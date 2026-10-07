@@ -285,3 +285,120 @@ def test_f5_start_is_idempotent_ticks_at_interval_stop_joins(conn):
 
     assert len(client.pull_calls) >= 2, f"expected at least 2 ticks in 0.3s at 0.05s interval, got {len(client.pull_calls)}"
     assert not forwarder_threads[0].is_alive(), "stop() returned but the forwarder thread is still running"
+
+
+# ── REHEARSAL-1007 B1 (d): a failing forwarder makes /sync/health unhealthy ──
+
+def _hub_own_health(**overrides) -> dict:
+    """The shape `SyncService.get_health()` returns on a hub whose own books
+    read and write its own site log: healthy by construction, 0 pending --
+    exactly what the rehearsal's till B reported while cut off."""
+    healthy_half = {"healthy": True, "consecutive_failures": 0, "last_failure_at": None,
+                    "last_failure_reason": None, "last_success_at": "2026-10-07T12:00:00+00:00"}
+    health = {"configured": True, "healthy": True, "pending_count": 0,
+              "never_synced": False, "seconds_since_last_success": 3,
+              "push": dict(healthy_half), "pull": dict(healthy_half)}
+    health.update(overrides)
+    return health
+
+
+def test_g1_tls_failing_forwarder_turns_hub_health_unhealthy_with_pending(conn):
+    """The rehearsal measurement, replayed: the forwarder's cloud is
+    unreachable over TLS on every tick and the site log holds rows that never
+    left. MUTATION-PROOF: making `overlay_upstream_health` return `health`
+    unchanged turns this RED (`healthy` stays True, `pending_count` 0)."""
+    store.append_events(conn, [_event(), _event()], origin_device_id="this-hub")
+    conn.commit()
+
+    class _TlsFails:
+        base_url = "https://192.168.1.219:5443"
+
+        def push(self, events):
+            raise NetworkError("TLS_VERIFICATION_FAILED", "self-signed")
+
+        def pull(self, since):
+            raise NetworkError("TLS_VERIFICATION_FAILED", "self-signed")
+
+    loop = forwarder_loop.ForwarderLoop(get_conn=_fresh_conn, cloud_client_factory=lambda: _TlsFails())
+    loop.tick()
+    loop.tick()
+    loop.tick()
+
+    out = forwarder_loop.overlay_upstream_health(_hub_own_health(), loop.snapshot())
+
+    assert out["healthy"] is False
+    assert out["pending_count"] == 2, "the two unforwarded rows are pending, not 0"
+    assert out["push"]["healthy"] is False and out["pull"]["healthy"] is False
+    assert out["push"]["consecutive_failures"] == 3
+    assert out["push"]["last_failure_reason"] == "UPSTREAM:TLS_VERIFICATION_FAILED"
+    assert out["upstream"]["cloud_host"] == "192.168.1.219:5443"
+    # Left alone on purpose -- the 72-hour offline policy reads these.
+    assert out["seconds_since_last_success"] == 3 and out["never_synced"] is False
+
+
+def test_g2_healthy_forwarder_and_lan_only_shop_change_nothing_but_pending(conn):
+    """The allow half: a forwarder that works leaves the hub healthy, and a
+    LAN-only shop (`NO_CLOUD`) is healthy with nothing added -- those rows
+    are never meant to leave, so counting them would nag forever."""
+    store.append_events(conn, [_event()], origin_device_id="this-hub")
+    conn.commit()
+
+    ok_loop = forwarder_loop.ForwarderLoop(get_conn=_fresh_conn,
+                                           cloud_client_factory=lambda: _RecordingCloudClient())
+    ok_loop.tick()  # forwards the one row
+    ok = forwarder_loop.overlay_upstream_health(_hub_own_health(), ok_loop.snapshot())
+    assert ok["healthy"] is True
+    assert ok["pending_count"] == 0
+    assert ok["push"]["consecutive_failures"] == 0
+
+    store.append_events(conn, [_event()], origin_device_id="this-hub")
+    conn.commit()
+    lan_loop = forwarder_loop.ForwarderLoop(get_conn=_fresh_conn, cloud_client_factory=lambda: None)
+    lan_loop.tick()
+    lan = forwarder_loop.overlay_upstream_health(_hub_own_health(), lan_loop.snapshot())
+    assert lan["healthy"] is True
+    assert lan["pending_count"] == 0
+    assert lan["upstream"]["state"] == "NO_CLOUD"
+
+
+def test_g3_recovery_clears_the_failure_and_unconfigured_health_is_untouched(conn):
+    # A row to send, or `forward_up` never calls push at all.
+    store.append_events(conn, [_event()], origin_device_id="this-hub")
+    conn.commit()
+    state = {"fail": True}
+
+    class _Flaky:
+        def push(self, events):
+            if state["fail"]:
+                raise NetworkError("NETWORK_UNAVAILABLE", "offline")
+            return {"stored": len(events), "received": len(events)}
+
+        def pull(self, since):
+            return {"events": [], "cursor": since}
+
+    loop = forwarder_loop.ForwarderLoop(get_conn=_fresh_conn, cloud_client_factory=lambda: _Flaky())
+    loop.tick()
+    assert forwarder_loop.overlay_upstream_health(_hub_own_health(), loop.snapshot())["healthy"] is False
+    state["fail"] = False
+    loop.tick()
+    snap = loop.snapshot()
+    assert snap["consecutive_failures"] == 0 and snap["last_success_at"]
+    assert forwarder_loop.overlay_upstream_health(_hub_own_health(), snap)["healthy"] is True
+
+    assert forwarder_loop.overlay_upstream_health({"configured": False}, snap) == {"configured": False}
+
+
+def test_g4_drain_mode_uploads_but_never_pulls_down(conn):
+    """REHEARSAL-1007 B1 (c): the kill-switch drain loop sends a former
+    hub's leftover rows up and never writes cloud rows into a site log
+    nobody reads any more."""
+    store.append_events(conn, [_event(), _event(), _event()], origin_device_id="former-hub")
+    conn.commit()
+    client = _RecordingCloudClient()
+    loop = forwarder_loop.ForwarderLoop(get_conn=_fresh_conn, cloud_client_factory=lambda: client,
+                                        pull_down=False)
+    result = loop.tick()
+    assert result["forwarded"] == 3
+    assert client.push_calls == [3]
+    assert client.pull_calls == []
+    assert forwarder.count_unforwarded(conn) == 0

@@ -147,6 +147,27 @@ def read_forward_cursor(conn: sqlite3.Connection) -> tuple[int, int]:
     return (row["forwarded_to_seq"], row["cloud_pull_seq"])
 
 
+def count_unforwarded(conn: sqlite3.Connection) -> int:
+    """How many site-log rows have NOT yet reached Owner's cloud relay:
+    every row past `forwarded_to_seq` except the ones `pull_down` itself
+    brought DOWN from the cloud (`store.UPSTREAM_ORIGIN` -- the same echo
+    guard `forward_up` applies, so this counts exactly what `forward_up`
+    would still send). Read-only; `site_forward_cursor` keeps its single
+    writer.
+
+    REHEARSAL-1007 B1 (d): a hub's own `SyncService` pushes into its OWN
+    site log, so its `sync_outbox` empties within a tick even when nothing
+    has reached Owner -- the rehearsal's till B read "0 pending" with every
+    one of its sales stuck behind a forwarder failing TLS. This is the
+    number that belongs in that "pending" figure instead."""
+    forwarded_to_seq, _cloud_pull_seq = read_forward_cursor(conn)
+    row = conn.execute(
+        "SELECT COUNT(*) FROM site_sync_events WHERE seq > ? AND origin_device_id != ?",
+        (forwarded_to_seq, store.UPSTREAM_ORIGIN),
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
 def _advance_forwarded_to(conn: sqlite3.Connection, seq: int) -> None:
     """Private: `site_forward_cursor` is this module's own state (see
     module docstring's "OWNERSHIP" paragraph) -- nothing outside this file

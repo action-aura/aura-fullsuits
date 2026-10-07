@@ -43,6 +43,7 @@ import logging
 import threading
 import time
 import urllib.parse
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from commercial_runtime.sync.site_relay import forwarder
@@ -93,6 +94,89 @@ def _cloud_host_port(cloud_client) -> Optional[str]:
     return netloc.rsplit("@", 1)[-1] or None
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _is_failure(result: dict) -> bool:
+    """A tick FAILED when it could not build a cloud client at all
+    (`error`), or when either half of the bridge raised. `NO_CLOUD` (a
+    LAN-only shop, the ordinary permanent state) is NOT a failure."""
+    return bool(result.get("error") or result.get("push_error") or result.get("pull_error"))
+
+
+def _degraded(half: dict, failures: int, reason: Optional[str], failed_at: Optional[str]) -> dict:
+    out = dict(half or {})
+    out["healthy"] = False
+    out["consecutive_failures"] = max(int(out.get("consecutive_failures") or 0), failures)
+    out["last_failure_reason"] = f"UPSTREAM:{reason}" if reason else "UPSTREAM"
+    out["last_failure_at"] = failed_at or out.get("last_failure_at")
+    return out
+
+
+def overlay_upstream_health(health: dict, upstream: dict) -> dict:
+    """REHEARSAL-1007 B1 (d): fold the forwarder's state into a hub's own
+    `SyncService.get_health()` -- returns a NEW dict, never mutates either
+    argument.
+
+    WHY: on a hub, the retail `SyncService` pushes and pulls its OWN site
+    log (`local_client.LocalSiteRelayClient`), which cannot fail for network
+    reasons, so its own health is "healthy, 0 pending" by construction --
+    the rehearsal's till B showed exactly that for half an hour while its
+    forwarder, the only thing that actually talks to Owner, failed
+    `TLS_VERIFICATION_FAILED` on every tick and staff created on the other
+    till never arrived. The forwarder is this till's real link to the shop's
+    other devices, so its failures are this till's sync failures.
+
+    What changes, and only when it should:
+      * `upstream` -- the forwarder snapshot, always attached, so a support
+        screen can see which leg is broken and against which host.
+      * `pending_count` -- plus the site-log rows not yet forwarded, unless
+        this shop has no cloud at all (`NO_CLOUD`: those rows are never
+        meant to leave, and counting them would nag forever).
+      * on a failing forwarder (`consecutive_failures > 0`): top-level
+        `healthy` false, and the failing half (`push` for an upload error,
+        `pull` for a download error, both when no client could be built)
+        carries the forwarder's failure count and an `UPSTREAM:<code>`
+        reason -- the fields the till's sync banner already reads, so it
+        degrades with no front-end change.
+
+    `seconds_since_last_success`/`never_synced` are deliberately left alone:
+    they drive the 72-hour offline sales stop, and whether a LAN hub that
+    has lost the internet should stop selling is a policy decision this
+    fix does not get to make in passing."""
+    if not isinstance(health, dict) or not health.get("configured"):
+        return health
+    out = dict(health)
+    out["upstream"] = dict(upstream)
+    state = upstream.get("state")
+    unforwarded = upstream.get("unforwarded_count")
+    if state not in (None, "NO_CLOUD") and isinstance(unforwarded, int) and unforwarded > 0:
+        out["pending_count"] = int(out.get("pending_count") or 0) + unforwarded
+    failures = int(upstream.get("consecutive_failures") or 0)
+    if failures > 0:
+        out["healthy"] = False
+        reason = upstream.get("last_failure_reason")
+        failed_at = upstream.get("last_failure_at")
+        if upstream.get("error") or upstream.get("push_error"):
+            out["push"] = _degraded(out.get("push"), failures, reason, failed_at)
+        if upstream.get("error") or upstream.get("pull_error"):
+            out["pull"] = _degraded(out.get("pull"), failures, reason, failed_at)
+    return out
+
+
+def _forward_up_only(conn, cloud_client) -> dict:
+    """`forwarder.run_once`'s result shape for the upload half alone -- the
+    drain mode (`ForwarderLoop(pull_down=False)`). Never raises, exactly
+    like `run_once`."""
+    page = {"forwarded": 0, "pulled": 0, "push_error": None, "pull_error": None}
+    try:
+        page["forwarded"] = forwarder.forward_up(conn, cloud_client)
+    except Exception as exc:  # noqa: BLE001 -- mirrors run_once
+        page["push_error"] = forwarder._error_label(exc)
+    return page
+
+
 def _no_apply(events: list) -> None:
     """The `apply_pulled` this loop always passes to `forwarder.pull_down`
     -- deliberately a no-op. See this module's own docstring, "WHY THIS RUNS
@@ -115,12 +199,25 @@ class ForwarderLoop:
     def __init__(self, *, get_conn, cloud_client_factory: Callable[[], Optional[object]],
                  interval_seconds: float = FORWARD_INTERVAL_SECONDS,
                  max_pages_per_tick: int = MAX_PAGES_PER_TICK,
-                 monotonic=time.monotonic):
+                 monotonic=time.monotonic,
+                 pull_down: bool = True):
         self._get_conn = get_conn
         self._cloud_client_factory = cloud_client_factory
         self._interval_seconds = interval_seconds
         self._max_pages_per_tick = max_pages_per_tick
         self._monotonic = monotonic
+        # REHEARSAL-1007 B1 (c): `pull_down=False` is the DRAIN mode a
+        # former hub runs under the operator kill switch
+        # (`AURA_SITE_RELAY_ENABLED=0`): its own books are back on the cloud,
+        # so nothing would ever read what a pull-down writes into the site
+        # log -- but rows it accepted while it WAS hub may not have reached
+        # Owner yet, and those must still go up. Upload only.
+        self._pull_down = pull_down
+        # Failure bookkeeping for `snapshot()` / `overlay_upstream_health`.
+        self._consecutive_failures = 0
+        self._last_failure_at: Optional[str] = None
+        self._last_failure_reason: Optional[str] = None
+        self._last_success_at: Optional[str] = None
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -141,6 +238,49 @@ class ForwarderLoop:
     def last_result(self) -> dict:
         return dict(self._last_result)
 
+    @property
+    def pull_down_enabled(self) -> bool:
+        return self._pull_down
+
+    def _record_outcome(self, result: dict) -> None:
+        if _is_failure(result):
+            self._consecutive_failures += 1
+            self._last_failure_at = _now_iso()
+            self._last_failure_reason = result.get("error") or result.get("push_error") or result.get("pull_error")
+        else:
+            self._consecutive_failures = 0
+            if result.get("state") == "RAN":
+                self._last_success_at = _now_iso()
+
+    def snapshot(self) -> dict:
+        """The forwarder's state for `overlay_upstream_health` -- the last
+        tick's result plus failure bookkeeping plus how many site-log rows
+        have not reached Owner yet. NEVER RAISES: the count is `None` when
+        the database cannot be read right now (a health read must never be
+        the thing that fails)."""
+        snap = dict(self._last_result)
+        snap.update({
+            "consecutive_failures": self._consecutive_failures,
+            "last_failure_at": self._last_failure_at,
+            "last_failure_reason": self._last_failure_reason,
+            "last_success_at": self._last_success_at,
+            "pull_down": self._pull_down,
+            "unforwarded_count": None,
+        })
+        conn = None
+        try:
+            conn = self._get_conn()
+            snap["unforwarded_count"] = forwarder.count_unforwarded(conn)
+        except Exception:  # noqa: BLE001 -- see docstring
+            pass
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        return snap
+
     def tick(self) -> dict:
         """One forwarder attempt. NEVER RAISES -- the whole body sits in
         `try/except`, mirroring `SyncService.run_once`'s own "an
@@ -160,12 +300,14 @@ class ForwarderLoop:
             result["state"] = "FAILED"
             result["error"] = getattr(exc, "reason_code", None) or type(exc).__name__
             self._last_result = result
+            self._record_outcome(result)
             self._log_result(result)
             return result
 
         if cloud_client is None:
             result["state"] = "NO_CLOUD"
             self._last_result = result
+            self._record_outcome(result)
             self._log_result(result)
             return result
 
@@ -175,7 +317,10 @@ class ForwarderLoop:
         try:
             conn = self._get_conn()
             for _page in range(self._max_pages_per_tick):
-                page = forwarder.run_once(conn, cloud_client, apply_pulled=_no_apply)
+                if self._pull_down:
+                    page = forwarder.run_once(conn, cloud_client, apply_pulled=_no_apply)
+                else:
+                    page = _forward_up_only(conn, cloud_client)
                 result["forwarded"] += page["forwarded"]
                 result["pulled"] += page["pulled"]
                 result["pages"] += 1
@@ -212,6 +357,7 @@ class ForwarderLoop:
         self._cumulative_forwarded += result["forwarded"]
         self._cumulative_pulled += result["pulled"]
         self._last_result = result
+        self._record_outcome(result)
         self._log_result(result)
         return result
 

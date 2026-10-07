@@ -71,13 +71,12 @@ re-invent any of its reasoning):
      network call of any kind) and returns `NOT_ACTIVATED`.
   1. Listen for a hub beacon (`beacon.py`'s wire format, unauthenticated --
      see above). No beacon heard inside `listen_timeout` -> `NO_HUB_FOUND`.
-  2. If the beacon's `url` already equals this device's OWN persisted relay
-     (`LicenseStateRecord.sync_relay_base_url` -- see
-     `products/retail/backend/config.py::_discover_persisted_sync_relay_url`,
-     the existing seam this module writes to and never invents a second
-     one for), this device is already using this hub -- `ALREADY_JOINED`,
-     a pure no-op: no HTTP call of any kind. This is what makes calling
-     this function repeatedly on a timer safe and cheap.
+  2. If the beacon's `url` names the hub this device already joined (the
+     `JoinedHubStore` sidecar -- see "THE PERSISTENCE SEAM" below, which
+     says why this is NOT `sync_relay_base_url` any more), this device is
+     already joined -- `ALREADY_JOINED`, a pure no-op: no HTTP call of any
+     kind. This is what makes calling this function repeatedly on a timer
+     safe and cheap.
   3. Fetch `GET {url}/api/sync/v1/identity` over a `pinned_session(spki_pin)`
      -- the SPKI pin the beacon advertised, so this connection can only ever
      succeed against whatever host actually holds the matching TLS private
@@ -122,26 +121,35 @@ re-invent any of its reasoning):
      URL is NOT persisted (see mutation-proof note in the test file: a
      hub that rejects the join must never be adopted as this device's
      relay).
-  7. Only on a 200 from `/join`: persist `url` as this device's relay
-     (`LicenseStateRepository.save`, `sync_relay_base_url` field -- see
-     module docstring section "THE PERSISTENCE SEAM" below) and return
-     `JOINED`.
+  7. Only on a 200 from `/join`: record the hub in the `JoinedHubStore`
+     sidecar (never in `sync_relay_base_url` -- see "THE PERSISTENCE SEAM"
+     below) and return `JOINED`.
 
 NEVER LOG assertion contents or key material, anywhere in this module --
 only reason codes, URLs, and boolean outcomes. An assertion envelope is not
 itself secret (`join.py`'s own docstring), but there is no reason for this
 module's logs to be the first place someone pastes one from.
 
-THE PERSISTENCE SEAM. `products/retail/backend/config.py`'s
-`_discover_persisted_sync_relay_url()` already reads
-`LicenseStateRepository.load().sync_relay_base_url` as the fallback source
-for `SYNC_RELAY_BASE_URL` on the NEXT process launch (Owner's own
-activation-time value is the other source, `_resolve_effective_sync_relay_
-base_url`'s precedence rule). This module writes to exactly that same
-field, through the same `LicenseStateRepository`, rather than inventing a
-second "where does this device's relay live" concept -- so a successful LAN
-autojoin takes effect on this device's next restart exactly the same way an
-Owner-provided relay URL already does, with no new config surface.
+THE PERSISTENCE SEAM -- REHEARSAL-1007 B1, and why it MOVED. This module
+used to save the joined hub's URL into `LicenseStateRecord.sync_relay_
+base_url`, reasoning that config.py already reads that field as "this
+device's relay" on the next launch, so no new config surface was needed.
+That field is ALSO the only place Owner's CLOUD relay address lives, and
+nothing ever writes it back. Measured 2026-10-07 on two real tills: B
+joined A, the save replaced B's cloud address with
+`https://192.168.1.219:5443`, B then won the hub election, and its
+forwarder -- which reads that same field as "the cloud" -- dialled a LAN
+till over ordinary TLS on every tick (`TLS_VERIFICATION_FAILED`, forever)
+while `/sync/health` read healthy; staff created on A never reached B, and
+restarts did not help. It also never worked as a CLIENT route on a desktop:
+`SyncRelayClient` has no pinned transport, so after a restart a joined
+till would have pointed its own books at a hub whose self-signed
+certificate it cannot verify.
+
+So the joined hub now lives in `upstream.JoinedHubStore` (a sidecar file
+the caller passes in as `joined_hub_store`), and this module NEVER writes
+`state_repository` at all. One field, one job: `sync_relay_base_url` is
+Owner's cloud relay and only activation writes it.
 
 `signer` is the same minimal `sign(canonical_bytes) -> base64` / `get_public
 _key_b64() -> base64` protocol every other caller in this package already
@@ -174,6 +182,7 @@ from commercial_runtime.licensing_contracts.state_repository import LicenseState
 from commercial_runtime.licensing_contracts.trust_store import OwnerTrustStore
 from commercial_runtime.sync.site_relay import beacon
 from commercial_runtime.sync.site_relay.pinned_transport import pinned_session
+from commercial_runtime.sync.site_relay.upstream import JoinedHubStore, same_relay
 
 _log = logging.getLogger(__name__)
 
@@ -296,16 +305,22 @@ def discover_and_join(
     session_factory: Callable[[str], "requests.Session"] = pinned_session,
     listen_timeout: float = 10.0,
     beacon_listener: Optional[Callable[[float], Optional[dict]]] = None,
+    joined_hub_store: Optional[JoinedHubStore] = None,
 ) -> AutoJoinResult:
     """See module docstring for the full, numbered flow. Safe to call
     repeatedly on a timer (step 2's `ALREADY_JOINED` short-circuit is a pure
-    no-op, no network call at all, for a hub this device already uses).
+    no-op, no network call at all, for a hub this device already joined).
 
     Every collaborator is injectable so this can be tested with no sockets
     and no real licensing state:
       * `state_repository` -- anything exposing `.load() -> LicenseStateRecord
-        | None` and `.save(record)`, matching `LicenseStateRepository`'s own
-        interface.
+        | None`, matching `LicenseStateRepository`'s own interface. READ
+        ONLY: this function never calls `.save()` (REHEARSAL-1007 B1 -- see
+        the module docstring's "THE PERSISTENCE SEAM").
+      * `joined_hub_store` -- where a successful join is recorded
+        (`upstream.JoinedHubStore`). `None` records nothing, so every tick
+        re-joins: harmless (`/join` is idempotent on the hub) but chatty,
+        which is why production always passes one.
       * `signer` -- anything exposing `.get_public_key_b64() -> str`,
         matching `DeviceIdentityProvider`'s own interface (see module
         docstring).
@@ -354,10 +369,10 @@ def discover_and_join(
         return AutoJoinResult.NO_HUB_FOUND
 
     hub_url = pointer["url"]
-    if own_record.sync_relay_base_url and own_record.sync_relay_base_url == hub_url:
-        # Already using this hub as our relay -- a pure no-op, no network
-        # call of any kind. This is what makes calling this function
-        # repeatedly on a timer cheap and safe.
+    if joined_hub_store is not None and same_relay(joined_hub_store.url(), hub_url):
+        # Already joined this hub -- a pure no-op, no network call of any
+        # kind. This is what makes calling this function repeatedly on a
+        # timer cheap and safe.
         return AutoJoinResult.ALREADY_JOINED
 
     session = session_factory(pointer["spki_pin"])
@@ -477,13 +492,14 @@ def discover_and_join(
         )
         return AutoJoinResult.FAILED
 
-    # Persist AFTER, and only after, a 200 from /join -- see the mutation-
-    # proof note immediately above. Uses the SAME seam
-    # products/retail/backend/config.py::_discover_persisted_sync_relay_url
-    # already reads on the next launch -- see module docstring's "THE
-    # PERSISTENCE SEAM" section for why this is not a second, invented
-    # config surface.
-    own_record.sync_relay_base_url = hub_url
-    state_repository.save(own_record)
+    # Record AFTER, and only after, a 200 from /join -- see the mutation-
+    # proof note immediately above. REHEARSAL-1007 B1: into the joined-hub
+    # sidecar, NEVER `own_record.sync_relay_base_url` -- that field is the
+    # only home of Owner's cloud relay address, and overwriting it with
+    # this hub's LAN address is what cut a till off from the cloud on
+    # 2026-10-07 (module docstring, "THE PERSISTENCE SEAM").
+    if joined_hub_store is not None:
+        joined_hub_store.save(
+            url=hub_url, spki_pin=pointer["spki_pin"], hub_installation_id=hub_installation_id)
     _log.info("site relay autojoin: joined hub at %s.", hub_url)
     return AutoJoinResult.JOINED

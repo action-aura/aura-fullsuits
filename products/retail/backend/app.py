@@ -1267,10 +1267,10 @@ def _enter_hub_self_sync(*, start_timers: bool = True) -> None:
       (b) `init_app()`, for a till that has HOSTED a site log before (see
           `_hub_self_sync_was_active_before`) -- so a restart resumes LOCAL
           mode immediately, before the first tick, rather than reverting to
-          the cloud and stranding unforwarded LAN rows (decision A4(b)/A7:
-          this runs even under `AURA_SITE_RELAY_ENABLED=0`, because going
-          back to the cloud on a kill-switched restart would be the exact
-          loss decision S1 exists to prevent).
+          the cloud and stranding unforwarded LAN rows (decision A4(b)).
+          NOT under `AURA_SITE_RELAY_ENABLED=0` any more (REHEARSAL-1007 B1
+          (c) overrules decision A7): the kill switch wins, and
+          `_leave_hub_self_sync_under_kill_switch` drains what A7 protected.
       (c) `_start_sync_after_activation`, right after its own call to
           `_start_site_relay_if_enabled()` -- covers the EXPLICIT-PIN case
           where this till was already bound as hub BEFORE it activated
@@ -1315,9 +1315,15 @@ def _enter_hub_self_sync(*, start_timers: bool = True) -> None:
                     _hub_self_sync_deferred_logged = True
                 return
 
+            # REHEARSAL-1007 B1 (b): a till that becomes hub must have its
+            # CLOUD relay back, never a LAN hub address (its own, after an
+            # election flip, being the rehearsal's exact case). This call
+            # repairs a value the old autojoin damaged and writes it back;
+            # the forwarder started below asks the same function on every
+            # tick, so it can never dial a LAN hub as "the cloud" either.
+            cloud, _cloud_problem = _cloud_relay_url_now(repair=True)
+
             if _sync_service is None:
-                relay_base_url, problems = resolve_sync_relay_base_url_now()
-                cloud = relay_base_url if (relay_base_url and not problems) else ''
                 _sync_service, _registry_sync_service = _build_windows_sync_services(cloud)
                 # BEFORE register/start: the very first push/pull attempt
                 # (a timer tick, or a route's own nudge()) must already see
@@ -1358,6 +1364,10 @@ def _enter_hub_self_sync(*, start_timers: bool = True) -> None:
                     interval_seconds=SITE_FORWARDER_INTERVAL_SECONDS,
                 )
                 _site_forwarder_loop.start()
+            # REHEARSAL-1007 B1 (d): from here on this till's own books talk
+            # to its own site log, which never fails -- the forwarder is its
+            # real link to the other tills, so /sync/health must report it.
+            _install_upstream_health_overlay(_sync_service, _site_forwarder_loop)
 
             if _site_housekeeping_stop is None:
                 from commercial_runtime.sync.site_relay import listener as _site_relay_listener
@@ -1399,12 +1409,19 @@ def _forwarder_cloud_client():
     from commercial_runtime.sync.relay_client import SyncRelayClient
     from commercial_runtime.sync.site_relay.local_client import LocalSiteRelayError
 
-    relay_base_url, problems = resolve_sync_relay_base_url_now()
-    if problems:
+    # REHEARSAL-1007 B1 (a): `_cloud_relay_url_now`, never the bare
+    # `resolve_sync_relay_base_url_now()` this used to call -- that returns
+    # whatever sits in `sync_relay_base_url`, and on the rehearsal's till B
+    # that was another till's LAN hub address, so this "cloud" client dialled
+    # a LAN till over ordinary TLS on every tick. A LAN hub address (or this
+    # till's own) is now refused as a cloud target with its own reason code,
+    # which `ForwarderLoop.tick()` reports as FAILED and `/sync/health` shows.
+    relay_base_url, problem = _cloud_relay_url_now()
+    if problem:
         raise LocalSiteRelayError(
-            'CLOUD_RELAY_URL_INVALID',
-            'the configured sync relay URL failed validation; see the problems '
-            'resolve_sync_relay_base_url_now() reported.',
+            problem,
+            'no usable CLOUD relay for the hub forwarder -- see '
+            '_cloud_relay_url_now() for what each reason code means.',
         )
     if not relay_base_url:
         return None
@@ -1422,6 +1439,318 @@ def _forwarder_cloud_client():
         timeout_seconds=SYNC_RELAY_TIMEOUT_SECONDS,
         verify_tls=SYNC_RELAY_VERIFY_TLS,
     )
+
+
+# ── REHEARSAL-1007 B1: the CLOUD relay, kept apart from any LAN hub ─────────
+# Measured 2026-10-07 on two real Windows tills (the full story is in
+# commercial_runtime/sync/site_relay/upstream.py's module docstring): till B
+# auto-joined A's LAN hub, autojoin saved A's LAN address into
+# `sync_relay_base_url` -- the ONLY home of Owner's cloud relay address --
+# then B won the election and its forwarder dialled that LAN address as "the
+# cloud" forever (TLS_VERIFICATION_FAILED), while /sync/health said healthy
+# with 0 pending. Autojoin no longer writes that field (it records the hub in
+# a sidecar). The functions below are the other half: what this till treats
+# as its cloud relay, refusing a LAN hub address, and repairing an install
+# that the old autojoin had already damaged.
+
+_cloud_relay_repair_logged = set()
+
+
+def _joined_hub_store():
+    """The sidecar autojoin records a joined LAN hub in -- next to this
+    till's own hub TLS identity, never in licensing.db."""
+    from commercial_runtime.sync.site_relay.upstream import JOINED_HUB_FILENAME, JoinedHubStore
+
+    return JoinedHubStore(Path(DATABASE_DIR).parent / 'site-relay' / JOINED_HUB_FILENAME)
+
+
+def _own_hub_urls() -> list:
+    """Every address THIS till would answer as a hub on: its LAN addresses
+    and loopback, on the configured hub port and on the port it is actually
+    bound to right now. Never raises -- an empty list only weakens the
+    exact-match signal; the shape signal in `is_lan_hub_url` still applies."""
+    urls = []
+    try:
+        from commercial_runtime.sync.site_relay.listener import local_lan_addresses
+
+        ports = {p for p in (SITE_RELAY_PORT, getattr(_site_relay_server, 'port', None)) if p}
+        hosts = list(local_lan_addresses()) + ['127.0.0.1', 'localhost']
+        urls = [f'https://{h}:{p}' for h in hosts for p in ports]
+    except Exception:
+        pass
+    return urls
+
+
+def _lan_hub_signals():
+    """(hub_ports, known_hub_urls) for `upstream.is_lan_hub_url`."""
+    from commercial_runtime.sync.site_relay.upstream import DEFAULT_HUB_PORT
+
+    known = _own_hub_urls()
+    ports = {DEFAULT_HUB_PORT}
+    if SITE_RELAY_PORT:
+        ports.add(SITE_RELAY_PORT)
+    try:
+        joined = _joined_hub_store().url()
+    except Exception:
+        joined = None
+    if joined:
+        known.append(joined)
+    return ports, known
+
+
+def _recover_cloud_relay_url(hub_ports, known_hub_urls) -> str:
+    """Best-effort recovery of the cloud relay address an install lost to the
+    old autojoin overwrite: the relay this till's own two sync streams last
+    pulled from (`sync_cursor.relay_url`, retail.db then registry.db) -- the
+    cloud, unless the till had already restarted onto the damaged value or
+    become a hub. Accepted only if it passes the same validation a typed
+    `AURA_SYNC_RELAY_URL` gets and is not itself a LAN hub address. '' when
+    nothing qualifies -- never a guess."""
+    from config import validate_sync_relay_url
+    from commercial_runtime.identity import registry_db
+    from commercial_runtime.sync.site_relay.upstream import is_lan_hub_url
+
+    candidates = []
+    for opener in (get_retail_conn, registry_db.get_conn):
+        try:
+            conn = opener()
+            try:
+                row = conn.execute("SELECT relay_url FROM sync_cursor WHERE id=1").fetchone()
+            finally:
+                conn.close()
+        except Exception:
+            continue
+        if row is not None and row[0]:
+            candidates.append(row[0])
+    for url in candidates:
+        if not url.lower().startswith(('http://', 'https://')):
+            continue  # aura-site-log://local and anything else non-HTTP
+        if validate_sync_relay_url(url):
+            continue
+        if is_lan_hub_url(url, hub_ports=hub_ports, known_hub_urls=known_hub_urls):
+            continue
+        return url
+    return ''
+
+
+def _cloud_relay_url_now(*, repair: bool = True):
+    """(url, problem_code): the CLOUD relay this till's forwarder -- and a
+    freshly built cloud sync pair -- may dial. `url` is '' when there is
+    none; `problem_code` is None unless that absence is a fault to report.
+
+      * an operator's AURA_SYNC_RELAY_URL wins, exactly as config.py's
+        precedence rule says -- unless it names THIS till's own hub address
+        (`CLOUD_RELAY_URL_IS_THIS_HUB`): a hub forwarding into itself is the
+        self-loop this fix exists to end, whoever typed it.
+      * an invalid operator value -> `CLOUD_RELAY_URL_INVALID` (unchanged).
+      * nothing configured -> ('', None): a LAN-only shop, not a fault.
+      * a persisted value that is a LAN hub address (old autojoin damage) is
+        NEVER returned. It is repaired from `_recover_cloud_relay_url` when
+        possible -- and with `repair=True` the recovered value is written
+        back to licensing.db, so the next boot's config.py reads the cloud
+        again -- otherwise ('', 'CLOUD_RELAY_URL_IS_LAN_HUB'), which stays a
+        visible failure until Owner's relay address is supplied again
+        (re-activation writes it; AURA_SYNC_RELAY_URL overrides it).
+
+    Logged once per distinct outcome, never per call: the forwarder asks on
+    every 10-second tick."""
+    import config as _config
+    from commercial_runtime.sync.site_relay.upstream import is_lan_hub_url, same_relay
+
+    url, problems = resolve_sync_relay_base_url_now()
+    if problems:
+        return '', 'CLOUD_RELAY_URL_INVALID'
+    if not url:
+        return '', None
+    if getattr(_config, '_AURA_SYNC_RELAY_URL_ENV', ''):
+        if any(same_relay(url, own) for own in _own_hub_urls()):
+            return '', 'CLOUD_RELAY_URL_IS_THIS_HUB'
+        return url, None
+    hub_ports, known = _lan_hub_signals()
+    if not is_lan_hub_url(url, hub_ports=hub_ports, known_hub_urls=known):
+        return url, None
+
+    log = logging.getLogger(__name__)
+    recovered = _recover_cloud_relay_url(hub_ports, known)
+    if recovered:
+        if repair:
+            try:
+                from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+
+                repo = LicenseStateRepository(Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
+                record = repo.load()
+                if record is not None and record.sync_relay_base_url == url:
+                    record.sync_relay_base_url = recovered
+                    repo.save(record)
+            except Exception:
+                log.exception('Cloud relay repair: could not write the recovered address back; '
+                              'this process still uses it.')
+        if ('recovered', url, recovered) not in _cloud_relay_repair_logged:
+            _cloud_relay_repair_logged.add(('recovered', url, recovered))
+            log.warning(
+                'Cloud relay repair (REHEARSAL-1007 B1): the saved cloud relay address was a '
+                'LAN hub address (%s), written there by an older LAN auto-join. Restored the '
+                'cloud relay this till last synced with (%s).', url, recovered)
+        return recovered, None
+    if ('lost', url) not in _cloud_relay_repair_logged:
+        _cloud_relay_repair_logged.add(('lost', url))
+        log.error(
+            'Cloud relay LOST (REHEARSAL-1007 B1): the saved cloud relay address is a LAN '
+            'hub address (%s), written there by an older LAN auto-join, and no earlier cloud '
+            'address survives on this till. It will NOT be dialled as the cloud. This till '
+            'reports sync as failing until Owner\'s relay address is supplied again '
+            '(re-activate the licence, or set AURA_SYNC_RELAY_URL).', url)
+    return '', 'CLOUD_RELAY_URL_IS_LAN_HUB'
+
+
+def _install_upstream_health_overlay(service, loop) -> None:
+    """REHEARSAL-1007 B1 (d): make `/sync/health` report the forwarder's
+    failures as this till's sync failures -- see `forwarder_loop.
+    overlay_upstream_health` for exactly what changes and why.
+
+    Wraps the INSTANCE's `get_health` (once; idempotent) rather than adding a
+    hook to `SyncService`, because sync_service.py is owned by another
+    concurrent change in this wave -- the cleaner long-term home is a
+    `health_overlay` constructor hook there, recorded in the B1 report. The
+    registered service object is unchanged (`_active_service is
+    _sync_service` still holds), so nothing that compares identity breaks."""
+    if service is None or loop is None or getattr(service, '_aura_upstream_overlay', False):
+        return
+    from commercial_runtime.sync.site_relay.forwarder_loop import overlay_upstream_health
+
+    base_get_health = service.get_health
+
+    def get_health():
+        return overlay_upstream_health(base_get_health(), loop.snapshot())
+
+    service.get_health = get_health
+    service._aura_upstream_overlay = True
+
+
+def _hub_site_log_unconsumed() -> bool:
+    """True if a site-log row this till did not write is still waiting for
+    one of its OWN two sync streams to apply it -- only meaningful while
+    that stream's cursor is on the site log. Fails SAFE (True) on any read
+    error: the caller then keeps the old behaviour (resume LOCAL), which can
+    never strand a row."""
+    from commercial_runtime.identity import registry_db
+    from commercial_runtime.sync.site_relay.local_client import LOCAL_RELAY_URL
+
+    try:
+        own_id = _current_owner_installation_id()
+        if not own_id:
+            return True
+        cursors = []
+        for opener in (get_retail_conn, registry_db.get_conn):
+            conn = opener()
+            try:
+                row = conn.execute("SELECT last_seq, relay_url FROM sync_cursor WHERE id=1").fetchone()
+            finally:
+                conn.close()
+            if row is not None and row[1] == LOCAL_RELAY_URL:
+                cursors.append(int(row[0] or 0))
+        if not cursors:
+            return False
+        conn = get_retail_conn()
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM site_sync_events WHERE seq > ? AND origin_device_id != ? LIMIT 1",
+                (min(cursors), own_id)).fetchone()
+        finally:
+            conn.close()
+        return row is not None
+    except Exception:
+        logging.getLogger(__name__).exception(
+            'Hub kill switch: could not tell whether this till has applied its whole site '
+            'log; keeping it on the site log this boot (fail safe).')
+        return True
+
+
+def _leave_hub_self_sync_under_kill_switch() -> None:
+    """REHEARSAL-1007 B1 (c): a till that once hosted a site log, booted with
+    the operator kill switch (`AURA_SITE_RELAY_ENABLED=0`), must NOT resume
+    hub self-sync. The rehearsal's till B did, on every start, and with the
+    damaged relay address that meant its own books never left its own disk.
+
+    The one thing that used to justify resuming anyway (decision A4(b)/A7:
+    "going back to the cloud would strand unforwarded LAN rows") is handled
+    here instead of by staying a hub:
+      * rows not yet sent UP are drained by an upload-only forwarder
+        (`ForwarderLoop(pull_down=False)`) -- started only when there are
+        any and a cloud exists to receive them;
+      * rows other devices left that this till's own books have NOT applied
+        yet cannot be read any other way -- in that one case this boot still
+        resumes self-sync (old behaviour, logged as a WARNING) and the kill
+        switch takes effect on the next boot after they are applied.
+    Otherwise the sync pair built at import stays on the CLOUD."""
+    global _site_forwarder_loop
+    log = logging.getLogger(__name__)
+    if _hub_site_log_unconsumed():
+        log.warning(
+            'Hub mode is switched OFF (AURA_SITE_RELAY_ENABLED=0), but this till still has '
+            'rows from other devices on its own site log that its books have not applied. '
+            'Keeping it on its site log for THIS boot so none are lost; the switch takes '
+            'full effect on the next start.')
+        _enter_hub_self_sync(start_timers=False)
+        return
+    log.info(
+        'Hub mode is switched OFF (AURA_SITE_RELAY_ENABLED=0): this till does not resume '
+        'hub self-sync; its own books sync with the cloud relay directly.')
+    url, _problem = _cloud_relay_url_now()
+    if not url or _site_forwarder_loop is not None:
+        return
+    try:
+        from commercial_runtime.sync.site_relay import forwarder as _forwarder
+
+        conn = get_retail_conn()
+        try:
+            backlog = _forwarder.count_unforwarded(conn)
+        finally:
+            conn.close()
+    except Exception:
+        log.exception('Hub kill switch: could not count unforwarded site-log rows.')
+        return
+    if backlog <= 0:
+        return
+    from commercial_runtime.sync.site_relay.forwarder_loop import ForwarderLoop
+
+    _site_forwarder_loop = ForwarderLoop(
+        get_conn=get_retail_conn,
+        cloud_client_factory=_forwarder_cloud_client,
+        interval_seconds=SITE_FORWARDER_INTERVAL_SECONDS,
+        pull_down=False,
+    )
+    _site_forwarder_loop.start()
+    _install_upstream_health_overlay(_sync_service, _site_forwarder_loop)
+    log.info('Hub kill switch: forwarding %d site-log row(s) from this till\'s time as hub '
+             'up to the cloud (upload only).', backlog)
+
+
+def _repair_relay_url_at_boot() -> None:
+    """REHEARSAL-1007 B1 (b), boot half: the sync pair was built at IMPORT
+    from config.py's frozen `SYNC_RELAY_BASE_URL`. On a till the old autojoin
+    damaged, that is a LAN hub address -- harmless while the pair reads its
+    own site log, but it is what the pair dials whenever it is on the CLOUD
+    (a till that never became hub, or one under the kill switch). Rebuild
+    the not-yet-started pair on the repaired cloud address (or none, which
+    then fails visibly with NO_RELAY_CONFIGURED rather than dialling a LAN
+    till). An operator's AURA_SYNC_RELAY_URL is never second-guessed here."""
+    global _sync_service, _registry_sync_service
+    import config as _config
+    from commercial_runtime.sync.site_relay.upstream import is_lan_hub_url
+
+    if LICENSING_PLATFORM == 'ANDROID' or _sync_service is None:
+        return
+    if getattr(_config, '_AURA_SYNC_RELAY_URL_ENV', ''):
+        return
+    hub_ports, known = _lan_hub_signals()
+    if not is_lan_hub_url(SYNC_RELAY_BASE_URL, hub_ports=hub_ports, known_hub_urls=known):
+        return
+    url, _problem = _cloud_relay_url_now(repair=True)
+    from commercial_runtime.sync.sync_service import register_active_service
+
+    _sync_service, _registry_sync_service = _build_windows_sync_services(url)
+    register_active_service(_sync_service)
 
 
 def _hub_self_sync_was_active_before() -> bool:
@@ -2297,17 +2626,18 @@ def _start_site_relay_if_enabled():
             HUB-SELF-SYNC GUARD (retail-hardware-viewports): a till already
             routed through its OWN site log (`_sync_relay_selector.
             is_local()`) must never also join ANOTHER hub as a LAN client.
-            `discover_and_join`'s success path calls `autojoin.persist_join`,
-            which overwrites `licensing_state.sync_relay_base_url` with the
-            OTHER hub's LAN URL -- and that field is exactly what `_forwarder_
-            cloud_client` reads as this till's OWN cloud target. After the
-            overwrite the forwarder would try to reach a LAN host over HTTPS
-            with THIS till's normal TLS verification (never the other hub's
-            pinned transport) and fail forever, silently cutting this till's
-            forwarder off from Owner. `is_local()` is the correct test here,
-            not `_site_relay_server is not None`: a STOOD-DOWN till (decision
-            S1) is no longer bound but must still refuse to join, for the
-            identical reason.
+            This guard was written against the overwrite of
+            `licensing_state.sync_relay_base_url` that a join used to do --
+            and it only covered a till that was ALREADY local. REHEARSAL-1007
+            B1 is the order it missed: a till joined FIRST (not local yet, so
+            this guard let it through), the overwrite landed, and THEN it won
+            the election. The overwrite itself is gone now (autojoin records
+            the hub in `_joined_hub_store()` and never writes licensing.db),
+            so this guard is defence in depth: a till reading and writing its
+            own site log has no use for another hub's, and joining would only
+            add a pairing row on that hub. `is_local()` is the correct test
+            here, not `_site_relay_server is not None`: a STOOD-DOWN till
+            (decision S1) is no longer bound but must still refuse to join.
             """
             global _hub_join_refusal_logged
             if _sync_relay_selector is not None and _sync_relay_selector.is_local():
@@ -2318,8 +2648,8 @@ def _start_site_relay_if_enabled():
                 if not _hub_join_refusal_logged:
                     logging.getLogger(__name__).info(
                         'Not joining another hub as a LAN client: this till syncs through '
-                        'its own site log and converges via its forwarder. Joining would '
-                        'overwrite its cloud relay URL.')
+                        'its own site log and converges via its forwarder, so another '
+                        'hub has nothing to give it.')
                     _hub_join_refusal_logged = True
                 return
 
@@ -2328,11 +2658,15 @@ def _start_site_relay_if_enabled():
             from commercial_runtime.sync.site_relay.autojoin import (
                 discover_and_join)
 
+            # REHEARSAL-1007 B1: the joined hub is recorded in its own
+            # sidecar; `_hub_state_repository` (licensing.db, home of the
+            # cloud relay address) is only ever READ by autojoin now.
             discover_and_join(
                 state_repository=_hub_state_repository,
                 signer=_hub_signer,
                 trust_store=_hub_trust_store_provider(),
                 trusted_now=_datetime.now(_timezone.utc),
+                joined_hub_store=_joined_hub_store(),
             )
 
         # -- EXPLICIT OPERATOR PIN ('1'): bind now, hold NO election ---------
@@ -2676,8 +3010,21 @@ def init_app():
     # waitress ever binds the port Kotlin's SyncCoordinator talks to, so no
     # separate Android seam is needed here.
     _ensure_runtime_schema_for_sync()
+    # REHEARSAL-1007 B1 (b): before either SyncService starts, rebuild the
+    # import-time pair if its cloud address is a LAN hub address an older
+    # autojoin wrote over Owner's relay -- see the function's docstring.
+    _repair_relay_url_at_boot()
     if LICENSING_PLATFORM != 'ANDROID' and _hub_self_sync_was_active_before():
-        _enter_hub_self_sync(start_timers=False)
+        # REHEARSAL-1007 B1 (c): the operator kill switch now WINS over the
+        # boot resume. Decision A4(b)/A7 used to resume self-sync even under
+        # AURA_SITE_RELAY_ENABLED=0 (to avoid stranding unforwarded LAN rows);
+        # on the rehearsal's till B that meant `-SiteRelay 0` could not get it
+        # off its own site log. The stranding concern is now handled by
+        # `_leave_hub_self_sync_under_kill_switch` without staying a hub.
+        if SITE_RELAY_ENABLE_OVERRIDE == '0':
+            _leave_hub_self_sync_under_kill_switch()
+        else:
+            _enter_hub_self_sync(start_timers=False)
     # Registry v9: announce this device BEFORE the registry stream starts, so
     # the queued `device` event rides the first push. Never fatal.
     _announce_boot_device()

@@ -35,6 +35,7 @@ from commercial_runtime.licensing_contracts.state_repository import LicenseState
 from commercial_runtime.licensing_contracts.trust_store import OwnerTrustStore
 from commercial_runtime.sync.site_relay import autojoin
 from commercial_runtime.sync.site_relay.autojoin import AutoJoinResult, discover_and_join
+from commercial_runtime.sync.site_relay.upstream import JoinedHubStore, is_lan_hub_url
 
 # This shop's shared licence -- held constant across every test that wants
 # "same shop". A device (or a hub) whose assertion names anything else is a
@@ -305,6 +306,7 @@ def test_happy_path_joins_and_posts_this_devices_own_identity(tmp_path):
         post_response=FakeResponse(200, {"joined": True, "installation_id": own_device.installation_id}),
     )
     session_factory_calls: list = []
+    joined = JoinedHubStore(tmp_path / "site-relay" / "joined_hub.json")
 
     result = discover_and_join(
         state_repository=repo,
@@ -313,6 +315,7 @@ def test_happy_path_joins_and_posts_this_devices_own_identity(tmp_path):
         trusted_now=datetime.now(timezone.utc),
         session_factory=_session_factory(session, session_factory_calls),
         beacon_listener=lambda timeout_seconds: _pointer(hub_device),
+        joined_hub_store=joined,
     )
 
     assert result == AutoJoinResult.JOINED
@@ -332,8 +335,58 @@ def test_happy_path_joins_and_posts_this_devices_own_identity(tmp_path):
         "assertion": own_assertion,
     }
 
-    assert len(repo.save_calls) == 1
-    assert repo.save_calls[0].sync_relay_base_url == HUB_URL
+    # REHEARSAL-1007 B1: the join is recorded in the joined-hub sidecar,
+    # and the licence record -- the only home of Owner's cloud relay
+    # address -- is never written at all. This assertion used to be
+    # `repo.save_calls[0].sync_relay_base_url == HUB_URL`, i.e. it pinned
+    # the very overwrite that cut a till off from the cloud on 2026-10-07.
+    # What it can no longer catch: nothing -- "the join persisted" is still
+    # asserted, against the store that now holds it.
+    assert repo.save_calls == []
+    assert joined.url() == HUB_URL
+    assert joined.load()["spki_pin"] == HUB_SPKI_PIN
+    assert joined.load()["hub_installation_id"] == hub_device.installation_id
+
+
+# ── 2b. REHEARSAL-1007 B1: joining never touches the cloud relay address ──
+
+def test_joining_a_lan_hub_never_overwrites_the_cloud_relay_url(tmp_path):
+    """The rehearsal defect at unit scale: a till that already knows Owner's
+    cloud relay joins a LAN hub. Its `sync_relay_base_url` must still be
+    the cloud afterwards -- that field is what the forwarder dials once this
+    till becomes a hub itself.
+
+    MUTATION-PROOF: re-adding `own_record.sync_relay_base_url = hub_url;
+    state_repository.save(own_record)` to the JOINED path turns this RED
+    (`sync_relay_base_url` becomes HUB_URL, one save call)."""
+    cloud = "https://owner.example.test"
+    owner_key = Ed25519PrivateKey.generate()
+    own_device = Device()
+    own_assertion = own_device.build_assertion(owner_key)
+    repo = FakeStateRepository(_own_state(own_device, own_assertion, sync_relay_base_url=cloud))
+    joined = JoinedHubStore(tmp_path / "site-relay" / "joined_hub.json")
+
+    hub_device = Device()
+    hub_assertion = hub_device.build_assertion(owner_key)
+    session = FakeSession(
+        get_response=FakeResponse(200, _identity_body(hub_device, hub_assertion)),
+        post_response=FakeResponse(200, {"joined": True}),
+    )
+
+    result = discover_and_join(
+        state_repository=repo,
+        signer=FakeSigner(own_device),
+        trust_store=_trust_store(tmp_path, owner_key),
+        trusted_now=datetime.now(timezone.utc),
+        session_factory=_session_factory(session, []),
+        beacon_listener=lambda timeout_seconds: _pointer(hub_device),
+        joined_hub_store=joined,
+    )
+
+    assert result == AutoJoinResult.JOINED
+    assert repo.load().sync_relay_base_url == cloud
+    assert repo.save_calls == []
+    assert joined.url() == HUB_URL
 
 
 # ── 3. different licence -- THE most important test in this file ──────────
@@ -477,9 +530,12 @@ def test_already_joined_to_the_same_hub_is_a_no_op(tmp_path):
     own_device = Device()
     own_assertion = own_device.build_assertion(owner_key)
     hub_device = Device()
-    # This device already uses HUB_URL as its relay -- persisted from a
-    # prior successful autojoin.
-    repo = FakeStateRepository(_own_state(own_device, own_assertion, sync_relay_base_url=HUB_URL))
+    # This device already joined HUB_URL -- recorded in the joined-hub
+    # sidecar by a prior successful autojoin (REHEARSAL-1007 B1: no longer
+    # in `sync_relay_base_url`, which stays the cloud relay).
+    repo = FakeStateRepository(_own_state(own_device, own_assertion))
+    joined = JoinedHubStore(tmp_path / "site-relay" / "joined_hub.json")
+    joined.save(url=HUB_URL, spki_pin=HUB_SPKI_PIN, hub_installation_id=hub_device.installation_id)
 
     session_factory_calls: list = []
 
@@ -490,6 +546,7 @@ def test_already_joined_to_the_same_hub_is_a_no_op(tmp_path):
         trusted_now=datetime.now(timezone.utc),
         session_factory=_refusing_session_factory(session_factory_calls),
         beacon_listener=lambda timeout_seconds: _pointer(hub_device),
+        joined_hub_store=joined,
     )
 
     assert result == AutoJoinResult.ALREADY_JOINED
@@ -500,16 +557,17 @@ def test_already_joined_to_the_same_hub_is_a_no_op(tmp_path):
 # ── 8. /join returns non-200 ────────────────────────────────────────────
 
 def test_join_rejected_by_hub_is_not_persisted(tmp_path):
-    """MUTATION-PROOF (verbatim, see task report): moving
-    `own_record.sync_relay_base_url = hub_url; state_repository.save(...)`
-    to BEFORE the `join_response.status_code != 200` check turns this test
-    RED -- `repo.save_calls` becomes non-empty and `repo.load().sync_relay_
-    base_url` becomes `HUB_URL` even though the hub refused the join.
+    """MUTATION-PROOF: moving the `joined_hub_store.save(...)` call to
+    BEFORE the `join_response.status_code != 200` check turns this test RED
+    -- the sidecar records `HUB_URL` even though the hub refused the join.
+    (Before REHEARSAL-1007 B1 the persisted field was `sync_relay_base_url`;
+    the licence record is now never written at all, asserted below too.)
     """
     owner_key = Ed25519PrivateKey.generate()
     own_device = Device()
     own_assertion = own_device.build_assertion(owner_key)
     repo = FakeStateRepository(_own_state(own_device, own_assertion, sync_relay_base_url=None))
+    joined = JoinedHubStore(tmp_path / "site-relay" / "joined_hub.json")
 
     hub_device = Device()
     hub_assertion = hub_device.build_assertion(owner_key)  # same licence, trusted -- verification succeeds
@@ -527,11 +585,13 @@ def test_join_rejected_by_hub_is_not_persisted(tmp_path):
         trusted_now=datetime.now(timezone.utc),
         session_factory=_session_factory(session, session_factory_calls),
         beacon_listener=lambda timeout_seconds: _pointer(hub_device),
+        joined_hub_store=joined,
     )
 
     assert result == AutoJoinResult.FAILED
     assert len(session.post_calls) == 1  # /join WAS attempted...
-    assert repo.save_calls == []  # ...but never persisted
+    assert joined.load() is None  # ...but never recorded
+    assert repo.save_calls == []
     assert repo.load().sync_relay_base_url is None
 
 
@@ -571,3 +631,27 @@ def test_extract_beacon_pointer_rejects_missing_fields():
     assert autojoin._extract_beacon_pointer(_json.dumps({"url": HUB_URL}).encode("utf-8")) is None
     assert autojoin._extract_beacon_pointer(b"not json at all") is None
     assert autojoin._extract_beacon_pointer(_json.dumps(["not", "a", "dict"]).encode("utf-8")) is None
+
+
+# ── REHEARSAL-1007 B1: recognising a LAN hub address that is NOT a cloud ──
+
+def test_is_lan_hub_url_recognises_the_rehearsal_value_and_spares_real_relays():
+    """`is_lan_hub_url` is what lets a till that was ALREADY damaged before
+    the autojoin fix (its persisted "cloud" relay is a LAN hub address)
+    refuse to dial it. Both directions matter: a false positive here would
+    stop a real Owner relay from ever being used."""
+    # The exact value the rehearsal's till B ended up holding.
+    assert is_lan_hub_url("https://192.168.1.219:5443") is True
+    assert is_lan_hub_url("https://10.0.0.7:5443/") is True
+    assert is_lan_hub_url("https://169.254.10.2:5443") is True
+    # A known hub on a non-default port is caught by exact match only.
+    assert is_lan_hub_url("https://127.0.0.1:5391", known_hub_urls=["https://127.0.0.1:5391"]) is True
+    assert is_lan_hub_url("https://127.0.0.1:5391") is False
+    # Real relays: the lab Owner (plain http loopback), a named host, a
+    # public address, nothing configured.
+    assert is_lan_hub_url("http://127.0.0.1:5551") is False
+    assert is_lan_hub_url("https://owner.actionaura.me") is False
+    assert is_lan_hub_url("https://owner.actionaura.me:5443") is False
+    assert is_lan_hub_url("https://8.8.8.8:5443") is False
+    assert is_lan_hub_url("") is False
+    assert is_lan_hub_url(None) is False
