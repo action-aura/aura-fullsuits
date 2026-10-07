@@ -7357,3 +7357,19 @@ typed by hand is silently replaced after the customer's first sale here. v49 add
 customers.total_spent_baseline (migration: MAX(0, stored - derived) per existing customer;
 import/hand-set writes it; carried in the customer sync payload); the cache becomes
 baseline + derived. Plan: job 54e80fc2 tmp/B6B-PLAN.md.
+
+## 2026-10-07 — retail schema v50 CLAIMED (W2b promotions + W3a modifier configuration sync)
+
+Claimed before any builder starts. Checked all 109 local and origin refs (fetched): highest
+RETAIL_SCHEMA_VERSION anywhere is 49 (this branch). W2b and W3a ship together on one version.
+Why: promotions and the extras configuration (modifier groups, options, product links) never
+leave the computer they were set up on: a promotion made on A is not applied on B (full price),
+B's till cannot offer A's extras, and a sale with extras or a promotion made on A shows a plain
+line in B's receipts and reports. v50: promotions gain uid (legacy rows get a deterministic uid
+from their content so identical promotions on two computers collapse), row_version,
+updated_at_utc; promotions + the three modifier tables gain sync_backfill_pending;
+sale_item_promotions gains uid. Config rows sync with LWW on (row_version, updated_at_utc, then a
+deterministic final tiebreak) so concurrent edits converge; the product-group link resolves a
+natural-key clash deterministically instead of wedging the pull; a branch-scoped promotion with an
+unknown branch waits (never widens); sale lines carry their extras and promotion snapshots.
+Plan: job 54e80fc2 tmp/W2B3A-PLAN.md.
