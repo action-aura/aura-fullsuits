@@ -5722,6 +5722,7 @@ def send_stock_transfer(transfer_id):
         # states.
         currency = _company_currency(conn, cid)
         sent_lines = []  # STOCK-BOOKS B4: (product_id, qty, unit_cost) for the send journal
+        sent_costs = []  # W3b verify F1: (item_id, unit_cost) -> the send journal's uid
         for item in items:
             pid = item['product_id']
             qty = float(item['quantity_sent'])
@@ -5804,6 +5805,7 @@ def send_stock_transfer(transfer_id):
                 (transfer_unit_cost, item['id'])
             )
             sent_lines.append((pid, qty, transfer_unit_cost))
+            sent_costs.append((item['id'], transfer_unit_cost))
             # v13 stamp + ledger row, identical shape to adjust_stock's own
             # INSERT above -- 'transfer_out' is a new, self-describing
             # movement_type; movement_type carries no CHECK constraint in
@@ -5862,7 +5864,15 @@ def send_stock_transfer(transfer_id):
         # STOCK-BOOKS B4: the stock is now in a van, not on a shelf -- Dr Stock
         # in Transit (1250) / Cr Inventory (1200) at the cost just snapshotted
         # on each line. Same transaction as the movements above.
-        gl.post_transfer_send(conn, cid, source_bid, transfer_id, sent_lines, currency)
+        # W3b verify F1: the journal's uid is keyed by the line costs, so a second
+        # computer that sent the same transfer offline at a DIFFERENT cost posts
+        # a different journal (and both reach every computer) instead of colliding
+        # on one uid and leaving each computer with only its own figure. The
+        # reconcile (also run after every pull) reverses the loser; here it is a
+        # no-op unless a sibling's journal has already arrived.
+        gl.post_transfer_send(conn, cid, source_bid, transfer_id, sent_lines, currency,
+                              costs_key=xfer_core.send_key(transfer_id, sent_costs))
+        gl.reconcile_transfer_send_duplicates(conn, cid, transfer_id)
         _audit(conn, 'STOCK_TRANSFER_SENT', 'stock_transfer', transfer_id,
                f'{len(items)} line(s) from branch {source_bid} to {transfer["destination_branch_id"]}')
         conn.commit()
@@ -6103,10 +6113,11 @@ def receive_stock_transfer(transfer_id):
         # two computers that received different quantities offline post two
         # journals (on every computer) instead of colliding on one uid and
         # leaving the books different on each. Identical receipts still collapse.
+        # W3b verify F2: ONE journal PER LINE (keyed by transfer, line and the
+        # quantity received) -- the stock movement already collapses per line, so
+        # a per-receipt journal double-booked any line two computers agreed on.
         _journal_id, written_off = gl.post_transfer_receive(
-            conn, cid, dest_bid, transfer_id, recv_lines, currency,
-            receipt_key=xfer_core.receipt_key(
-                transfer_id, [(l[0], l[2]) for l in recv_lines]))
+            conn, cid, dest_bid, transfer_id, recv_lines, currency)
         for s, line in zip(shortages, [l for l in recv_lines
                                        if l[2] < l[1] - stock_reconciliation.DEFAULT_TOLERANCE]):
             s['written_off_value'] = float(written_off.get(line[0], 0))
@@ -6271,7 +6282,11 @@ def recall_stock_transfer(transfer_id):
         # W3b: `recalled_at` (with `cancelled_at`) is what tells every computer
         # this 'cancelled' means "sent, then brought back" (rank 3) and not
         # "never sent" (rank 1): a recall outranks the send it undoes.
-        cur.execute("UPDATE stock_transfers SET status='cancelled', cancelled_at=?, recalled_at=? "
+        # W3b verify F5: set-once. An in-transit transfer can already carry a
+        # `cancelled_at` (a cancel from another computer that lost to a send --
+        # `transfer_sent_after_cancel`); a recall must not overwrite that fact.
+        cur.execute("UPDATE stock_transfers SET status='cancelled', "
+                    "cancelled_at=COALESCE(cancelled_at, ?), recalled_at=COALESCE(recalled_at, ?) "
                     "WHERE id=? AND company_id=? AND status='in_transit'",
                     (utc_now, utc_now, transfer_id, cid))
         if cur.rowcount != 1:
@@ -21037,6 +21052,58 @@ def install_party_balance_refresh(sync_service):
     # it is installed here rather than at a second call site that could be
     # forgotten on one of them.
     install_po_state_refresh(sync_service)
+    # W3b verify F1c: same reasoning -- one more post-pull step both services need.
+    install_transfer_send_reconcile(sync_service)
+    return sync_service
+
+
+def install_transfer_send_reconcile(sync_service):
+    """W3b verify F1c: after every pull that brought events, reverse the losing
+    send journal of any transfer that two computers sent offline at different
+    costs.
+
+    WHY. Both sends post (their uids differ -- they are keyed by the line costs)
+    and both reach every computer, so the books hold the transfer's send value
+    TWICE until one is taken back. The line costs converge to the smaller cost on
+    every computer (sync_service's merge), and `gl.reconcile_transfer_send_
+    duplicates` reverses every send journal that is not the one keyed by those
+    converged costs. The reversal's uid derives from the loser's uid, so every
+    computer posts the SAME reversal and they collapse when they sync: both
+    computers end with identical books.
+
+    Same shape as `install_void_reversal_sweep` (copied on purpose): a SAVEPOINT,
+    log and swallow -- a failure here must never fail a pull that already applied;
+    the next pull and the next send on this computer run it again. The sync engine
+    cannot import products code, so the product hands the step in by wrapping
+    `apply_pull_result`. Installing twice is a no-op."""
+    if getattr(sync_service, '_transfer_send_reconcile_installed', False):
+        return sync_service
+    original = sync_service.apply_pull_result
+
+    def apply_pull_result_then_reconcile(conn, result, *args, **kwargs):
+        out = original(conn, result, *args, **kwargs)
+        try:
+            arrived = bool((result or {}).get('events')) if isinstance(result, dict) else True
+        except Exception:  # noqa: BLE001
+            arrived = True
+        if not arrived:
+            return out
+        try:
+            conn.execute("SAVEPOINT transfer_send_reconcile")
+            try:
+                for company_id, transfer_id in gl.transfers_with_duplicate_sends(conn):
+                    gl.reconcile_transfer_send_duplicates(conn, company_id, transfer_id)
+                conn.execute("RELEASE SAVEPOINT transfer_send_reconcile")
+            except Exception:
+                conn.execute("ROLLBACK TO SAVEPOINT transfer_send_reconcile")
+                conn.execute("RELEASE SAVEPOINT transfer_send_reconcile")
+                raise
+        except Exception:  # noqa: BLE001 -- see docstring
+            log.exception('transfer send reconcile failed after pull')
+        return out
+
+    sync_service.apply_pull_result = apply_pull_result_then_reconcile
+    sync_service._transfer_send_reconcile_installed = True
     return sync_service
 
 
@@ -22444,11 +22511,13 @@ _SYNC_REVIEW_REASONS = {
     # W3b (schema v47): stock transfers shared between computers. Arabic wording
     # in locales/ar.json: native speaker to confirm.
     'missing_parent:stock_transfer': ('the transfer it belongs to has not reached this computer yet', True),
+    # W3b verify F4: the item-update apply parks with this reason when its line is not here yet
+    # (its en/ar locale sentences were missing).
     'missing_parent:stock_transfer_item': ('the transfer line it belongs to has not reached this computer yet', True),
     'transfer_sent_after_cancel': ('a transfer was cancelled on one computer while another computer sent it. The stock did leave, so the transfer counts as sent. Check that the goods are where you expect', False),
-    'transfer_received_and_recalled': ('a transfer was received on one computer while another computer brought it back. Both moved stock, so the same goods may be counted twice. A person needs to correct the stock', False),
-    'transfer_sent_twice': ('two computers sent the same transfer and recorded a different cost for it. The first cost was kept', False),
-    'transfer_received_twice': ('two computers received the same transfer and counted a different quantity. Both counts moved stock, so check the shelves and correct the stock', False),
+    'transfer_received_and_recalled': ('a transfer was received on one computer while another computer brought it back. Both moved stock, so the same goods may be counted twice. A person needs to correct the stock and the books (the stock in transit and the shrinkage accounts)', False),
+    'transfer_sent_twice': ('two computers sent the same transfer and recorded a different cost for it. The lower cost was kept on every computer and the duplicate send was reversed in the books', False),
+    'transfer_received_twice': ('two computers received the same transfer and counted a different quantity. Both counts moved stock, so check the shelves and correct the stock and the books (the stock in transit and the shrinkage accounts)', False),
 }
 # The engine also parks `malformed_<entity type>` for any entity it cannot read
 # (sync_service `reason=f"malformed_{entity_type}"`), so the prefix gets one

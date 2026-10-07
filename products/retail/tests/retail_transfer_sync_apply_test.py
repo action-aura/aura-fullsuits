@@ -340,26 +340,36 @@ def test_rank_merge_is_forward_only_for_every_ordered_pair(get_conn, local, inco
         assert not row["recalled_at"], (local, incoming)
 
 
-@pytest.mark.parametrize("local,incoming,reason", [
-    ("cancelled_pre", "in_transit", "transfer_sent_after_cancel"),
-    ("in_transit", "cancelled_pre", "transfer_sent_after_cancel"),
-    ("received", "recalled", "transfer_received_and_recalled"),
-    ("recalled", "received", "transfer_received_and_recalled"),
-])
-def test_the_two_clashes_are_recorded_in_either_arrival_order(get_conn, local, incoming, reason):
+#: W3b verify F3: `transfer_sent_after_cancel` is recorded when a cancel-BEFORE-send
+#: meets ANY state that proves the goods left (in transit, recalled, received), in
+#: either arrival order. It used to cover only {cancelled_pre, in_transit}, so a
+#: cancel that met a transfer already sent AND received elsewhere was recorded on
+#: one computer and not the other. What the old pair list could no longer catch:
+#: nothing -- it is a subset of the new one.
+_SENT_AFTER_CANCEL_PAIRS = [
+    (a, b) for a in ("cancelled_pre",) for b in ("in_transit", "recalled", "received")]
+_CLASH_PAIRS = (
+    [(a, b, "transfer_sent_after_cancel") for a, b in _SENT_AFTER_CANCEL_PAIRS]
+    + [(b, a, "transfer_sent_after_cancel") for a, b in _SENT_AFTER_CANCEL_PAIRS]
+    + [("received", "recalled", "transfer_received_and_recalled"),
+       ("recalled", "received", "transfer_received_and_recalled")])
+
+
+@pytest.mark.parametrize("local,incoming,reason", _CLASH_PAIRS)
+def test_the_clashes_are_recorded_in_either_arrival_order(get_conn, local, incoming, reason):
     _apply(get_conn, _create())
     _set_local_state(get_conn, local)
     _apply(get_conn, _update(**STATES[incoming]))
     assert _conflicts(get_conn) == [reason]
-    # The rank rule still decides the status: send beats cancel-before-send,
-    # received beats recalled (stock was moved by BOTH movements).
-    expected = "in_transit" if reason == "transfer_sent_after_cancel" else "received"
-    assert _header(get_conn)["status"] == expected
+    # The rank rule still decides the status: whatever outranks wins (send beats
+    # cancel-before-send; received beats recalled -- stock was moved by BOTH).
+    winner = local if RANK[local] > RANK[incoming] else incoming
+    assert _header(get_conn)["status"] == STATES[winner]["status"]
 
 
 @pytest.mark.parametrize("local,incoming", [
     p for p in itertools.permutations(STATES, 2)
-    if {p[0], p[1]} not in ({"cancelled_pre", "in_transit"}, {"received", "recalled"})])
+    if (p[0], p[1]) not in {(a, b) for a, b, _r in _CLASH_PAIRS}])
 def test_every_other_pair_records_no_conflict(get_conn, local, incoming):
     _apply(get_conn, _create())
     _set_local_state(get_conn, local)
@@ -435,7 +445,37 @@ def test_same_value_twice_is_not_a_conflict_but_a_different_one_is(get_conn):
     _apply(get_conn, _item_update(unit_cost=9.0, quantity_received=3.0))   # redelivered
     assert _conflicts(get_conn) == ["transfer_received_twice", "transfer_sent_twice"]
     row = _rows(get_conn, "SELECT * FROM stock_transfer_items")[0]
-    assert row["unit_cost"] == 2.25 and row["quantity_received"] == 4.0, "set-once: first value stays"
+    # W3b verify F1a UPDATE: the SMALLER value wins (was: the first value stays).
+    # Cost 9.0 arrived second and is larger, so 2.25 stays; the quantity 3.0 is
+    # smaller than the 4.0 held, so it REPLACES it. What this can no longer
+    # catch: "the first value always stays" -- order independence is the point
+    # and the next test pins it.
+    assert row["unit_cost"] == 2.25 and row["quantity_received"] == 3.0
+
+
+@pytest.mark.parametrize("first,second", [(2.25, 9.0), (9.0, 2.25)])
+def test_two_computers_converge_on_the_smaller_cost_whatever_the_arrival_order(get_conn, first, second):
+    """W3b verify F1a: computer A applies (its own 9.0, then B's 2.25) and computer
+    B applies (its own 2.25, then A's 9.0). Both must end on 2.25 -- the old
+    'first value kept' left each computer holding its own figure for ever.
+    The same for the received quantity. Mutation: restore 'keep the local value'
+    and the (9.0, 2.25) order stays at 9.0."""
+    _apply(get_conn, _create())
+    _apply(get_conn, _item())
+    _apply(get_conn, _item_update(unit_cost=first, quantity_received=first))
+    _apply(get_conn, _item_update(unit_cost=second, quantity_received=second))
+    row = _rows(get_conn, "SELECT unit_cost, quantity_received FROM stock_transfer_items")[0]
+    assert row["unit_cost"] == 2.25 and row["quantity_received"] == 2.25
+    assert _conflicts(get_conn) == ["transfer_received_twice", "transfer_sent_twice"]
+
+
+def test_the_smaller_tie_break_is_pinned_equal_to_the_retail_core():
+    """sync_service cannot import products code, so it carries a twin of
+    `core.retail.stock_transfers.smaller`; they must agree on every pair."""
+    from core.retail import stock_transfers as st
+    from commercial_runtime.sync.sync_service import SyncService
+    for a, b in [(5, 2), (2, 5), (None, 3), (3, None), (3, 3), ('4', 5.0), (0, 5), (None, None), (0.1, 0.10)]:
+        assert SyncService._transfer_smaller(a, b) == st.smaller(a, b), (a, b)
 
 
 def test_zero_received_is_a_real_value_not_unset(get_conn):

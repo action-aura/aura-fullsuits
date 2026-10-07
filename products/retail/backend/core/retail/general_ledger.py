@@ -2411,13 +2411,23 @@ def post_po_close_short(conn, cid, branch_id, po_row, currency):
                       lines, reference=po_number, source_uid=po_row['uid'])
 
 
-def post_transfer_send(conn, cid, branch_id, transfer_id, lines, currency):
+def post_transfer_send(conn, cid, branch_id, transfer_id, lines, currency, costs_key=None):
     """Stock leaves the source branch: Dr Stock in Transit (1250) / Cr
     Inventory (1200) for the sum of quantize(qty x unit_cost) over `lines`
     (a list of (product_id, qty, unit_cost)) -- per-line rounding, because the
     receipt reads THIS journal's total back and must credit exactly it.
     `branch_id` is the SOURCE branch. None when the total is at or below the
-    currency's half-unit floor (a cost-less transfer is not booked)."""
+    currency's half-unit floor (a cost-less transfer is not booked).
+
+    W3b verify F1 -- `costs_key` (core.retail.stock_transfers.send_key) is what
+    the journal's uid derives from. Before it the uid was the plain transfer
+    id, so the SAME transfer sent on two computers while offline at DIFFERENT
+    costs collided on one uid: each computer kept only its own figure and the
+    books differed on every computer for ever. Keyed by the costs, two
+    different sends post two different journals and BOTH reach every computer;
+    `reconcile_transfer_send_duplicates` then reverses the loser. No key (an
+    old caller, a pre-v47 transfer) keeps the legacy plain-tid uid, which
+    `send_journal` still finds."""
     amount = sum((_stock_amount(q, c, currency) for _pid, q, c in lines), Decimal('0'))
     if amount <= _gl_epsilon(currency):
         return None
@@ -2427,90 +2437,189 @@ def post_transfer_send(conn, cid, branch_id, transfer_id, lines, currency):
         {'account_code': ACCOUNT_INVENTORY, 'credit': amount,
          'memo': 'Stock left the branch'},
     ]
-    return _post_once(conn, cid, stock_journal_uid(transfer_id, 'transfer_send'),
+    return _post_once(conn, cid,
+                      stock_journal_uid(costs_key if costs_key is not None else transfer_id,
+                                        'transfer_send'),
                       branch_id, _today(), 'stock_transfer', None, currency, jl,
                       reference=str(transfer_id), source_uid=str(transfer_id))
+
+
+def _transfer_converged_send_key(conn, transfer_id):
+    """The send key implied by the line costs this computer holds NOW (after any
+    sync merge -- the smaller cost wins on every computer), or None when the
+    transfer has no lines here or one of its costs has not arrived."""
+    from core.retail import stock_transfers as xfer
+    rows = conn.execute(
+        "SELECT id, unit_cost FROM stock_transfer_items WHERE transfer_id=?",
+        (transfer_id,)).fetchall()
+    if not rows or any(r['unit_cost'] is None for r in rows):
+        return None
+    return xfer.send_key(transfer_id, [(r['id'], r['unit_cost']) for r in rows])
+
+
+def _journal_1250_debit(conn, journal_id):
+    """The 1250 debit of a journal as a Decimal, or None (not a send journal)."""
+    debit = conn.execute(
+        "SELECT l.debit FROM gl_journal_lines l JOIN gl_accounts a ON a.id=l.account_id "
+        "WHERE l.journal_id=? AND a.code=? AND l.debit > 0 ORDER BY l.id LIMIT 1",
+        (journal_id, ACCOUNT_STOCK_IN_TRANSIT)
+    ).fetchone()
+    return Decimal(str(debit[0])) if debit else None
 
 
 def send_journal(conn, cid, transfer_id):
     """The send journal of `transfer_id`, or None (a transfer sent before this
     wave, or one sent at zero cost): {'id', 'uid', 'amount'} where `amount` is
     its 1250 debit as a Decimal. Found by its deterministic uid, so it is the
-    same journal on every computer."""
-    row = conn.execute(
-        "SELECT id, uid FROM gl_journals WHERE company_id=? AND uid=?",
-        (cid, stock_journal_uid(transfer_id, 'transfer_send'))
-    ).fetchone()
-    if not row:
-        return None
-    debit = conn.execute(
-        "SELECT l.debit FROM gl_journal_lines l JOIN gl_accounts a ON a.id=l.account_id "
-        "WHERE l.journal_id=? AND a.code=? AND l.debit > 0 ORDER BY l.id LIMIT 1",
-        (row['id'], ACCOUNT_STOCK_IN_TRANSIT)
-    ).fetchone()
-    if not debit:
-        return None
-    return {'id': row['id'], 'uid': row['uid'], 'amount': Decimal(str(debit[0]))}
+    same journal on every computer.
+
+    W3b verify F1 -- when a transfer was sent twice offline at different costs
+    there are TWO send journals; this returns the WINNER, the one keyed by the
+    line costs this computer now holds (which converge to the smaller cost on
+    every computer). A legacy transfer (no costs-keyed journal) falls back to
+    the plain-tid uid. If the line costs have moved on but the matching journal
+    has not arrived yet this returns None -- never the loser's figure -- and the
+    guards turn that into 'sync, then try again'."""
+    uids = []
+    key = _transfer_converged_send_key(conn, transfer_id)
+    if key is not None:
+        uids.append(stock_journal_uid(key, 'transfer_send'))
+    uids.append(stock_journal_uid(transfer_id, 'transfer_send'))
+    for uid in uids:
+        row = conn.execute(
+            "SELECT id, uid FROM gl_journals WHERE company_id=? AND uid=?", (cid, uid)
+        ).fetchone()
+        if not row:
+            continue
+        amount = _journal_1250_debit(conn, row['id'])
+        if amount is None:
+            return None
+        return {'id': row['id'], 'uid': row['uid'], 'amount': amount}
+    return None
 
 
-def post_transfer_receive(conn, cid, branch_id, transfer_id, lines, currency,
-                          receipt_key=None):
-    """Stock arrives at the destination: Dr Inventory (1200) for what was
-    received, Cr Stock in Transit (1250) for EXACTLY what the send journal
-    debited (READ BACK, never recomputed -- per-line rounding makes a fresh
-    sum drift from it by a minor unit), and the difference to Shrinkage and
-    Adjustments (5910): a shortage debits it, an over-receipt credits it.
-    `lines` is [(product_id, qty_sent, qty_received, unit_cost)];
+def reconcile_transfer_send_duplicates(conn, cid, transfer_id):
+    """W3b verify F1c. A transfer sent twice offline at different costs holds
+    two send journals on every computer once both have synced. Keep the WINNER
+    (`send_journal`: keyed by the converged line costs) and reverse every other
+    send journal, so 1250 carries the transfer's send value exactly once.
+
+    Deterministic on every computer: the reversal goes through `reverse_journal`,
+    whose uid is `reversal_uid(<the loser's uid>)` -- the same on A and on B, so
+    the two reversals collapse into one row when they sync.
+
+    SAFETY: a loser is reversed only when its amount is at least the winner's.
+    The winner's costs are the per-line minimum over every send, so a genuine
+    loser can never be cheaper; a "loser" that IS cheaper means the line costs
+    have not converged yet on this computer (the journal arrived before the line
+    update) and reversing it would reverse the wrong one. Wait for the next pass.
+
+    Never reverses the winner; never touches receive journals (they credit
+    1250), reversals, or a legacy transfer's single plain-tid journal. Returns
+    the ids of the reversals it posted (empty when there was nothing to do)."""
+    key = _transfer_converged_send_key(conn, transfer_id)
+    if key is None:
+        return []
+    winner_uid = stock_journal_uid(key, 'transfer_send')
+    winner = conn.execute(
+        "SELECT id FROM gl_journals WHERE company_id=? AND uid=?", (cid, winner_uid)).fetchone()
+    if not winner:
+        return []
+    winner_amount = _journal_1250_debit(conn, winner['id'])
+    if winner_amount is None:
+        return []
+    posted = []
+    candidates = conn.execute(
+        "SELECT id FROM gl_journals WHERE company_id=? AND source_type='stock_transfer' "
+        "AND source_uid=? AND uid IS NOT ? ORDER BY id", (cid, str(transfer_id), winner_uid)
+    ).fetchall()
+    for cand in candidates:
+        amount = _journal_1250_debit(conn, cand['id'])
+        if amount is None or amount < winner_amount:
+            continue            # a receive journal, or not converged yet (see SAFETY)
+        if conn.execute("SELECT 1 FROM gl_journals WHERE company_id=? AND reversed_journal_id=?",
+                        (cid, cand['id'])).fetchone():
+            continue            # already reversed (here, or arrived by sync)
+        posted.append(reverse_journal(
+            conn, cid, cand['id'],
+            memo=f'Transfer {transfer_id}: duplicate send reversed (the lower cost was kept)'))
+    return posted
+
+
+def transfers_with_duplicate_sends(conn):
+    """[(company_id, transfer_id)] for every transfer that holds more than one
+    send journal on this computer -- what the post-pull reconcile walks."""
+    return [(r[0], r[1]) for r in conn.execute(
+        "SELECT j.company_id, j.source_uid FROM gl_journals j "
+        "JOIN gl_journal_lines l ON l.journal_id=j.id AND l.debit > 0 "
+        "JOIN gl_accounts a ON a.id=l.account_id AND a.code=? "
+        "WHERE j.source_type='stock_transfer' AND j.source_uid IS NOT NULL "
+        "GROUP BY j.company_id, j.source_uid HAVING COUNT(DISTINCT j.id) > 1",
+        (ACCOUNT_STOCK_IN_TRANSIT,)).fetchall()]
+
+
+def post_transfer_receive(conn, cid, branch_id, transfer_id, lines, currency):
+    """Stock arrives at the destination: per LINE, Dr Inventory (1200) for what
+    was received, Cr Stock in Transit (1250) for what THAT LINE's send debited,
+    and the difference to Shrinkage and Adjustments (5910): a shortage debits
+    it, an over-receipt credits it. `lines` is [(line_key, qty_sent,
+    qty_received, unit_cost)] (the route passes the stock_transfer_items id);
     `branch_id` is the DESTINATION branch.
 
-    Returns (journal_id, {product_id: written_off}) -- `written_off` per
-    product is quantize(sent x cost) - quantize(received x cost): positive
-    for a shortage, negative for an over-receipt. A transfer with NO send
-    journal (sent before this wave, or at zero cost) posts nothing and
-    returns (None, {}): its stock never entered 1250, so there is nothing to
-    clear and 1250 can never go negative.
+    Returns (journal_id, {line_key: written_off}) -- `journal_id` is the first
+    journal posted (None when nothing was) and `written_off` per line is
+    quantize(sent x cost) - quantize(received x cost): positive for a shortage,
+    negative for an over-receipt. A transfer with NO send journal (sent before
+    this wave, or at zero cost) posts nothing and returns (None, {}): its stock
+    never entered 1250, so there is nothing to clear and 1250 can never go
+    negative.
 
-    W3b -- `receipt_key` (core.retail.stock_transfers.receipt_key) is what the
-    journal's uid derives from. Before W3b the uid was derived from the plain
-    transfer id, so the SAME transfer received on two computers while offline
-    (possibly with different counted quantities) collided on one uid: the
-    second receipt's journal was silently dropped on every computer and the
-    books understated what the second computer's stock movement did. With the
-    key, identical receipts collapse to ONE journal and different ones both
-    post -- on EVERY computer, so the books stay identical everywhere (the
-    double is flagged by the sync merge, never hidden). No key (an old caller,
-    or a test) keeps the legacy uid, so journals already posted under the plain
-    transfer id are still the ones found. `source_uid` stays the transfer id."""
-    send = send_journal(conn, cid, transfer_id)
-    if not send:
+    W3b verify F2 -- ONE JOURNAL PER LINE, keyed by (transfer, line, quantity
+    received). The stock movement of a receipt is already per line and
+    collapses per line on the same uid, so when two computers receive the same
+    transfer offline and agree on one line but not another, the agreeing line's
+    movement collapses to one while a per-RECEIPT journal posted twice -- the
+    books then carried that line's value double and the inventory tie broke.
+    Per line, an agreeing line collapses in the books exactly as it does on the
+    shelf, and a line counted differently posts both (flagged by the sync merge,
+    on every computer alike). The line's send value is quantize(qty_sent x
+    cost), the same per-line rounding the send journal summed, so the credits
+    add up to exactly what the send debited. The receipt is read-gated on the
+    send journal existing (`send_journal`), never recomputed from it."""
+    from core.retail import stock_transfers as xfer
+    if not send_journal(conn, cid, transfer_id):
         return None, {}
-    received_total = Decimal('0')
     written_off = {}
-    for product_id, qty_sent, qty_received, unit_cost in lines:
+    first_id = None
+    for line_key, qty_sent, qty_received, unit_cost in lines:
+        sent_value = _stock_amount(qty_sent, unit_cost, currency)
         recv = _stock_amount(qty_received, unit_cost, currency)
-        written_off[product_id] = _stock_amount(qty_sent, unit_cost, currency) - recv
-        received_total += recv
-    difference = send['amount'] - received_total
-    jl = [
-        {'account_code': ACCOUNT_INVENTORY, 'debit': received_total,
-         'memo': f'Transfer {transfer_id} received'},
-        {'account_code': ACCOUNT_STOCK_IN_TRANSIT, 'credit': send['amount'],
-         'memo': 'Stock arrived'},
-    ]
-    if difference > 0:
-        jl.append({'account_code': ACCOUNT_SHRINKAGE, 'debit': difference,
-                   'memo': 'Transfer shortage written off'})
-    elif difference < 0:
-        jl.append({'account_code': ACCOUNT_SHRINKAGE, 'credit': -difference,
-                   'memo': 'Transfer over-receipt'})
-    journal_id = _post_once(
-        conn, cid,
-        stock_journal_uid(receipt_key if receipt_key is not None else transfer_id,
-                          'transfer_receive'),
-        branch_id,
-        _today(), 'stock_transfer', None, currency, jl,
-        reference=str(transfer_id), source_uid=str(transfer_id))
-    return journal_id, written_off
+        written_off[line_key] = sent_value - recv
+        difference = sent_value - recv
+        jl = []
+        if recv > 0:
+            jl.append({'account_code': ACCOUNT_INVENTORY, 'debit': recv,
+                       'memo': f'Transfer {transfer_id} received'})
+        if sent_value > 0:
+            jl.append({'account_code': ACCOUNT_STOCK_IN_TRANSIT, 'credit': sent_value,
+                       'memo': 'Stock arrived'})
+        if difference > 0:
+            jl.append({'account_code': ACCOUNT_SHRINKAGE, 'debit': difference,
+                       'memo': 'Transfer shortage written off'})
+        elif difference < 0:
+            jl.append({'account_code': ACCOUNT_SHRINKAGE, 'credit': -difference,
+                       'memo': 'Transfer over-receipt'})
+        if not jl:
+            continue
+        journal_id = _post_once(
+            conn, cid,
+            stock_journal_uid(xfer.receive_line_key(transfer_id, line_key, qty_received),
+                              'transfer_receive_line'),
+            branch_id, _today(), 'stock_transfer', None, currency, jl,
+            reference=str(transfer_id), source_uid=str(transfer_id))
+        if first_id is None:
+            first_id = journal_id
+    return first_id, written_off
 
 
 def _post_movement_journal(conn, cid, branch_id, movement_uid, qty, unit_cost,

@@ -280,6 +280,35 @@ def test_every_reason_the_engine_can_write_has_a_plain_sentence():
         assert re.search(r'[a-z]{3}', text) and '_' not in text and ':' not in text, (reason, text)
 
 
+def test_every_reason_the_engine_can_write_has_en_and_ar_locale_sentences():
+    """W3b verify F4. The test above proves every engine reason has a plain
+    English sentence in retail_api; the screen translates that sentence through
+    the locale files, so a reason with a sentence but no en/ar entry shows
+    English on an Arabic till (and `missing_parent:stock_transfer_item` did
+    exactly that). Checked against the engine's own reason list, like the test
+    above, so a future reason cannot ship without both languages. A reason that
+    resolves to the generic fallback sentence is the OTHER test's failure and is
+    skipped here."""
+    root = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'locales')
+    with open(os.path.join(root, 'ar.json'), encoding='utf-8') as f:
+        ar = json.load(f)
+    with open(os.path.join(root, 'en.json'), encoding='utf-8') as f:
+        en = json.load(f)
+    missing = []
+    for reason in sorted(_engine_reasons()):
+        # The stock-transfer reasons must have their OWN sentence, not the generic
+        # "something it belongs to is missing" fallback a bare `missing_parent:*`
+        # would otherwise resolve to (mutation: delete the stock_transfer_item entry).
+        if 'stock_transfer' in reason or reason.startswith('transfer_'):
+            assert reason in retail_api._SYNC_REVIEW_REASONS, reason
+        text, _ = retail_api._sync_review_reason(reason, 'sale_item')
+        if en.get(text) != text:
+            missing.append((reason, 'en'))
+        if not ar.get(text) or ar[text] == text:
+            missing.append((reason, 'ar'))
+    assert not missing, missing
+
+
 # AUDIT-033 B2b: checked against the engine's OWN list of refusal reasons, not a
 # hand-typed copy. The hand-typed copy had drifted by three (admin_claim_signer_
 # mismatch, no_local_licence, takeover_signer_mismatch parked with the generic

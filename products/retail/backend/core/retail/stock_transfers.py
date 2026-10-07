@@ -20,9 +20,13 @@ equal, the way W4a did for the purchase-order namespace):
     unique `uid` index and moves the stock ONCE;
   * `transfer_rank` -- the order a transfer's state may only move forward in
     when two computers' views are merged;
-  * `receipt_key` -- what the RECEIVE journal's uid is derived from, so identical
-    receipts collapse to one journal and different ones both post on every
-    computer (the books stay identical everywhere and the double is flagged).
+  * `send_key` -- what the SEND journal's uid is derived from (W3b verify F1), so
+    two sends at different costs post two journals that both reach every computer
+    and the retail reconcile reverses the loser;
+  * `smaller` -- the deterministic tie-break for a line fact two computers wrote
+    differently (the smaller value wins on every computer).
+  (The receive journal is posted PER LINE by the ledger itself -- verify F2 --
+  so there is no per-receipt key any more.)
 
 NO IMPORT OF api/ OR general_ledger: nothing here touches the database.
 """
@@ -91,21 +95,46 @@ def in_movement_uid(transfer_id: str, item_id: str, quantity) -> str:
                           f"{transfer_id}:{item_id}:in:{qty_canon(quantity)}"))
 
 
-def lines_canon(item_quantities) -> str:
-    """`item_quantities` is an iterable of (item_id, quantity_received). The
-    canonical text is sorted by item id, so the order the lines were read in
-    never changes it."""
-    return ";".join(f"{item_id}={qty_canon(qty)}"
-                    for item_id, qty in sorted(item_quantities, key=lambda p: str(p[0])))
+def receive_line_key(transfer_id: str, line_key, quantity) -> str:
+    """The key `general_ledger.post_transfer_receive` derives ONE LINE's receive
+    journal uid from (W3b verify F2; it replaces the per-receipt `receipt_key`).
+    The same line counted the same on two computers is the same journal, exactly
+    like its stock movement (`in_movement_uid`); the same line counted
+    differently is a different journal, on every computer alike."""
+    return f"{transfer_id}:{line_key}:{qty_canon(quantity)}"
 
 
-def receipt_key(transfer_id: str, item_quantities) -> str:
-    """The key `general_ledger.post_transfer_receive` derives the RECEIVE
-    journal's uid from (W3b). Identical receipts of one transfer give the same
-    key (one journal on every computer); different received quantities give a
-    different key (both journals post, on EVERY computer, so the books stay
-    identical everywhere -- the double is flagged by the sync merge)."""
-    return f"{transfer_id}:{lines_canon(item_quantities)}"
+def costs_canon(item_costs) -> str:
+    """W3b verify F1. `item_costs` is an iterable of (item_id, unit_cost); the
+    canonical text is sorted by item id, like `lines_canon`. It is part of the
+    SEND journal's identity: two computers that each sent the same transfer
+    while offline, at DIFFERENT costs, must post two DIFFERENT journals (and
+    both must reach every computer) instead of colliding on one uid and leaving
+    each computer with only its own figure -- see `send_key`."""
+    return ";".join(f"{item_id}={qty_canon(cost)}"
+                    for item_id, cost in sorted(item_costs, key=lambda p: str(p[0])))
+
+
+def send_key(transfer_id: str, item_costs) -> str:
+    """The key `general_ledger.post_transfer_send` derives the SEND journal's
+    uid from (W3b verify F1). Same costs -> same key -> one journal on every
+    computer; different costs -> a different key -> both journals post, and the
+    retail reconcile reverses the loser (the one whose costs are not the
+    converged line costs)."""
+    return f"{transfer_id}:{costs_canon(item_costs)}"
+
+
+def smaller(local, incoming):
+    """W3b verify F1. The deterministic tie-break for a line fact two computers
+    wrote differently (`unit_cost`, `quantity_received`): the SMALLER value
+    wins, on every computer, in any arrival order -- so all converge. An absent
+    value never beats a real one. Twin of `SyncService._transfer_smaller`; a
+    test pins the two equal."""
+    if local is None:
+        return incoming
+    if incoming is None:
+        return local
+    return incoming if Decimal(str(incoming)) < Decimal(str(local)) else local
 
 
 def transfer_rank(status, recalled_at=None) -> int:

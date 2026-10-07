@@ -6030,6 +6030,20 @@ class SyncService:
     # ── W3b: stock transfers (schema v47) ────────────────────────────────────
 
     @staticmethod
+    def _transfer_smaller(local, incoming):
+        """W3b verify F1a: the deterministic tie-break for a line fact two
+        computers wrote differently (`unit_cost`, `quantity_received`): the
+        SMALLER value wins, on every computer, in any arrival order, so every
+        computer converges on the same figure (the old "first value kept" left
+        each computer holding its own). Twin of
+        `core/retail/stock_transfers.py::smaller`; a test pins the two equal."""
+        if local is None:
+            return incoming
+        if incoming is None:
+            return local
+        return incoming if Decimal(str(incoming)) < Decimal(str(local)) else local
+
+    @staticmethod
     def _transfer_earliest(local, incoming):
         """Set-once merge of a timestamp: the earliest non-empty value wins and
         an empty one never replaces a real one (so a redelivered older event
@@ -6123,7 +6137,13 @@ class SyncService:
             return True
         ranks = {local_rank, incoming_rank}
         reason = None
-        if ranks == {_TRANSFER_RANK_CANCELLED_BEFORE_SEND, _TRANSFER_RANK_IN_TRANSIT}:
+        # W3b verify F3: a cancel-before-send meeting ANY state that proves the
+        # goods left (in transit, recalled, received), in either arrival order.
+        # It used to match only {cancelled, in_transit}, so a cancel that met a
+        # transfer already sent AND received (or recalled) elsewhere was recorded
+        # on one computer and not the other.
+        if (_TRANSFER_RANK_CANCELLED_BEFORE_SEND in ranks
+                and max(ranks) >= _TRANSFER_RANK_IN_TRANSIT):
             reason = "transfer_sent_after_cancel"
         elif ranks == {_TRANSFER_RANK_RECALLED, _TRANSFER_RANK_RECEIVED}:
             reason = "transfer_received_and_recalled"
@@ -6220,6 +6240,8 @@ class SyncService:
             if unset:
                 new_cost = incoming_cost
             elif Decimal(str(row["unit_cost"])) != Decimal(str(incoming_cost)):
+                # W3b verify F1a: the SMALLER cost wins on every computer.
+                new_cost = self._transfer_smaller(row["unit_cost"], incoming_cost)
                 self._record_sync_conflict_once(
                     conn, conflict_sink, local_company_id=cid, entity_type="stock_transfer",
                     entity_id=tid, event_type="update", local_row_version=0,
@@ -6229,6 +6251,8 @@ class SyncService:
             if row["quantity_received"] is None:
                 new_qty = incoming_qty
             elif Decimal(str(row["quantity_received"])) != Decimal(str(incoming_qty)):
+                # W3b verify F1a: the SMALLER quantity wins on every computer.
+                new_qty = self._transfer_smaller(row["quantity_received"], incoming_qty)
                 self._record_sync_conflict_once(
                     conn, conflict_sink, local_company_id=cid, entity_type="stock_transfer",
                     entity_id=tid, event_type="update", local_row_version=0,

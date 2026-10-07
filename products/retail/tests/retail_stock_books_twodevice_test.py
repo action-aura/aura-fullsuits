@@ -138,6 +138,10 @@ def test_t8_transfer_journals_match_on_the_sibling_and_1250_clears_once(tmp_path
     for app, cid in ((app_a, boot_a["company_id"]), (app_b, boot_b["company_id"])):
         rows = _read_device(app, "SELECT COUNT(*) AS n FROM gl_journals WHERE company_id=? "
                                  "AND source_type='stock_transfer'", (cid,))
+        # W3b verify F2: the receive journal is now PER LINE; this transfer has ONE
+        # line, so the count is still 2 (send + one line receipt). What this can no
+        # longer catch: a double-posted multi-line receipt -- the overlap case is
+        # pinned in retail_transfer_sync_core_test (and by the two-computer test).
         assert rows[0]["n"] == 2, rows
 
 

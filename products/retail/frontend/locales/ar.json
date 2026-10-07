@@ -2540,8 +2540,9 @@
   "A stock transfer from another computer": "تحويل مخزون من جهاز آخر",
   "A line of a stock transfer": "بند من تحويل مخزون",
   "the transfer it belongs to has not reached this computer yet": "التحويل الذي يتبع له لم يصل إلى هذا الجهاز بعد",
+  "the transfer line it belongs to has not reached this computer yet": "بند التحويل الذي يتبع له لم يصل إلى هذا الجهاز بعد",
   "a transfer was cancelled on one computer while another computer sent it. The stock did leave, so the transfer counts as sent. Check that the goods are where you expect": "أُلغي تحويل على جهاز بينما أرسله جهاز آخر. البضاعة غادرت فعلاً، لذلك يُعتبر التحويل مُرسلاً. تأكد أن البضاعة في المكان المتوقع",
-  "a transfer was received on one computer while another computer brought it back. Both moved stock, so the same goods may be counted twice. A person needs to correct the stock": "استُلم تحويل على جهاز بينما أعاده جهاز آخر. كلاهما حرّك المخزون، فقد تُحتسب البضاعة نفسها مرتين. يلزم تصحيح المخزون يدوياً",
-  "two computers sent the same transfer and recorded a different cost for it. The first cost was kept": "أرسل جهازان التحويل نفسه وسجّل كل منهما تكلفة مختلفة له. تم الاحتفاظ بالتكلفة الأولى",
-  "two computers received the same transfer and counted a different quantity. Both counts moved stock, so check the shelves and correct the stock": "استلم جهازان التحويل نفسه وعدّ كل منهما كمية مختلفة. كلا العدّين حرّك المخزون، لذا راجع الرفوف وصحّح المخزون"
+  "a transfer was received on one computer while another computer brought it back. Both moved stock, so the same goods may be counted twice. A person needs to correct the stock and the books (the stock in transit and the shrinkage accounts)": "استُلم تحويل على جهاز بينما أعاده جهاز آخر. كلاهما حرّك المخزون، فقد تُحتسب البضاعة نفسها مرتين. يلزم تصحيح المخزون والدفاتر يدوياً (حساب المخزون في الطريق وحساب الفاقد)",
+  "two computers sent the same transfer and recorded a different cost for it. The lower cost was kept on every computer and the duplicate send was reversed in the books": "أرسل جهازان التحويل نفسه وسجّل كل منهما تكلفة مختلفة له. تم الاحتفاظ بالتكلفة الأقل على كل جهاز وعُكس الإرسال المكرر في الدفاتر",
+  "two computers received the same transfer and counted a different quantity. Both counts moved stock, so check the shelves and correct the stock and the books (the stock in transit and the shrinkage accounts)": "استلم جهازان التحويل نفسه وعدّ كل منهما كمية مختلفة. كلا العدّين حرّك المخزون، لذا راجع الرفوف وصحّح المخزون والدفاتر (حساب المخزون في الطريق وحساب الفاقد)"
 }

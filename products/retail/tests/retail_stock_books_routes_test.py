@@ -643,14 +643,18 @@ def test_t7_send_then_short_receive_writes_the_loss_to_shrinkage(client):
     assert _inventory_tie(client)['status'] == 'ties'
     # The journal lines themselves: Dr 1200 6, Dr 5910 2, Cr 1250 8.
     # W3b fix (D6) UPDATE: the receive journal's uid names WHAT was received
-    # (core.retail.stock_transfers.receipt_key), no longer the bare transfer id.
+    # (since verify F2: per line, core.retail.stock_transfers.receive_line_key), no
+    # longer the bare transfer id.
     # What this can no longer catch: a receive journal posted under the legacy
     # plain-tid uid -- that is exactly the regression the new uid exists to
     # prevent, and is asserted absent here.
     iid = _xfer_items(client, tid)[0]['id']
-    rkey = xfer_core.receipt_key(tid, [(iid, 3)])
+    # W3b verify F2 UPDATE: the journal is now ONE PER LINE (`receive_line_key`),
+    # not per receipt. What this can no longer catch: a per-receipt uid -- the
+    # core test's two-line case pins that.
+    rkey = xfer_core.receive_line_key(tid, iid, 3)
     assert _journals(cid, uid=gl.stock_journal_uid(tid, 'transfer_receive')) == []
-    [j] = _journals(cid, uid=gl.stock_journal_uid(rkey, 'transfer_receive'))
+    [j] = _journals(cid, uid=gl.stock_journal_uid(rkey, 'transfer_receive_line'))
     conn = get_retail_conn()
     lines = {(r['code']): (r['debit'], r['credit']) for r in conn.execute(
         "SELECT a.code AS code, l.debit, l.credit FROM gl_journal_lines l "
@@ -727,7 +731,9 @@ def test_t7_recall_puts_stock_and_books_back(client):
     assert _bal(cid, gl.ACCOUNT_STOCK_IN_TRANSIT) == 0.0
     assert _bal(cid, gl.ACCOUNT_INVENTORY) == 20.0
     assert _inventory_tie(client)['status'] == 'ties'
-    send_j = _journals(cid, uid=gl.stock_journal_uid(tid, 'transfer_send'))[0]
+    # W3b verify F1: the send journal's uid is keyed by the line costs now, so it
+    # is found as THE stock_transfer journal (there is exactly one before recall).
+    [send_j] = _journals(cid, source_type='stock_transfer')
     assert _journals(cid, source_type='reversal')[0]['uid'] == gl.reversal_uid(send_j['uid'])
 
     # Deny half: receive after recall, recall twice, recall a pending one.
@@ -849,9 +855,25 @@ def test_f2_recall_of_a_zero_cost_transfer_keeps_the_source_average(client):
     cid = client.test_company_id
     pid, src, dest = _two_branch_shop(client, cost=2.0, qty=10)
     tid = _xfer(client, src, dest, [(pid, 4)])
+    # W3b verify F1 UPDATE: the send journal's uid is keyed by the line costs, so the
+    # old way of faking "a transfer sent at cost 0" -- editing the line's unit_cost
+    # AFTER a real send -- now (correctly) reads as "the books for this cost have not
+    # arrived" and recall refuses. Instead the transfer is genuinely SENT at cost 0
+    # (every cost source zero: nothing is booked, the line snapshots 0) and the source
+    # branch's average is then set to 2.000, which is the state the test needs: a
+    # zero-cost line leaving a branch whose average is real. What this can no longer
+    # catch: a zero line cost sitting beside a REAL send journal (only a hand edit
+    # makes that, and that is now guarded).
+    conn = get_retail_conn()
+    conn.execute("UPDATE products SET cost_price=0, avg_cost=0 WHERE id=? AND company_id=?", (pid, cid))
+    conn.execute("UPDATE inventory_balances SET avg_cost=0 WHERE company_id=? AND product_id=? AND branch_id=?",
+                 (cid, pid, src))
+    conn.commit(); conn.close()
     assert client.post(f'{API}/stock-transfers/{tid}/send').status_code == 200
     conn = get_retail_conn()
-    conn.execute("UPDATE stock_transfer_items SET unit_cost=0 WHERE transfer_id=?", (tid,))
+    assert conn.execute("SELECT unit_cost FROM stock_transfer_items WHERE transfer_id=?", (tid,)).fetchone()[0] == 0
+    conn.execute("UPDATE inventory_balances SET avg_cost=2.0 WHERE company_id=? AND product_id=? AND branch_id=?",
+                 (cid, pid, src))
     conn.commit(); conn.close()
     assert _branch_avg(cid, pid, src) == (6.0, 2.0)
     assert client.post(f'{API}/stock-transfers/{tid}/recall').status_code == 200
@@ -865,11 +887,18 @@ def test_f2_recall_with_a_real_cost_still_blends(client):
     cid = client.test_company_id
     pid, src, dest = _two_branch_shop(client, cost=2.0, qty=10)
     tid = _xfer(client, src, dest, [(pid, 4)])
+    # W3b verify F1 UPDATE: the line is genuinely SENT at cost 1 (the source branch's
+    # average is 1 at send time) and the average is moved to 3 afterwards -- editing
+    # the line's cost after the send would now (correctly) refuse the recall because
+    # the send journal is keyed by the cost it was posted at. Same arithmetic as before.
+    conn = get_retail_conn()
+    conn.execute("UPDATE inventory_balances SET avg_cost=1 WHERE company_id=? AND product_id=? AND branch_id=?",
+                 (cid, pid, src))
+    conn.commit(); conn.close()
     assert client.post(f'{API}/stock-transfers/{tid}/send').status_code == 200
     conn = get_retail_conn()
     conn.execute("UPDATE inventory_balances SET avg_cost=3 WHERE company_id=? AND product_id=? AND branch_id=?",
                  (cid, pid, src))
-    conn.execute("UPDATE stock_transfer_items SET unit_cost=1 WHERE transfer_id=?", (tid,))
     conn.commit(); conn.close()
     assert client.post(f'{API}/stock-transfers/{tid}/recall').status_code == 200
     # (6 x 3.000 + 4 x 1.000) / 10 = 2.200

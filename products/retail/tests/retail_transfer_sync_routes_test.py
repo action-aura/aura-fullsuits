@@ -410,22 +410,30 @@ def _receive_journal_uids(cid):
         "AND uid LIKE '%' ORDER BY id", cid)]
 
 
-def test_x9_receive_journal_uid_is_keyed_by_the_received_quantities(shop):
+def test_x9_receive_journal_uid_is_keyed_by_line_and_received_quantity(shop):
     """Two computers receiving one transfer OFFLINE with different counts must
     post different journal uids (so both post, on every computer); identical
-    counts must give the same uid (so they collapse). The route has to pass the
-    receipt key -- without it every receipt of a transfer shares ONE uid and the
-    second computer's journal is silently dropped."""
+    counts must give the same uid (so they collapse).
+
+    W3b verify F1/F2 UPDATE: the send journal is now keyed by the line costs
+    (`send_key`) and the receive journal is ONE PER LINE (`receive_line_key`),
+    not one per receipt. What this can no longer catch: a per-RECEIPT key (the
+    old `receipt_key`) -- the two-computer overlap probe and
+    retail_transfer_sync_core_test's two-line test now guard that shape."""
     c, cid, src, dst, pid, tid, iid = _sent(shop)
     assert _receive(c, tid, iid, 7).status_code == 200
-    sent_uid = gl.stock_journal_uid(tid, 'transfer_send')
-    uids = [u for u in _receive_journal_uids(cid) if u != sent_uid]
-    assert uids == [gl.stock_journal_uid(xfer.receipt_key(tid, [(iid, 7)]), 'transfer_receive')]
+    sent = gl.send_journal(get_retail_conn(), cid, tid)
+    [cost_row] = _q("SELECT unit_cost FROM stock_transfer_items WHERE id=?", iid)
+    assert sent is not None and sent['uid'] == gl.stock_journal_uid(
+        xfer.send_key(tid, [(iid, cost_row['unit_cost'])]), 'transfer_send'), \
+        'the send journal is keyed by the line cost'
+    uids = [u for u in _receive_journal_uids(cid) if u != sent['uid']]
+    assert uids == [gl.stock_journal_uid(xfer.receive_line_key(tid, iid, 7), 'transfer_receive_line')]
     assert gl.stock_journal_uid(tid, 'transfer_receive') not in uids, 'the legacy plain-tid uid'
     # what the OTHER computer would key for its own count: differs for a
     # different quantity, equal for the identical one (written two ways).
-    assert (gl.stock_journal_uid(xfer.receipt_key(tid, [(iid, 6)]), 'transfer_receive') != uids[0])
-    assert (gl.stock_journal_uid(xfer.receipt_key(tid, [(iid, 7.0)]), 'transfer_receive') == uids[0])
+    assert (gl.stock_journal_uid(xfer.receive_line_key(tid, iid, 6), 'transfer_receive_line') != uids[0])
+    assert (gl.stock_journal_uid(xfer.receive_line_key(tid, iid, 7.0), 'transfer_receive_line') == uids[0])
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -459,6 +467,100 @@ def test_x6_recall_stamps_recalled_at_uses_deterministic_uid_and_queues_update(s
     h = _events('stock_transfer', 'update', tid)
     assert h[-1]['payload']['status'] == 'cancelled' and h[-1]['payload']['recalled_at']
     assert set(h[-1]['payload']) == HEADER_UPDATE_KEYS
+
+
+def test_x6_recall_keeps_an_existing_cancelled_at(shop):
+    """W3b verify F5: a transfer that is in transit but already carries a
+    `cancelled_at` (a cancel from another computer that lost to the send --
+    `transfer_sent_after_cancel`) keeps that earlier stamp when recalled; both
+    stamps are set-once. Mutation: put `cancelled_at=?` back in the recall's
+    UPDATE and the earlier instant is overwritten."""
+    c, cid, src, dst, pid, tid, iid = _sent(shop)
+    earlier = '2026-01-01 00:00:00'
+    _x("UPDATE stock_transfers SET cancelled_at=? WHERE id=?", earlier, tid)
+    assert c.post(f'{API}/stock-transfers/{tid}/recall').status_code == 200
+    t = _q("SELECT * FROM stock_transfers WHERE id=?", tid)[0]
+    assert t['cancelled_at'] == earlier, 'a recall must not overwrite an existing cancelled_at'
+    assert t['recalled_at'] and t['recalled_at'] != earlier
+    # the allow half: with no earlier stamp the recall still sets both
+    c2 = _sent(shop)
+    assert c2[0].post(f'{API}/stock-transfers/{c2[5]}/recall').status_code == 200
+    t2 = _q("SELECT * FROM stock_transfers WHERE id=?", c2[5])[0]
+    assert t2['cancelled_at'] and t2['recalled_at']
+
+
+def test_x6_a_send_posts_its_journal_keyed_by_the_line_costs(shop):
+    """W3b verify F1b: the send journal's uid names the line costs, so a second
+    computer's send of the same transfer at a different cost is a DIFFERENT
+    journal (it does not collide and vanish). Mutation: drop `costs_key=` from the
+    route's post_transfer_send call and the uid reverts to the bare transfer id."""
+    c, cid, src, dst, pid, tid, iid = _sent(shop)
+    [cost_row] = _q("SELECT unit_cost FROM stock_transfer_items WHERE id=?", iid)
+    key = xfer.send_key(tid, [(iid, cost_row['unit_cost'])])
+    [j] = _q("SELECT uid FROM gl_journals WHERE company_id=? AND source_type='stock_transfer' "
+             "AND source_uid=?", cid, tid)
+    assert j['uid'] == gl.stock_journal_uid(key, 'transfer_send')
+    assert j['uid'] != gl.stock_journal_uid(tid, 'transfer_send')
+
+
+class _FakeSync:
+    """The least a sync service needs for the post-pull wrappers: an
+    `apply_pull_result(conn, result)` that does nothing (the events are already
+    'applied' by the test)."""
+    def __init__(self):
+        self.calls = 0
+
+    def apply_pull_result(self, conn, result, *a, **k):
+        self.calls += 1
+        return {'applied': 0}
+
+
+def test_x6_the_post_pull_reconcile_reverses_the_dearer_duplicate_send(shop):
+    """W3b verify F1c: the installed post-pull step reverses a send journal that is not
+    the one keyed by the converged line costs. A sibling's DEARER send journal has
+    'arrived' (posted here under its own cost key); the line holds the smaller cost.
+    Mutations: skip the install (nothing reversed), or drop the `arrived` gate (a pull
+    with no events must not walk the books)."""
+    c, cid, src, dst, pid, tid, iid = _sent(shop)
+    [line] = _q("SELECT unit_cost, quantity_sent FROM stock_transfer_items WHERE id=?", iid)
+    dearer = float(line['unit_cost']) * 2 + 1
+    conn = get_retail_conn()
+    try:
+        gl.post_transfer_send(conn, cid, src, tid, [(pid, line['quantity_sent'], dearer)], 'JOD',
+                              costs_key=xfer.send_key(tid, [(iid, dearer)]))
+        conn.commit()
+    finally:
+        conn.close()
+    def reversals():      # scoped to THIS transfer: earlier tests in the file recall other transfers
+        return _q("SELECT r.uid, o.uid AS orig FROM gl_journals r JOIN gl_journals o "
+                  "ON o.id=r.reversed_journal_id WHERE r.source_type='reversal' AND o.source_uid=?", tid)
+    assert reversals() == []
+
+    svc = _FakeSync()
+    retail_api.install_transfer_send_reconcile(svc)
+    retail_api.install_transfer_send_reconcile(svc)            # installing twice is a no-op
+    conn = get_retail_conn()
+    try:
+        svc.apply_pull_result(conn, {'events': []})
+        conn.commit()
+        assert reversals() == [], 'a pull that brought no events must not run the reconcile'
+        svc.apply_pull_result(conn, {'events': [{'seq': 1}]})
+        conn.commit()
+    finally:
+        conn.close()
+    assert svc.calls == 2, 'the wrapped original ran exactly once per pull'
+    winner = gl.send_journal(get_retail_conn(), cid, tid)
+    assert winner['uid'] == gl.stock_journal_uid(xfer.send_key(tid, [(iid, line['unit_cost'])]), 'transfer_send')
+    revs = reversals()
+    assert len(revs) == 1 and revs[0]['orig'] != winner['uid'], revs      # the winner is never reversed
+    # deny half: a second pull posts nothing more
+    conn = get_retail_conn()
+    try:
+        svc.apply_pull_result(conn, {'events': [{'seq': 2}]})
+        conn.commit()
+    finally:
+        conn.close()
+    assert len(reversals()) == 1
 
 
 def test_x6_recall_when_sibling_recall_movement_already_here_moves_stock_once(shop):
