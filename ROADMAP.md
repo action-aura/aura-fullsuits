@@ -7246,3 +7246,48 @@ v47 adds `stock_transfers.item_count`, `cancelled_at`, `recalled_at`,
 set-once facts), stock and books keep moving only through their own synced movements and
 journals, movement uids become deterministic, and receive/recall refuse until the transfer's
 lines, send costs and send journal are local. Plan: job 54e80fc2 tmp/W3B-PLAN.md.
+
+## 2026-10-07 — W3b CASHED IN (stock transfers shared between computers, retail schema v47)
+
+Commits c2308cee (feature), e3df2f2b (two-computer proof), 97431bc2 (verify fixes), 270d5d67
+(test split) on feat/retail-ux-p0. Plans: job 54e80fc2 tmp/W3B-PLAN.md, W3B-FIX1.md.
+
+What changed: `stock_transfers` headers and lines sync as METADATA (stock_transfer create/update,
+stock_transfer_item create/update; branches travel as uids); stock still moves only through
+inventory_movement events and books only through gl_journal events. Forward-only merge by rank
+(pending < cancelled-before-send < in_transit < recalled < received); line facts converge by a
+fixed tie-break (the smaller unit_cost / quantity_received wins on every computer). Movement uids
+are deterministic (out/recall per line, in per line + quantity); the send journal is keyed by the
+line costs and a post-pull reconcile reverses losing duplicate sends with the deterministic
+reversal uid; the receive journal is per line, keyed like the movement. Receive/recall/send refuse
+409 TRANSFER_LINES_NOT_ARRIVED / TRANSFER_SEND_NOT_ARRIVED / TRANSFER_BOOKS_NOT_ARRIVED until the
+transfer is complete locally (books guard skipped for pre-v47 transfers). v47 adds item_count,
+cancelled_at, recalled_at, pre_v47, sync_backfill_pending; a boot backfill announces pre-v47
+transfers once without re-queuing their movements. Clashes recorded once per transfer on both
+computers with plain sentences (en/ar): transfer_sent_after_cancel, transfer_received_and_recalled,
+transfer_sent_twice, transfer_received_twice.
+
+Measured: core 33, routes 23, apply 69, migration 3, two-computer 10 (sent on A received on B with
+identical trial balances and journal uids; shortage 5910 = 6 on both; NOT_ARRIVED refusals write
+nothing; same receipt offline moves once; different receipts both count + flagged; recall vs
+receive and cancel vs send converge with the conflict on both, asserted mid-sync; duplicate send at
+different costs converges; overlapping two-line receipt keeps the inventory tie). Adversarial
+verify: 14 mutations re-proved; 1 HIGH (double send at different costs left the two computers'
+books permanently different) + 2 MEDIUM (overlapping receipt doubled the books; line facts kept each
+computer's own value) + 5 LOW, all fixed and mutation-proved.
+
+Full suite (run_all_tests.py retail -j 6) at 97431bc2: 377 PASS, 2 FAIL, both test-side and fixed
+in 270d5d67: the two-computer transfer file (~21 min) hit the runner's 1200 s per-file limit and is
+now two files (~10 and ~11 min, both green whole); a dialog-test mutant anchor matched twice after
+W3b reused the PO refusal line (now unique; all claims hold, every mutant caught).
+
+Residuals:
+- Double receive with different quantities and recall-vs-receive are CONSISTENT on every computer
+  but physically ambiguous (stock counted twice, 1250 negative): flagged for a person.
+- The transfer_out movement keeps each writer's unit_cost snapshot after a send clash (nothing
+  that sums money reads it); source-branch average cost can differ when a PO receipt and a send are
+  blended in different orders on two computers (the generic order-dependence, not transfers).
+- A pre-v47 transfer sent AFTER the books wave and received on a sibling before its send journal
+  arrives posts no receive journal.
+- No destination-branch enforcement; an unknown branch uid falls back to the local default branch.
+- Android has no transfer screens. Arabic sentences await a native speaker.
