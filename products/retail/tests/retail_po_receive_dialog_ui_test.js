@@ -383,7 +383,10 @@ const MUTANTS = [
   ['Enter no longer submits', 'noEnter', 'dialogIsKeyboardOperable',
     "event.key==='Enter'&&event.target.tagName==='INPUT'){event.preventDefault();RetailSystem._submitReceivePO();}", "event.key==='Enter'&&false){}"],
   ['server refusal shown raw', 'rawRefusal', 'serverRefusalIsTranslatedNotRaw',
-    "return msg ? t(msg) : ((d && d.message) || t('Error'));", "return (d && d.message) || t('Error');"],
+    // W3b: the transfer refusal helper reuses the same return line, so the
+    // anchor carries the PO helper's last code to stay unique to it.
+    "CLOSE_SHORT_NEEDS_SUPPLIER: 'Set a supplier on this order before closing it short.',\n    };\n    const msg = d && byCode[d.code];\n    return msg ? t(msg) : ((d && d.message) || t('Error'));",
+    "CLOSE_SHORT_NEEDS_SUPPLIER: 'Set a supplier on this order before closing it short.',\n    };\n    const msg = d && byCode[d.code];\n    return (d && d.message) || t('Error');"],
   ['closed_short statement kind removed', 'noClosedShortKind', 'closedShortStatementLineHasItsOwnLabel',
     "    closed_short: { label: 'Closed short (undelivered balance released)', sign: -1 },", ''],
   ['no in-flight guard (double Enter sends twice)', 'noInFlightGuard', 'doubleEnterSendsOneRequest',
