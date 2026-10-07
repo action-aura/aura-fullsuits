@@ -883,6 +883,15 @@ TRACKED_TABLES = {
     # W4a-2: a delivery is an immutable synced fact -- header and lines.
     'purchase_order_receipts': [('purchase_order_receipt', 'create')],
     'purchase_order_receipt_lines': [('purchase_order_receipt_line', 'create')],
+    # W3b (schema v47): a transfer's header and lines now travel between
+    # computers. Both are built from a create PLUS an update, so each table's
+    # sources list both: the create carries what never changes (branches by
+    # uid, creator, line product and quantity sent) and the update carries
+    # the facts a send/receive learn (status and its four stamps; a line's
+    # unit_cost and quantity_received). A column only the update carries
+    # counts as covered; one neither carries is found.
+    'stock_transfers': [('stock_transfer', 'create'), ('stock_transfer', 'update')],
+    'stock_transfer_items': [('stock_transfer_item', 'create'), ('stock_transfer_item', 'update')],
 }
 
 MIN_REASON_LEN = 40
@@ -1273,6 +1282,29 @@ EXCLUSIONS = {
                  "and the apply branch resolves the real parent by looking "
                  "up purchase_orders.uid, as sale_items does with sale_uid.",
     },
+    # W3b (schema v47): stock transfers shared between computers. `id` is NOT
+    # excluded on either table: it is a client-generated TEXT uuid and IS the
+    # cross-device identity, carried in every payload.
+    'stock_transfers': {
+        'company_id': "Tenant-isolation key; the stock_transfer apply branch "
+                      "INSERTs the receiver's own local_company_id, never a "
+                      "value read off the incoming payload, identical to "
+                      "every other synced header in this file.",
+        'source_branch_id': "A per-computer integer branches.id; the payload "
+                            "carries `source_branch_uid` instead and the apply "
+                            "branch resolves it to THIS computer's own branch "
+                            "through _resolve_branch_id, as sales do.",
+        'destination_branch_id': "A per-computer integer branches.id; the "
+                                 "payload carries `destination_branch_uid` "
+                                 "instead and the apply branch resolves it to "
+                                 "THIS computer's own branch through "
+                                 "_resolve_branch_id, as sales do.",
+        'sync_backfill_pending': "Local outbox bookkeeping: 1 marks a pre-v47 "
+                                 "transfer whose create this computer still "
+                                 "owes the outbox. Meaningless to a peer, and "
+                                 "a receiver must keep it 0 or it would "
+                                 "re-queue what it just pulled.",
+    },
 }
 
 
@@ -1434,6 +1466,14 @@ def test_purchase_order_receipts_outbox_payload_covers_every_column():
 
 def test_purchase_order_receipt_lines_outbox_payload_covers_every_column():
     _assert_full_coverage('purchase_order_receipt_lines')
+
+
+def test_stock_transfers_outbox_payload_covers_every_column():
+    _assert_full_coverage('stock_transfers')
+
+
+def test_stock_transfer_items_outbox_payload_covers_every_column():
+    _assert_full_coverage('stock_transfer_items')
 
 
 # ── NOT-VACUOUS PROOF ─────────────────────────────────────────────────────────

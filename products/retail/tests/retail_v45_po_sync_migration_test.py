@@ -163,8 +163,8 @@ def test_upgrade_adds_columns_stamps_legacy_rows_and_keeps_integrity(lazy):
     # proves v45's own columns/backfill through the real chain, and can no
     # longer catch the head drifting past 46 (that tripwire lives with
     # retail_v46_po_receipts_migration_test.py).
-    assert sch.RETAIL_SCHEMA_VERSION == 46
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 46
+    assert sch.RETAIL_SCHEMA_VERSION == 47  # v47 UPDATE: head moved 46 -> 47 (W3b); v47's own shape is pinned by retail_v47_transfer_sync_migration_test.py
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 47  # v47 UPDATE: head moved 46 -> 47 (W3b); v47's own shape is pinned by retail_v47_transfer_sync_migration_test.py
     assert _rows(db, 'PRAGMA integrity_check')[0]['integrity_check'] == 'ok'
     assert os.listdir(backup_dir), 'ensure_schema_version must have written its pre-migration backup'
 
@@ -247,7 +247,7 @@ def test_replaying_the_chain_changes_nothing_and_a_new_row_is_not_pending():
 def test_a_fresh_install_has_the_v45_shape_and_no_pending_rows():
     sch, db = _install()
     # v46 UPDATE: head is 46 now (see the note above); the v45 shape check stays.
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 46
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 47  # v47 UPDATE: head moved 46 -> 47 (W3b); v47's own shape is pinned by retail_v47_transfer_sync_migration_test.py
     assert {'uid', 'order_journal_uid', 'sync_backfill_pending'} <= _cols(db, 'purchase_orders')
     assert 'uid' in _cols(db, 'purchase_order_items')
     assert _rows(db, "SELECT COUNT(*) AS n FROM purchase_orders WHERE sync_backfill_pending=1")[0]['n'] == 0

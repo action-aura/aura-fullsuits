@@ -1240,7 +1240,39 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 #     rows locally. Its books are the existing W4a/STOCK-BOOKS journal.
 #
 # Appended LAST and shape-gated. See `_migrate_add_po_receipts`.
-RETAIL_SCHEMA_VERSION = 46
+#
+# v47 (2026-10-07, W3b -- STOCK TRANSFERS SHARED BETWEEN COMPUTERS; claimed in
+# ROADMAP.md "retail schema v47 CLAIMED"). A transfer's stock movements and their
+# 1250/5910 journals already synced, but the `stock_transfers` header and its
+# lines never did: a transfer sent from computer A could not be received on
+# computer B (404), B's books showed stock in transit its screen could not see,
+# the movement uids were random (the same transfer received on two computers
+# offline added the stock twice) and a recall racing a receive was unhandled.
+# Headers and lines now sync as METADATA (stock moves only through movement
+# events, books only through journal events, exactly as before) and the movement
+# and receive-journal uids became deterministic (core/retail/stock_transfers.py).
+#
+#   * `stock_transfers.item_count` -- how many lines the transfer was written
+#     with. Header and lines are separate events and a line can park while the
+#     header is already here; receive/recall/send refuse while the local line
+#     count is below it. NULL = written by a build that did not send it.
+#   * `stock_transfers.cancelled_at` / `recalled_at` -- set-once facts. A cancel
+#     BEFORE send is a plain cancel (cancelled_at only); a cancel AFTER send is a
+#     recall (both). Merge rank depends on the difference (a recall outranks the
+#     send it undoes; a plain cancel does not), which `status` alone cannot say.
+#   * `stock_transfers.sync_backfill_pending` -- 1 on exactly the rows that
+#     existed at upgrade: the boot step announces each one to the outbox once,
+#     then clears the flag. Armed in the SAME statement that stamps item_count
+#     (the W4a pattern), so a replay can never re-arm a flag already cleared.
+#   * `stock_transfers.pre_v47` (W3b fix) -- 1 on the same rows, armed in the same
+#     statement and NEVER cleared; it travels in the create payload. A transfer
+#     that existed before v47 may have been sent before the stock-books wave, so
+#     it can have a cost on its lines and no send journal ever; the
+#     TRANSFER_BOOKS_NOT_ARRIVED guard (a send journal not yet synced) must not
+#     apply to it or it could never be received.
+#
+# Appended LAST and shape-gated. See `_migrate_add_transfer_sync`.
+RETAIL_SCHEMA_VERSION = 47
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2403,6 +2435,70 @@ def _migrate_retail_schema(conn):
     # legacy receipts' uids), so it must run after `_migrate_add_purchase_order_
     # sync`. See the v46 comment on RETAIL_SCHEMA_VERSION.
     _migrate_add_po_receipts(conn)
+    # v46 -> v47 (stock transfers shared between computers, W3b): appended LAST.
+    # It reads `stock_transfers` / `stock_transfer_items` (created by the v28
+    # step) and nothing a step above may still be changing. See the v47 comment
+    # on RETAIL_SCHEMA_VERSION.
+    _migrate_add_transfer_sync(conn)
+
+
+def _migrate_add_transfer_sync(conn):
+    """One-time migration (schema v46 -> v47). See the v47 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    Shape-gated end to end (`PRAGMA table_info`, `IS NULL` gates), so the whole
+    chain replaying -- the normal case after a failed launch -- is
+    byte-identical. Returns early when `stock_transfers` does not exist (a
+    hand-built minimal fixture).
+
+    THE BACKFILL GATES ARE THE POINT. `sync_backfill_pending=1` is armed in the
+    SAME statement as `item_count` and only `WHERE item_count IS NULL`: a row
+    the boot backfill already announced and cleared has its count, so a replay
+    cannot re-arm it, and a transfer written by v47 code (which stamps the
+    count) is never pending. (A header applied from a sibling whose build sent
+    no count also has NULL; that only matters if the chain is replayed by hand,
+    and the worst outcome is one harmless duplicate announcement.)
+    `cancelled_at`/`recalled_at` are filled only where still NULL, so a replay
+    never overwrites a real time.
+
+    THE RECALL INFERENCE. Before v47 a cancel after send was recorded as
+    status='cancelled' with `sent_at` still set; one before send has
+    `sent_at` NULL. So `recalled_at` = the best known instant (`sent_at`) where
+    the cancelled row was sent, and stays NULL for a never-sent cancel. The
+    instant is approximate (the real cancel time was never stored) and is only
+    used as a set-once marker, never compared against another computer's clock
+    for anything but 'is it set'."""
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'stock_transfers' not in live:
+        return
+
+    cols = {row[1] for row in conn.execute('PRAGMA table_info("stock_transfers")').fetchall()}
+    for column, decl in (
+        ('item_count', 'INTEGER'),
+        ('cancelled_at', 'TEXT'),
+        ('recalled_at', 'TEXT'),
+        ('sync_backfill_pending', 'INTEGER DEFAULT 0'),
+        # W3b fix (F3): 1 on exactly the rows that existed at upgrade; see the
+        # statement below and retail_api._xfer_not_arrived.
+        ('pre_v47', 'INTEGER DEFAULT 0'),
+    ):
+        if column not in cols:
+            conn.execute(f'ALTER TABLE stock_transfers ADD COLUMN {column} {decl}')
+
+    if 'stock_transfer_items' in live:
+        conn.execute(
+            "UPDATE stock_transfers SET "
+            " item_count = (SELECT COUNT(*) FROM stock_transfer_items i WHERE i.transfer_id = stock_transfers.id),"
+            " sync_backfill_pending = 1,"
+            " pre_v47 = 1 "
+            "WHERE item_count IS NULL")
+    conn.execute(
+        "UPDATE stock_transfers SET cancelled_at = COALESCE(sent_at, created_at) "
+        "WHERE status = 'cancelled' AND cancelled_at IS NULL")
+    conn.execute(
+        "UPDATE stock_transfers SET recalled_at = COALESCE(sent_at, created_at) "
+        "WHERE status = 'cancelled' AND sent_at IS NOT NULL AND recalled_at IS NULL")
 
 
 def _migrate_add_po_receipts(conn):

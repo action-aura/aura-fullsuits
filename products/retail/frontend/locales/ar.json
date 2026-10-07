@@ -2533,5 +2533,15 @@
   "two deliveries of one purchase order add up to more than was ordered. Both were kept, so check the count with the supplier": "استلامان لطلب شراء واحد يتجاوز مجموعهما الكمية المطلوبة. تم الاحتفاظ بكليهما، لذا راجع العدد مع المورّد",
   "goods arrived on a purchase order that another computer had already closed. The goods were kept, so check what is owed to the supplier": "وصلت بضاعة على طلب شراء كان جهاز آخر قد أغلقه. تم الاحتفاظ بالبضاعة، لذا راجع المبلغ المستحق للمورّد",
   "goods arrived on a purchase order that another computer cancelled. The goods were kept": "وصلت بضاعة على طلب شراء ألغاه جهاز آخر. تم الاحتفاظ بالبضاعة",
-  "another computer tried to link a supplier payment to a purchase order it did not pay. It was ignored": "حاول جهاز آخر ربط دفعة مورّد بطلب شراء لم يدفعها. تم تجاهل ذلك"
+  "another computer tried to link a supplier payment to a purchase order it did not pay. It was ignored": "حاول جهاز آخر ربط دفعة مورّد بطلب شراء لم يدفعها. تم تجاهل ذلك",
+  "This transfer has not finished syncing from your other computer yet. Try again in a moment.": "لم تكتمل مزامنة هذا التحويل من جهازك الآخر بعد. حاول مجدداً بعد قليل.",
+  "The sending of this transfer has not finished syncing from your other computer yet. Try again in a moment.": "لم تكتمل مزامنة إرسال هذا التحويل من جهازك الآخر بعد. حاول مجدداً بعد قليل.",
+  "This transfer's bookkeeping has not finished syncing from your other computer yet. Try again in a moment.": "لم تكتمل مزامنة قيود هذا التحويل المحاسبية من جهازك الآخر بعد. حاول مجدداً بعد قليل.",
+  "A stock transfer from another computer": "تحويل مخزون من جهاز آخر",
+  "A line of a stock transfer": "بند من تحويل مخزون",
+  "the transfer it belongs to has not reached this computer yet": "التحويل الذي يتبع له لم يصل إلى هذا الجهاز بعد",
+  "a transfer was cancelled on one computer while another computer sent it. The stock did leave, so the transfer counts as sent. Check that the goods are where you expect": "أُلغي تحويل على جهاز بينما أرسله جهاز آخر. البضاعة غادرت فعلاً، لذلك يُعتبر التحويل مُرسلاً. تأكد أن البضاعة في المكان المتوقع",
+  "a transfer was received on one computer while another computer brought it back. Both moved stock, so the same goods may be counted twice. A person needs to correct the stock": "استُلم تحويل على جهاز بينما أعاده جهاز آخر. كلاهما حرّك المخزون، فقد تُحتسب البضاعة نفسها مرتين. يلزم تصحيح المخزون يدوياً",
+  "two computers sent the same transfer and recorded a different cost for it. The first cost was kept": "أرسل جهازان التحويل نفسه وسجّل كل منهما تكلفة مختلفة له. تم الاحتفاظ بالتكلفة الأولى",
+  "two computers received the same transfer and counted a different quantity. Both counts moved stock, so check the shelves and correct the stock": "استلم جهازان التحويل نفسه وعدّ كل منهما كمية مختلفة. كلا العدّين حرّك المخزون، لذا راجع الرفوف وصحّح المخزون"
 }

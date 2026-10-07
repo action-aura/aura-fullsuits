@@ -12208,12 +12208,25 @@ const RetailSystem = {
         // 400 names the exact product id and the quantity actually on hand
         // (its own f-string) -- surfacing anything less specific here would
         // leave the Send button looking dead with no way to tell why.
-        SubsystemApp.showToast(d.message || t('Error'), 'error');
+        SubsystemApp.showToast(this._transferErrorMessage(d), 'error');
       }
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
     }
+  },
+
+  // W3b: the refusals a transfer sent from another computer can meet, in the
+  // shop's language. Any other refusal keeps its own server sentence (the
+  // oversell 400 names the product and what is on hand -- see _sendTransfer).
+  _transferErrorMessage(d) {
+    const byCode = {
+      TRANSFER_LINES_NOT_ARRIVED: 'This transfer has not finished syncing from your other computer yet. Try again in a moment.',
+      TRANSFER_SEND_NOT_ARRIVED: 'The sending of this transfer has not finished syncing from your other computer yet. Try again in a moment.',
+      TRANSFER_BOOKS_NOT_ARRIVED: "This transfer's bookkeeping has not finished syncing from your other computer yet. Try again in a moment.",
+    };
+    const msg = d && byCode[d.code];
+    return msg ? t(msg) : ((d && d.message) || t('Error'));
   },
 
   async _openReceiveTransfer(id) {
@@ -12333,7 +12346,7 @@ const RetailSystem = {
           SubsystemApp.showToast(t('Transfer received'), 'success');
         }
       } else {
-        SubsystemApp.showToast(d.message || t('Error'), 'error');
+        SubsystemApp.showToast(this._transferErrorMessage(d), 'error');
       }
     } catch (e) {
       console.error(e);
@@ -12375,7 +12388,7 @@ const RetailSystem = {
         SubsystemApp.showToast(t('Transfer recalled'), 'success');
         this._loadTransfers();
       } else {
-        SubsystemApp.showToast(d.message || t('Error'), 'error');
+        SubsystemApp.showToast(this._transferErrorMessage(d), 'error');
       }
     } catch (e) {
       console.error(e);

@@ -2453,7 +2453,8 @@ def send_journal(conn, cid, transfer_id):
     return {'id': row['id'], 'uid': row['uid'], 'amount': Decimal(str(debit[0]))}
 
 
-def post_transfer_receive(conn, cid, branch_id, transfer_id, lines, currency):
+def post_transfer_receive(conn, cid, branch_id, transfer_id, lines, currency,
+                          receipt_key=None):
     """Stock arrives at the destination: Dr Inventory (1200) for what was
     received, Cr Stock in Transit (1250) for EXACTLY what the send journal
     debited (READ BACK, never recomputed -- per-line rounding makes a fresh
@@ -2467,7 +2468,19 @@ def post_transfer_receive(conn, cid, branch_id, transfer_id, lines, currency):
     for a shortage, negative for an over-receipt. A transfer with NO send
     journal (sent before this wave, or at zero cost) posts nothing and
     returns (None, {}): its stock never entered 1250, so there is nothing to
-    clear and 1250 can never go negative."""
+    clear and 1250 can never go negative.
+
+    W3b -- `receipt_key` (core.retail.stock_transfers.receipt_key) is what the
+    journal's uid derives from. Before W3b the uid was derived from the plain
+    transfer id, so the SAME transfer received on two computers while offline
+    (possibly with different counted quantities) collided on one uid: the
+    second receipt's journal was silently dropped on every computer and the
+    books understated what the second computer's stock movement did. With the
+    key, identical receipts collapse to ONE journal and different ones both
+    post -- on EVERY computer, so the books stay identical everywhere (the
+    double is flagged by the sync merge, never hidden). No key (an old caller,
+    or a test) keeps the legacy uid, so journals already posted under the plain
+    transfer id are still the ones found. `source_uid` stays the transfer id."""
     send = send_journal(conn, cid, transfer_id)
     if not send:
         return None, {}
@@ -2491,7 +2504,10 @@ def post_transfer_receive(conn, cid, branch_id, transfer_id, lines, currency):
         jl.append({'account_code': ACCOUNT_SHRINKAGE, 'credit': -difference,
                    'memo': 'Transfer over-receipt'})
     journal_id = _post_once(
-        conn, cid, stock_journal_uid(transfer_id, 'transfer_receive'), branch_id,
+        conn, cid,
+        stock_journal_uid(receipt_key if receipt_key is not None else transfer_id,
+                          'transfer_receive'),
+        branch_id,
         _today(), 'stock_transfer', None, currency, jl,
         reference=str(transfer_id), source_uid=str(transfer_id))
     return journal_id, written_off

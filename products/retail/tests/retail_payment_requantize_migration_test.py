@@ -435,7 +435,7 @@ def test_the_real_chain_advances_the_version_and_keeps_integrity():
         # v46 UPDATE: bumped 45 -> 46 (W4a-2: receipt tables + purchase_orders
         # basis/closed/cancelled columns; no change to `payments`). Same caveat;
         # v46's own migration is retail_v46_po_receipts_migration_test.py's job.
-        assert sch.RETAIL_SCHEMA_VERSION == 46, (
+        assert sch.RETAIL_SCHEMA_VERSION == 47, (  # v47 UPDATE: head moved 46 -> 47 (W3b); v47's own shape is pinned by retail_v47_transfer_sync_migration_test.py
             f"this suite is written against v46; constant is {sch.RETAIL_SCHEMA_VERSION}")
         assert _amount(conn, pay_id) == 4.007, (
             f"the chain must have applied the correction, got {_amount(conn, pay_id)!r}")

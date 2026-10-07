@@ -172,6 +172,9 @@ from core.retail import party_balance
 # W4a: the three rules a purchase order shares with the sync apply (derived
 # paid figure, deterministic receipt-movement uid, forward-only status rank).
 from core.retail import purchase_orders as po_core
+# W3b: the deterministic transfer-movement uids and the forward-only state rank,
+# shared with the sync apply (which carries its own pinned-equal copy).
+from core.retail import stock_transfers as xfer_core
 from core.retail import stock_books
 from commercial_runtime.stock_cost import blended_unit_cost as _blended_unit_cost
 from core.retail import today_cards
@@ -5281,6 +5284,189 @@ def preview_po_split():
 # machinery to feed for the header row itself, only for the movement rows,
 # which already have their own (see _queue_sync_event calls below).
 
+# W3b (schema v47): TRANSFERS SHARED BETWEEN COMPUTERS.
+#
+# WHY. The movements of a transfer and their 1250/5910 journals already synced,
+# but the `stock_transfers` header and its lines never did: a transfer sent from
+# computer A could not be received on computer B (404), B's books showed stock in
+# transit its own screen could not see, the movement uids were random (the same
+# transfer received on two computers while offline added the stock twice), and a
+# recall on one computer racing a receive on another was not handled at all.
+#
+# THE RULES (docs: ROADMAP.md W3b entry):
+#   * headers and lines sync as METADATA. Stock moves only through
+#     `inventory_movement` events and the books only through `gl_journal` events,
+#     exactly as before -- applying a transfer event never moves stock;
+#   * the movement uids are pure functions of (transfer, line) (core/retail/
+#     stock_transfers.py), so the same send or receipt recorded on two computers
+#     collides on the unique `uid` index. Every route below inserts the movement
+#     FIRST (`ON CONFLICT(uid) ... DO NOTHING`) and touches the balance, the
+#     average cost and the outbox ONLY when that insert really wrote a row;
+#   * send / receive / recall refuse (409, nothing written) while the pieces of
+#     the transfer another computer announced have not all arrived here.
+#
+# The payload dicts below are LITERAL at every `_queue_sync_event` call site: the
+# payload-coverage ratchet (retail_sync_payload_coverage_test.py) reads the keys
+# from literal dicts only.
+
+def _xfer_queue_header_update(cur, cid, transfer_id):
+    """W3b: announce the header's CURRENT facts (status and the four timestamps).
+    The receiver merges forward-only by rank and keeps the earliest timestamps,
+    so sending the full set every time is safe and a replay changes nothing."""
+    t = cur.execute("SELECT * FROM stock_transfers WHERE id=? AND company_id=?",
+                    (transfer_id, cid)).fetchone()
+    _queue_sync_event(cur, 'stock_transfer', transfer_id, 'update', {
+        'id': t['id'], 'status': t['status'], 'sent_at': t['sent_at'],
+        'received_at': t['received_at'], 'cancelled_at': t['cancelled_at'],
+        'recalled_at': t['recalled_at'],
+    })
+
+
+def _xfer_queue_item_update(cur, cid, item_id):
+    """W3b: announce a line's cost snapshot and received quantity. Both are
+    set-once on the receiver; a NULL here means 'not known yet', never 'zero'."""
+    it = cur.execute(
+        "SELECT i.* FROM stock_transfer_items i JOIN stock_transfers t ON t.id=i.transfer_id "
+        "WHERE i.id=? AND t.company_id=?", (item_id, cid)).fetchone()
+    _queue_sync_event(cur, 'stock_transfer_item', item_id, 'update', {
+        'id': it['id'], 'unit_cost': it['unit_cost'], 'quantity_received': it['quantity_received'],
+    })
+
+
+def _xfer_stamp_and_queue_create(cur, cid, transfer_id):
+    """W3b: finish a freshly-written transfer for sync -- stamp how many lines it
+    has, then queue the header and every line. Called by the create route and by
+    the legacy boot backfill so the wire shape cannot drift between them.
+
+    `item_count` exists because the header and each line are SEPARATE events and
+    a line can park on a product that has not arrived; a computer that received
+    on the header alone would move the books for the whole transfer and the
+    stock for only the lines it holds. send/receive/recall refuse while this
+    computer holds fewer lines than that number."""
+    cur.execute(
+        "UPDATE stock_transfers SET item_count="
+        "(SELECT COUNT(*) FROM stock_transfer_items WHERE transfer_id=stock_transfers.id) "
+        "WHERE id=? AND company_id=?", (transfer_id, cid))
+    t = cur.execute("SELECT * FROM stock_transfers WHERE id=? AND company_id=?",
+                    (transfer_id, cid)).fetchone()
+    _queue_sync_event(cur, 'stock_transfer', transfer_id, 'create', {
+        'id': t['id'],
+        'source_branch_uid': _branch_uid(cur.connection, t['source_branch_id']),
+        'destination_branch_uid': _branch_uid(cur.connection, t['destination_branch_id']),
+        'created_by': t['created_by'], 'created_at': t['created_at'],
+        'item_count': t['item_count'],
+        # W3b fix (F3): travels so every computer knows this transfer predates
+        # v47 and may legitimately have no send journal (see _xfer_not_arrived).
+        'pre_v47': int(t['pre_v47'] or 0),
+    })
+    for it in cur.execute("SELECT * FROM stock_transfer_items WHERE transfer_id=? ORDER BY id",
+                          (transfer_id,)).fetchall():
+        _queue_sync_event(cur, 'stock_transfer_item', it['id'], 'create', {
+            'id': it['id'], 'transfer_id': it['transfer_id'], 'product_id': it['product_id'],
+            'quantity_sent': it['quantity_sent'],
+        })
+
+
+def _xfer_not_arrived(conn, cid, transfer, items, currency, *, needs_send=True):
+    """W3b: the 409 a route returns while pieces of this transfer that another
+    computer announced have not all reached THIS computer; None when it is safe
+    to act. Three separate hazards, each a different code so the screen can say
+    what is missing:
+
+      TRANSFER_LINES_NOT_ARRIVED  fewer lines here than the header says. Acting
+          now would move the books for the whole transfer and the stock for the
+          lines present, and the missing line could never be added afterwards.
+      TRANSFER_SEND_NOT_ARRIVED   the header says in transit but a line's cost
+          snapshot has not arrived (its NULL is 'unknown', a real 0 is cost-less).
+          Receiving would weigh the goods into the average at no cost.
+      TRANSFER_BOOKS_NOT_ARRIVED  the transfer is worth money but its send
+          journal is not here. Receiving would post nothing and leave 1250 stuck;
+          recalling could not reverse the send. A cost-less transfer has no send
+          journal by design, so the check is on the VALUE, not on the journal.
+
+    `needs_send=False` (the send route) checks only the lines: a pending
+    transfer has no cost snapshot or journal to wait for.
+    W3b fix (F3): the BOOKS check applies only to a transfer written by v47
+    code (`pre_v47` = 0). One that existed at the v47 upgrade may have been sent
+    after v40 but before the stock-books wave -- a cost on its lines and no send
+    journal EVER -- and would wait forever for a journal that will never come;
+    it receives and posts nothing, exactly as before W3b.
+    RESIDUAL (recorded, not fixed): a pre-v47 transfer sent AFTER the books wave
+    and received on a sibling computer before its send journal has arrived there
+    is let through too, so that receipt posts no receive journal (1250 keeps the
+    send's debit until a person clears it). The two cases cannot be told apart
+    from the row; the first is certain, the second needs an unlucky sync order."""
+    if transfer['item_count'] is not None and len(items) < transfer['item_count']:
+        return jsonify({'status': 'error', 'code': 'TRANSFER_LINES_NOT_ARRIVED',
+                        'message': 'Some lines of this transfer have not reached this computer yet. '
+                                   'Sync, then try again.'}), 409
+    if not needs_send:
+        return None
+    if any(i['unit_cost'] is None for i in items):
+        return jsonify({'status': 'error', 'code': 'TRANSFER_SEND_NOT_ARRIVED',
+                        'message': 'The send of this transfer has not finished reaching this computer '
+                                   'yet. Sync, then try again.'}), 409
+    worth = sum((gl._stock_amount(i['quantity_sent'], i['unit_cost'], currency) for i in items),
+                Decimal('0'))
+    if (not transfer['pre_v47'] and worth > gl._gl_epsilon(currency)
+            and gl.send_journal(conn, cid, transfer['id']) is None):
+        return jsonify({'status': 'error', 'code': 'TRANSFER_BOOKS_NOT_ARRIVED',
+                        'message': "This transfer's bookkeeping has not reached this computer yet. "
+                                   "Sync, then try again."}), 409
+    return None
+
+
+def backfill_legacy_transfers(conn):
+    """W3b boot step: announce every transfer that existed BEFORE v47.
+
+    The migration only flags them `sync_backfill_pending=1` (it cannot import
+    this module's payload code). Per flagged transfer, in ONE savepoint each:
+    the header and its lines (`_xfer_stamp_and_queue_create`), one header update
+    carrying the current facts, and a line update for every line whose facts are
+    real -- a cost only once the transfer has been SENT (a pending line's cost is
+    the column default 0, which would be set-once on the receivers and clash with
+    the real cost at send), a received quantity only once there is one. Then the
+    flag clears; a second run emits nothing, and a failure rolls back just that
+    transfer so the next boot retries it.
+
+    The stock MOVEMENTS are NEVER re-queued: they already synced under their old
+    random uids, and a second copy under any other uid would double the stock.
+    Returns the number of transfers announced."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(stock_transfers)").fetchall()}
+    if 'sync_backfill_pending' not in cols:
+        return 0          # pre-v47 shape: nothing flagged yet, retry next boot
+    done = 0
+    pending = [(r[0], r[1]) for r in conn.execute(
+        "SELECT id, company_id FROM stock_transfers WHERE sync_backfill_pending=1 ORDER BY created_at, id"
+    ).fetchall()]
+    for tid, tcid in pending:
+        cur = conn.cursor()
+        try:
+            cur.execute("SAVEPOINT xfer_backfill")
+            _xfer_stamp_and_queue_create(cur, tcid, tid)
+            _xfer_queue_header_update(cur, tcid, tid)
+            sent = cur.execute("SELECT sent_at FROM stock_transfers WHERE id=? AND company_id=?",
+                               (tid, tcid)).fetchone()['sent_at']
+            for it in cur.execute("SELECT id, quantity_received FROM stock_transfer_items "
+                                  "WHERE transfer_id=? ORDER BY id", (tid,)).fetchall():
+                if sent or it['quantity_received'] is not None:
+                    _xfer_queue_item_update(cur, tcid, it['id'])
+            cur.execute("UPDATE stock_transfers SET sync_backfill_pending=0 WHERE id=? AND company_id=?",
+                        (tid, tcid))
+            cur.execute("RELEASE SAVEPOINT xfer_backfill")
+            done += 1
+        except Exception:  # noqa: BLE001 -- one transfer must not stop the rest, nor the boot
+            log.exception('stock-transfer sync backfill failed for %s -- will retry next boot', tid)
+            try:
+                cur.execute("ROLLBACK TO SAVEPOINT xfer_backfill")
+                cur.execute("RELEASE SAVEPOINT xfer_backfill")
+            except Exception:  # noqa: BLE001
+                pass
+    if done:
+        conn.commit()
+    return done
+
+
 @retail_bp.route('/stock-transfers', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -5440,9 +5626,16 @@ def create_stock_transfer():
         )
         for pid, qty in parsed_items:
             cur.execute(
-                "INSERT INTO stock_transfer_items (id,transfer_id,product_id,quantity_sent) VALUES (?,?,?,?)",
+                # W3b: unit_cost explicitly NULL (the column default is 0). NULL
+                # means "no send has written a cost yet"; only send writes one.
+                # TRANSFER_SEND_NOT_ARRIVED reads that NULL on a computer that
+                # learned the transfer is in transit before the line's cost.
+                "INSERT INTO stock_transfer_items (id,transfer_id,product_id,quantity_sent,unit_cost) "
+                "VALUES (?,?,?,?,NULL)",
                 (_new_uid(), transfer_id, pid, qty)
             )
+        # W3b: stamp item_count and announce the header + every line.
+        _xfer_stamp_and_queue_create(cur, cid, transfer_id)
         _audit(conn, 'STOCK_TRANSFER_CREATED', 'stock_transfer', transfer_id,
                f'{len(parsed_items)} line(s) from branch {source_bid} to {dest_bid}')
         conn.commit()
@@ -5509,8 +5702,15 @@ def send_stock_transfer(transfer_id):
                              'message': f"Cannot send a transfer that is {transfer['status']}."}), 409
 
         items = cur.execute(
-            "SELECT * FROM stock_transfer_items WHERE transfer_id=?", (transfer_id,)
+            "SELECT * FROM stock_transfer_items WHERE transfer_id=? ORDER BY id", (transfer_id,)
         ).fetchall()
+        # W3b: the header can be here while a line is still parked (its product
+        # has not synced). Sending then would take stock for only the lines
+        # present, and the missing one could never be sent afterwards.
+        refusal = _xfer_not_arrived(conn, cid, transfer, items, None, needs_send=False)
+        if refusal is not None:
+            conn.rollback()
+            return refusal
 
         source_bid = transfer['source_branch_id']
         reference = f'XFER-{transfer_id}'
@@ -5525,6 +5725,15 @@ def send_stock_transfer(transfer_id):
         for item in items:
             pid = item['product_id']
             qty = float(item['quantity_sent'])
+            # W3b: this line's movement uid is the same on every computer. A
+            # sibling that sent the SAME line already put its movement here (the
+            # sync apply also took the stock off the balance), so this send must
+            # take nothing more -- and must NOT refuse because the balance it
+            # reads is already the reduced one.
+            movement_uid = xfer_core.out_movement_uid(transfer_id, item['id'])
+            sibling_out = cur.execute(
+                "SELECT unit_cost FROM inventory_movements WHERE company_id=? AND uid=?",
+                (cid, movement_uid)).fetchone()
             # Same seed-then-read-then-update shape as adjust_stock above --
             # a branch that has never stocked this product yet gets a zero
             # row rather than a missing one, so the SELECT just below always
@@ -5550,7 +5759,7 @@ def send_stock_transfer(transfer_id):
             # quantity_on_hand is REAL and accumulated by repeated +/-
             # UPDATEs, so a fractional-unit product can legitimately sit at
             # 0.7999999999999999 rather than 0.8.
-            if on_hand - qty < -stock_reconciliation.DEFAULT_TOLERANCE:
+            if sibling_out is None and on_hand - qty < -stock_reconciliation.DEFAULT_TOLERANCE:
                 conn.rollback()
                 return jsonify({'status': 'error',
                                  'message': f'Cannot send {qty} of product {pid} -- '
@@ -5577,11 +5786,11 @@ def send_stock_transfer(transfer_id):
                     company_avg_cost if company_avg_cost else product_cost_price),
                 currency
             )
-            cur.execute(
-                "UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand - ? "
-                "WHERE company_id=? AND product_id=? AND branch_id=?",
-                (qty, cid, pid, source_bid)
-            )
+            if sibling_out is not None:
+                # W3b: take the SIBLING's snapshot, so both computers carry the
+                # same cost on the line (a different figure would be flagged
+                # `transfer_sent_twice` by the merge for no real disagreement).
+                transfer_unit_cost = float(sibling_out['unit_cost'] or 0)
             # Schema v40: persist the snapshot onto THIS line's own
             # stock_transfer_items row (keyed by item id, not product_id --
             # see database/schema.py's v40 migration docstring for why: a
@@ -5608,20 +5817,31 @@ def send_stock_transfer(transfer_id):
             # branches now carries its cost with it, per ROADMAP.md's v40
             # entry, rather than the "harmless while cost was company-wide"
             # zero v39 deliberately left in place.
-            movement_uid = _new_uid()
-            cur.execute("""
+            # W3b: movement FIRST, under the deterministic uid; the balance moves
+            # and the event is announced ONLY when this insert really wrote a
+            # row (see the section comment above). `ON CONFLICT(uid) WHERE uid
+            # IS NOT NULL` repeats the partial unique index's predicate, as
+            # sync_service's inventory_movement apply does.
+            ins = cur.execute("""
                 INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
                                                  uid,actor_user_uid,terminal_id,created_at_utc)
                 VALUES (?,?,?,'transfer_out',?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING
             """, (cid, pid, source_bid, -qty, transfer_unit_cost, reference,
                   f'Transfer to branch {transfer["destination_branch_id"]}', _uid(),
                   movement_uid, actor, terminal, utc_now))
-            _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
-                'uid': movement_uid, 'product_id': pid, 'branch_id': source_bid, 'branch_uid': source_branch_uid,
-                'movement_type': 'transfer_out', 'quantity': -qty, 'unit_cost': transfer_unit_cost,
-                'reference': reference, 'notes': f'Transfer to branch {transfer["destination_branch_id"]}',
-                'created_by': _uid(), 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
-            })
+            if ins.rowcount == 1:
+                cur.execute(
+                    "UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand - ? "
+                    "WHERE company_id=? AND product_id=? AND branch_id=?",
+                    (qty, cid, pid, source_bid)
+                )
+                _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
+                    'uid': movement_uid, 'product_id': pid, 'branch_id': source_bid, 'branch_uid': source_branch_uid,
+                    'movement_type': 'transfer_out', 'quantity': -qty, 'unit_cost': transfer_unit_cost,
+                    'reference': reference, 'notes': f'Transfer to branch {transfer["destination_branch_id"]}',
+                    'created_by': _uid(), 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+                })
 
         cur.execute(
             "UPDATE stock_transfers SET status='in_transit', sent_at=? "
@@ -5634,6 +5854,11 @@ def send_stock_transfer(transfer_id):
             # order's identical double-guard.
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'Transfer already sent.'}), 409
+        # W3b: announce the new state and each line's cost snapshot. The stock
+        # itself travels in the movement events above, never in these.
+        _xfer_queue_header_update(cur, cid, transfer_id)
+        for item in items:
+            _xfer_queue_item_update(cur, cid, item['id'])
         # STOCK-BOOKS B4: the stock is now in a van, not on a shelf -- Dr Stock
         # in Transit (1250) / Cr Inventory (1200) at the cost just snapshotted
         # on each line. Same transaction as the movements above.
@@ -5704,8 +5929,15 @@ def receive_stock_transfer(transfer_id):
                              'message': f"Cannot receive a transfer that is {transfer['status']}."}), 409
 
         items = cur.execute(
-            "SELECT * FROM stock_transfer_items WHERE transfer_id=?", (transfer_id,)
+            "SELECT * FROM stock_transfer_items WHERE transfer_id=? ORDER BY id", (transfer_id,)
         ).fetchall()
+        # W3b: BEFORE the body is read -- a missing line would otherwise surface
+        # as "unknown transfer item id" (a 400 the screen cannot act on) instead
+        # of the 409 that says "sync, then try again".
+        refusal = _xfer_not_arrived(conn, cid, transfer, items, _company_currency(conn, cid))
+        if refusal is not None:
+            conn.rollback()
+            return refusal
 
         received_by_item_id = {}
         for entry in (data.get('items') or []):
@@ -5757,6 +5989,15 @@ def receive_stock_transfer(transfer_id):
                 "UPDATE stock_transfer_items SET quantity_received=? WHERE id=?",
                 (qty_received, item['id'])
             )
+            # qty_received == 0 writes no movement and moves no stock -- see
+            # this route's own docstring: 0 is itself the real, meaningful
+            # fact ("sent but none arrived"), not an absence to special-case.
+            # (W3b: the shortage is recorded HERE, before the movement, so a
+            # receipt whose movement a sibling already wrote still reports it.)
+            if qty_received < qty_sent - stock_reconciliation.DEFAULT_TOLERANCE:
+                shortages.append({
+                    'product_id': pid, 'quantity_sent': qty_sent, 'quantity_received': qty_received,
+                })
             if qty_received > 0:
                 # Schema v40: the cost THIS line left the source branch at,
                 # snapshotted by send_stock_transfer onto this SAME row (see
@@ -5781,6 +6022,25 @@ def receive_stock_transfer(transfer_id):
                     "VALUES (?,?,?,0)",
                     (cid, pid, dest_bid)
                 )
+                # W3b: the movement goes in FIRST under a uid that names this
+                # line AND the quantity received. The same receipt recorded on
+                # two computers is the same movement (the stock arrives once);
+                # `rowcount == 0` means a sibling's identical receipt already
+                # put it here, so this one adds nothing -- no balance bump, no
+                # average-cost blend, no announcement. Two DIFFERENT quantities
+                # are two movements: both move stock and the merge flags the
+                # pair, rather than one silently vanishing.
+                movement_uid = xfer_core.in_movement_uid(transfer_id, item['id'], qty_received)
+                ins = cur.execute("""
+                    INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
+                                                     uid,actor_user_uid,terminal_id,created_at_utc)
+                    VALUES (?,?,?,'transfer_in',?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING
+                """, (cid, pid, dest_bid, qty_received, incoming_unit_cost, reference,
+                      f'Transfer from branch {transfer["source_branch_id"]}', _uid(),
+                      movement_uid, actor, terminal, utc_now))
+                if ins.rowcount == 0:
+                    continue      # the shortage (if any) was already recorded above
                 dest_bal_row = cur.execute(
                     "SELECT quantity_on_hand, avg_cost FROM inventory_balances "
                     "WHERE company_id=? AND product_id=? AND branch_id=?",
@@ -5812,26 +6072,13 @@ def receive_stock_transfer(transfer_id):
                 # figure just weighted into the destination average above,
                 # so the immutable ledger row and the mutable cache it feeds
                 # agree by construction.
-                movement_uid = _new_uid()
-                cur.execute("""
-                    INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
-                                                     uid,actor_user_uid,terminal_id,created_at_utc)
-                    VALUES (?,?,?,'transfer_in',?,?,?,?,?,?,?,?,?)
-                """, (cid, pid, dest_bid, qty_received, incoming_unit_cost, reference,
-                      f'Transfer from branch {transfer["source_branch_id"]}', _uid(),
-                      movement_uid, actor, terminal, utc_now))
+                # (the movement row itself was written FIRST, above, under the
+                # deterministic uid -- only its announcement is left to do.)
                 _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
                     'uid': movement_uid, 'product_id': pid, 'branch_id': dest_bid, 'branch_uid': dest_branch_uid,
                     'movement_type': 'transfer_in', 'quantity': qty_received, 'unit_cost': incoming_unit_cost,
                     'reference': reference, 'notes': f'Transfer from branch {transfer["source_branch_id"]}',
                     'created_by': _uid(), 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
-                })
-            # qty_received == 0 writes no movement and moves no stock -- see
-            # this route's own docstring: 0 is itself the real, meaningful
-            # fact ("sent but none arrived"), not an absence to special-case.
-            if qty_received < qty_sent - stock_reconciliation.DEFAULT_TOLERANCE:
-                shortages.append({
-                    'product_id': pid, 'quantity_sent': qty_sent, 'quantity_received': qty_received,
                 })
 
         cur.execute(
@@ -5842,13 +6089,24 @@ def receive_stock_transfer(transfer_id):
         if cur.rowcount != 1:
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'Transfer already received.'}), 409
+        # W3b: announce the new state and what each line received. The stock
+        # itself travels in the movement events above, never in these.
+        _xfer_queue_header_update(cur, cid, transfer_id)
+        for item in items:
+            _xfer_queue_item_update(cur, cid, item['id'])
         # STOCK-BOOKS B4: Dr Inventory (received) / Cr Stock in Transit (exactly
         # what the send journal debited) / the difference to Shrinkage (5910).
         # A shortage used to vanish: the stock left the source and never arrived
         # and nothing recorded the loss. A transfer sent before this wave has no
         # send journal; the helper then posts nothing (1250 never goes negative).
+        # W3b fix (D6): the receive journal's uid names WHAT was received, so
+        # two computers that received different quantities offline post two
+        # journals (on every computer) instead of colliding on one uid and
+        # leaving the books different on each. Identical receipts still collapse.
         _journal_id, written_off = gl.post_transfer_receive(
-            conn, cid, dest_bid, transfer_id, recv_lines, currency)
+            conn, cid, dest_bid, transfer_id, recv_lines, currency,
+            receipt_key=xfer_core.receipt_key(
+                transfer_id, [(l[0], l[2]) for l in recv_lines]))
         for s, line in zip(shortages, [l for l in recv_lines
                                        if l[2] < l[1] - stock_reconciliation.DEFAULT_TOLERANCE]):
             s['written_off_value'] = float(written_off.get(line[0], 0))
@@ -5900,13 +6158,19 @@ def cancel_stock_transfer(transfer_id):
             return jsonify({'status': 'error',
                              'message': f"Cannot cancel a transfer that is {transfer['status']}."}), 409
 
+        # W3b: `cancelled_at` with `recalled_at` left EMPTY is what tells every
+        # computer this was cancelled BEFORE anything was sent (rank 1), not a
+        # recall (rank 3) -- a send elsewhere then outranks it and is flagged.
+        cancelled_utc = now_utc_iso()      # same clock/format as sent_at/received_at (_stamp)
         cur.execute(
-            "UPDATE stock_transfers SET status='cancelled' WHERE id=? AND company_id=? AND status='pending'",
-            (transfer_id, cid)
+            "UPDATE stock_transfers SET status='cancelled', cancelled_at=? "
+            "WHERE id=? AND company_id=? AND status='pending'",
+            (cancelled_utc, transfer_id, cid)
         )
         if cur.rowcount != 1:
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'Transfer already sent or received.'}), 409
+        _xfer_queue_header_update(cur, cid, transfer_id)
         _audit(conn, 'STOCK_TRANSFER_CANCELLED', 'stock_transfer', transfer_id)
         conn.commit()
     except sqlite3.DatabaseError as exc:
@@ -5951,16 +6215,38 @@ def recall_stock_transfer(transfer_id):
             conn.rollback()
             return jsonify({'status': 'error',
                             'message': f"Cannot recall a transfer that is {transfer['status']}."}), 409
-        items = cur.execute("SELECT * FROM stock_transfer_items WHERE transfer_id=?", (transfer_id,)).fetchall()
+        items = cur.execute("SELECT * FROM stock_transfer_items WHERE transfer_id=? ORDER BY id",
+                            (transfer_id,)).fetchall()
         source_bid = transfer['source_branch_id']
         reference = f'XFER-{transfer_id}'
         actor, terminal, utc_now = _stamp()
         source_branch_uid = _branch_uid(conn, source_bid)
         currency = _company_currency(conn, cid)
+        # W3b: the same three waits as receive -- a recall that reads fewer lines
+        # than were sent would put back only some of the stock, and one that finds
+        # no send journal could not reverse it. See `_xfer_not_arrived`.
+        refusal = _xfer_not_arrived(conn, cid, transfer, items, currency)
+        if refusal is not None:
+            conn.rollback()
+            return refusal
         for item in items:
             pid = item['product_id']
             qty = float(item['quantity_sent'])
             unit_cost = float(item['unit_cost'] or 0)
+            movement_uid = xfer_core.recall_movement_uid(transfer_id, item['id'])
+            note = 'Recalled'
+            # W3b: movement FIRST under the deterministic uid; the balance, the
+            # average and the announcement only when it really wrote a row (two
+            # computers recalling the same line put the stock back once).
+            ins = cur.execute("""
+                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
+                                                 uid,actor_user_uid,terminal_id,created_at_utc)
+                VALUES (?,?,?,'transfer_in',?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING
+            """, (cid, pid, source_bid, qty, unit_cost, reference, note, _uid(),
+                  movement_uid, actor, terminal, utc_now))
+            if ins.rowcount == 0:
+                continue
             cur.execute("INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand) "
                         "VALUES (?,?,?,0)", (cid, pid, source_bid))
             bal = cur.execute("SELECT quantity_on_hand, avg_cost FROM inventory_balances "
@@ -5976,25 +6262,22 @@ def recall_stock_transfer(transfer_id):
             cur.execute("UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?, avg_cost = ? "
                         "WHERE company_id=? AND product_id=? AND branch_id=?",
                         (qty, new_avg_cost, cid, pid, source_bid))
-            movement_uid = _new_uid()
-            note = 'Recalled'
-            cur.execute("""
-                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
-                                                 uid,actor_user_uid,terminal_id,created_at_utc)
-                VALUES (?,?,?,'transfer_in',?,?,?,?,?,?,?,?,?)
-            """, (cid, pid, source_bid, qty, unit_cost, reference, note, _uid(),
-                  movement_uid, actor, terminal, utc_now))
             _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
                 'uid': movement_uid, 'product_id': pid, 'branch_id': source_bid, 'branch_uid': source_branch_uid,
                 'movement_type': 'transfer_in', 'quantity': qty, 'unit_cost': unit_cost,
                 'reference': reference, 'notes': note, 'created_by': _uid(),
                 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
             })
-        cur.execute("UPDATE stock_transfers SET status='cancelled' "
-                    "WHERE id=? AND company_id=? AND status='in_transit'", (transfer_id, cid))
+        # W3b: `recalled_at` (with `cancelled_at`) is what tells every computer
+        # this 'cancelled' means "sent, then brought back" (rank 3) and not
+        # "never sent" (rank 1): a recall outranks the send it undoes.
+        cur.execute("UPDATE stock_transfers SET status='cancelled', cancelled_at=?, recalled_at=? "
+                    "WHERE id=? AND company_id=? AND status='in_transit'",
+                    (utc_now, utc_now, transfer_id, cid))
         if cur.rowcount != 1:
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'Transfer already received or recalled.'}), 409
+        _xfer_queue_header_update(cur, cid, transfer_id)
         send = gl.send_journal(conn, cid, transfer_id)
         if send:
             gl.reverse_journal(conn, cid, send['id'], memo=f'Transfer {transfer_id} recalled')
@@ -14307,6 +14590,13 @@ def _ensure_credit_schema(conn):
         backfill_legacy_purchase_orders(conn)
     except Exception:  # noqa: BLE001
         log.exception('purchase-order sync backfill failed this boot -- will retry next boot')
+    # W3b BOOT STEP: same shape and same reasoning as the purchase-order backfill
+    # just above, for stock transfers that pre-date v47. Its own try block so a
+    # failure in one cannot stop the other.
+    try:
+        backfill_legacy_transfers(conn)
+    except Exception:  # noqa: BLE001
+        log.exception('stock-transfer sync backfill failed this boot -- will retry next boot')
     _CREDIT_SCHEMA_READY = True
 
 def _settings(conn, cid):
@@ -22067,6 +22357,8 @@ _SYNC_REVIEW_KINDS = {
     'cheque': 'A cheque from another computer',
     'gl_journal': 'An accounting entry',
     'gl_journal_line': 'A line of an accounting entry',
+    'stock_transfer': 'A stock transfer from another computer',
+    'stock_transfer_item': 'A line of a stock transfer',
     # Track S (retail v42 + 1e7194cb): the engine parks these too -- a till
     # number given out by a computer that is not main, or a branch alias it
     # refused -- so the owner is told what the item is, not "something".
@@ -22149,6 +22441,14 @@ _SYNC_REVIEW_REASONS = {
     'po_received_after_close': ('goods arrived on a purchase order that another computer had already closed. The goods were kept, so check what is owed to the supplier', False),
     'po_received_and_cancelled': ('goods arrived on a purchase order that another computer cancelled. The goods were kept', False),
     'po_link_from_non_origin': ('another computer tried to link a supplier payment to a purchase order it did not pay. It was ignored', False),
+    # W3b (schema v47): stock transfers shared between computers. Arabic wording
+    # in locales/ar.json: native speaker to confirm.
+    'missing_parent:stock_transfer': ('the transfer it belongs to has not reached this computer yet', True),
+    'missing_parent:stock_transfer_item': ('the transfer line it belongs to has not reached this computer yet', True),
+    'transfer_sent_after_cancel': ('a transfer was cancelled on one computer while another computer sent it. The stock did leave, so the transfer counts as sent. Check that the goods are where you expect', False),
+    'transfer_received_and_recalled': ('a transfer was received on one computer while another computer brought it back. Both moved stock, so the same goods may be counted twice. A person needs to correct the stock', False),
+    'transfer_sent_twice': ('two computers sent the same transfer and recorded a different cost for it. The first cost was kept', False),
+    'transfer_received_twice': ('two computers received the same transfer and counted a different quantity. Both counts moved stock, so check the shelves and correct the stock', False),
 }
 # The engine also parks `malformed_<entity type>` for any entity it cannot read
 # (sync_service `reason=f"malformed_{entity_type}"`), so the prefix gets one

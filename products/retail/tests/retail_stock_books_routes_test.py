@@ -55,6 +55,7 @@ from commercial_runtime.identity.registry_db import get_conn as registry_conn  #
 from commercial_runtime.security.passwords import hash_password  # noqa: E402
 from database.schema import get_retail_conn  # noqa: E402
 from core.retail import general_ledger as gl  # noqa: E402
+from core.retail import stock_transfers as xfer_core  # noqa: E402
 
 API = '/api/sub/retail'
 
@@ -641,7 +642,15 @@ def test_t7_send_then_short_receive_writes_the_loss_to_shrinkage(client):
     assert _bal(cid, gl.ACCOUNT_SHRINKAGE) == 2.0
     assert _inventory_tie(client)['status'] == 'ties'
     # The journal lines themselves: Dr 1200 6, Dr 5910 2, Cr 1250 8.
-    [j] = _journals(cid, uid=gl.stock_journal_uid(tid, 'transfer_receive'))
+    # W3b fix (D6) UPDATE: the receive journal's uid names WHAT was received
+    # (core.retail.stock_transfers.receipt_key), no longer the bare transfer id.
+    # What this can no longer catch: a receive journal posted under the legacy
+    # plain-tid uid -- that is exactly the regression the new uid exists to
+    # prevent, and is asserted absent here.
+    iid = _xfer_items(client, tid)[0]['id']
+    rkey = xfer_core.receipt_key(tid, [(iid, 3)])
+    assert _journals(cid, uid=gl.stock_journal_uid(tid, 'transfer_receive')) == []
+    [j] = _journals(cid, uid=gl.stock_journal_uid(rkey, 'transfer_receive'))
     conn = get_retail_conn()
     lines = {(r['code']): (r['debit'], r['credit']) for r in conn.execute(
         "SELECT a.code AS code, l.debit, l.credit FROM gl_journal_lines l "
@@ -666,7 +675,30 @@ def test_t7_over_receipt_credits_shrinkage(client):
 
 def test_t7_legacy_in_transit_transfer_posts_nothing_on_receive(client):
     """In transit BEFORE this wave: no send journal, so receiving must not
-    credit a 1250 that never held it."""
+    credit a 1250 that never held it.
+
+    W3b fix (F3): the row is a transfer that existed at the v47 upgrade
+    (`pre_v47`=1). The W3b books guard (TRANSFER_BOOKS_NOT_ARRIVED) must not
+    apply to it -- it may have been sent before the books wave, with a cost and
+    NO send journal ever, and would otherwise be unreceivable forever. The
+    same shape on a v47 transfer (pre_v47=0) IS refused: pinned in
+    retail_transfer_sync_routes_test.py::test_x5_books_not_arrived_*."""
+    cid = client.test_company_id
+    pid, src, dest = _two_branch_shop(client)
+    tid = str(uuid.uuid4())
+    conn = get_retail_conn()
+    conn.execute("INSERT INTO stock_transfers (id,company_id,source_branch_id,destination_branch_id,status,pre_v47) "
+                 "VALUES (?,?,?,?,'in_transit',1)", (tid, cid, src, dest))
+    conn.execute("INSERT INTO stock_transfer_items (id,transfer_id,product_id,quantity_sent,unit_cost) "
+                 "VALUES (?,?,?,4,2)", (str(uuid.uuid4()), tid, pid))
+    conn.commit(); conn.close()
+    n = len(_journals(cid))
+    assert _xfer_receive(client, tid, [4]).status_code == 200
+    assert len(_journals(cid)) == n
+    assert _bal(cid, gl.ACCOUNT_STOCK_IN_TRANSIT) == 0.0
+
+
+def test_t7_legacy_costless_in_transit_transfer_still_receives_and_posts_nothing(client):
     cid = client.test_company_id
     pid, src, dest = _two_branch_shop(client)
     tid = str(uuid.uuid4())
@@ -674,7 +706,7 @@ def test_t7_legacy_in_transit_transfer_posts_nothing_on_receive(client):
     conn.execute("INSERT INTO stock_transfers (id,company_id,source_branch_id,destination_branch_id,status) "
                  "VALUES (?,?,?,?,'in_transit')", (tid, cid, src, dest))
     conn.execute("INSERT INTO stock_transfer_items (id,transfer_id,product_id,quantity_sent,unit_cost) "
-                 "VALUES (?,?,?,4,2)", (str(uuid.uuid4()), tid, pid))
+                 "VALUES (?,?,?,4,0)", (str(uuid.uuid4()), tid, pid))
     conn.commit(); conn.close()
     n = len(_journals(cid))
     assert _xfer_receive(client, tid, [4]).status_code == 200

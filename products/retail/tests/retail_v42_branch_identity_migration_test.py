@@ -273,7 +273,7 @@ def _assert_money_neutral(before, after):
     # DAY-1c UPDATE: the head is now v43 (payments.cash_session_id), so a v41 database boots all the way to 43 and the pre-migration backup is named v41-to-v43. This is the head-version tripwire, hard-coded on purpose; v43's own migration is proved by retail_day1_v43_migration_test.py, and what this line cannot catch is a v43 defect.
     # v44 UPDATE: the head is now v44 (party_balance tables); same tripwire, same caveat -- v44's own migration is proved by retail_v44_party_balance_migration_test.py.
     # v46 UPDATE: the head is now v46 (v45 PO sync identity, v46 PO receipts); same tripwire, same caveat -- v45/v46's own migrations are proved by their own migration tests, and what this line cannot catch is a v45/v46 defect.
-    assert after['user_version'] == 46
+    assert after['user_version'] == 47  # v47 UPDATE: head moved 46 -> 47 (W3b); v47's own shape is pinned by retail_v47_transfer_sync_migration_test.py
     for t in MONEY_TABLES:
         assert before['money'][t] == after['money'][t], f'{t}: rows changed across the v42 boot'
     assert after['drift'] == before['drift']
@@ -285,8 +285,8 @@ def _assert_money_neutral(before, after):
 
 def _assert_backup_is_the_pre_migration_state(sch, before_branches):
     bdir = os.path.join(sch.BASE_DIR, 'migration_backups')
-    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v46' in n)   # v46: head is v46
-    assert names, f'no v41-to-v46 backup in {os.listdir(bdir)}'
+    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v47' in n)   # v47 UPDATE: head is v47 (W3b)
+    assert names, f'no v41-to-v47 backup in {os.listdir(bdir)}'  # v47 UPDATE: head moved 46 -> 47 (W3b); v47's own shape is pinned by retail_v47_transfer_sync_migration_test.py
     conn = sqlite3.connect(f'file:{os.path.join(bdir, names[-1])}?mode=ro', uri=True)
     try:
         assert conn.execute('PRAGMA user_version').fetchone()[0] == 41
@@ -418,7 +418,7 @@ def test_a_fresh_shop_with_no_branches_yet_skips_quietly(tmp_path):
     conn.close()
     sch.init_retail()
     sch.init_retail()
-    assert _rows(sch, 'PRAGMA user_version') == [(46,)]   # v46: head is v46
+    assert _rows(sch, 'PRAGMA user_version') == [(47,)]   # v47 UPDATE: head is v47 (W3b)
     assert _aliases(sch) == [] and _skip_audits(sch) == []
 
 
@@ -523,9 +523,9 @@ def test_census_copy_migrates_money_neutral(name, tmp_path):
         assert before['money'][t] == after['money'][t], f'{name}: {t} changed'
     assert after['drift'] == before['drift']
     assert after['trial_balance'] == before['trial_balance']
-    assert after['integrity'] == 'ok' and after['user_version'] == 46   # v46: head is v46
+    assert after['integrity'] == 'ok' and after['user_version'] == 47   # v47 UPDATE: head is v47 (W3b)
     assert [b[:4] for b in before['branches']] == [b[:4] for b in after['branches']]
-    assert any('v41-to-v46' in n for n in os.listdir(os.path.join(sch.BASE_DIR, 'migration_backups')))
+    assert any('v41-to-v47' in n for n in os.listdir(os.path.join(sch.BASE_DIR, 'migration_backups')))  # v47 UPDATE: head moved 46 -> 47 (W3b); v47's own shape is pinned by retail_v47_transfer_sync_migration_test.py
     # At most one branch changed uid, and only to the licence-derived one.
     changed = [(b, a) for b, a in zip(before['branches'], after['branches']) if b[4] != a[4]]
     assert len(changed) <= 1

@@ -703,6 +703,21 @@ RETAIL_SYNC_ENTITY_TYPES = frozenset({
     # know either type and parks them via the unknown-type schema-skew gate.
     "purchase_order_receipt",
     "purchase_order_receipt_line",
+    # Schema v47 (W3b) -- stock transfers shared between computers. Two types,
+    # both METADATA: "stock_transfer" (the header: a `create` naming the two
+    # branches by uid, then `update`s carrying the state and its stamps) and
+    # "stock_transfer_item" (a `create` for the line, then `update`s carrying
+    # the two facts a send and a receive learn: unit_cost, quantity_received).
+    # Before W3b the movements and their 1250/5910 journals synced but the
+    # header never did, so a transfer sent on one computer could not be
+    # received on another. Applying either type NEVER moves stock and NEVER
+    # posts books -- those travel only as inventory_movement / gl_journal
+    # events, so a transfer is never counted twice. The header needs
+    # `company_id` (the receiver stamps its own); the line has none (see
+    # `_ENTITY_TYPES_WITHOUT_COMPANY_ID`). A v46 peer does not know either
+    # type and parks them via the unknown-type schema-skew gate.
+    "stock_transfer",
+    "stock_transfer_item",
 })
 
 #: Phase 5 wave B2 (docs/launch-readiness/phase5-waveb2-user-sync.md) -- the
@@ -782,9 +797,18 @@ _PO_ENSURE_ENTITY_TYPES = frozenset({
     "purchase_order_receipt", "purchase_order_receipt_line",
 })
 
+#: "stock_transfer_item" (W3b, schema v47) likewise: `stock_transfer_items` has no
+#: company column; its parent header carries it (the apply looks the parent up
+#: under the receiver's own company, so a line can never attach across tenants).
+#:
+#: W3b D11 -- NOT added to `_PO_ENSURE_ENTITY_TYPES` / the `local_ensure_schema`
+#: gate: applying a transfer or a line touches only `stock_transfers` and
+#: `stock_transfer_items`, whose every column (v47's included) is created by
+#: schema.py's migration chain, never lazily by retail_api. Nothing here reads
+#: `payments` or `retail_settings`, the lazily-created things that gate exists for.
 _ENTITY_TYPES_WITHOUT_COMPANY_ID = frozenset(
     {"sale_item", "return_item", "cheque_event", "purchase_order_item",
-     "purchase_order_receipt_line"})
+     "purchase_order_receipt_line", "stock_transfer_item"})
 
 #: W4a-2: the namespace `core/retail/purchase_orders.py` mints its uuid5 uids
 #: under. Needed here ONLY to synthesize the LEGACY receipt a v45 writer's
@@ -817,6 +841,41 @@ def _po_received_by_item(conn, company_id, po_id) -> dict:
 #: Twin of `core/retail/purchase_orders.py`'s `PO_STATUS_RANK` (commercial_
 #: runtime cannot import products/); a test pins the two equal.
 PO_STATUS_RANK = {"pending": 0, "cancelled": 1, "received": 2}
+
+#: W3b: a stock transfer's state only ever moves FORWARD through this rank when
+#: merged from a peer. It is a function of the (status, recalled_at) PAIR, not
+#: of status alone, because 'cancelled' means two things: cancelled before it
+#: was ever sent (goods never left) and recalled after it was sent (goods came
+#: back). A recall outranks the send it undoes; a plain cancel does not.
+#: "received" outranks everything: the goods physically arrived and were booked.
+#: Twin of `core/retail/stock_transfers.py`'s `transfer_rank` (commercial_runtime
+#: cannot import products/); a test pins the two equal over every state.
+_TRANSFER_RANK_PENDING = 0
+_TRANSFER_RANK_CANCELLED_BEFORE_SEND = 1
+_TRANSFER_RANK_IN_TRANSIT = 2
+_TRANSFER_RANK_RECALLED = 3
+_TRANSFER_RANK_RECEIVED = 4
+
+#: The reasons a transfer merge records (once per transfer). Duplicated from the
+#: core module for the same reason; the same test pins them equal.
+TRANSFER_CONFLICT_REASONS = frozenset({
+    "transfer_sent_after_cancel", "transfer_received_and_recalled",
+    "transfer_sent_twice", "transfer_received_twice"})
+
+
+def transfer_state_rank(status, recalled_at=None) -> int:
+    """Merge rank of a transfer's (status, recalled_at); raises ValueError for
+    a status this build does not know so a garbage event cannot out-rank real
+    state (the apply catches it and ignores the status)."""
+    if status == "pending":
+        return _TRANSFER_RANK_PENDING
+    if status == "in_transit":
+        return _TRANSFER_RANK_IN_TRANSIT
+    if status == "received":
+        return _TRANSFER_RANK_RECEIVED
+    if status == "cancelled":
+        return _TRANSFER_RANK_RECALLED if recalled_at else _TRANSFER_RANK_CANCELLED_BEFORE_SEND
+    raise ValueError(f"unknown transfer status {status!r}")
 
 
 def local_company_id_from_registry() -> Optional[str]:
@@ -3463,6 +3522,23 @@ class SyncService:
                 self._ensure_legacy_receipt(
                     conn, local_company_id, po_row, only_item_uid=p.get("uid"))
             self._refresh_po(conn, local_company_id, po_row["id"])
+        elif entity_type == "stock_transfer":
+            # W3b (schema v47): the header of a transfer another computer
+            # typed. METADATA ONLY -- never moves stock, never posts books.
+            if event_type == "create":
+                return self._apply_stock_transfer_create(
+                    conn, ev, p, local_company_id, branch_fallback_sink)
+            if event_type == "update":
+                return self._apply_stock_transfer_update(
+                    conn, ev, p, local_company_id, conflict_sink)
+            return True
+        elif entity_type == "stock_transfer_item":
+            if event_type == "create":
+                return self._apply_stock_transfer_item_create(conn, ev, p, local_company_id)
+            if event_type == "update":
+                return self._apply_stock_transfer_item_update(
+                    conn, ev, p, local_company_id, conflict_sink)
+            return True
         elif entity_type == "inventory_movement":
             # Wave B (stock-moving sync). Immutable ledger fact -- see the
             # module docstring's wave B note for why this posture matches
@@ -5949,6 +6025,218 @@ class SyncService:
                 (cancelled_at, closed_at, local["id"], local_company_id))
         self._refresh_po(conn, local_company_id, local["id"])
         self._flag_po_conflicts(conn, conflict_sink, local_company_id, local["id"])
+        return True
+
+    # ── W3b: stock transfers (schema v47) ────────────────────────────────────
+
+    @staticmethod
+    def _transfer_earliest(local, incoming):
+        """Set-once merge of a timestamp: the earliest non-empty value wins and
+        an empty one never replaces a real one (so a redelivered older event
+        cannot erase a stamp). 'YYYY-MM-DD HH:MM:SS' text orders as a string.
+        Twin of `core/retail/stock_transfers.py::earliest`."""
+        a = local or None
+        b = incoming or None
+        if a is None:
+            return b
+        if b is None:
+            return a
+        return min(str(a), str(b))
+
+    @staticmethod
+    def _transfer_rank_or_none(status, recalled_at):
+        try:
+            return transfer_state_rank(status, recalled_at)
+        except ValueError:
+            return None
+
+    def _apply_stock_transfer_create(self, conn, ev: dict, p: dict, local_company_id,
+                                      branch_fallback_sink) -> bool:
+        """`stock_transfer` create: insert the header another computer typed,
+        under THIS computer's company, with its two branches resolved from
+        their uids (the writer's integer branch ids mean nothing here), exactly
+        once. Status starts 'pending'; the writer's real state arrives as the
+        `update` that follows (and as the boot backfill's current-facts update).
+        `item_count` is how many lines the writer wrote -- NULL when it did not
+        say, which leaves the receive guard nothing to compare against (a
+        fabricated count would strand the transfer or hide a missing line).
+        `sync_backfill_pending` stays 0: that flag means "this computer still
+        owes the outbox a create"; a receiver must never re-queue what it pulled."""
+        tid = p.get("id") or ev.get("entity_id")
+        src = self._resolve_branch_id(
+            conn, local_company_id, p.get("source_branch_uid"), fallback_sink=branch_fallback_sink)
+        dst = self._resolve_branch_id(
+            conn, local_company_id, p.get("destination_branch_uid"), fallback_sink=branch_fallback_sink)
+        conn.execute(
+            "INSERT INTO stock_transfers (id, company_id, source_branch_id, destination_branch_id, "
+            "status, created_by, created_at, item_count, sync_backfill_pending, pre_v47) "
+            "VALUES (?,?,?,?,'pending',?,COALESCE(?,CURRENT_TIMESTAMP),?,0,?) "
+            "ON CONFLICT(id) DO NOTHING",
+            (tid, local_company_id, src, dst, p.get("created_by") or "System",
+             p.get("created_at"), p.get("item_count"),
+             # W3b fix (F3): absent (a sender that predates the key) -> 0, the
+             # strict side: the books guard applies.
+             1 if p.get("pre_v47") else 0))
+        return True
+
+    def _apply_stock_transfer_update(self, conn, ev: dict, p: dict, local_company_id,
+                                      conflict_sink) -> bool:
+        """`stock_transfer` update: merge the state FORWARD ONLY by rank of the
+        (status, recalled_at) pair, and the four stamps set-once (earliest
+        wins, a NULL never erases).
+
+        WHY a rank and not "last write wins": two computers can act on one
+        transfer while offline, and every computer must reach the SAME answer
+        in any arrival order. pending < cancelled-before-send < in_transit <
+        recalled < received. Two meetings cannot be ordered honestly and are
+        recorded -- once per transfer -- for a person:
+          * 'transfer_sent_after_cancel' -- one computer cancelled a transfer
+            that another had already sent. The goods left, so the send wins.
+          * 'transfer_received_and_recalled' -- one computer received what
+            another recalled. Received wins in status, but BOTH movements
+            moved stock, so someone must correct the count.
+        A lower rank than ours is simply ignored (an ordinary redelivery), with
+        no conflict. Never moves stock and never posts books."""
+        tid = p.get("id") or ev.get("entity_id")
+        local = conn.execute(
+            "SELECT status, sent_at, received_at, cancelled_at, recalled_at, pre_v47 "
+            "FROM stock_transfers WHERE id=? AND company_id=?", (tid, local_company_id)).fetchone()
+        if local is None:
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:stock_transfer",
+                detail=f"id={tid!r} not found locally to update")
+        local_rank = self._transfer_rank_or_none(local["status"], local["recalled_at"])
+        incoming_rank = self._transfer_rank_or_none(p.get("status"), p.get("recalled_at"))
+        status = local["status"]
+        if incoming_rank is not None and (local_rank is None or incoming_rank > local_rank):
+            status = p.get("status")
+        stamps = {k: self._transfer_earliest(local[k], p.get(k))
+                  for k in ("sent_at", "received_at", "cancelled_at", "recalled_at")}
+        if (status, *stamps.values()) != (local["status"], local["sent_at"], local["received_at"],
+                                          local["cancelled_at"], local["recalled_at"]):
+            conn.execute(
+                "UPDATE stock_transfers SET status=?, sent_at=?, received_at=?, cancelled_at=?, "
+                "recalled_at=? WHERE id=? AND company_id=?",
+                (status, stamps["sent_at"], stamps["received_at"], stamps["cancelled_at"],
+                 stamps["recalled_at"], tid, local_company_id))
+        if local_rank is None or incoming_rank is None:
+            return True
+        ranks = {local_rank, incoming_rank}
+        reason = None
+        if ranks == {_TRANSFER_RANK_CANCELLED_BEFORE_SEND, _TRANSFER_RANK_IN_TRANSIT}:
+            reason = "transfer_sent_after_cancel"
+        elif ranks == {_TRANSFER_RANK_RECALLED, _TRANSFER_RANK_RECEIVED}:
+            reason = "transfer_received_and_recalled"
+        if reason:
+            self._record_sync_conflict_once(
+                conn, conflict_sink, local_company_id=local_company_id,
+                entity_type="stock_transfer", entity_id=tid, event_type="update",
+                local_row_version=local_rank, incoming_row_version=incoming_rank,
+                reason=reason, payload={"id": tid, "status": p.get("status")})
+        # A transfer that moves from "not sent here" to "sent elsewhere" may hold
+        # PLACEHOLDER line costs on this computer: before v47 the column
+        # DEFAULTed to 0, which would read as "free goods" and let a receive book
+        # the goods in at cost 0. Clear them to NULL ("the send's cost has not
+        # arrived") so the receive guard waits for the sender's real figures,
+        # which follow as item updates. Only ever from a state this computer
+        # never sent from.
+        # W3b fix (F4): ONLY for a transfer that existed at the v47 upgrade
+        # (`pre_v47`). A v47 transfer's lines are created NULL (the create route
+        # and the item-create apply both write NULL), so a 0 on one is a REAL
+        # zero-cost send; re-NULLing it stranded the transfer on
+        # TRANSFER_SEND_NOT_ARRIVED forever when its item update had arrived
+        # before the header moved. RESIDUAL: the same order flip on a PRE-v47
+        # transfer whose real cost is genuinely 0 still re-NULLs (a placeholder
+        # and a genuine zero cannot be told apart on a legacy row).
+        if (local["pre_v47"] and incoming_rank > local_rank
+                and local_rank < _TRANSFER_RANK_IN_TRANSIT <= incoming_rank):
+            conn.execute(
+                "UPDATE stock_transfer_items SET unit_cost=NULL WHERE transfer_id=? AND unit_cost=0",
+                (tid,))
+        return True
+
+    def _apply_stock_transfer_item_create(self, conn, ev: dict, p: dict, local_company_id) -> bool:
+        """`stock_transfer_item` create: one line of a transfer. The parent is
+        looked up INSIDE the receiver's company (a line carries no company of
+        its own), and parked until it arrives; `product_id` is a real FK, so an
+        absent product is parked rather than raised. `unit_cost` and
+        `quantity_received` are inserted as NULL ON PURPOSE: the column DEFAULT
+        for unit_cost is 0, which would make a line that has not been sent
+        look like free goods; NULL is what the receive guard reads as "the
+        send has not arrived". They are filled by the item updates."""
+        cid = local_company_id or self._get_local_company_id()
+        tid = p.get("transfer_id")
+        parent = conn.execute(
+            "SELECT id FROM stock_transfers WHERE id=? AND company_id=?", (tid, cid)
+        ).fetchone() if tid else None
+        if parent is None:
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:stock_transfer",
+                detail=f"transfer_id={tid!r} not found locally")
+        if not self._row_exists(conn, "products", p.get("product_id")):
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:product",
+                detail=f"product_id={p.get('product_id')!r} not found locally")
+        conn.execute(
+            "INSERT INTO stock_transfer_items (id, transfer_id, product_id, quantity_sent, "
+            "quantity_received, unit_cost) VALUES (?,?,?,?,NULL,NULL) ON CONFLICT(id) DO NOTHING",
+            (p.get("id") or ev.get("entity_id"), tid, p.get("product_id"), p.get("quantity_sent") or 0))
+        return True
+
+    def _apply_stock_transfer_item_update(self, conn, ev: dict, p: dict, local_company_id,
+                                           conflict_sink) -> bool:
+        """`stock_transfer_item` update: merge the two facts a line learns.
+        `unit_cost` (what the SENDER's books valued it at) and
+        `quantity_received` are SET-ONCE: the first real value stays. A second,
+        DIFFERENT value is a second send / second receipt of the same line on
+        another computer -- both moved stock, so it is recorded (once per
+        transfer, 'transfer_sent_twice' / 'transfer_received_twice') and the
+        first value is kept; never silently replaced.
+
+        A local unit_cost of 0 on a transfer this computer never sent is the
+        column DEFAULT (a placeholder), not "free goods", so it does not block
+        the sender's real cost. 0 is a real value for quantity_received (it
+        arrived empty) and is never treated as unset."""
+        cid = local_company_id or self._get_local_company_id()
+        item_id = p.get("id") or ev.get("entity_id")
+        row = conn.execute(
+            "SELECT i.unit_cost, i.quantity_received, i.transfer_id, t.status, t.recalled_at, "
+            "t.pre_v47 "
+            "FROM stock_transfer_items i JOIN stock_transfers t ON t.id = i.transfer_id "
+            "WHERE i.id=? AND t.company_id=?", (item_id, cid)).fetchone()
+        if row is None:
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:stock_transfer_item",
+                detail=f"id={item_id!r} not found locally to update")
+        tid = row["transfer_id"]
+        header_rank = self._transfer_rank_or_none(row["status"], row["recalled_at"])
+        new_cost, new_qty = row["unit_cost"], row["quantity_received"]
+        incoming_cost, incoming_qty = p.get("unit_cost"), p.get("quantity_received")
+        if incoming_cost is not None:
+            # W3b fix (F4): a stored 0 is a placeholder only on a pre-v47 row.
+            unset = row["unit_cost"] is None or (
+                row["pre_v47"] and row["unit_cost"] == 0
+                and (header_rank is None or header_rank < _TRANSFER_RANK_IN_TRANSIT))
+            if unset:
+                new_cost = incoming_cost
+            elif Decimal(str(row["unit_cost"])) != Decimal(str(incoming_cost)):
+                self._record_sync_conflict_once(
+                    conn, conflict_sink, local_company_id=cid, entity_type="stock_transfer",
+                    entity_id=tid, event_type="update", local_row_version=0,
+                    incoming_row_version=0, reason="transfer_sent_twice",
+                    payload={"id": item_id, "unit_cost": incoming_cost})
+        if incoming_qty is not None:
+            if row["quantity_received"] is None:
+                new_qty = incoming_qty
+            elif Decimal(str(row["quantity_received"])) != Decimal(str(incoming_qty)):
+                self._record_sync_conflict_once(
+                    conn, conflict_sink, local_company_id=cid, entity_type="stock_transfer",
+                    entity_id=tid, event_type="update", local_row_version=0,
+                    incoming_row_version=0, reason="transfer_received_twice",
+                    payload={"id": item_id, "quantity_received": incoming_qty})
+        if (new_cost, new_qty) != (row["unit_cost"], row["quantity_received"]):
+            conn.execute("UPDATE stock_transfer_items SET unit_cost=?, quantity_received=? WHERE id=?",
+                         (new_cost, new_qty, item_id))
         return True
 
     def _apply_payment_po_link(self, conn, ev: dict, p: dict, local_company_id,

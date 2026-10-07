@@ -2533,5 +2533,15 @@
   "two deliveries of one purchase order add up to more than was ordered. Both were kept, so check the count with the supplier": "two deliveries of one purchase order add up to more than was ordered. Both were kept, so check the count with the supplier",
   "goods arrived on a purchase order that another computer had already closed. The goods were kept, so check what is owed to the supplier": "goods arrived on a purchase order that another computer had already closed. The goods were kept, so check what is owed to the supplier",
   "goods arrived on a purchase order that another computer cancelled. The goods were kept": "goods arrived on a purchase order that another computer cancelled. The goods were kept",
-  "another computer tried to link a supplier payment to a purchase order it did not pay. It was ignored": "another computer tried to link a supplier payment to a purchase order it did not pay. It was ignored"
+  "another computer tried to link a supplier payment to a purchase order it did not pay. It was ignored": "another computer tried to link a supplier payment to a purchase order it did not pay. It was ignored",
+  "This transfer has not finished syncing from your other computer yet. Try again in a moment.": "This transfer has not finished syncing from your other computer yet. Try again in a moment.",
+  "The sending of this transfer has not finished syncing from your other computer yet. Try again in a moment.": "The sending of this transfer has not finished syncing from your other computer yet. Try again in a moment.",
+  "This transfer's bookkeeping has not finished syncing from your other computer yet. Try again in a moment.": "This transfer's bookkeeping has not finished syncing from your other computer yet. Try again in a moment.",
+  "A stock transfer from another computer": "A stock transfer from another computer",
+  "A line of a stock transfer": "A line of a stock transfer",
+  "the transfer it belongs to has not reached this computer yet": "the transfer it belongs to has not reached this computer yet",
+  "a transfer was cancelled on one computer while another computer sent it. The stock did leave, so the transfer counts as sent. Check that the goods are where you expect": "a transfer was cancelled on one computer while another computer sent it. The stock did leave, so the transfer counts as sent. Check that the goods are where you expect",
+  "a transfer was received on one computer while another computer brought it back. Both moved stock, so the same goods may be counted twice. A person needs to correct the stock": "a transfer was received on one computer while another computer brought it back. Both moved stock, so the same goods may be counted twice. A person needs to correct the stock",
+  "two computers sent the same transfer and recorded a different cost for it. The first cost was kept": "two computers sent the same transfer and recorded a different cost for it. The first cost was kept",
+  "two computers received the same transfer and counted a different quantity. Both counts moved stock, so check the shelves and correct the stock": "two computers received the same transfer and counted a different quantity. Both counts moved stock, so check the shelves and correct the stock"
 }
