@@ -636,29 +636,36 @@ EXPECTED_READ_CAPABILITIES = {
     'get_quotation': CAP_SELL,
 
     # ── General ledger, schema v38 (retail-hardware-viewports) ──────────────
+    # REHEARSAL-1007 B7: the four GL-derived reads below moved from CAP_REPORTS to
+    # CAP_BOOKS_VIEW. user_accounts.py makes the books owner-only by default (a manager
+    # holds retail.reports but NOT retail.books.view), yet a manager could open the
+    # trial balance, P&L and balance sheet. WHAT THIS ROW CAN NO LONGER CATCH: nothing
+    # it caught before -- the ratchet still forces SOME capability on each route; the
+    # behavioural proof that a manager is refused and a bookkeeper admitted is
+    # retail_rehearsal_b7_books_gate_test.py.
     # `report_trial_balance` (GET /reports/trial-balance) discloses the
     # WHOLE chart of accounts' lifetime debit/credit totals plus the AR/AP
     # subledger tie-back -- the same disclosure tier as every other report
     # route in this table (report_summary, daily_cash, aging_report), not a
     # till operation.
-    'report_trial_balance': CAP_REPORTS,
+    'report_trial_balance': CAP_BOOKS_VIEW,   # REHEARSAL-1007 B7: books-read, not retail.reports
     # `report_profit_and_loss` (GET /reports/profit-and-loss) -- the income
     # statement derived from the SAME general ledger `report_trial_balance`
     # exposes just above it in retail_api.py. Identical disclosure tier:
     # a full period's revenue/COGS/expense figures, not a till operation.
-    'report_profit_and_loss': CAP_REPORTS,
+    'report_profit_and_loss': CAP_BOOKS_VIEW,   # REHEARSAL-1007 B7: books-read, not retail.reports
     # `report_balance_sheet` (GET /reports/balance-sheet) -- the balance
     # sheet, financial_statements.py's second GL-derived statement, same
     # wave as report_profit_and_loss immediately above it. Identical
     # disclosure tier: the company's full asset/liability/equity position
     # as of a date, not a till operation.
-    'report_balance_sheet': CAP_REPORTS,
+    'report_balance_sheet': CAP_BOOKS_VIEW,   # REHEARSAL-1007 B7: books-read, not retail.reports
     # `report_cash_flow` (GET /reports/cash-flow) -- financial_statements.py's
     # THIRD GL-derived statement (retail-hardware-viewports), same wave as
     # report_profit_and_loss/report_balance_sheet immediately above it.
     # Identical disclosure tier: a full period's cash receipts/payments, not
     # a till operation.
-    'report_cash_flow': CAP_REPORTS,
+    'report_cash_flow': CAP_BOOKS_VIEW,   # REHEARSAL-1007 B7: books-read, not retail.reports
 
     # ── P0 item #15(e), interface I-6 ─────────────────────────────────────
     # `product_stock_value` (GET /products/stock-value) discloses the whole

@@ -185,6 +185,14 @@ def _shop(branches=('Abdali', 'Irbid')):
         r = client.post(f"{API}/branches", json={'name': name})
         assert r.status_code == 200, r.get_json()
         ids[name] = r.get_json()['data']['id']
+        # REHEARSAL-1007 B8: the route now also creates a standard "Main Branch" first on a
+        # company with no branch; this file counts the branches IT creates ("one branch
+        # means no branch card"), so the empty placeholder is dropped. The placeholder is
+        # owned by retail_rehearsal_b8_b9_branch_and_float_test.py.
+        _c = get_retail_conn()
+        _c.execute("DELETE FROM branches WHERE name='Main Branch' AND id<? AND company_id="
+                   "(SELECT company_id FROM branches WHERE id=?)", (ids[name], ids[name]))
+        _c.commit(); _c.close()
     return {'cid': cid, 'uid': uid, 'client': client, 'branch': ids}
 
 

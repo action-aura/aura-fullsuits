@@ -418,6 +418,20 @@ def create_admin():
         # like any other -- a second device onboarded later (or a restore)
         # needs to learn it exists. `row_version` is already 1 from the
         # INSERT above, so this is a `create` event, not an `update`.
+        # REHEARSAL-1007 B5: the person's name typed at sign-up (`name`) went ONLY
+        # into config.json's admin_name, never onto the account, so the greeting
+        # said "Owner" and a second computer never learned it. Written BEFORE the
+        # create event below so the event carries it (the payload is re-read from
+        # the row). `display_name` is the same column Employees uses; a blank or
+        # unusable name stays NULL, exactly as before.
+        try:
+            _signup_display_name = _accounts.normalize_display_name(name) if name else None
+        except ValueError:
+            # Too long / has a line break: sign-up must not fail over a name that
+            # only fails the Employees rule; it stays in config.json as before.
+            _signup_display_name = None
+        if _signup_display_name:
+            conn.execute("UPDATE users SET display_name=? WHERE id=?", (_signup_display_name, user_id))
         _accounts._queue_user_sync_event(conn, user_id, 'create')
 
         # Admin still bypasses the permission lookup at mt_auth.py:287, so

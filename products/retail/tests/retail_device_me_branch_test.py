@@ -99,7 +99,17 @@ def _make_admin(company_id):
 def _add_branch(client, name):
     r = client.post(f'{API}/branches', json={'name': name})
     assert r.status_code == 200, r.get_json()
-    return r.get_json()['data']['id']
+    bid = r.get_json()['data']['id']
+    # REHEARSAL-1007 B8: the route now also creates a standard "Main Branch" first on a
+    # company with no branch; these tests pin /device/me's branch NAME resolution against
+    # the branches they create, so the empty placeholder is dropped here (the placeholder
+    # itself is owned by retail_rehearsal_b8_b9_branch_and_float_test.py).
+    from database.schema import get_retail_conn
+    conn = get_retail_conn()
+    conn.execute("DELETE FROM branches WHERE name='Main Branch' AND id<? AND company_id="
+                 "(SELECT company_id FROM branches WHERE id=?)", (bid, bid))
+    conn.commit(); conn.close()
+    return bid
 
 
 def _branch_uid(branch_id, company_id):

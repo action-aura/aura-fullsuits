@@ -379,6 +379,20 @@ def main() -> None:
                 branch_id = (r.get_json().get("data") or {}).get("id")
                 conn = get_retail_conn()
                 try:
+                    # REHEARSAL-1007 B8: POST /branches on a company with no branch now
+                    # also creates the standard local-only "Main Branch" placeholder
+                    # first. These two-computer scenarios were written for "the first
+                    # branch created here IS the shop's one branch, and it syncs", so
+                    # the harness drops that EMPTY placeholder to keep their shape.
+                    # What that hides: the placeholder's own behaviour, which
+                    # retail_rehearsal_b8_b9_branch_and_float_test.py owns.
+                    conn.execute(
+                        "DELETE FROM branches WHERE name='Main Branch' AND id<? AND company_id="
+                        "(SELECT company_id FROM branches WHERE id=?) "
+                        "AND id NOT IN (SELECT branch_id FROM inventory_balances WHERE branch_id IS NOT NULL) "
+                        "AND id NOT IN (SELECT branch_id FROM sales WHERE branch_id IS NOT NULL)",
+                        (branch_id, branch_id))
+                    conn.commit()
                     row = conn.execute("SELECT uid FROM branches WHERE id=?", (branch_id,)).fetchone()
                 finally:
                     conn.close()

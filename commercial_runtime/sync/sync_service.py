@@ -1770,7 +1770,14 @@ class SyncService:
                         and ev.get("event_type") in ("create", "update"))
                     or (ev.get("entity_type") == "payment"
                         and ev.get("event_type") == "po_link")
-                    or ev.get("entity_type") == "retail_setting")
+                    or ev.get("entity_type") == "retail_setting"
+                    # REHEARSAL-1007 B2: a customer event can now carry
+                    # credit_mode/credit_limit, lazily created by the same
+                    # ensure; a fresh device must not lose its first page
+                    # to `no such column`.
+                    or (ev.get("entity_type") == "customer"
+                        and ev.get("event_type") in ("create", "update")
+                        and any(k in (ev.get("payload") or {}) for k in ("credit_mode", "credit_limit"))))
                 for ev in events
             ) or touches_pending_or_quarantine
         ):
@@ -2909,15 +2916,26 @@ class SyncService:
                 # with the other two branches and so a future restore route
                 # (6b-iii-b) needs no apply-side change, but it is inert
                 # until that route exists.
+                #
+                # REHEARSAL-1007 B2: credit_mode/credit_limit travel with the
+                # customer now (a limit set on till A never reached till B, so B
+                # applied its own stale terms to a credit sale). They are applied
+                # ONLY when the payload actually carries the key: an event from an
+                # older device omits them, and treating "absent" as "reset to
+                # none/0" would wipe terms the shop set here. The same
+                # row_version/LWW gate and delta list as every other column.
+                credit_cols = [c for c in ("credit_mode", "credit_limit") if c in p]
+                cust_cols = ["name", "phone", "email", "address", "status", "deleted_at_utc"] + credit_cols
                 changed_fields = p.get("_changed_fields")
-                delta_frag, delta_binds = self._delta_set_clause(
-                    "customers", ["name", "phone", "email", "address", "status", "deleted_at_utc"], changed_fields)
+                delta_frag, delta_binds = self._delta_set_clause("customers", cust_cols, changed_fields)
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
+                credit_insert_cols = "".join(f", {c}" for c in credit_cols)
+                credit_insert_marks = ",?" * len(credit_cols)
                 cur = conn.execute(
                     "INSERT INTO customers (id, company_id, name, phone, email, address, status, "
-                    "deleted_at_utc, row_version, updated_at_utc) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?) "
+                    "deleted_at_utc, row_version, updated_at_utc" + credit_insert_cols + ") "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?" + credit_insert_marks + ") "
                     "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
                     "row_version=MAX(customers.row_version, excluded.row_version), "
                     "updated_at_utc=excluded.updated_at_utc "
@@ -2925,6 +2943,7 @@ class SyncService:
                     (p.get("id"), local_company_id, p.get("name"), p.get("phone", ""),
                      p.get("email", ""), p.get("address", ""), p.get("status", "active"), p.get("deleted_at_utc"),
                      insert_row_version, p.get("updated_at_utc"),
+                     *[p.get(c) for c in credit_cols],
                      *delta_binds,
                      raw_row_version, raw_row_version),
                 )
@@ -3201,6 +3220,9 @@ class SyncService:
                         detail=f"sale_number={p.get('sale_number')!r} already exists locally "
                                f"under a different sale (incoming uid={p.get('uid')!r})")
                 raise
+            # REHEARSAL-1007 B6: this customer's "total spent" is derived from the
+            # sales rows, so a sale applied from another computer must refresh it.
+            self._refresh_total_spent(conn, local_company_id, p.get("customer_id"))
         elif entity_type == "sale_item":
             if event_type != "create":
                 return True
@@ -3356,6 +3378,11 @@ class SyncService:
                         detail=f"return_number={p.get('return_number')!r} already exists locally "
                                f"under a different return (incoming uid={p.get('uid')!r})")
                 raise
+            # REHEARSAL-1007 B6: a return nets the customer's "total spent"; refresh
+            # the sale's customer (derived figure, see _refresh_total_spent).
+            _ret_sale = conn.execute("SELECT customer_id FROM sales WHERE id=?", (sale_local_id,)).fetchone()
+            if _ret_sale is not None:
+                self._refresh_total_spent(conn, local_company_id, _ret_sale[0])
         elif entity_type == "return_item":
             if event_type != "create":
                 return True
@@ -6079,6 +6106,37 @@ class SyncService:
         computer. Twin of `core/retail/loyalty.py::opening_uid`; a test pins the
         two equal."""
         return str(uuid.uuid5(_LOYALTY_OPENING_NAMESPACE, f"{customer_id}:opening"))
+
+    #: REHEARSAL-1007 B6 -- twin of `core/retail/customer_spend.py::
+    #: REFRESH_TOTAL_SPENT_SQL` (this module cannot import products code); a test
+    #: pins the two equal. `customers.total_spent` is a CACHE of the customer's
+    #: sales less its returns' refunds, refreshed after every applied sale/return so
+    #: every computer shows the same figure for the same rows.
+    _REFRESH_TOTAL_SPENT_SQL = (
+        "UPDATE customers SET total_spent = MAX(0, "
+        "COALESCE((SELECT SUM(total) FROM sales WHERE company_id=? AND customer_id=?), 0) "
+        "- COALESCE((SELECT SUM(r.refund_amount) FROM returns r JOIN sales s ON s.id=r.sale_id "
+        "WHERE s.company_id=? AND s.customer_id=? AND COALESCE(r.status,'completed')='completed'), 0)) "
+        "WHERE company_id=? AND id=? "
+        "AND EXISTS (SELECT 1 FROM sales WHERE company_id=? AND customer_id=?)"
+    )
+
+    @classmethod
+    def _refresh_total_spent(cls, conn, company_id, customer_id) -> None:
+        """Replace `customers.total_spent` with the derived figure. Never bumps
+        row_version and queues no customer event (see the SQL constant above).
+        A walk-in (no customer) and a customer this device has no sale row for
+        are no-ops, and so is a device whose `customers`/`sales` shape predates
+        the columns -- an apply must never fail over a display cache."""
+        if not customer_id:
+            return
+        try:
+            conn.execute(cls._REFRESH_TOTAL_SPENT_SQL,
+                         (company_id, customer_id, company_id, customer_id,
+                          company_id, customer_id, company_id, customer_id))
+        except sqlite3.OperationalError:
+            # A minimal test/legacy schema without total_spent or returns.refund_amount.
+            logger.debug("total_spent refresh skipped: schema lacks a column", exc_info=True)
 
     @staticmethod
     def _refresh_loyalty_points(conn, company_id, customer_id) -> None:

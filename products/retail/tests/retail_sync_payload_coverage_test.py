@@ -991,15 +991,8 @@ EXCLUSIONS = {
                        "_adjust_credit docstring explicitly names total_spent, "
                        "alongside loyalty_points, as a device-local accumulator "
                        "this sync path deliberately never carries.",
-        'credit_mode': "Not in SYNCED_CUSTOMER_FIELDS, the code-owned allowlist of "
-                       "the only customer attributes this entity type's sync "
-                       "payload is responsible for; a credit setting outside that "
-                       "allowlist is out of scope by the same design, not an "
-                       "oversight.",
-        'credit_limit': "Not in SYNCED_CUSTOMER_FIELDS; the customer apply branch's "
-                        "own INSERT column list in sync_service.py never references "
-                        "it either, confirming it is out of this entity type's "
-                        "synced scope by design.",
+        # REHEARSAL-1007 B2: 'credit_mode'/'credit_limit' deliberately have NO entry any
+        # more -- they are synced customer attributes now and must stay on the wire.
         'credit_balance': "retail_api.py's _adjust_credit docstring states plainly "
                           "that credit_balance is 'device-local, never synced ... "
                           "and that omission is the point, not an oversight', found "

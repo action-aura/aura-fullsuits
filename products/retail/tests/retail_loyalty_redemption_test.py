@@ -17,9 +17,9 @@ report):
 
   1. Redeeming more points than the ledger balance is refused, and no sale
      is written.
-  2. Redeeming without CAP_DISCOUNT is refused (403), and no sale is
-     written -- both as ordinary behaviour (a real cashier) AND as an
-     explicit mutation proof (forcing session_has_capability to always
+  2. REHEARSAL-1007 B4: a cashier CAN redeem (points are a tender; this used
+     to be "redeeming without CAP_DISCOUNT is refused"), and the outcome is
+     driven by the point value, not the capability (forcing session_has_capability to always
      grant / always deny and watching the outcome track it, the same
      technique retail_route_capability_matrix_test.py's
      `test_void_payment_authority_outcome_tracks_the_live_capability_verdict`
@@ -283,45 +283,45 @@ def test_redeeming_more_points_than_balance_is_refused(shop):
     assert _sales_count(cid) == before, "a refused redemption must not create a sale"
 
 
-# ── 2. CAP_DISCOUNT, both the real behaviour and the mutation proof ─────────
+# ── 2. Who may redeem (REHEARSAL-1007 B4: points are a TENDER, not a discount) ──
 
-def test_redeeming_without_cap_discount_is_refused_and_no_sale_created(shop):
-    """A real cashier -- default capabilities carry no retail.discount
-    (user_accounts.DEFAULT_CAPABILITIES) -- is refused a redemption even
-    though the customer has ample balance and the shop has configured a
-    point value."""
+def test_a_cashier_can_redeem_points_and_the_ledger_is_debited(shop):
+    """REHEARSAL-1007 B4. This test used to be `test_redeeming_without_cap_discount_
+    is_refused_and_no_sale_created` and pinned the OPPOSITE: a cashier was refused
+    ("You do not have permission to apply a discount") on the argument that a
+    redemption gives value away. The rehearsal showed the till could not take a
+    customer's own earned points. Points are a tender -- the customer paid for them
+    -- so anyone allowed to ring the sale may take them. WHAT THIS CHANGE CAN NO
+    LONGER CATCH: a future edit that puts a role/capability gate back on redemption
+    is caught only by this test (a cashier must get 200), not by the old 403 pin."""
     cid, admin = shop
     pid = _create_product(admin, sell_price=100.0)
     customer_id = _create_customer(admin)
     _set_loyalty_point_value(admin, 1)
     _grant_ledger_points(cid, customer_id, 20)
     cashier = _make_user('cashier', cid)
-    before = _sales_count(cid)
 
     r = _sale(cashier, [{'product_id': pid, 'quantity': 1}],
-              customer_id=customer_id, points_redeemed=5, amount_paid=100.0)
-    assert r.status_code == 403, r.get_json()
-    assert _ledger_balance(cid, customer_id) == 20, "a refused redemption must not touch the ledger"
-    assert _sales_count(cid) == before, "a refused redemption must not create a sale"
+              customer_id=customer_id, points_redeemed=5, amount_paid=95.0)
+    assert r.status_code == 200, r.get_json()
+    conn = sch.get_retail_conn()
+    try:
+        spent = conn.execute(
+            "SELECT COALESCE(SUM(points_delta),0) FROM loyalty_ledger WHERE company_id=? AND customer_id=? "
+            "AND points_delta < 0", (cid, customer_id)).fetchone()[0]
+    finally:
+        conn.close()
+    assert spent == -5, "exactly the 5 redeemed points must be written as a NEGATIVE ledger row"
 
 
-def test_capability_check_outcome_tracks_the_live_verdict_both_directions(shop, monkeypatch):
-    """MUTATION PROOF (the technique retail_route_capability_matrix_test.py's
-    `test_void_payment_authority_outcome_tracks_the_live_capability_verdict`
-    already uses): force session_has_capability to a fixed answer and
-    confirm redemption's outcome is DRIVEN by it, for both a cashier (no
-    real grant) and an admin (whose normal pass comes from role-bypass
-    INSIDE session_has_capability, not from a second exemption in
-    create_sale).
-
-    Forced True must let even a bare cashier redeem; forced False must
-    refuse even an admin. Either direction disagreeing would mean a second,
-    undocumented gate is doing the real work.
-    """
+def test_redemption_outcome_is_driven_by_the_point_value_not_by_capability(shop, monkeypatch):
+    """Both directions, with the capability check forced each way. A redemption
+    must NOT track `session_has_capability` (forced False must still redeem), and
+    MUST still track the shop's point value (value 0 must still refuse, even for an
+    admin with every capability forced True)."""
     cid, admin = shop
     pid = _create_product(admin, sell_price=5.0)  # cheap: total < 10, so pts earned == 0
     customer_id = _create_customer(admin)
-    _set_loyalty_point_value(admin, 1)
     cashier = _make_user('cashier', cid)
 
     def _always(value):
@@ -330,16 +330,21 @@ def test_capability_check_outcome_tracks_the_live_verdict_both_directions(shop, 
         return stub
 
     _grant_ledger_points(cid, customer_id, 3)
-    monkeypatch.setattr(retail_api_module, 'session_has_capability', _always(True))
-    r = _sale(cashier, [{'product_id': pid, 'quantity': 1}],
-              customer_id=customer_id, points_redeemed=1, amount_paid=100.0)
-    assert r.status_code == 200, ('forced True must let a cashier redeem', r.get_json())
-    monkeypatch.undo()
 
-    monkeypatch.setattr(retail_api_module, 'session_has_capability', _always(False))
+    # point value 0 (the default): refused even with every capability forced on
+    monkeypatch.setattr(retail_api_module, 'session_has_capability', _always(True))
     r = _sale(admin, [{'product_id': pid, 'quantity': 1}],
               customer_id=customer_id, points_redeemed=1, amount_paid=100.0)
-    assert r.status_code == 403, ('forced False must refuse even an admin', r.get_json())
+    assert r.status_code == 400 and 'not configured' in r.get_json()['message'].lower(), r.get_json()
+    monkeypatch.undo()
+
+    # point value set: allowed even with the discount capability forced OFF
+    _set_loyalty_point_value(admin, 1)
+    monkeypatch.setattr(retail_api_module, 'session_has_capability',
+                        lambda code: False if code == retail_api_module.CAP_DISCOUNT else True)
+    r = _sale(cashier, [{'product_id': pid, 'quantity': 1}],
+              customer_id=customer_id, points_redeemed=1, amount_paid=100.0)
+    assert r.status_code == 200, ('redemption must not depend on CAP_DISCOUNT', r.get_json())
     monkeypatch.undo()
 
 

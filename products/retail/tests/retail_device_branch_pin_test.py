@@ -124,6 +124,13 @@ def _create_branch(client, name):
     assert r.status_code == 200, r.get_json()
     bid = r.get_json()['data']['id']
     conn = get_retail_conn()
+    # REHEARSAL-1007 B8: the route now also creates a standard "Main Branch" first on a
+    # company with no branch. These tests pin DEVICE-to-branch resolution against the
+    # branches THEY create, so the empty placeholder is dropped (what that hides is
+    # owned by retail_rehearsal_b8_b9_branch_and_float_test.py).
+    conn.execute("DELETE FROM branches WHERE name='Main Branch' AND id<? AND company_id="
+                 "(SELECT company_id FROM branches WHERE id=?)", (bid, bid))
+    conn.commit()
     row = conn.execute("SELECT uid FROM branches WHERE id=?", (bid,)).fetchone()
     conn.close()
     return bid, row['uid']

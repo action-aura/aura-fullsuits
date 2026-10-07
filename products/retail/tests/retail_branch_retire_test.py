@@ -105,6 +105,22 @@ def _make_admin():
 
 
 def _add_branch(client, name):
+    # REHEARSAL-1007 B8: POST /branches on a company with NO branch now creates the
+    # standard "Main Branch" first, which would be a second active branch and change
+    # what these retirement tests mean (the "last active branch" and "oldest branch
+    # is the default" cases). This file is about RETIRING branches, not creating the
+    # first one (retail_rehearsal_b8_b9_branch_and_float_test.py owns that), so the
+    # company's first branch is inserted directly, as it used to be created.
+    cid = client.test_company_id
+    conn = get_retail_conn()
+    try:
+        if conn.execute("SELECT COUNT(*) FROM branches WHERE company_id=?", (cid,)).fetchone()[0] == 0:
+            cur = conn.execute("INSERT INTO branches (company_id,name,uid) VALUES (?,?,?)",
+                               (cid, name, str(uuid.uuid4())))
+            conn.commit()
+            return cur.lastrowid
+    finally:
+        conn.close()
     r = client.post(f'{API}/branches', json={'name': name})
     assert r.status_code == 200, r.get_json()
     return r.get_json()['data']['id']

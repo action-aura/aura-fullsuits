@@ -106,10 +106,24 @@ def _reset_device_pin():
     _onb.set_device_branch_uid(None)
 
 
-def _create_branch(client, name):
-    r = client.post('/api/sub/retail/branches', json={'name': name})
-    assert r.status_code == 200, r.get_json()
-    bid = r.get_json()['data']['id']
+def _create_branch(client, name, first_for_company=None):
+    # REHEARSAL-1007 B8: POST /branches on a company with NO branch now creates the
+    # standard "Main Branch" first, so the route-created branch is no longer the
+    # shop's first/default one. This file is about branch SCOPE, not branch creation,
+    # and its fixture needs the named branch to BE the company's first -- so the first
+    # one is inserted directly (what a shop's first branch used to be). WHAT THAT
+    # CHANGE CAN NO LONGER CATCH here: first-branch creation through the route, which
+    # retail_rehearsal_b8_b9_branch_and_float_test.py now owns.
+    if first_for_company is not None:
+        conn = get_retail_conn()
+        cur = conn.execute("INSERT INTO branches (company_id,name,uid) VALUES (?,?,?)",
+                           (first_for_company, name, str(uuid.uuid4())))
+        bid = cur.lastrowid
+        conn.commit(); conn.close()
+    else:
+        r = client.post('/api/sub/retail/branches', json={'name': name})
+        assert r.status_code == 200, r.get_json()
+        bid = r.get_json()['data']['id']
     conn = get_retail_conn()
     row = conn.execute("SELECT uid FROM branches WHERE id=?", (bid,)).fetchone()
     conn.close()
@@ -192,7 +206,7 @@ def two_branch_company():
     arithmetic."""
     company_id, admin_id, admin_email, admin_password = _new_company(role="admin")
     admin = _login(admin_email, admin_password)
-    main_id, main_uid = _create_branch(admin, 'Main')
+    main_id, main_uid = _create_branch(admin, 'Main', first_for_company=company_id)
     down_id, down_uid = _create_branch(admin, 'Downtown')
 
     pid, _ = _create_product(admin, initial_stock=0)

@@ -456,8 +456,8 @@ def test_t10_cancelled_po_leaves_statement_and_aging_pending_stays(client):
 # T5 -- adjustments valued at the cost HERE
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _adjust(c, pid, qty, branch_id=None):
-    body = {'quantity': qty, 'reason': 'test'}
+def _adjust(c, pid, qty, branch_id=None, reason='test'):
+    body = {'quantity': qty, 'reason': reason}
     if branch_id is not None:
         body['branch_id'] = branch_id
     r = c.post(f'{API}/products/{pid}/stock-adjust', json=body)
@@ -472,7 +472,11 @@ def test_t5_opening_adjust_and_sale_keep_inventory_equal_to_stock_times_cost(cli
     _adjust(client, pid, -3)       # Dr 5910 6 / Cr 1200 6
     assert _bal(cid, gl.ACCOUNT_INVENTORY) == 14.0          # 7 x 2.000
     assert _bal(cid, gl.ACCOUNT_SHRINKAGE) == 6.0
-    _adjust(client, pid, 1)        # Dr 1200 2 / Cr 5910 2
+    # REHEARSAL-1007 B3: an increase is a stock-count correction ONLY when it says so
+    # ('count'); the default for a bare increase is now 'added' (Cr 3900, not 5910) --
+    # see retail_rehearsal_b3_adjust_stock_kind_test.py. This line keeps pinning the
+    # count-correction path: Dr 1200 2 / Cr 5910 2.
+    _adjust(client, pid, 1, reason='count')
     assert _bal(cid, gl.ACCOUNT_INVENTORY) == 16.0
     assert _bal(cid, gl.ACCOUNT_SHRINKAGE) == 4.0
 

@@ -179,6 +179,7 @@ from core.retail import stock_books
 # W2a: the one rule that refreshes the loyalty cache and the deterministic
 # opening-row uid, shared with the importer and the sync apply.
 from core.retail import loyalty as loyalty_core
+from core.retail import customer_spend  # REHEARSAL-1007 B6
 from commercial_runtime.stock_cost import blended_unit_cost as _blended_unit_cost
 from core.retail import today_cards
 from config import (
@@ -2744,6 +2745,24 @@ def adjust_stock(pid):
     reason = data.get('reason', 'Manual adjustment')
     if qty == 0:
         return jsonify({'status': 'error', 'message': 'Quantity cannot be zero'}), 400
+    # REHEARSAL-1007 B3: `reason` doubles as the KIND of adjustment when it is one
+    # of the two tokens below. An increase used to post Cr 5910 (Shrinkage and
+    # Adjustments), i.e. buying stock outside a purchase order counted as PROFIT.
+    #   'added' -- new stock the owner put in (bought outside a PO): Dr Inventory /
+    #              Cr 3900 Opening Balance Equity, the same journal as opening stock
+    #              at product create (the owner's money put into stock, not income).
+    #   'count' -- a stock-count correction: Dr/Cr 5910 as before (gain OR loss).
+    # Absent (or any other free-text note, which is stored as the note as before):
+    # a positive quantity defaults to 'added', a negative one to 'count'. A
+    # REDUCTION is always 5910 -- 'added' with a negative quantity is refused.
+    adj_kind = reason if reason in ('added', 'count') else ('added' if qty > 0 else 'count')
+    if adj_kind == 'added' and qty < 0:
+        return jsonify({'status': 'error',
+                        'message': "Removing stock cannot be 'added' -- use a count correction."}), 400
+    if reason == 'added':
+        reason = 'New stock added'
+    elif reason == 'count':
+        reason = 'Stock count correction'
 
     conn = get_retail_conn()
     try:
@@ -2866,7 +2885,12 @@ def adjust_stock(pid):
               movement_type,
               qty, adj_cost, 'ADJ', reason, _uid(),
               movement_uid, actor, terminal, utc_now))
-        gl.post_stock_adjustment(conn, cid, bid, movement_uid, qty, adj_cost, 'ADJ', adj_currency)
+        if adj_kind == 'added':
+            # REHEARSAL-1007 B3: keyed 'opening_entry' on the movement uid, which
+            # stock_books's tie already recognises (_MOVEMENT_KEYED_JOURNALS).
+            gl.post_opening_entry(conn, cid, bid, movement_uid, qty, adj_cost, 'ADJ', adj_currency)
+        else:
+            gl.post_stock_adjustment(conn, cid, bid, movement_uid, qty, adj_cost, 'ADJ', adj_currency)
         # Wave B: queue the matching sync event -- see create_sale's own
         # inventory_movement emission for the shape every writer shares.
         _queue_sync_event(conn.cursor(), 'inventory_movement', movement_uid, 'create', {
@@ -2917,7 +2941,12 @@ def adjust_stock(pid):
 # reach the wire, exactly the way an update to a purely local-only field
 # (credit_mode/credit_limit) correctly does today. `status` is not
 # local-only, so it cannot be treated the same way.
-SYNCED_CUSTOMER_FIELDS = frozenset({'name', 'phone', 'email', 'address', 'status'})
+# REHEARSAL-1007 B2: credit_mode/credit_limit JOIN the synced set. They were local-only,
+# so a credit limit set on till A never reached till B and B refused (or, worse, allowed)
+# the credit sale on its own stale terms. They travel under the SAME row_version/LWW rule
+# as name/phone, so a credit-only PATCH now bumps and emits like any other synced edit.
+SYNCED_CUSTOMER_FIELDS = frozenset({'name', 'phone', 'email', 'address', 'status',
+                                    'credit_mode', 'credit_limit'})
 
 @retail_bp.route('/customers', methods=['GET'])
 @mt_login_required
@@ -2980,6 +3009,9 @@ def create_customer():
     _queue_sync_event(cur, 'customer', nid, 'create', {
         'id': nid, 'name': data['name'], 'phone': data.get('phone', ''),
         'email': data.get('email', ''), 'address': data.get('address', ''),
+        # REHEARSAL-1007 B2: a new customer starts with no credit terms; sent
+        # explicitly so the receiver's row matches the column defaults here.
+        'credit_mode': 'none', 'credit_limit': 0,
         'row_version': 1, 'updated_at_utc': now,
     })
     conn.commit(); conn.close()
@@ -3036,6 +3068,9 @@ def update_customer(cust_id):
     if 'status' in fields and not session_has_capability(CAP_STOCK_ADJUST):
         return jsonify({'status': 'error', 'message': CUSTOMER_RESTORE_DENIED_MESSAGE}), 403
     conn = get_retail_conn()
+    # REHEARSAL-1007 B2: the re-read SELECT below names credit_mode/credit_limit,
+    # lazily-created columns; make sure they exist before touching them.
+    _ensure_credit_schema(conn)
     cur = conn.cursor()
     sets = ', '.join(f'{k}=?' for k in fields)
     params = list(fields.values())
@@ -3049,9 +3084,13 @@ def update_customer(cust_id):
     restoring = fields.get('status') == 'active'
     if restoring:
         sets += ', deleted_at_utc=NULL'
+    # REHEARSAL-1007 B2: SUPERSEDED paragraph below -- credit_mode/credit_limit
+    # are synced now (SYNCED_CUSTOMER_FIELDS), so a credit-only PATCH DOES bump
+    # and emit. The loyalty-accumulator rule still holds for total_spent/
+    # loyalty_points/credit_balance, which remain device-local caches.
     # launch-readiness Phase 6 stage 6a-i, THE loyalty-accumulator rule
     # applied to a second site: `fields` here can be entirely credit_mode/
-    # credit_limit, which are local-only credit-terms columns with no
+    # credit_limit, which WERE local-only credit-terms columns with no
     # apply-side column at all (SYNCED_CUSTOMER_FIELDS above). Bumping
     # row_version on a credit-only edit would mean a genuine name/phone
     # correction made on another till later would arrive with a LOWER
@@ -3079,7 +3118,7 @@ def update_customer(cust_id):
         # "re-read after the UPDATE rather than trust the request" pattern
         # update_product/update_supplier already use for their own restore.
         row = conn.execute(
-            "SELECT name,phone,email,address,deleted_at_utc,row_version,updated_at_utc FROM customers WHERE id=?",
+            "SELECT name,phone,email,address,credit_mode,credit_limit,deleted_at_utc,row_version,updated_at_utc FROM customers WHERE id=?",
             (cust_id,)).fetchone()
         # launch-readiness Phase 6 stage 6b-i (changed-field deltas):
         # `_changed_fields` is `SYNCED_CUSTOMER_FIELDS & fields.keys()`, NOT
@@ -8436,13 +8475,15 @@ def create_sale():
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error',
                                 'message': 'Loyalty point redemption requires a customer (walk-in not allowed).'}), 400
-            # (b) CAP_DISCOUNT's own documented authority -- "give value
-            # away with no matching payment" (see `wants_discount` above) --
-            # is exactly what a redemption does, so it is the SAME gate,
-            # checked and refused in the same shape as that one.
-            if not session_has_capability(CAP_DISCOUNT):
-                conn.rollback(); conn.close()
-                return jsonify({'status': 'error', 'message': DISCOUNT_DENIED_MESSAGE}), 403
+            # (b) REHEARSAL-1007 B4: NO CAP_DISCOUNT gate any more. This block used
+            # to refuse a cashier ("You do not have permission to apply a
+            # discount") on the argument that a redemption gives value away.
+            # But points are a TENDER, not a discount (this block's own header):
+            # the customer EARNED them by paying, and spending them is paying
+            # again. A cashier who may ring the sale may take the points. What
+            # keeps it safe is not a role but the gates below -- the shop must
+            # have set a point value (d), the LEDGER must hold the points (c),
+            # and the value is clamped to the sale total (e).
             # (d) OFF by default -- see _DEFAULT_SETTINGS['loyalty_point_value'].
             # A shop that has never opened this setting must not start
             # giving cash-equivalent value away the moment this code ships.
@@ -8973,10 +9014,14 @@ def create_sale():
             # The column is now a CACHE refreshed from SUM(points_delta) by
             # loyalty_core.refresh_points after the ledger rows below -- still
             # no row_version bump, still no customer sync event.
-            cur.execute("""
-                UPDATE customers SET total_spent=total_spent+?
-                WHERE id=? AND company_id=?
-            """, (total, customer_id, cid))
+            # REHEARSAL-1007 B6: `total_spent` is now a CACHE derived from the
+            # customer's sales (less returns), not a running `+= total` -- the old
+            # increment only ever saw sales rung on THIS computer, so two tills
+            # disagreed about the same customer (10.440 vs 1.450 measured). The
+            # sales row for this sale is already written above. Same rule as the
+            # loyalty cache below: replaces the figure, no row_version bump, no
+            # customer sync event.
+            customer_spend.refresh_total_spent(conn, cid, customer_id)
             # Immutable ledger rows alongside the accumulator UPDATE above --
             # see database/schema.py's _migrate_add_loyalty_ledger docstring
             # for why the accumulator alone can never be the source of
@@ -10952,10 +10997,12 @@ def create_return():
             # retail_v17_row_version_bump_test.py's
             # `test_loyalty_accumulator_sale_does_not_bump_row_version_or_emit`
             # and retail_total_spent_return_test.py's own row_version test.
-            cur.execute(
-                "UPDATE customers SET total_spent = MAX(0, COALESCE(total_spent,0) - ?) "
-                "WHERE id=? AND company_id=?",
-                (refund, sale['customer_id'], cid))
+            # REHEARSAL-1007 B6: derived, not decremented -- see create_sale's
+            # identical call. The returns row for THIS return is already written
+            # above (ret_id), so its refund is part of the figure. The paragraph
+            # above describes WHY the figure nets returns and why it never goes
+            # below zero; both still hold, now by derivation.
+            customer_spend.refresh_total_spent(conn, cid, sale['customer_id'])
             original_total = float(sale['total'] or 0)
             # Guards a division by zero for a (degenerate) zero-value
             # sale; such a sale earns/redeems nothing anyway (create_sale's
@@ -12107,6 +12154,22 @@ def open_cash_session():
         if branch_err:
             conn.close()
             return branch_err
+        # REHEARSAL-1007 B9: `_money` swallows every parse failure into 0.0, so
+        # {"opening_float": "abc"} opened a drawer with 0.000 and a 200. Check the
+        # raw value FIRST: absent/None/'' still mean 0 (a drawer opened with no
+        # float), but anything that is not a finite number, or is negative, is a
+        # 400 with a code the till can key on.
+        _raw_float = data.get('opening_float', 0)
+        if _raw_float not in (None, ''):
+            try:
+                _parsed_float = Decimal(str(_raw_float).strip())
+                _float_ok = _parsed_float.is_finite() and _parsed_float >= 0 and not isinstance(_raw_float, bool)
+            except Exception:
+                _float_ok = False
+            if not _float_ok:
+                conn.close()
+                return jsonify({'status': 'error', 'reason_code': 'INVALID_OPENING_FLOAT',
+                                'message': 'Opening float must be a number, zero or more.'}), 400
         try:
             # The shop's own currency, not cents: a JOD drawer counts fils.
             opening_float = _money(data.get('opening_float', 0),
@@ -13163,7 +13226,12 @@ def report_summary():
 @retail_bp.route('/reports/trial-balance', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
-@mt_require_capability(CAP_REPORTS)
+# REHEARSAL-1007 B7: the BOOKS-READ capability, not retail.reports. user_accounts.py
+# makes the books owner-only by default (a manager gets none unless the owner
+# gives it; the Accountant preset holds retail.books.view), but these reads were
+# gated on retail.reports, which managers DO hold -- so a manager could open the
+# trial balance and the P&L. Sales and stock reports stay on retail.reports.
+@mt_require_capability(CAP_BOOKS_VIEW)
 def report_trial_balance():
     """THE POINT OF THIS ROUTE is the `subledger` key, not the bare account
     balances -- ROADMAP.md's v38 entry asks for "a trial balance that ties
@@ -13218,7 +13286,12 @@ def report_trial_balance():
 @retail_bp.route('/reports/profit-and-loss', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
-@mt_require_capability(CAP_REPORTS)
+# REHEARSAL-1007 B7: the BOOKS-READ capability, not retail.reports. user_accounts.py
+# makes the books owner-only by default (a manager gets none unless the owner
+# gives it; the Accountant preset holds retail.books.view), but these reads were
+# gated on retail.reports, which managers DO hold -- so a manager could open the
+# trial balance and the P&L. Sales and stock reports stay on retail.reports.
+@mt_require_capability(CAP_BOOKS_VIEW)
 def report_profit_and_loss():
     """`?start_date=`/`?end_date=` (both required, 'YYYY-MM-DD', BOTH ENDS
     INCLUSIVE) and an optional `?branch_id=`. Unlike `report_trial_balance`
@@ -13275,7 +13348,12 @@ def report_profit_and_loss():
 @retail_bp.route('/reports/balance-sheet', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
-@mt_require_capability(CAP_REPORTS)
+# REHEARSAL-1007 B7: the BOOKS-READ capability, not retail.reports. user_accounts.py
+# makes the books owner-only by default (a manager gets none unless the owner
+# gives it; the Accountant preset holds retail.books.view), but these reads were
+# gated on retail.reports, which managers DO hold -- so a manager could open the
+# trial balance and the P&L. Sales and stock reports stay on retail.reports.
+@mt_require_capability(CAP_BOOKS_VIEW)
 def report_balance_sheet():
     """`?as_of_date=` (required, 'YYYY-MM-DD') and an optional `?branch_id=`.
     A missing or malformed date is refused with a 400, never silently
@@ -13327,7 +13405,12 @@ def report_balance_sheet():
 @retail_bp.route('/reports/cash-flow', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
-@mt_require_capability(CAP_REPORTS)
+# REHEARSAL-1007 B7: the BOOKS-READ capability, not retail.reports. user_accounts.py
+# makes the books owner-only by default (a manager gets none unless the owner
+# gives it; the Accountant preset holds retail.books.view), but these reads were
+# gated on retail.reports, which managers DO hold -- so a manager could open the
+# trial balance and the P&L. Sales and stock reports stay on retail.reports.
+@mt_require_capability(CAP_BOOKS_VIEW)
 def report_cash_flow():
     """`?start_date=`/`?end_date=` (both required, 'YYYY-MM-DD', BOTH ENDS
     INCLUSIVE) and an optional `?branch_id=`. A missing or malformed date is
@@ -14032,6 +14115,18 @@ def create_branch():
             # subscription rather than the network.
             return jsonify({'status': 'error', 'reason_code': 'BRANCH_LIMIT', 'message': BRANCH_LIMIT_MESSAGE,
                             'data': {'limit': limit, 'branches': active}}), 403
+    # REHEARSAL-1007 B8: on a brand-new shop (no branch row at all) the FIRST branch
+    # the owner added silently became the main branch, because every route that
+    # needs a branch takes the lowest-id active one -- so there was no "Main
+    # Branch" and the owner's new shop was the default for sales and stock.
+    # Create the standard "Main Branch" first (the same placeholder, with the same
+    # licence-derived uid, that _default_branch makes; local-only, never synced)
+    # so an ADDED branch is never silently the main one. Existing shops are
+    # untouched: this runs only when the company has zero branches. If the
+    # licence allows exactly ONE branch, the placeholder would use that slot, so
+    # it is skipped and the owner's branch is the main one, as before.
+    if limit != 1 and conn.execute("SELECT COUNT(*) FROM branches WHERE company_id=?", (cid,)).fetchone()[0] == 0:
+        _default_branch(conn, cid)
     cur  = conn.cursor()
     # v13 `uid` -- the same wire identity _default_branch's self-healed branch
     # gets, so a branch is named identically on the wire however it came into
@@ -18115,6 +18210,72 @@ def _signup_company_name():
         return ''
 
 
+def _licence_allows_settings_write():
+    """True when the licence state lets this till write a shop setting
+    (`retail.settings.update`) -- asked WITHOUT the decorator, because the
+    decorator records a CAPABILITY_DENIED event on every refusal and this is
+    asked on a plain GET. Any failure to find out answers False."""
+    try:
+        from pathlib import Path as _P
+        from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+        from commercial_runtime.licensing_contracts.capability_guard import evaluate_capability
+        from commercial_runtime.licensing_contracts.flask_guard import _resolve_current_state
+        db = _P(DATABASE_DIR) / 'subsystems' / 'licensing.db'
+        rec = LicenseStateRepository(db).load()
+        ents = json.loads(rec.entitlements_json) if rec and rec.entitlements_json else {}
+        return bool(evaluate_capability(
+            capability_code="retail.settings.update",
+            current_state=_resolve_current_state(rec, db),
+            restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST,
+            required_entitlement=None, entitlements=ents).allowed)
+    except Exception:
+        return False
+
+
+def _seed_shop_name_from_signup(conn, cid):
+    """REHEARSAL-1007 B5: make the shop name typed at sign-up a REAL, SYNCED
+    setting instead of a device-local file entry.
+
+    THE DEFECT: the name lived only in this device's config.json (read at
+    display time by `_signup_company_name`), so a second computer showed
+    `business_name_source: none` -- no shop name on its sidebar or receipts --
+    and the owner had to retype it on every computer.
+
+    THE RULE: if THIS device ran the sign-up (config.json carries `admin_email`,
+    which only create_admin writes -- a computer that JOINED a shop has none, so
+    it can never seed a name of its own), the licence lets it write settings
+    (a pre-activation row would never sync, so seeding then would be wasted AND
+    would make the stored value disagree with the fallback), and there is NO
+    `branding_business_name` row at all, write the signup name as that setting and
+    queue it like any other branding edit. An EXISTING row -- even an empty one
+    the owner saved on purpose -- is never touched, and the shop name the owner
+    later types simply replaces it through the normal route."""
+    try:
+        path = os.path.join(os.environ.get('AURA_APP_DATA') or os.getcwd(), 'config.json')
+        if not os.path.exists(path):
+            return
+        with open(path, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+        if not str(cfg.get('admin_email') or '').strip():
+            return
+        name = str(cfg.get('company_id') or '').strip()
+        if not name:
+            return
+        if conn.execute("SELECT 1 FROM retail_settings WHERE company_id=? AND skey='branding_business_name'",
+                        (cid,)).fetchone() is not None:
+            return
+        if not _licence_allows_settings_write():
+            return
+        conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
+                     "ON CONFLICT(company_id,skey) DO NOTHING", (cid, 'branding_business_name', name))
+        _queue_setting_sync_event(conn, 'branding_business_name', name)
+        conn.commit()
+        _sync_nudge()
+    except Exception:
+        # Best-effort by design: the read-time fallback still shows the name here.
+        log.exception('could not seed the shop name from sign-up (non-fatal)')
+
+
 _BRANDING_TEXT_KEYS = (
     'branding_business_name', 'branding_address', 'branding_phone',
     'branding_tax_number', 'branding_receipt_header', 'branding_receipt_footer',
@@ -18252,6 +18413,7 @@ def branding_settings_get():
     branding cannot sit behind the Admin Center's device gate even though
     writing it does (see branding_settings_set below)."""
     cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
+    _seed_shop_name_from_signup(conn, cid)   # REHEARSAL-1007 B5
     s = _settings(conn, cid)
     has_logo = conn.execute(
         "SELECT 1 FROM retail_settings WHERE company_id=? AND skey=?",

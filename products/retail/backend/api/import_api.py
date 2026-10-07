@@ -2188,6 +2188,10 @@ def _handle_retail_customers(records):
             _queue_sync_event(cur, 'customer', nid, 'create', {
                 'id': nid, 'name': name, 'phone': rec.get('phone', ''),
                 'email': email, 'address': rec.get('address', ''),
+                # REHEARSAL-1007 B2: credit terms are synced customer fields now
+                # (payload-coverage ratchet); an imported customer starts at the
+                # column defaults, same as create_customer.
+                'credit_mode': 'none', 'credit_limit': 0,
                 'row_version': 1, 'updated_at_utc': utc_now,
             })
             _sync_loyalty_ledger_to_column(cur, cid, nid, lp)
