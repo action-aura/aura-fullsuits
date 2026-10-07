@@ -1320,7 +1320,32 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # learns an existing customer's history only when that customer is next imported/edited.
 #
 # Appended LAST and shape-gated. See `_migrate_add_total_spent_baseline`.
-RETAIL_SCHEMA_VERSION = 49
+#
+# v50 (2026-10-07, W2b + W3a -- PROMOTIONS AND EXTRAS CONFIGURATION SHARED BETWEEN COMPUTERS;
+# claimed in ROADMAP.md "retail schema v50"). Promotions and the extras configuration never
+# left the computer they were set up on: a promotion made on A was not applied on B (full
+# price), B's till could not offer A's extras, and a sale with extras or a promotion made on
+# A showed a plain line in B's receipts, reprints and reports (the money was right -- prices
+# are baked into sale_items).
+#
+#   * `promotions.uid` -- the wire identity (a promotion's id is a local autoincrement), with
+#     a partial UNIQUE index. Existing rows get a DETERMINISTIC uid,
+#     `core.retail.config_sync.promotion_legacy_uid` (uuid5 over name, percentage, target,
+#     window and the branch's UID), so the same promotion typed on two computers before v50
+#     collapses into one row when they first sync instead of appearing twice. Field-for-field
+#     identical copies on ONE computer are separated by an ordinal (by id), so the unique index
+#     cannot refuse the upgrade.
+#   * `promotions.row_version` (NOT NULL DEFAULT 1) and `promotions.updated_at_utc` -- the pair
+#     last-writer-wins needs (the modifier tables already had both).
+#   * `sync_backfill_pending` on promotions, modifier_groups, modifier_options and
+#     product_modifier_groups -- 1 on exactly the rows that existed at upgrade: the boot step
+#     announces each one to the outbox once, then clears the flag. Armed in the SAME step that
+#     adds each column (the W4a pattern), so a replay can never re-arm a flag already cleared.
+#   * `sale_item_promotions.uid` (partial UNIQUE index) -- history rows get random uids; they
+#     are never announced on their own, they travel inside their sale line's payload.
+#
+# Appended LAST and shape-gated. See `_migrate_add_config_sync`.
+RETAIL_SCHEMA_VERSION = 50
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2496,6 +2521,88 @@ def _migrate_retail_schema(conn):
     # It reads `customers`, `sales` and `returns` and nothing a step above may still
     # be changing. See the v49 comment on RETAIL_SCHEMA_VERSION.
     _migrate_add_total_spent_baseline(conn)
+    # v49 -> v50 (promotions + extras configuration shared between computers, W2b/W3a):
+    # appended LAST. It reads `branches.uid` (v13/v42) to key legacy promotions and
+    # touches only the promotion/modifier tables; nothing a step above may still be
+    # changing. See the v50 comment on RETAIL_SCHEMA_VERSION.
+    _migrate_add_config_sync(conn)
+
+
+def _migrate_add_config_sync(conn):
+    """One-time migration (schema v49 -> v50). See the v50 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    Shape-gated per column (`PRAGMA table_info`) and per table (a hand-built minimal
+    fixture may lack any of them), so the whole chain replaying is byte-identical.
+
+    W2b/W3a: EACH FLAG IS ARMED ONLY WHEN ITS COLUMN IS JUST ADDED. Every row that exists at
+    that moment is pending; once the column exists a replay never touches it, so a row the boot
+    backfill already announced and cleared cannot be re-armed, and a row written by v50 code
+    (flag 0) is never pending. The legacy promotion uids are likewise assigned only in the
+    step that adds `promotions.uid`.
+
+    Positional row access throughout (this may run on a connection without sqlite3.Row)."""
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+
+    def _cols(table):
+        return {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
+
+    for table in ('modifier_groups', 'modifier_options', 'product_modifier_groups'):
+        if table in live and 'sync_backfill_pending' not in _cols(table):
+            conn.execute(f'ALTER TABLE "{table}" ADD COLUMN sync_backfill_pending INTEGER DEFAULT 0')
+            conn.execute(f'UPDATE "{table}" SET sync_backfill_pending = 1')
+
+    if 'promotions' in live:
+        cols = _cols('promotions')
+        if 'row_version' not in cols:
+            conn.execute('ALTER TABLE promotions ADD COLUMN row_version INTEGER NOT NULL DEFAULT 1')
+        if 'updated_at_utc' not in cols:
+            conn.execute('ALTER TABLE promotions ADD COLUMN updated_at_utc TEXT')
+        if 'sync_backfill_pending' not in cols:
+            conn.execute('ALTER TABLE promotions ADD COLUMN sync_backfill_pending INTEGER DEFAULT 0')
+            conn.execute('UPDATE promotions SET sync_backfill_pending = 1')
+        if 'uid' not in cols:
+            conn.execute('ALTER TABLE promotions ADD COLUMN uid TEXT')
+            _stamp_legacy_promotion_uids(conn, live)
+        _ensure_unique_uid_index(conn, 'promotions')
+
+    if 'sale_item_promotions' in live:
+        if 'uid' not in _cols('sale_item_promotions'):
+            conn.execute('ALTER TABLE sale_item_promotions ADD COLUMN uid TEXT')
+            conn.executemany(
+                'UPDATE sale_item_promotions SET uid = ? WHERE id = ?',
+                [(str(_uuid.uuid4()), row[0]) for row in
+                 conn.execute('SELECT id FROM sale_item_promotions').fetchall()])
+        _ensure_unique_uid_index(conn, 'sale_item_promotions')
+
+
+def _stamp_legacy_promotion_uids(conn, live):
+    """Give every existing promotion its deterministic uid (W2b). Rows are taken in id
+    order; the Nth field-for-field copy of one promotion gets ordinal N-1 (see
+    `config_sync.promotion_legacy_uid`). The branch enters the key by its uid; a branch
+    that has no uid (not expected after v13/v42) falls back to a local-id marker so two
+    different branches can never collapse into one key."""
+    from core.retail import config_sync as _cfg
+    branch_uid = {}
+    if 'branches' in live:
+        bcols = {row[1] for row in conn.execute('PRAGMA table_info("branches")').fetchall()}
+        if 'uid' in bcols:
+            branch_uid = {row[0]: row[1] for row in conn.execute(
+                'SELECT id, uid FROM branches WHERE uid IS NOT NULL').fetchall()}
+    seen = {}
+    for pid, name, pct, prod, cat, branch, start, end in conn.execute(
+            'SELECT id, name, discount_pct, product_id, category_id, branch_id, starts_at, ends_at '
+            'FROM promotions ORDER BY id').fetchall():
+        if branch is None:
+            buid = ''
+        else:
+            buid = branch_uid.get(branch) or f'branch-id:{branch}'
+        key = (name, _cfg.canonical_number(pct if pct is not None else 0), prod, cat, start, end, buid)
+        ordinal = seen.get(key, 0)
+        seen[key] = ordinal + 1
+        conn.execute('UPDATE promotions SET uid = ? WHERE id = ?', (
+            _cfg.promotion_legacy_uid(name, pct, prod, cat, start, end, buid, ordinal=ordinal), pid))
 
 
 def _migrate_add_total_spent_baseline(conn):

@@ -842,6 +842,108 @@ def intersection_of_module_keys(per_module):
     return set.intersection(*literal_keysets)
 
 
+# ── NESTED snapshots (W2b/W3a, schema v50) ───────────────────────────────────
+# A `sale_item` `create` payload now carries two NESTED snapshots: `modifiers`
+# (a list of dicts, one per extra) and `promotion` (null or one dict). Their
+# rows live in `sale_item_modifiers` / `sale_item_promotions`, two real tables
+# with real columns -- so a column added to either must reach the wire or be
+# excluded with a reason, exactly like a top-level table. The top-level
+# extractor above cannot see them: the nested value is not a literal at the
+# `_queue_sync_event` call but a NAME (`modifier_snapshots_wire`,
+# `promotion_snapshot`) bound earlier in the SAME function.
+#
+# `nested_payload_keys_for` therefore resolves that name inside the enclosing
+# function -- the one extra shape it understands, stated plainly:
+#   * `NAME = {literal dict}`            (a snapshot built in one go), and
+#   * `NAME.append({literal dict})`      (a list of snapshots built in a loop).
+# `NAME = None` is ignored (the "no promotion" arm). Anything else bound to the
+# name -- a helper call, a comprehension, a dict(row) merge -- cannot be read,
+# and is counted as a NONLITERAL site so the shape change fails LOUDLY instead
+# of the table silently reading as "covers nothing" or "covers everything".
+# A payload key that holds a literal dict / list-of-dicts directly is read too.
+
+def _dict_literal_keys(node):
+    return {k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+
+
+def _resolve_nested_keys(func_def, name):
+    """Keys of every literal dict bound to / appended to `name` inside
+    `func_def`; `(keys, literal_count, nonliteral_count)`."""
+    keys, literal, nonliteral = set(), 0, 0
+    for node in ast.walk(func_def):
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id == name:
+                    if isinstance(node.value, ast.Dict):
+                        keys |= _dict_literal_keys(node.value)
+                        literal += 1
+                    elif isinstance(node.value, ast.Constant) and node.value.value is None:
+                        pass
+                    elif isinstance(node.value, (ast.List, ast.Tuple)) and not node.value.elts:
+                        pass
+                    else:
+                        nonliteral += 1
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and node.func.attr == 'append' and isinstance(node.func.value, ast.Name)
+              and node.func.value.id == name and node.args):
+            if isinstance(node.args[0], ast.Dict):
+                keys |= _dict_literal_keys(node.args[0])
+                literal += 1
+            else:
+                nonliteral += 1
+    return keys, literal, nonliteral
+
+
+def nested_payload_keys_for(tree, entity_type, event_type, payload_key):
+    """Keys of the nested snapshot dict(s) a `_queue_sync_event(<entity_type>,
+    <event_type>, {...})` payload carries under `payload_key`. Returns
+    `(keys, literal_sites, nonliteral_sites)` like `payload_keys_for`."""
+    keys, literal, nonliteral = set(), 0, 0
+    for func_def in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for call in ast.walk(func_def):
+            if not _is_queue_call(call) or len(call.args) < 5:
+                continue
+            et, evt, payload = call.args[1], call.args[3], call.args[4]
+            if not (isinstance(et, ast.Constant) and et.value == entity_type
+                    and isinstance(evt, ast.Constant) and evt.value == event_type):
+                continue
+            if not isinstance(payload, ast.Dict):
+                nonliteral += 1
+                continue
+            value = None
+            for k, v in zip(payload.keys, payload.values):
+                if isinstance(k, ast.Constant) and k.value == payload_key:
+                    value = v
+            if value is None:
+                # The key is absent from this writer's payload altogether: a
+                # real, literal site that carries NOTHING -- the intersection
+                # then correctly reports every column as uncovered.
+                literal += 1
+                continue
+            if isinstance(value, ast.Dict):
+                keys |= _dict_literal_keys(value)
+                literal += 1
+            elif isinstance(value, ast.Name):
+                k2, lit2, non2 = _resolve_nested_keys(func_def, value.id)
+                keys |= k2
+                literal += lit2 if lit2 else 0
+                nonliteral += non2
+                if not lit2 and not non2:
+                    nonliteral += 1      # the name is bound to nothing we can read
+            else:
+                nonliteral += 1
+    return keys, literal, nonliteral
+
+
+def per_module_nested_keys(trees_by_path, entity_type, event_type, payload_key):
+    result = {}
+    for path, tree in trees_by_path.items():
+        keys, lit, nonlit = nested_payload_keys_for(tree, entity_type, event_type, payload_key)
+        if lit or nonlit:
+            result[path] = (keys, lit, nonlit)
+    return result
+
+
 # ── Which (entity_type, event_type) pair(s) are this table's full-row
 #    baseline, and the reasoned exclusions for every column its baseline
 #    legitimately does not carry. See this module's docstring for the full
@@ -899,6 +1001,35 @@ TRACKED_TABLES = {
     # here: `sales` is already tracked, and the new column has NO exclusion, so
     # the sales test goes red the moment the sale payload stops carrying it.
     'loyalty_ledger': [('loyalty_entry', 'create')],
+    # W2b/W3a (schema v50): promotions and the extras configuration now travel
+    # between computers. Each is a mutable row announced by a `create` (the full
+    # snapshot) and `update`s that re-send the full snapshot plus
+    # `_changed_fields`, so both events are listed and both must be literal.
+    'promotions': [('promotion', 'create'), ('promotion', 'update')],
+    'modifier_groups': [('modifier_group', 'create'), ('modifier_group', 'update')],
+    'modifier_options': [('modifier_option', 'create'), ('modifier_option', 'update')],
+    'product_modifier_groups': [('product_modifier_group', 'create'),
+                                ('product_modifier_group', 'update')],
+}
+
+# W2b/W3a (schema v50): tables whose rows ride NESTED inside another entity's
+# payload. `{table: (entity_type, event_type, payload_key, {wire key: column})}`.
+# The wire keys that differ from their column name are mapped here (the
+# snapshot columns carry a `_snapshot` suffix on the table, none on the wire);
+# `test_nested_wire_mapping_names_real_columns` proves every mapped target is a
+# real column, so a typo here goes red instead of quietly covering nothing.
+NESTED_TABLES = {
+    'sale_item_modifiers': ('sale_item', 'create', 'modifiers', {
+        'group_name': 'group_name_snapshot', 'name': 'name_snapshot',
+        'price_delta': 'price_delta_snapshot', 'cost_delta': 'cost_delta_snapshot',
+    }),
+    'sale_item_promotions': ('sale_item', 'create', 'promotion', {
+        'name': 'name_snapshot', 'discount_pct': 'discount_pct_snapshot',
+        'discount_amount': 'discount_amount_snapshot',
+        # The wire names the promotion by UID; the table's `promotion_id` is the
+        # receiving computer's own id for it, resolved from this uid.
+        'promotion_uid': 'promotion_id',
+    }),
 }
 
 MIN_REASON_LEN = 40
@@ -1331,6 +1462,94 @@ EXCLUSIONS = {
                                  "a receiver must keep it 0 or it would "
                                  "re-queue what it just pulled.",
     },
+    # W2b/W3a (schema v50): the sender's `id`s of the modifier tables are
+    # client-generated TEXT uuids and ARE the cross-device identity (carried);
+    # `promotions.id` is a local autoincrement whose identity is the `uid`.
+    'promotions': {
+        'id': "Local SQLite autoincrement primary key; a promotion's real "
+              "cross-device identity is its `uid` (already in the payload), so "
+              "the sender's own integer id is meaningless on a receiving "
+              "computer and is never sent.",
+        'company_id': "Tenant-isolation key; the promotion apply branch INSERTs "
+                      "the receiver's own local_company_id, never a value read "
+                      "off the incoming payload, identical to every other "
+                      "synced company-scoped row in this file.",
+        'branch_id': "A per-computer integer branches.id; the payload carries "
+                     "`branch_uid` instead (NULL = every branch) and the apply "
+                     "branch resolves it STRICTLY, parking the promotion until "
+                     "the branch arrives rather than widening or narrowing it.",
+        'created_at': "Row-insertion bookkeeping timestamp; the apply branch's "
+                      "INSERT leaves it at the column default, matching every "
+                      "other master-data entity in this file, and nothing reads "
+                      "it for money or ordering (the merge uses updated_at_utc).",
+        'sync_backfill_pending': "Local outbox bookkeeping: 1 marks a pre-v50 "
+                                 "promotion whose create this computer still "
+                                 "owes the outbox. Meaningless to a peer, and "
+                                 "a receiver must keep it 0 or it would "
+                                 "re-queue what it just pulled.",
+    },
+    'modifier_groups': {
+        'company_id': "Tenant-isolation key; the modifier_group apply branch "
+                      "INSERTs the receiver's own local_company_id, never a "
+                      "value read off the incoming payload.",
+        'created_at': "Row-insertion bookkeeping timestamp; the apply branch's "
+                      "INSERT leaves it at the column default and nothing reads "
+                      "it (the merge uses row_version / updated_at_utc).",
+        'sync_backfill_pending': "Local outbox bookkeeping: 1 marks a pre-v50 "
+                                 "group whose create this computer still owes "
+                                 "the outbox. Meaningless to a peer, and a "
+                                 "receiver must keep it 0 or it would re-queue "
+                                 "what it just pulled.",
+    },
+    'modifier_options': {
+        'company_id': "Tenant-isolation key; the modifier_option apply branch "
+                      "INSERTs the receiver's own local_company_id, never a "
+                      "value read off the incoming payload.",
+        'created_at': "Row-insertion bookkeeping timestamp; the apply branch's "
+                      "INSERT leaves it at the column default and nothing reads "
+                      "it (the merge uses row_version / updated_at_utc).",
+        'sync_backfill_pending': "Local outbox bookkeeping: 1 marks a pre-v50 "
+                                 "option whose create this computer still owes "
+                                 "the outbox. Meaningless to a peer, and a "
+                                 "receiver must keep it 0 or it would re-queue "
+                                 "what it just pulled.",
+    },
+    'product_modifier_groups': {
+        'company_id': "Tenant-isolation key; the product_modifier_group apply "
+                      "branch INSERTs the receiver's own local_company_id, never "
+                      "a value read off the incoming payload.",
+        'sync_backfill_pending': "Local outbox bookkeeping: 1 marks a pre-v50 "
+                                 "attachment whose create this computer still "
+                                 "owes the outbox. Meaningless to a peer, and a "
+                                 "receiver must keep it 0 or it would re-queue "
+                                 "what it just pulled.",
+    },
+    # Nested snapshots (see NESTED_TABLES): `id` and `sale_item_id` are local
+    # autoincrement keys, `company_id` is the receiver's own.
+    'sale_item_modifiers': {
+        'id': "Local SQLite autoincrement primary key; a snapshot row's "
+              "cross-device identity is its `uid` (carried in the nested dict), "
+              "so the sender's own integer is meaningless on a peer.",
+        'company_id': "Tenant-isolation key; the receiver takes it from the "
+                      "parent sale it already resolved by uid, never from the "
+                      "incoming payload.",
+        'sale_item_id': "A local autoincrement foreign key into this computer's "
+                        "own sale_items.id; the snapshot travels INSIDE its "
+                        "sale_item event and the apply branch attaches it to the "
+                        "line it just resolved by that line's uid.",
+    },
+    'sale_item_promotions': {
+        'id': "Local SQLite autoincrement primary key; a snapshot row's "
+              "cross-device identity is its `uid` (carried in the nested dict), "
+              "so the sender's own integer is meaningless on a peer.",
+        'company_id': "Tenant-isolation key; the receiver takes it from the "
+                      "parent sale it already resolved by uid, never from the "
+                      "incoming payload.",
+        'sale_item_id': "A local autoincrement foreign key into this computer's "
+                        "own sale_items.id; the snapshot travels INSIDE its "
+                        "sale_item event and the apply branch attaches it to the "
+                        "line it just resolved by that line's uid.",
+    },
 }
 
 
@@ -1355,7 +1574,7 @@ def test_every_exclusion_has_a_real_reason():
 
 def test_exclusions_reference_only_tracked_tables():
     for table in EXCLUSIONS:
-        assert table in TRACKED_TABLES, (
+        assert table in TRACKED_TABLES or table in NESTED_TABLES, (
             f"EXCLUSIONS has an entry for {table!r}, which is not in TRACKED_TABLES "
             f"-- dead configuration nobody's test actually exercises."
         )
@@ -1504,6 +1723,99 @@ def test_stock_transfer_items_outbox_payload_covers_every_column():
 
 def test_loyalty_ledger_outbox_payload_covers_every_column():
     _assert_full_coverage('loyalty_ledger')
+
+
+def test_promotions_outbox_payload_covers_every_column():
+    _assert_full_coverage('promotions')
+
+
+def test_modifier_groups_outbox_payload_covers_every_column():
+    _assert_full_coverage('modifier_groups')
+
+
+def test_modifier_options_outbox_payload_covers_every_column():
+    _assert_full_coverage('modifier_options')
+
+
+def test_product_modifier_groups_outbox_payload_covers_every_column():
+    _assert_full_coverage('product_modifier_groups')
+
+
+def _assert_nested_coverage(table):
+    """W2b/W3a: the snapshot tables whose rows ride inside a sale_item event."""
+    db_path = _install()
+    entity_type, event_type, payload_key, wire_to_column = NESTED_TABLES[table]
+    per_module = per_module_nested_keys(_SYNC_MODULE_TREES, entity_type, event_type, payload_key)
+    assert per_module, (
+        f"no `_queue_sync_event(..., {entity_type!r}, ..., {event_type!r}, {{...}})` "
+        f"call found in any scanned module -- the shape this ratchet reads for "
+        f"{table!r} no longer holds")
+    nonliteral = sorted(_rel(p) for p, (_, _, nl) in per_module.items() if nl)
+    assert not nonliteral, (
+        f"{table}: the nested {payload_key!r} snapshot in {nonliteral} is bound to "
+        f"something this ratchet cannot read (not a literal dict / `.append({{...}})`); "
+        f"investigate before trusting a green result.")
+    # Every writer of the parent event must carry the snapshot with the same keys:
+    # a writer whose payload lacks the key has an empty set and empties the
+    # intersection, so its columns are reported as uncovered.
+    common = intersection_of_module_keys(per_module)
+    on_wire = {wire_to_column.get(k, k) for k in common}
+    missing = missing_coverage(_table_columns(db_path, table), on_wire, EXCLUSIONS.get(table, {}))
+    assert not missing, (
+        f"{table}: column(s) {sorted(missing)} exist in the live schema but the nested "
+        f"{payload_key!r} snapshot of a {entity_type!r} {event_type!r} event does not carry "
+        f"them (keys on the wire: {sorted(common)}) and they are not in EXCLUSIONS[{table!r}]. "
+        f"A peer computer would never receive them.")
+
+
+def test_sale_item_modifiers_snapshot_covers_every_column():
+    _assert_nested_coverage('sale_item_modifiers')
+
+
+def test_sale_item_promotions_snapshot_covers_every_column():
+    _assert_nested_coverage('sale_item_promotions')
+
+
+def test_nested_wire_mapping_names_real_columns():
+    """The wire-key -> column maps above are hand-typed; a typo must go red
+    (a mapped target that is not a real column would quietly cover nothing)."""
+    db_path = _install()
+    for table, (_, _, _, wire_to_column) in NESTED_TABLES.items():
+        real = _table_columns(db_path, table)
+        for wire, column in wire_to_column.items():
+            assert column in real, f"{table}: {wire!r} maps to {column!r}, which is not a column"
+
+
+def test_nested_extractor_reads_a_name_bound_in_the_same_function_and_flags_unreadable_ones():
+    """NOT-VACUOUS PROOF for `nested_payload_keys_for`, from synthetic source:
+    a list built by `.append({...})`, a dict assigned once and a None arm are
+    read; a name bound to a helper call is NONLITERAL (loud), and a writer
+    whose payload omits the key reports no keys (so the intersection empties)."""
+    readable = ast.parse(
+        "def f():\n"
+        "    snaps = []\n"
+        "    for s in rows:\n"
+        "        snaps.append({'uid': 1, 'name': 2})\n"
+        "    promo = None\n"
+        "    if x:\n"
+        "        promo = {'uid': 1, 'pct': 3}\n"
+        "    _queue_sync_event(cur, 'sale_item', u, 'create', {'uid': u, 'modifiers': snaps, 'promotion': promo})\n")
+    assert nested_payload_keys_for(readable, 'sale_item', 'create', 'modifiers') == ({'uid', 'name'}, 1, 0)
+    assert nested_payload_keys_for(readable, 'sale_item', 'create', 'promotion') == ({'uid', 'pct'}, 1, 0)
+    opaque = ast.parse(
+        "def f():\n"
+        "    snaps = build(rows)\n"
+        "    _queue_sync_event(cur, 'sale_item', u, 'create', {'modifiers': snaps})\n")
+    keys, lit, nonlit = nested_payload_keys_for(opaque, 'sale_item', 'create', 'modifiers')
+    assert keys == set() and nonlit >= 1
+    absent = ast.parse(
+        "def f():\n"
+        "    _queue_sync_event(cur, 'sale_item', u, 'create', {'uid': u})\n")
+    assert nested_payload_keys_for(absent, 'sale_item', 'create', 'modifiers') == (set(), 1, 0)
+    other = ast.parse(
+        "def f():\n"
+        "    _queue_sync_event(cur, 'sale', u, 'create', {'modifiers': {'a': 1}})\n")
+    assert nested_payload_keys_for(other, 'sale_item', 'create', 'modifiers') == (set(), 0, 0)
 
 
 # ── NOT-VACUOUS PROOF ─────────────────────────────────────────────────────────

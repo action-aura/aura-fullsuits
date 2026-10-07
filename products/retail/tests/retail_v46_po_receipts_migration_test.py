@@ -150,8 +150,8 @@ def test_upgrade_adds_shape_basis_and_one_legacy_receipt_with_exact_uids():
     pos = _make_v45(db)
     backup_dir = _migrate(sch, db)
 
-    assert sch.RETAIL_SCHEMA_VERSION == 49  # v49 UPDATE: head moved 48 -> 49 (B6b); v49's own shape is pinned by retail_v49_total_spent_baseline_migration_test.py
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 49  # v49 UPDATE: head moved 48 -> 49 (B6b); v49's own shape is pinned by retail_v49_total_spent_baseline_migration_test.py
+    assert sch.RETAIL_SCHEMA_VERSION == 50  # v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 50  # v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     assert _rows(db, 'PRAGMA integrity_check')[0]['integrity_check'] == 'ok'
     assert os.listdir(backup_dir), 'ensure_schema_version must have written its pre-migration backup'
     assert {'ap_basis', 'closed_at', 'cancelled_at'} <= _cols(db, 'purchase_orders')
@@ -248,7 +248,7 @@ def test_replaying_the_chain_is_byte_identical_and_adds_no_second_legacy_receipt
 
 def test_a_fresh_install_has_the_v46_shape_and_no_receipts():
     sch, db = _install()
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 49  # v49 UPDATE: head moved 48 -> 49 (B6b); v49's own shape is pinned by retail_v49_total_spent_baseline_migration_test.py
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 50  # v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     assert {'ap_basis', 'closed_at', 'cancelled_at'} <= _cols(db, 'purchase_orders')
     assert _rows(db, "SELECT COUNT(*) AS n FROM purchase_order_receipts")[0]['n'] == 0
     names = {r['name'] for r in _rows(db, "SELECT name FROM sqlite_master WHERE type='index'")}

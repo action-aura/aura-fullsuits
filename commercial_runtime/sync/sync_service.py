@@ -474,6 +474,96 @@ def _canonical_branch_uid(conn: sqlite3.Connection, uid: Any, company_id: Any) -
     return current
 
 
+# -- W2b/W3a (schema v50): the configuration merge rule ----------------------
+# TWIN of products/retail/backend/core/retail/config_sync.py (`canonical_json`,
+# `lww_incoming_wins`, `config_values_differ`). sync_service must never import
+# products/ code (it is shared with Clinic), so the rule is duplicated here and
+# `retail_config_sync_apply_test.py` pins the two equal on a battery of cases.
+# If you change one, change the other: two computers using DIFFERENT rules would
+# each pick a different winner for the same pair of edits and never converge.
+_CONFIG_META_KEYS = frozenset({
+    "_changed_fields", "company_id", "row_version", "updated_at_utc",
+    "sync_backfill_pending", "id",
+})
+
+
+def _config_canon(value):
+    if isinstance(value, bool) or value is None or isinstance(value, (int, str)):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else round(value, 9)
+    if isinstance(value, dict):
+        return {str(k): _config_canon(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_config_canon(v) for v in value]
+    return str(value)
+
+
+def _config_canonical_json(obj) -> str:
+    return json.dumps(_config_canon(obj), sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False)
+
+
+def _config_version(row) -> int:
+    value = row.get("row_version")
+    try:
+        return int(value) if value is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _config_stamp(row) -> str:
+    value = row.get("updated_at_utc")
+    return "" if value is None else str(value)
+
+
+def _config_shared_keys(local, incoming):
+    return sorted((set(local) & set(incoming)) - _CONFIG_META_KEYS)
+
+
+def _config_content(row, keys) -> str:
+    return _config_canonical_json({k: row.get(k) for k in keys})
+
+
+def _config_values_differ(local, incoming) -> bool:
+    keys = _config_shared_keys(local, incoming)
+    return _config_content(local, keys) != _config_content(incoming, keys)
+
+
+def _config_lww_incoming_wins(local, incoming) -> bool:
+    """Last writer wins per row on (row_version, updated_at_utc, content);
+    identical content is no win. See core/retail/config_sync.py for the full
+    reasoning -- this is its twin."""
+    rv_in, rv_local = _config_version(incoming), _config_version(local)
+    if rv_in != rv_local:
+        return rv_in > rv_local
+    at_in, at_local = _config_stamp(incoming), _config_stamp(local)
+    if at_in != at_local:
+        return at_in > at_local
+    keys = _config_shared_keys(local, incoming)
+    return _config_content(incoming, keys) > _config_content(local, keys)
+
+
+#: The four entity types W2b/W3a adds, and per type the content columns that
+#: travel. Code-owned: a wire `_changed_fields` is only ever membership-tested
+#: against these, never interpolated into SQL. `retail_config_sync_apply_test.py`
+#: pins the column lists to the emit side's literal payload dicts by SOURCE
+#: reading, not by import (sync_service cannot import retail_api).
+CONFIG_SYNC_ENTITY_TYPES = frozenset({
+    "promotion", "modifier_group", "modifier_option", "product_modifier_group",
+})
+_CONFIG_PROMOTION_COLUMNS = (
+    "name", "discount_pct", "product_id", "category_id", "branch_uid",
+    "starts_at", "ends_at", "status",
+)
+_CONFIG_GROUP_COLUMNS = ("name", "min_select", "max_select", "status", "deleted_at_utc")
+_CONFIG_OPTION_COLUMNS = (
+    "group_id", "name", "price_delta", "cost_delta", "is_default", "sort_order",
+    "status", "deleted_at_utc",
+)
+_CONFIG_LINK_COLUMNS = ("product_id", "group_id", "sort_order", "deleted_at_utc")
+
+
 def _normalise_branch_uid_refs(conn: sqlite3.Connection, company_id: Any) -> None:
     """Rewrite every stored reference to an alias uid so it names the canonical
     one: `doc_series.branch_uid`, the `branch_code:<uid>` setting key, and the
@@ -730,6 +820,22 @@ RETAIL_SYNC_ENTITY_TYPES = frozenset({
     # peer does not know the type and parks it via the unknown-type schema-skew
     # gate (`schema_version_too_new`).
     "loyalty_entry",
+    # Schema v50 (W2b + W3a) -- promotions and the extras configuration shared
+    # between computers. Four types, all MUTABLE rows merged last-writer-wins
+    # per row (see `_config_lww_incoming_wins`): "promotion" (keyed on the
+    # row's wire `uid`; the branch travels as `branch_uid`, NULL = every
+    # branch), "modifier_group", "modifier_option" and
+    # "product_modifier_group" (the attachment of a group to a product), the
+    # three modifier ones keyed on their own TEXT `id`. Before v50 none of them
+    # ever left the computer they were typed on: a promotion made on A was not
+    # applied on B (full price) and B's till could not offer A's extras. Every
+    # one needs `company_id` (the receiver stamps its own), so none is in
+    # `_ENTITY_TYPES_WITHOUT_COMPANY_ID`. A v49 peer does not know the types and
+    # parks them via the unknown-type schema-skew gate.
+    "promotion",
+    "modifier_group",
+    "modifier_option",
+    "product_modifier_group",
 })
 
 #: Phase 5 wave B2 (docs/launch-readiness/phase5-waveb2-user-sync.md) -- the
@@ -3291,6 +3397,9 @@ class SyncService:
                  p.get("discount_pct", 0), p.get("tax_rate", 0), p.get("line_total"),
                  p.get("unit_cost", 0), p.get("uid")),
             )
+            # W2b/W3a (schema v50): the line's extras / promotion SNAPSHOTS.
+            # Older payloads carry neither key and this is then a no-op.
+            self._apply_sale_item_snapshots(conn, p)
         elif entity_type == "return":
             if event_type != "create":
                 # Same immutability posture as "sale" above -- a return is
@@ -3614,6 +3723,12 @@ class SyncService:
             if event_type != "create":
                 return True
             return self._apply_loyalty_entry_create(conn, ev, p, local_company_id, conflict_sink)
+        elif entity_type in CONFIG_SYNC_ENTITY_TYPES:
+            # W2b/W3a (schema v50): promotions and the extras configuration.
+            if event_type not in ("create", "update"):
+                return True
+            return self._apply_config_event(conn, ev, p, entity_type, event_type,
+                                            local_company_id, conflict_sink)
         elif entity_type == "inventory_movement":
             # Wave B (stock-moving sync). Immutable ledger fact -- see the
             # module docstring's wave B note for why this posture matches
@@ -6417,6 +6532,351 @@ class SyncService:
                 payload={"customer_id": customer_id, "redeem_uid": redeem_uid},
                 discriminator=("redeem_uid", redeem_uid))
         return True
+
+    # -- W2b/W3a: promotions + extras configuration (schema v50) -------------
+
+    @staticmethod
+    def _config_resolve_branch(conn, cid, branch_uid):
+        """`(ok, local branch id)` for a promotion's wire `branch_uid`.
+
+        STRICT, unlike `_resolve_branch_id`: no uid means "every branch"
+        (ok, None); a uid this computer cannot resolve is `ok=False` -- the
+        caller PARKS. The default-branch fallback that sales take would be
+        wrong here in BOTH directions: a branch-scoped promotion silently
+        widened to every branch discounts a till it was never meant for, and
+        one silently narrowed to the default branch vanishes from the branch it
+        belongs to. Parked instead, it replays when the branch arrives. Follows
+        a branch alias in both directions exactly like `_resolve_branch_id`'s
+        tier 1b."""
+        if not branch_uid:
+            return True, None
+        if not isinstance(branch_uid, str):
+            return False, None
+        row = conn.execute("SELECT id FROM branches WHERE uid=? AND company_id=?",
+                           (branch_uid, cid)).fetchone()
+        if row:
+            return True, row["id"]
+        try:
+            canon = _canonical_branch_uid(conn, branch_uid, cid)
+            row = None
+            if canon and canon != branch_uid:
+                row = conn.execute("SELECT id FROM branches WHERE uid=? AND company_id=?",
+                                   (canon, cid)).fetchone()
+            if row is None and canon:
+                row = conn.execute(
+                    "SELECT b.id AS id FROM branches b JOIN branch_uid_aliases a "
+                    "ON a.alias_uid = b.uid "
+                    "WHERE a.canonical_uid = ? AND CAST(a.company_id AS TEXT) = ? "
+                    "AND b.company_id = ? ORDER BY b.id LIMIT 1",
+                    (canon, str(cid), cid)).fetchone()
+        except sqlite3.Error:
+            row = None
+        return (True, row["id"]) if row else (False, None)
+
+    @staticmethod
+    def _config_int(value, default=1) -> int:
+        """A wire row_version as an int >= 1; anything unreadable is `default`
+        (bool is refused: True would read as 1)."""
+        if isinstance(value, bool):
+            return default
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return default
+
+    def _apply_config_event(self, conn, ev: dict, p: dict, entity_type: str,
+                            event_type: str, cid, conflict_sink) -> bool:
+        """`promotion` / `modifier_group` / `modifier_option` /
+        `product_modifier_group` create and update. All four are merged by
+        `_config_merge`; this method only validates the payload, resolves what
+        needs resolving, and says which table and columns each type owns.
+
+        The row's wire key must be a non-empty string: it is what every later
+        update names, so a key-less event could never be merged and is parked,
+        never inserted."""
+        key_name = "uid" if entity_type == "promotion" else "id"
+        key = p.get(key_name)
+        if not isinstance(key, str) or not key:
+            return self._quarantine_apply_event(
+                conn, ev, reason=f"malformed_{entity_type}",
+                detail=f"payload carries no usable {key_name!r}")
+        if entity_type == "promotion":
+            return self._apply_promotion(conn, ev, p, key, event_type, cid, conflict_sink)
+        if entity_type == "modifier_group":
+            self._config_merge(
+                conn, p, entity_type=entity_type, event_type=event_type,
+                table="modifier_groups", key_col="id", key=key, cid=cid,
+                columns=_CONFIG_GROUP_COLUMNS, incoming={c: p.get(c) for c in _CONFIG_GROUP_COLUMNS},
+                conflict_sink=conflict_sink)
+            self._flag_same_name_group(conn, cid, key, p.get("name"), conflict_sink, event_type)
+            return True
+        if entity_type == "modifier_option":
+            self._config_merge(
+                conn, p, entity_type=entity_type, event_type=event_type,
+                table="modifier_options", key_col="id", key=key, cid=cid,
+                columns=_CONFIG_OPTION_COLUMNS, incoming={c: p.get(c) for c in _CONFIG_OPTION_COLUMNS},
+                conflict_sink=conflict_sink)
+            return True
+        return self._apply_modifier_link(conn, ev, p, key, event_type, cid, conflict_sink)
+
+    def _config_merge(self, conn, p: dict, *, entity_type, event_type, table, key_col, key, cid,
+                      columns, incoming, conflict_sink, column_map=None, local_wire_of=None,
+                      incoming_local=None) -> bool:
+        """Insert, or merge last-writer-wins, ONE configuration row. Returns
+        True when the row was inserted here.
+
+        `incoming` is the payload's content by WIRE column; `column_map` maps a
+        wire column to a differently named local one (promotions only:
+        `branch_uid` -> `branch_id`), `incoming_local` carries the values
+        already resolved for the local columns (the local branch id), and
+        `local_wire_of(row)` rebuilds a local row's WIRE view for the merge
+        comparison (the branch uid, not the local integer). All three exist so
+        the comparison runs on what both computers share, never on a
+        per-computer integer.
+
+        * No local row: insert the sender's full snapshot (an `update` for a row
+          never seen here is the same thing -- the snapshot is complete).
+        * Local row: `_config_lww_incoming_wins`. A WINNING update writes only
+          the columns the sender names in `_changed_fields` (all of them when
+          the key is absent), so two edits to different fields are not
+          clobbered by the sender re-sending its stale value of the other
+          field; a create / legacy event with no `_changed_fields` writes the
+          snapshot. The row's version and stamp take the sender's.
+        * A LOSING update changes nothing. It is recorded as a conflict -- once
+          per row -- only when it actually disagrees with what is kept here, so
+          an echo or a re-announce of identical data stays silent.
+
+        A stale edit can never resurrect a deactivated or detached row: the
+        deactivation carries a higher row_version, so the stale edit loses; and
+        an edit that wins on a tie writes only the fields it changed, which
+        never include `status` / `deleted_at_utc` unless it meant to."""
+        cmap = column_map or {}
+        local_values = incoming_local if incoming_local is not None else incoming
+        rv_in = self._config_int(p.get("row_version"))
+        ts_in = p.get("updated_at_utc")
+        changed = p.get("_changed_fields")
+        if not isinstance(changed, (list, tuple)):
+            changed = None
+        row = conn.execute(f'SELECT * FROM "{table}" WHERE "{key_col}"=? AND company_id=?',
+                           (key, cid)).fetchone()
+        if row is None:
+            names = [key_col, "company_id"] + [cmap.get(c, c) for c in columns] + \
+                ["row_version", "updated_at_utc"]
+            binds = [key, cid] + [local_values[c] for c in columns] + [rv_in, ts_in]
+            conn.execute(
+                f'INSERT INTO "{table}" (' + ", ".join(f'"{n}"' for n in names) + ") VALUES ("
+                + ",".join("?" * len(names)) + ")", binds)
+            return True
+        local_wire = local_wire_of(row) if local_wire_of else {c: row[cmap.get(c, c)] for c in columns}
+        local = dict(local_wire, row_version=row["row_version"], updated_at_utc=row["updated_at_utc"])
+        incoming_view = dict(incoming, row_version=rv_in, updated_at_utc=ts_in)
+        differs = any(_config_canonical_json(incoming.get(c)) != _config_canonical_json(local_wire.get(c))
+                      for c in columns)
+        if _config_lww_incoming_wins(local, incoming_view):
+            # WHOLE-ROW last-writer-wins (planner decision, replaces the earlier
+            # delta write): the winner writes its FULL snapshot of the synced
+            # columns, never only `_changed_fields`. With delta writes two
+            # computers editing DIFFERENT fields at the same row_version ended
+            # up different (the winner's computer kept both edits, the other
+            # kept only the winner's). Whole-row means both pick the same row.
+            # The cost -- independent field edits no longer merge on a tie --
+            # is made VISIBLE: when the two versions were concurrent (equal
+            # row_version) and their values differ, the dropped local edit is
+            # recorded once so the owner can see it. A normal later edit
+            # (higher row_version) is not a conflict and records nothing.
+            if rv_in == self._config_int(row["row_version"], 0) and differs:
+                self._record_sync_conflict_once(
+                    conn, conflict_sink, local_company_id=cid, entity_type=entity_type,
+                    entity_id=key, event_type=event_type,
+                    local_row_version=self._config_int(row["row_version"], 0),
+                    incoming_row_version=rv_in, reason="config_edit_superseded",
+                    payload=dict(local_wire, superseded="local"))
+            write = list(columns)
+            sets = [f'"{cmap.get(c, c)}"=?' for c in write] + ['"row_version"=?', '"updated_at_utc"=?']
+            conn.execute(
+                f'UPDATE "{table}" SET ' + ", ".join(sets) + f' WHERE "{key_col}"=? AND company_id=?',
+                [local_values[c] for c in write] + [rv_in, ts_in, key, cid])
+            return False
+        if differs:
+            self._record_sync_conflict_once(
+                conn, conflict_sink, local_company_id=cid, entity_type=entity_type,
+                entity_id=key, event_type=event_type,
+                local_row_version=self._config_int(row["row_version"], 0),
+                incoming_row_version=rv_in, reason="config_edit_superseded", payload=p)
+        return False
+
+    def _apply_promotion(self, conn, ev, p, uid, event_type, cid, conflict_sink) -> bool:
+        """`promotion`: see `_config_merge`. On top of it:
+
+        * exactly one of product_id / category_id (the same rule the API
+          enforces on write) and a readable name and percentage -- a payload
+          breaking them PARKS as `malformed_promotion` instead of raising out of
+          the INSERT and wedging the batch;
+        * `branch_uid` resolves strictly (`_config_resolve_branch`);
+        * product_id / category_id travel verbatim and are never looked up:
+          neither column has a foreign key, and a promotion for a category this
+          computer has not received yet must still apply;
+        * starts_at / ends_at are the shop's local wall clock and travel
+          verbatim -- never converted."""
+        name = p.get("name")
+        pct = p.get("discount_pct")
+        product_id, category_id = p.get("product_id"), p.get("category_id")
+        problem = None
+        if not isinstance(name, str) or not name.strip():
+            problem = "name is empty"
+        elif isinstance(pct, bool) or not isinstance(pct, (int, float)):
+            problem = f"discount_pct={pct!r} is not a number"
+        elif bool(product_id) == bool(category_id):
+            problem = "a promotion must target exactly one of product_id / category_id"
+        if problem:
+            return self._quarantine_apply_event(
+                conn, ev, reason="malformed_promotion", detail=f"promotion {uid!r}: {problem}")
+        ok, branch_id = self._config_resolve_branch(conn, cid, p.get("branch_uid"))
+        if not ok:
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:branch",
+                detail=f"branch_uid={p.get('branch_uid')!r} not found locally")
+        canon_branch = _canonical_branch_uid(conn, p.get("branch_uid"), cid) or None
+        incoming = {c: p.get(c) for c in _CONFIG_PROMOTION_COLUMNS}
+        incoming["branch_uid"] = canon_branch
+        incoming["discount_pct"] = float(pct)
+        incoming_local = dict(incoming, branch_uid=branch_id)
+
+        def _wire_of(row):
+            view = {c: row[c] for c in _CONFIG_PROMOTION_COLUMNS if c != "branch_uid"}
+            buid = None
+            if row["branch_id"] is not None:
+                b = conn.execute("SELECT uid FROM branches WHERE id=?", (row["branch_id"],)).fetchone()
+                buid = _canonical_branch_uid(conn, b["uid"], cid) if b else None
+            view["branch_uid"] = buid or None
+            return view
+
+        self._config_merge(
+            conn, p, entity_type="promotion", event_type=event_type, table="promotions",
+            key_col="uid", key=uid, cid=cid, columns=_CONFIG_PROMOTION_COLUMNS,
+            incoming=incoming, conflict_sink=conflict_sink,
+            column_map={"branch_uid": "branch_id"}, local_wire_of=_wire_of,
+            incoming_local=incoming_local)
+        return True
+
+    def _flag_same_name_group(self, conn, cid, gid, name, conflict_sink, event_type) -> None:
+        """Two extras groups typed separately on two computers before v50 (or
+        offline) have different ids and the same name. Both stay -- merging
+        them would guess which options belong together -- but the owner is told
+        once per name, so they can switch one off."""
+        if not isinstance(name, str) or not name:
+            return
+        other = conn.execute(
+            "SELECT 1 FROM modifier_groups WHERE company_id=? AND name=? AND id<>? "
+            "AND deleted_at_utc IS NULL LIMIT 1", (cid, name, gid)).fetchone()
+        if other:
+            self._record_sync_conflict_once(
+                conn, conflict_sink, local_company_id=cid, entity_type="modifier_group",
+                entity_id=name, event_type=event_type, local_row_version=0,
+                incoming_row_version=0, reason="modifier_group_same_name",
+                payload={"group_id": gid, "name": name})
+
+    def _apply_modifier_link(self, conn, ev, p, key, event_type, cid, conflict_sink) -> bool:
+        """`product_modifier_group`: one group attached to one product.
+
+        UNIQUE(company_id, product_id, group_id) is a different key from the
+        row id, so two computers that each attached the SAME group to the SAME
+        product mint different ids and the second INSERT would raise
+        IntegrityError out of the batch. Resolved deterministically instead:
+        the lexicographically LOWER id keeps the pair on every computer, in any
+        arrival order. If the incoming id is lower the local row is deleted and
+        the incoming one inserted (nothing references an attachment's id --
+        every read goes by product + group); otherwise the incoming one is
+        ignored. Recorded once per pair, never raised. Edits made on the losing
+        id are lost -- that is the price of a total order without a registry."""
+        product_id, group_id = p.get("product_id"), p.get("group_id")
+        if not isinstance(product_id, str) or not product_id \
+                or not isinstance(group_id, str) or not group_id:
+            return self._quarantine_apply_event(
+                conn, ev, reason="malformed_product_modifier_group",
+                detail="product_id / group_id missing or not text")
+        others = conn.execute(
+            "SELECT id FROM product_modifier_groups WHERE company_id=? AND product_id=? "
+            "AND group_id=? AND id<>?", (cid, product_id, group_id, key)).fetchall()
+        if others:
+            self._record_sync_conflict_once(
+                conn, conflict_sink, local_company_id=cid,
+                entity_type="product_modifier_group", entity_id=f"{product_id}:{group_id}",
+                event_type=event_type, local_row_version=0, incoming_row_version=0,
+                reason="modifier_link_duplicate",
+                payload={"product_id": product_id, "group_id": group_id,
+                         "ids": sorted([key] + [o["id"] for o in others])})
+            if any(o["id"] < key for o in others):
+                return True
+            for o in others:
+                conn.execute("DELETE FROM product_modifier_groups WHERE id=? AND company_id=?",
+                             (o["id"], cid))
+        self._config_merge(
+            conn, p, entity_type="product_modifier_group", event_type=event_type,
+            table="product_modifier_groups", key_col="id", key=key, cid=cid,
+            columns=_CONFIG_LINK_COLUMNS, incoming={c: p.get(c) for c in _CONFIG_LINK_COLUMNS},
+            conflict_sink=conflict_sink)
+        return True
+
+    @staticmethod
+    def _apply_sale_item_snapshots(conn, p: dict) -> None:
+        """W2b/W3a (D8): land the extras and promotion SNAPSHOTS a `sale_item`
+        now carries, so a sale rung on another computer shows its extras and
+        its promotion in receipts, reprints and reports here. The money was
+        always right (prices are baked into `sale_items`); this is the story of
+        how the line got its price.
+
+        Each snapshot row is keyed on its own `uid`, `ON CONFLICT DO NOTHING`,
+        so a replay or a re-announce adds nothing. The tenant comes from the
+        parent SALE, not the caller: `sale_item` is in
+        `_ENTITY_TYPES_WITHOUT_COMPANY_ID`, so a batch of only sale lines never
+        resolved a company id, and the snapshot tables' company_id is NOT NULL.
+        `sale_item_promotions.promotion_id` is the LOCAL promotion's id, or 0
+        when that promotion has not arrived yet -- the snapshot (name, percent,
+        amount) is what matters, the id is provenance. A malformed entry is
+        skipped, never fatal: the line itself already applied."""
+        mods, promo = p.get("modifiers"), p.get("promotion")
+        if not mods and not promo:
+            return
+        item_uid = p.get("uid")
+        if not item_uid:
+            return
+        item = conn.execute(
+            "SELECT si.id AS id, s.company_id AS company_id FROM sale_items si "
+            "JOIN sales s ON s.id = si.sale_id WHERE si.uid=?", (item_uid,)).fetchone()
+        if item is None:
+            return
+        cid = item["company_id"]
+        for m in (mods if isinstance(mods, list) else []):
+            if not isinstance(m, dict) or not isinstance(m.get("uid"), str) or not m.get("uid"):
+                continue
+            try:
+                price, cost = float(m.get("price_delta") or 0), float(m.get("cost_delta") or 0)
+            except (TypeError, ValueError):
+                continue
+            conn.execute(
+                "INSERT INTO sale_item_modifiers (company_id, sale_item_id, modifier_option_id, "
+                "group_name_snapshot, name_snapshot, price_delta_snapshot, cost_delta_snapshot, uid) "
+                "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                (cid, item["id"], m.get("modifier_option_id"), str(m.get("group_name") or ""),
+                 str(m.get("name") or ""), price, cost, m["uid"]))
+        if isinstance(promo, dict) and isinstance(promo.get("uid"), str) and promo.get("uid"):
+            try:
+                pct = float(promo.get("discount_pct") or 0)
+                amount = float(promo.get("discount_amount") or 0)
+            except (TypeError, ValueError):
+                return
+            local = None
+            if isinstance(promo.get("promotion_uid"), str) and promo.get("promotion_uid"):
+                local = conn.execute(
+                    "SELECT id FROM promotions WHERE uid=? AND company_id=?",
+                    (promo["promotion_uid"], cid)).fetchone()
+            conn.execute(
+                "INSERT INTO sale_item_promotions (company_id, sale_item_id, promotion_id, "
+                "name_snapshot, discount_pct_snapshot, discount_amount_snapshot, uid) "
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                (cid, item["id"], local["id"] if local else 0, str(promo.get("name") or ""),
+                 pct, amount, promo["uid"]))
 
     # ── W3b: stock transfers (schema v47) ────────────────────────────────────
 

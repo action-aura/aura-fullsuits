@@ -92,7 +92,7 @@ def test_a_v41_database_is_rebuilt_with_auth_key_and_keeps_every_row(tmp_path):
     sch.init_retail()                                      # the REAL v41 -> v42 upgrade, backup and checks included
     conn = _open(sch)
     try:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 49  # v49 UPDATE: head moved 48 -> 49 (B6b); v49's own shape is pinned by retail_v49_total_spent_baseline_migration_test.py
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 50  # v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
         assert _pk(conn) == {"entity_id", "event_type", "auth_key"}
         rows = {r["entity_id"]: dict(r) for r in conn.execute(
             "SELECT entity_id, entity_type, event_type, payload, reason, detail, quarantined_at, auth_key "
@@ -129,7 +129,7 @@ def test_the_pre_migration_backup_still_holds_the_old_shape(tmp_path):
     sch = _rewound_install(tmp_path)
     sch.init_retail()
     bdir = os.path.join(sch.BASE_DIR, 'migration_backups')
-    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v49' in n)  # v49 UPDATE: head moved 48 -> 49 (B6b); v49's own shape is pinned by retail_v49_total_spent_baseline_migration_test.py
+    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v50' in n)  # v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     assert names, os.listdir(bdir)
     conn = sqlite3.connect(f'file:{os.path.join(bdir, names[-1])}?mode=ro', uri=True)
     try:

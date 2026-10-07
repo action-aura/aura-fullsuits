@@ -5511,6 +5511,197 @@ def backfill_legacy_transfers(conn):
     return done
 
 
+# ── W2b / W3a (schema v50): promotions and extras shared between computers ─────
+#
+# Promotions and the extras configuration (modifier groups, options and their
+# attachment to products) never left the computer they were set up on: a
+# promotion made on A was not applied on B (full price), B's till could not
+# offer A's extras, and a sale with extras or a promotion made on A showed a
+# plain line in B's receipts and reports. Every write below now queues one
+# event; the receiving computer merges last-writer-wins per row (see
+# core/retail/config_sync.py and the twin in sync_service.py).
+#
+# ONE helper per entity, with LITERAL payload dicts (the sync-payload coverage
+# ratchet reads them from the AST), called by every route AND by the boot
+# backfill so the wire shape cannot drift between them. `changed` is None for a
+# create; for an update it is the set of columns THIS edit touched, announced as
+# `_changed_fields` so two computers' independent field edits merge instead of
+# one clobbering the other. The rest of each payload is a FULL snapshot of the
+# row after the write -- the receiving side needs it for a computer that has
+# never seen this row. No `company_id` on the wire: the receiver stamps its own.
+
+
+def _queue_promotion(cur, cid, promotion_id, changed=None):
+    """W2b: queue a `promotion` create (changed is None) or update event. The
+    wire identity is `promotions.uid`; `branch_id` travels as the branch's UID
+    (NULL = every branch -- a promotion is never widened or narrowed in
+    transit). `product_id` / `category_id` travel verbatim. A row that somehow
+    has no uid yet is given one here, so an event never goes out nameless."""
+    r = cur.execute(
+        "SELECT p.*, b.uid AS branch_uid FROM promotions p "
+        "LEFT JOIN branches b ON b.id=p.branch_id AND b.company_id=p.company_id "
+        "WHERE p.id=? AND p.company_id=?", (promotion_id, cid)).fetchone()
+    uid = r['uid']
+    if not uid:
+        uid = _new_uid()
+        cur.execute("UPDATE promotions SET uid=? WHERE id=?", (uid, promotion_id))
+    if changed is None:
+        _queue_sync_event(cur, 'promotion', uid, 'create', {
+            'uid': uid, 'name': r['name'], 'discount_pct': r['discount_pct'],
+            'product_id': r['product_id'], 'category_id': r['category_id'],
+            'branch_uid': r['branch_uid'], 'starts_at': r['starts_at'], 'ends_at': r['ends_at'],
+            'status': r['status'], 'row_version': r['row_version'],
+            'updated_at_utc': r['updated_at_utc'],
+        })
+    else:
+        # `branch_id` is a local number; the other side knows the branch by uid.
+        wire_changed = sorted('branch_uid' if c == 'branch_id' else c for c in changed)
+        _queue_sync_event(cur, 'promotion', uid, 'update', {
+            'uid': uid, 'name': r['name'], 'discount_pct': r['discount_pct'],
+            'product_id': r['product_id'], 'category_id': r['category_id'],
+            'branch_uid': r['branch_uid'], 'starts_at': r['starts_at'], 'ends_at': r['ends_at'],
+            'status': r['status'], 'row_version': r['row_version'],
+            'updated_at_utc': r['updated_at_utc'], '_changed_fields': wire_changed,
+        })
+
+
+def _queue_modifier_group(cur, cid, group_id, changed=None):
+    """W3a: queue a `modifier_group` create (changed is None) or update event."""
+    r = cur.execute("SELECT * FROM modifier_groups WHERE id=? AND company_id=?",
+                    (group_id, cid)).fetchone()
+    if changed is None:
+        _queue_sync_event(cur, 'modifier_group', group_id, 'create', {
+            'id': r['id'], 'name': r['name'], 'min_select': r['min_select'],
+            'max_select': r['max_select'], 'status': r['status'],
+            'deleted_at_utc': r['deleted_at_utc'], 'row_version': r['row_version'],
+            'updated_at_utc': r['updated_at_utc'],
+        })
+    else:
+        _queue_sync_event(cur, 'modifier_group', group_id, 'update', {
+            'id': r['id'], 'name': r['name'], 'min_select': r['min_select'],
+            'max_select': r['max_select'], 'status': r['status'],
+            'deleted_at_utc': r['deleted_at_utc'], 'row_version': r['row_version'],
+            'updated_at_utc': r['updated_at_utc'], '_changed_fields': sorted(changed),
+        })
+
+
+def _queue_modifier_option(cur, cid, option_id, changed=None):
+    """W3a: queue a `modifier_option` create (changed is None) or update event.
+    `group_id` is the group's own wire id (a TEXT uuid), so it travels as is."""
+    r = cur.execute("SELECT * FROM modifier_options WHERE id=? AND company_id=?",
+                    (option_id, cid)).fetchone()
+    if changed is None:
+        _queue_sync_event(cur, 'modifier_option', option_id, 'create', {
+            'id': r['id'], 'group_id': r['group_id'], 'name': r['name'],
+            'price_delta': r['price_delta'], 'cost_delta': r['cost_delta'],
+            'is_default': r['is_default'], 'sort_order': r['sort_order'], 'status': r['status'],
+            'deleted_at_utc': r['deleted_at_utc'], 'row_version': r['row_version'],
+            'updated_at_utc': r['updated_at_utc'],
+        })
+    else:
+        _queue_sync_event(cur, 'modifier_option', option_id, 'update', {
+            'id': r['id'], 'group_id': r['group_id'], 'name': r['name'],
+            'price_delta': r['price_delta'], 'cost_delta': r['cost_delta'],
+            'is_default': r['is_default'], 'sort_order': r['sort_order'], 'status': r['status'],
+            'deleted_at_utc': r['deleted_at_utc'], 'row_version': r['row_version'],
+            'updated_at_utc': r['updated_at_utc'], '_changed_fields': sorted(changed),
+        })
+
+
+def _queue_product_modifier_group(cur, cid, link_id, changed=None):
+    """W3a: queue a `product_modifier_group` (an extras group attached to a
+    product) create or update event. A detach is an update that sets
+    `deleted_at_utc`; a re-attach is an update that clears it. The natural key
+    (product, group) is UNIQUE per computer, so two computers that attached the
+    same pair under different ids are reconciled by the receiver (the lower id
+    wins everywhere)."""
+    r = cur.execute("SELECT * FROM product_modifier_groups WHERE id=? AND company_id=?",
+                    (link_id, cid)).fetchone()
+    if changed is None:
+        _queue_sync_event(cur, 'product_modifier_group', link_id, 'create', {
+            'id': r['id'], 'product_id': r['product_id'], 'group_id': r['group_id'],
+            'sort_order': r['sort_order'], 'deleted_at_utc': r['deleted_at_utc'],
+            'row_version': r['row_version'], 'updated_at_utc': r['updated_at_utc'],
+        })
+    else:
+        _queue_sync_event(cur, 'product_modifier_group', link_id, 'update', {
+            'id': r['id'], 'product_id': r['product_id'], 'group_id': r['group_id'],
+            'sort_order': r['sort_order'], 'deleted_at_utc': r['deleted_at_utc'],
+            'row_version': r['row_version'], 'updated_at_utc': r['updated_at_utc'],
+            '_changed_fields': sorted(changed),
+        })
+
+
+_CONFIG_BACKFILL_BATCH = 200
+
+# Parents before children: a group before its options and attachments, so a
+# computer applying them in order never parks an option on a group that is
+# still in flight. Promotions reference products/categories/branches only.
+# The writer is named, not referenced, so it is looked up at CALL time (a test,
+# or a future hot-patch, that replaces the module's writer is honoured).
+_CONFIG_BACKFILL_TABLES = (
+    ('modifier_groups', '_queue_modifier_group'),
+    ('modifier_options', '_queue_modifier_option'),
+    ('product_modifier_groups', '_queue_product_modifier_group'),
+    ('promotions', '_queue_promotion'),
+)
+
+
+def backfill_legacy_config(conn):
+    """W2b/W3a boot step: announce every promotion and every extras row that
+    existed BEFORE v50.
+
+    The migration only flags them `sync_backfill_pending=1` (it cannot import
+    this module's payload code). Per flagged row, in ONE savepoint each: queue
+    its create event, clear the flag. A second run emits nothing, and a row that
+    fails is rolled back alone, left flagged so the NEXT boot retries it, and
+    skipped for the rest of this run -- it can neither stop the rest nor spin
+    this loop forever (the loyalty backfill's no-progress guard, same reason:
+    this runs at BOOT, and a loop here that never ends means the till never
+    starts). Returns the number of rows announced."""
+    done = 0
+    for table, queue_name in _CONFIG_BACKFILL_TABLES:
+        queue = globals()[queue_name]
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if 'sync_backfill_pending' not in cols:
+            continue          # pre-v50 shape: nothing flagged yet, retry next boot
+        skipped = set()
+        last_first = None
+        while True:
+            marks = ','.join('?' * len(skipped))
+            rows = conn.execute(
+                f"SELECT rowid AS rid, id, company_id FROM {table} WHERE sync_backfill_pending=1 "
+                + (f"AND rowid NOT IN ({marks}) " if skipped else "")
+                + "ORDER BY rowid LIMIT ?", (*skipped, _CONFIG_BACKFILL_BATCH)).fetchall()
+            if not rows:
+                break
+            if rows[0]['rid'] == last_first:
+                log.error('config sync backfill made no progress on %s row %s -- stopping; '
+                          'will retry next boot', table, last_first)
+                break
+            last_first = rows[0]['rid']
+            for row in rows:
+                cur = conn.cursor()
+                try:
+                    cur.execute("SAVEPOINT config_backfill")
+                    queue(cur, row['company_id'], row['id'])
+                    cur.execute(f"UPDATE {table} SET sync_backfill_pending=0 WHERE rowid=?", (row['rid'],))
+                    cur.execute("RELEASE SAVEPOINT config_backfill")
+                    done += 1
+                except Exception:  # noqa: BLE001 -- one row must not stop the rest, nor the boot
+                    log.exception('config sync backfill failed for %s %s -- will retry next boot',
+                                  table, row['id'])
+                    skipped.add(row['rid'])
+                    try:
+                        cur.execute("ROLLBACK TO SAVEPOINT config_backfill")
+                        cur.execute("RELEASE SAVEPOINT config_backfill")
+                    except Exception:  # noqa: BLE001
+                        pass
+    if done:
+        conn.commit()
+    return done
+
+
 def _queue_loyalty_entry(cur, cid, entry_uid):
     """W2a: queue one `loyalty_ledger` row as a `loyalty_entry` create event.
 
@@ -8819,6 +9010,79 @@ def create_sale():
             # autoincrement id, which exists nowhere else once this INSERT
             # has run.
             sale_item_id = cur.lastrowid
+            # W2b/W3a: the snapshot rows are written BEFORE the sale_item event is
+            # queued, because the event now carries them (`promotion` and
+            # `modifiers` below). Another computer used to receive a plain line
+            # here: its receipts, reprints and reports could not say which extras
+            # or promotion the sale was rung with. The prices were always right
+            # (baked into unit_price / discount_pct above); this carries the
+            # WHY. Both are snapshots AS APPLIED, never re-derived.
+            #
+            # Promotions, wave 1 (schema v23): snapshot the WINNING promotion, if
+            # any, onto this line. `applied_promotion` is None whenever the
+            # manual discount won (including a tie) or nothing matched -- see
+            # core.retail.promotions.resolve_line_discount_pct -- so most sales
+            # write nothing here at all, matching the "invisible unless opted
+            # in" contract. `discount_amount_snapshot` is `calc['discount_amount']`
+            # from the SAME calculate_line call that produced this line's own
+            # `line_total`/`discount_pct` above (line['discount_amount']), never
+            # re-derived -- a receipt reprinted next year, and a return processed
+            # against it, must show what was ACTUALLY charged, not a figure
+            # recomputed from whatever the promotion row says today.
+            applied_promotion = line.get('applied_promotion')
+            promotion_snapshot = None
+            if applied_promotion:
+                snap_promo_uid = _new_uid()
+                cur.execute("""
+                    INSERT INTO sale_item_promotions
+                        (company_id, sale_item_id, promotion_id, name_snapshot,
+                         discount_pct_snapshot, discount_amount_snapshot, uid)
+                    VALUES (?,?,?,?,?,?,?)
+                """, (cid, sale_item_id, applied_promotion['id'], applied_promotion['name'],
+                      applied_promotion['discount_pct'], line['discount_amount'], snap_promo_uid))
+                promo_row = cur.execute(
+                    "SELECT uid FROM promotions WHERE id=? AND company_id=?",
+                    (applied_promotion['id'], cid)).fetchone()
+                # `promotion_uid` is how the other computer finds ITS copy of the
+                # promotion (a local integer id means nothing there). None when
+                # this promotion has no uid, which the receiver treats as "not
+                # arrived": the snapshot is what matters, the link is provenance.
+                promotion_snapshot = {
+                    'uid': snap_promo_uid,
+                    'promotion_uid': promo_row['uid'] if promo_row else None,
+                    'name': applied_promotion['name'],
+                    'discount_pct': applied_promotion['discount_pct'],
+                    'discount_amount': line['discount_amount'],
+                }
+
+            # Restaurant modifiers, wave 1 (schema v26): snapshot every modifier
+            # actually applied to this line, AS APPLIED -- same discipline as
+            # sale_item_promotions immediately above, and the reason it exists is
+            # identical: a receipt reprinted next year, and a return processed
+            # against it, must show what the customer was actually charged, not
+            # what modifier_options says today. `modifier_option_id` is
+            # provenance only and must NEVER be re-read for money (see
+            # core/retail/modifiers.py's module docstring and
+            # products/retail/tests/retail_modifiers_test.py's mutation proof
+            # M2). Most sales write nothing here at all -- `modifier_snapshots`
+            # is `[]` on any line with no attached groups or no selections --
+            # matching the "invisible unless opted in" contract.
+            modifier_snapshots_wire = []
+            for snap in line.get('modifier_snapshots') or []:
+                snap_uid = _new_uid()
+                cur.execute("""
+                    INSERT INTO sale_item_modifiers
+                        (company_id, sale_item_id, modifier_option_id, group_name_snapshot,
+                         name_snapshot, price_delta_snapshot, cost_delta_snapshot, uid)
+                    VALUES (?,?,?,?,?,?,?,?)
+                """, (cid, sale_item_id, snap['modifier_option_id'], snap['group_name'],
+                      snap['name'], snap['price_delta'], snap['cost_delta'], snap_uid))
+                modifier_snapshots_wire.append({
+                    'uid': snap_uid, 'modifier_option_id': snap['modifier_option_id'],
+                    'group_name': snap['group_name'], 'name': snap['name'],
+                    'price_delta': snap['price_delta'], 'cost_delta': snap['cost_delta'],
+                })
+
             # `sale_uid`, not `sale_id` -- the local autoincrement id means
             # nothing on another device. The receiving side resolves this
             # line's parent by looking up `sales.uid = sale_uid` locally (see
@@ -8839,59 +9103,12 @@ def create_sale():
                 # column exists to kill, reappearing on every OTHER device
                 # in the shop even though the selling device got it right.
                 'unit_cost': line['unit_cost'],
+                # W2b/W3a: the extras and the promotion this line was rung with
+                # (see the block above). A payload from an older computer has
+                # neither key; the receiver treats that as "nothing to add".
+                'modifiers': modifier_snapshots_wire,
+                'promotion': promotion_snapshot,
             })
-            # Promotions, wave 1 (schema v23): snapshot the WINNING
-            # promotion, if any, onto this line. `applied_promotion` is None
-            # whenever the manual discount won (including a tie) or nothing
-            # matched -- see core.retail.promotions.resolve_line_discount_pct
-            # -- so most sales write nothing here at all, matching the
-            # "invisible unless opted in" contract. `discount_amount_
-            # snapshot` is `calc['discount_amount']` from the SAME
-            # calculate_line call that produced this line's own
-            # `line_total`/`discount_pct` above (line['discount_amount']),
-            # never re-derived -- a receipt reprinted next year, and a
-            # return processed against it, must show what was ACTUALLY
-            # charged, not a figure recomputed from whatever the promotion
-            # row says today. No sync event: promotions/sale_item_
-            # promotions are not one of Phase 5's synced entity types (see
-            # database/schema.py's `_migrate_add_promotions` docstring),
-            # so there is nothing to queue here.
-            applied_promotion = line.get('applied_promotion')
-            if applied_promotion:
-                cur.execute("""
-                    INSERT INTO sale_item_promotions
-                        (company_id, sale_item_id, promotion_id, name_snapshot,
-                         discount_pct_snapshot, discount_amount_snapshot)
-                    VALUES (?,?,?,?,?,?)
-                """, (cid, sale_item_id, applied_promotion['id'], applied_promotion['name'],
-                      applied_promotion['discount_pct'], line['discount_amount']))
-
-            # Restaurant modifiers, wave 1 (schema v26): snapshot every
-            # modifier actually applied to this line, AS APPLIED -- same
-            # discipline as sale_item_promotions immediately above, and the
-            # reason it exists is identical: a receipt reprinted next year,
-            # and a return processed against it, must show what the
-            # customer was actually charged, not what modifier_options says
-            # today. `modifier_option_id` is provenance only and must NEVER
-            # be re-read for money (see core/retail/modifiers.py's module
-            # docstring and products/retail/tests/retail_modifiers_test.py's
-            # mutation proof M2). Most sales write nothing here at all --
-            # `modifier_snapshots` is `[]` on any line with no attached
-            # groups or no selections -- matching the "invisible unless
-            # opted in" contract. No sync event: sale_item_modifiers is not
-            # one of Phase 5's synced entity types in wave 1 (see database/
-            # schema.py's `_migrate_add_modifiers` docstring) -- it carries
-            # a `uid` under a partial unique index anyway so a LATER wave
-            # can add one without a further migration.
-            for snap in line.get('modifier_snapshots') or []:
-                snap_uid = _new_uid()
-                cur.execute("""
-                    INSERT INTO sale_item_modifiers
-                        (company_id, sale_item_id, modifier_option_id, group_name_snapshot,
-                         name_snapshot, price_delta_snapshot, cost_delta_snapshot, uid)
-                    VALUES (?,?,?,?,?,?,?,?)
-                """, (cid, sale_item_id, snap['modifier_option_id'], snap['group_name'],
-                      snap['name'], snap['price_delta'], snap['cost_delta'], snap_uid))
 
             movement_uid = _new_uid()
             cur.execute("""
@@ -9473,14 +9690,24 @@ def create_promotion():
         return jsonify({'status': 'error', 'message': target_error}), 400
 
     cur = conn.cursor()
+    # W2b (schema v50): a promotion now has a wire identity (`uid`) and the
+    # row_version/updated_at_utc pair every other synced row carries, stamped
+    # at birth so the receiving computer's last-writer-wins comparison has a
+    # real value from the first event.
+    promo_uid = _new_uid()
+    now = now_utc_iso()
     cur.execute("""
         INSERT INTO promotions
             (company_id, name, discount_pct, product_id, category_id, branch_id,
-             starts_at, ends_at, status)
-        VALUES (?,?,?,?,?,?,?,?, 'active')
-    """, (cid, name, discount_pct, product_id, category_id, branch_id, starts_at, ends_at))
+             starts_at, ends_at, status, uid, row_version, updated_at_utc,
+             sync_backfill_pending)
+        VALUES (?,?,?,?,?,?,?,?, 'active', ?, 1, ?, 0)
+    """, (cid, name, discount_pct, product_id, category_id, branch_id, starts_at, ends_at,
+          promo_uid, now))
     new_id = cur.lastrowid
+    _queue_promotion(cur, cid, new_id)
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success', 'data': {'id': new_id}})
 
 
@@ -9549,12 +9776,18 @@ def update_promotion(promotion_id):
         return jsonify({'status': 'error', 'message': target_error}), 400
 
     cur = conn.cursor()
+    # W2b: this UPDATE used to bump nothing, so two edits of one promotion were
+    # indistinguishable to every other computer. row_version and updated_at_utc
+    # move in the SAME statement as the change (the category/modifier pattern).
     sets = ', '.join(f'{k}=?' for k in fields)
     cur.execute(
-        f"UPDATE promotions SET {sets} WHERE id=? AND company_id=?",
-        list(fields.values()) + [promotion_id, cid]
+        f"UPDATE promotions SET {sets}, row_version=COALESCE(row_version,1)+1, updated_at_utc=? "
+        "WHERE id=? AND company_id=?",
+        list(fields.values()) + [now_utc_iso(), promotion_id, cid]
     )
+    _queue_promotion(cur, cid, promotion_id, changed=list(fields))
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success'})
 
 
@@ -9575,14 +9808,19 @@ def delete_promotion(promotion_id):
     cid = _cid()
     conn = get_retail_conn()
     cur = conn.cursor()
+    # W2b: stamps row_version/updated_at_utc like every other change, so the
+    # deactivation outranks the edit it follows on every other computer.
     cur.execute(
-        "UPDATE promotions SET status='inactive' WHERE id=? AND company_id=? AND status='active'",
-        (promotion_id, cid)
+        "UPDATE promotions SET status='inactive', row_version=COALESCE(row_version,1)+1, "
+        "updated_at_utc=? WHERE id=? AND company_id=? AND status='active'",
+        (now_utc_iso(), promotion_id, cid)
     )
     if cur.rowcount == 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Promotion not found.'}), 404
+    _queue_promotion(cur, cid, promotion_id, changed=['status'])
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success'})
 
 
@@ -11271,7 +11509,9 @@ def create_modifier_group():
         INSERT INTO modifier_groups (id, company_id, name, min_select, max_select, status, row_version, updated_at_utc)
         VALUES (?,?,?,?,?, 'active', 1, ?)
     """, (group_id, cid, name, min_select, max_select, now))
+    _queue_modifier_group(cur, cid, group_id)
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success', 'data': {'id': group_id}})
 
 
@@ -11325,6 +11565,7 @@ def update_modifier_group(group_id):
             conn.close()
             return jsonify({'status': 'error', 'message': 'max_select cannot be less than min_select.'}), 400
 
+    changed = sorted(fields)          # W3a: what THIS edit touched, before the stamps below
     fields['row_version'] = int(existing['row_version'] or 1) + 1
     fields['updated_at_utc'] = now_utc_iso()
     cur = conn.cursor()
@@ -11333,7 +11574,9 @@ def update_modifier_group(group_id):
         f"UPDATE modifier_groups SET {sets} WHERE id=? AND company_id=?",
         list(fields.values()) + [group_id, cid]
     )
+    _queue_modifier_group(cur, cid, group_id, changed=changed)
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success'})
 
 
@@ -11363,7 +11606,9 @@ def delete_modifier_group(group_id):
     if cur.rowcount == 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Modifier group not found.'}), 404
+    _queue_modifier_group(cur, cid, group_id, changed=['status'])
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success'})
 
 
@@ -11409,7 +11654,9 @@ def create_modifier_option(group_id):
         VALUES (?,?,?,?,?,?,?,?, 'active', 1, ?)
     """, (option_id, cid, group_id, name, price_delta, cost_delta,
           1 if data.get('is_default') else 0, int(data.get('sort_order', 0) or 0), now))
+    _queue_modifier_option(cur, cid, option_id)
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success', 'data': {'id': option_id}})
 
 
@@ -11462,6 +11709,7 @@ def update_modifier_option(option_id):
     if 'is_default' in fields:
         fields['is_default'] = 1 if fields['is_default'] else 0
 
+    changed = sorted(fields)          # W3a: what THIS edit touched, before the stamps below
     fields['row_version'] = int(existing['row_version'] or 1) + 1
     fields['updated_at_utc'] = now_utc_iso()
     cur = conn.cursor()
@@ -11470,7 +11718,9 @@ def update_modifier_option(option_id):
         f"UPDATE modifier_options SET {sets} WHERE id=? AND company_id=?",
         list(fields.values()) + [option_id, cid]
     )
+    _queue_modifier_option(cur, cid, option_id, changed=changed)
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success'})
 
 
@@ -11492,7 +11742,9 @@ def delete_modifier_option(option_id):
     if cur.rowcount == 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Modifier option not found.'}), 404
+    _queue_modifier_option(cur, cid, option_id, changed=['status'])
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success'})
 
 
@@ -11570,7 +11822,10 @@ def attach_product_modifier_group(pid):
             "row_version=row_version+1, updated_at_utc=? WHERE id=?",
             (sort_order, now, existing['id'])
         )
+        _queue_product_modifier_group(cur, cid, existing['id'],
+                                      changed=['deleted_at_utc', 'sort_order'])
         conn.commit(); conn.close()
+        _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
         return jsonify({'status': 'success', 'data': {'id': existing['id']}})
 
     link_id = str(_uuid.uuid4())
@@ -11579,7 +11834,9 @@ def attach_product_modifier_group(pid):
             (id, company_id, product_id, group_id, sort_order, row_version, updated_at_utc)
         VALUES (?,?,?,?,?,1,?)
     """, (link_id, cid, pid, group_id, sort_order, now))
+    _queue_product_modifier_group(cur, cid, link_id)
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success', 'data': {'id': link_id}})
 
 
@@ -11592,15 +11849,24 @@ def detach_product_modifier_group(pid, group_id):
     cid = _cid()
     conn = get_retail_conn()
     cur = conn.cursor()
+    # W3a: this UPDATE bumped row_version but never touched updated_at_utc, so a
+    # detach was invisible to the last-writer-wins tie-break on other computers.
+    now = now_utc_iso()
     cur.execute(
-        "UPDATE product_modifier_groups SET deleted_at_utc=?, row_version=row_version+1 "
+        "UPDATE product_modifier_groups SET deleted_at_utc=?, row_version=row_version+1, "
+        "updated_at_utc=? "
         "WHERE company_id=? AND product_id=? AND group_id=? AND deleted_at_utc IS NULL",
-        (now_utc_iso(), cid, pid, group_id)
+        (now, now, cid, pid, group_id)
     )
     if cur.rowcount == 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Attachment not found.'}), 404
+    link = cur.execute(
+        "SELECT id FROM product_modifier_groups WHERE company_id=? AND product_id=? AND group_id=?",
+        (cid, pid, group_id)).fetchone()
+    _queue_product_modifier_group(cur, cid, link['id'], changed=['deleted_at_utc'])
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success'})
 
 
@@ -14946,6 +15212,12 @@ def _ensure_credit_schema(conn):
         backfill_legacy_loyalty(conn)
     except Exception:  # noqa: BLE001
         log.exception('loyalty sync backfill failed this boot -- will retry next boot')
+    # W2b/W3a BOOT STEP: promotions and extras configuration that pre-date v50
+    # (same shape and reasoning as the backfills above; its own try block).
+    try:
+        backfill_legacy_config(conn)
+    except Exception:  # noqa: BLE001
+        log.exception('promotion/extras sync backfill failed this boot -- will retry next boot')
     _CREDIT_SCHEMA_READY = True
 
 def _settings(conn, cid):
@@ -22848,6 +23120,11 @@ _SYNC_REVIEW_KINDS = {
     # refused -- so the owner is told what the item is, not "something".
     'till_allocation': 'A till number from another computer',
     'branch_alias': 'A branch link from another computer',
+    # W2b/W3a (schema v50): promotions and extras configuration from another computer.
+    'promotion': 'A promotion from another computer',
+    'modifier_group': 'An extras group from another computer',
+    'modifier_option': 'An extras option from another computer',
+    'product_modifier_group': 'An extras group attached to a product on another computer',
 }
 _SYNC_REVIEW_KIND_FALLBACK = 'Something from another computer'
 
@@ -22944,6 +23221,14 @@ _SYNC_REVIEW_REASONS = {
     # W2a verify F1: one points file loaded on two computers. Arabic: native speaker to confirm.
     'loyalty_import_differs': ('the same points file was loaded for this customer on two computers, so the points may have been counted twice. Check the balance with the customer', False),
     'loyalty_overspent': ('this customer spent points on two computers before the points had synced, so the balance is now below zero. Check it with the customer', False),
+    # W2b/W3a (schema v50): promotions and extras shared between computers. Arabic
+    # wording in locales/ar.json: native speaker to confirm.
+    'missing_parent:branch': ('the shop branch this promotion is for has not reached this computer yet', True),
+    'missing_parent:modifier_group': ('the extras group it belongs to has not reached this computer yet', True),
+    'malformed_promotion': ('the other computer described a promotion in a way this one cannot read, so it was not added', False),
+    'modifier_link_duplicate': ('two computers attached the same extras group to the same product. One attachment was kept on both computers, so nothing needs doing', False),
+    'config_edit_superseded': ('two computers changed the same promotion or extras setting at about the same time. The most recent change was kept on both computers, so nothing needs doing', False),
+    'modifier_group_same_name': ('two extras groups with the same name were set up on different computers. Both are shown, so switch one off if they are the same', False),
 }
 # The engine also parks `malformed_<entity type>` for any entity it cannot read
 # (sync_service `reason=f"malformed_{entity_type}"`), so the prefix gets one

@@ -128,8 +128,8 @@ def test_upgrade_adds_columns_arms_every_existing_row_and_rekeys_opening():
     ids = _make_v47(db)
     backup_dir = _migrate(sch, db)
 
-    assert sch.RETAIL_SCHEMA_VERSION == 49  # v49 UPDATE: head moved 48 -> 49 (B6b); v49's own shape is pinned by retail_v49_total_spent_baseline_migration_test.py
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 49  # v49 UPDATE: head moved 48 -> 49 (B6b); v49's own shape is pinned by retail_v49_total_spent_baseline_migration_test.py
+    assert sch.RETAIL_SCHEMA_VERSION == 50  # v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 50  # v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     assert _rows(db, 'PRAGMA integrity_check')[0]['integrity_check'] == 'ok'
     assert os.listdir(backup_dir), 'ensure_schema_version must have written its pre-migration backup'
     assert 'sync_backfill_pending' in _cols(db, 'loyalty_ledger')
@@ -194,7 +194,7 @@ def test_replay_is_byte_identical_and_never_rearms_a_cleared_flag():
 
 def test_a_fresh_install_has_the_v48_shape_and_defaults_the_flag_to_zero():
     sch, db = _install()
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 49  # v49 UPDATE: head moved 48 -> 49 (B6b); v49's own shape is pinned by retail_v49_total_spent_baseline_migration_test.py
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 50  # v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     assert {'sync_backfill_pending', 'return_id'} <= _cols(db, 'loyalty_ledger')
     assert 'points_earned' in _cols(db, 'sales')
     conn = _open(db)
