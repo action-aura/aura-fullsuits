@@ -5513,12 +5513,24 @@ def backfill_legacy_loyalty(conn):
     if 'sync_backfill_pending' not in cols:
         return 0          # pre-v48 shape: nothing flagged yet, retry next boot
     done = 0
+    last_first_id = None
     while True:
         batch = conn.execute(
             "SELECT id, company_id, customer_id, uid, entry_type FROM loyalty_ledger "
             "WHERE sync_backfill_pending=1 ORDER BY id LIMIT ?", (_LOYALTY_BACKFILL_BATCH,)).fetchall()
         if not batch:
             break
+        # W2a: this runs at BOOT. Every path below clears the row's flag or
+        # deletes the row, so each pass moves forward -- but two mutation runs
+        # showed that a future edit breaking that (a branch that `continue`s
+        # without clearing) spins here forever and the till never starts. If a
+        # pass would re-read the batch it just handled, stop and say so; the
+        # next boot retries.
+        if batch[0]['id'] == last_first_id:
+            log.error('loyalty sync backfill made no progress on row %s -- stopping; '
+                      'will retry next boot', last_first_id)
+            break
+        last_first_id = batch[0]['id']
         cur = conn.cursor()
         try:
             cur.execute("SAVEPOINT loyalty_backfill")
@@ -5527,11 +5539,28 @@ def backfill_legacy_loyalty(conn):
                 if row['entry_type'] == 'opening':
                     want = loyalty_core.opening_uid(row['customer_id'])
                     if uid != want:
-                        taken = cur.execute("SELECT 1 FROM loyalty_ledger WHERE uid=? AND id<>?",
-                                            (want, row['id'])).fetchone()
+                        taken = cur.execute(
+                            "SELECT id, sync_backfill_pending FROM loyalty_ledger WHERE uid=? AND id<>?",
+                            (want, row['id'])).fetchone()
                         if taken:
-                            cur.execute("UPDATE loyalty_ledger SET sync_backfill_pending=0 WHERE id=?",
-                                        (row['id'],))
+                            # W2a verify F6: a second local opening row for one customer. It used
+                            # to be left in place with only its flag cleared -- never announced
+                            # but still COUNTED here, so this computer's balance differed from
+                            # every other computer's for good. Merge it into the deterministic
+                            # row (sum, exactly like the v48 migration's merge) and delete it, so
+                            # the books here are the books the wire carries. The keeper is
+                            # (re)announced below when it was still pending, or here when it had
+                            # already gone out with the smaller figure, because its delta changed.
+                            log.warning('loyalty backfill merged a duplicate opening row for customer %s '
+                                        'into the deterministic opening row', row['customer_id'])
+                            cur.execute(
+                                "UPDATE loyalty_ledger SET points_delta = points_delta + "
+                                "(SELECT points_delta FROM loyalty_ledger WHERE id=?) WHERE id=?",
+                                (row['id'], taken['id']))
+                            cur.execute("DELETE FROM loyalty_ledger WHERE id=?", (row['id'],))
+                            if not taken['sync_backfill_pending']:
+                                _queue_loyalty_entry(cur, row['company_id'], want)
+                                done += 1
                             continue
                         uid = want
                         cur.execute("UPDATE loyalty_ledger SET uid=? WHERE id=?", (uid, row['id']))
@@ -22666,7 +22695,11 @@ _SYNC_REVIEW_REASONS = {
     # W2a (schema v48): loyalty points shared between computers. Arabic wording in
     # locales/ar.json: native speaker to confirm.
     'missing_parent:customer': ('the customer these points belong to has not reached this computer yet', True),
-    'loyalty_opening_differs': ('two computers started this customer with a different number of points. The smaller number was kept on every computer. Check the balance with the customer', False),
+    # W2a verify F3: also recorded when the two starting balances are EQUAL -- nothing says whether
+    # they were the same points or separate ones, so a person is asked.
+    'loyalty_opening_differs': ('two computers each had a starting balance for this customer. Check whether they were the same points or separate ones. The smaller number was kept on every computer', False),
+    # W2a verify F1: one points file loaded on two computers. Arabic: native speaker to confirm.
+    'loyalty_import_differs': ('the same points file was loaded for this customer on two computers, so the points may have been counted twice. Check the balance with the customer', False),
     'loyalty_overspent': ('this customer spent points on two computers before the points had synced, so the balance is now below zero. Check it with the customer', False),
 }
 # The engine also parks `malformed_<entity type>` for any entity it cannot read

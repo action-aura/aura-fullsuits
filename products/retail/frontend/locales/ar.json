@@ -2547,6 +2547,7 @@
   "two computers received the same transfer and counted a different quantity. Both counts moved stock, so check the shelves and correct the stock and the books (the stock in transit and the shrinkage accounts)": "استلم جهازان التحويل نفسه وعدّ كل منهما كمية مختلفة. كلا العدّين حرّك المخزون، لذا راجع الرفوف وصحّح المخزون والدفاتر (حساب المخزون في الطريق وحساب الفاقد)",
   "Loyalty points from another computer": "نقاط ولاء من جهاز آخر",
   "the customer these points belong to has not reached this computer yet": "لم يصل العميل الذي تخصّه هذه النقاط إلى هذا الجهاز بعد",
-  "two computers started this customer with a different number of points. The smaller number was kept on every computer. Check the balance with the customer": "بدأ جهازان رصيد هذا العميل بعدد مختلف من النقاط. تم الاحتفاظ بالرقم الأصغر على كل جهاز. راجع الرصيد مع العميل",
+  "two computers each had a starting balance for this customer. Check whether they were the same points or separate ones. The smaller number was kept on every computer": "كان لدى جهازين رصيد ابتدائي لهذا العميل. تحقق هل هي النقاط نفسها أم نقاط منفصلة. تم الاحتفاظ بالرقم الأصغر على كل جهاز",
+  "the same points file was loaded for this customer on two computers, so the points may have been counted twice. Check the balance with the customer": "تم تحميل ملف النقاط نفسه لهذا العميل على جهازين، فقد تكون النقاط احتُسبت مرتين. راجع الرصيد مع العميل",
   "this customer spent points on two computers before the points had synced, so the balance is now below zero. Check it with the customer": "أنفق هذا العميل نقاطاً على جهازين قبل أن تتزامن النقاط، فأصبح الرصيد أقل من صفر. راجع الأمر مع العميل"
 }

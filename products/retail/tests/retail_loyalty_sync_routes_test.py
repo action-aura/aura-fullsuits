@@ -405,6 +405,28 @@ def test_backfill_queues_each_flagged_row_once_and_clears_the_flag(shop):
     assert len(_events()) == 3, "a second boot must emit nothing"
 
 
+def test_backfill_merges_a_duplicate_opening_row_instead_of_leaving_it_counted(shop):
+    # W2a verify F6: a SECOND local opening row for one customer (the migration
+    # merges these, so this needs a row written after it -- a downgrade, or a
+    # hand edit). It used to keep counting here while never being announced,
+    # so this computer's balance differed from every other computer's for good.
+    client, cid = shop
+    cust = _customer(client)
+    _legacy_row(cid, cust, 30, 'opening')
+    _legacy_row(cid, cust, 20, 'opening', uid=str(uuid.uuid4()))
+    conn = get_retail_conn()
+    retail_api.backfill_legacy_loyalty(conn)
+    conn.close()
+    rows = _q("SELECT uid, points_delta FROM loyalty_ledger WHERE company_id=? AND customer_id=? "
+              "AND entry_type='opening'", cid, cust)
+    assert len(rows) == 1 and rows[0]['uid'] == L.opening_uid(cust)
+    assert rows[0]['points_delta'] == 50, "the duplicate was merged by SUM, like the v48 migration's merge"
+    assert _sum(cid, cust) == 50
+    opening_events = [e for e in _entry_events_for(cid, cust) if e['payload']['entry_type'] == 'opening']
+    assert opening_events[-1]['payload']['points_delta'] == 50, "what the wire carries is what is counted here"
+    assert {e['payload']['uid'] for e in opening_events} == {L.opening_uid(cust)}
+
+
 # ── importer ─────────────────────────────────────────────────────────────────
 
 def _import_points(client, email, points):
@@ -442,10 +464,28 @@ def test_import_queues_its_ledger_rows_and_refreshes_the_cache(shop, monkeypatch
     assert evs[1]['payload']['uid'] != L.opening_uid(cust)
     assert _cache(cust) == _sum(cid, cust) == 100
 
+    # W2a verify F1: that 'adjust' row's uid is derived from (customer, TARGET,
+    # shop day) -- the same file loaded on another computer today mints the
+    # SAME uid, so the two collapse instead of crediting twice. Pinned against
+    # the shop's own clock, not a hand-typed date.
+    conn = get_retail_conn()
+    today = retail_api._shop_today(conn, cid).isoformat()
+    conn.close()
+    assert evs[1]['payload']['uid'] == L.import_uid(cust, 100, today)
+    # The very same file again writes nothing (delta 0), so no second row.
+    _import_points(client, email, '100')
+    assert len(_entry_events_for(cid, cust)) == 2
+    # A different target is a different uid.
+    _import_points(client, email, '130')
+    evs = _entry_events_for(cid, cust)
+    assert len(evs) == 3 and evs[2]['payload']['uid'] == L.import_uid(cust, 130, today)
+    assert evs[2]['payload']['uid'] != evs[1]['payload']['uid']
+
 
 # ── plain sentences for the review screen ───────────────────────────────────
 
-NEW_REASONS = ('missing_parent:customer', 'loyalty_opening_differs', 'loyalty_overspent')
+NEW_REASONS = ('missing_parent:customer', 'loyalty_opening_differs', 'loyalty_overspent',
+               'loyalty_import_differs')
 
 
 def test_new_loyalty_reasons_have_their_own_plain_sentence_in_both_languages():

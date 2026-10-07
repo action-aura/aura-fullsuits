@@ -339,7 +339,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Callable, Iterable, NamedTuple, Optional
 
@@ -836,6 +836,12 @@ _PO_RECEIPT_NAMESPACE = uuid.UUID('a674e3be-c149-497a-b0a7-f235e22c5ae0')
 #: would be counted twice once rows sync. commercial_runtime cannot import
 #: products/, so the literal is duplicated and a test pins the two equal.
 _LOYALTY_OPENING_NAMESPACE = uuid.UUID('b3a7d1c4-5e92-4f08-9a61-0c2d8e4f7b13')
+
+#: W2a verify F1: the namespace an IMPORT's 'adjust' ledger row's uid is minted
+#: under (twin of `core/retail/loyalty.py::_IMPORT_NAMESPACE`). NEVER CHANGE.
+#: The same file imported on two computers the same shop day must derive the
+#: SAME uid so the two rows collapse instead of crediting twice.
+_LOYALTY_IMPORT_NAMESPACE = uuid.UUID('4d9e2f7a-81c3-4b56-9e0d-6a3f1c8b5e72')
 
 #: W4a-2 verify R2: quantities are REAL columns but are compared as DECIMALS
 #: built from str(value) -- exactly what core/retail/purchase_orders.py does --
@@ -5809,17 +5815,25 @@ class SyncService:
     @classmethod
     def _record_sync_conflict_once(cls, conn, conflict_sink, *, local_company_id, entity_type,
                                     entity_id, event_type, local_row_version,
-                                    incoming_row_version, reason, payload) -> bool:
+                                    incoming_row_version, reason, payload,
+                                    discriminator=None) -> bool:
         """`_record_sync_conflict`, but only when this (entity, reason) has no
-        row yet (W4a verify F3). The same losing event is redelivered whenever
+        row yet (W4a verify F3). W2a verify F4: an optional `discriminator`
+        (key, value) narrows "no row yet" to one episode -- the loyalty
+        reasons pass the offending row's uid, because `sync_conflicts` has no
+        resolved column to ask and an entity-wide once would swallow a second,
+        different overspend for good. Callers that pass none are unchanged. The same losing event is redelivered whenever
         a pull is replayed or a peer re-announces; the first row already tells
         a human everything, and N copies of it bury the real conflicts in the
         review list. Returns True when a row was written."""
         needle = "%" + json.dumps({"reason": reason})[1:-1] + "%"
-        if conn.execute(
-                "SELECT 1 FROM sync_conflicts WHERE company_id=? AND entity_type=? AND entity_id=? "
-                "AND incoming_payload LIKE ?",
-                (local_company_id, entity_type, entity_id, needle)).fetchone():
+        sql = ("SELECT 1 FROM sync_conflicts WHERE company_id=? AND entity_type=? AND entity_id=? "
+               "AND incoming_payload LIKE ?")
+        args = [local_company_id, entity_type, entity_id, needle]
+        if discriminator is not None:
+            sql += " AND incoming_payload LIKE ?"
+            args.append("%" + json.dumps({discriminator[0]: discriminator[1]})[1:-1] + "%")
+        if conn.execute(sql, args).fetchone():
             return False
         cls._record_sync_conflict(
             conn, conflict_sink, local_company_id=local_company_id, entity_type=entity_type,
@@ -6072,32 +6086,112 @@ class SyncService:
         cache (so a replayed row cannot double it). Never bumps row_version and
         queues no customer event: the figure is derived from rows that sync on
         their own. Twin of `core/retail/loyalty.py::refresh_points` -- the same
-        one statement; a test pins the two equal."""
+        one statement; a test pins the two equal.
+
+        W2a verify F5: the SUM is scoped by company_id, exactly like the core
+        statement. It was not: a customer id is a uuid so a cross-company
+        clash is not expected, but a twin that differs from the rule it
+        duplicates is how the two drift apart without anything failing."""
         conn.execute(
             "UPDATE customers SET loyalty_points = COALESCE((SELECT SUM(points_delta) FROM loyalty_ledger "
-            "WHERE customer_id=?), 0) WHERE company_id=? AND id=?",
-            (customer_id, company_id, customer_id))
+            "WHERE company_id=? AND customer_id=?), 0) WHERE company_id=? AND id=?",
+            (company_id, customer_id, company_id, customer_id))
 
     @staticmethod
-    def _loyalty_crossing_entry_type(conn, company_id, customer_id):
-        """(final balance, entry_type of the row that LAST took the running
-        balance from >= 0 to < 0), walking the customer's rows in time order
-        (created_at, then uid -- never the local id, which differs per
-        computer). The crossing type is None when the balance ended >= 0. Time
-        order, not arrival order, so every computer reaches the same verdict
-        however the rows reached it."""
+    def _loyalty_import_uid(customer_id, target, business_date) -> str:
+        """Twin of `core/retail/loyalty.py::import_uid` (the uid of an import's
+        'adjust' row); a test pins the two equal."""
+        text = format(Decimal(str(target)).normalize(), 'f')
+        text = '0' if text in ('-0', '') else text
+        return str(uuid.uuid5(_LOYALTY_IMPORT_NAMESPACE, f"{customer_id}:import:{text}:{business_date}"))
+
+    @staticmethod
+    def _loyalty_same_row(existing, delta, p) -> bool:
+        """True when the incoming ledger event IS the local row (same delta,
+        created_at and created_by) -- the row's own event handed back, or a
+        replay -- rather than a second computer's row that happens to share a
+        deterministic uid."""
+        return (Decimal(str(delta)) == Decimal(str(existing[0]))
+                and (p.get("created_at") or None) == (existing[4] or None)
+                and (p.get("created_by") or "System") == (existing[5] or "System"))
+
+    @staticmethod
+    def _loyalty_converge(conn, company_id, uid, existing, delta, p) -> None:
+        """Two computers wrote a row under ONE deterministic uid (an opening, or
+        an import's adjust). The ONLY edit a ledger row ever gets: both
+        computers move to the SMALLER points_delta and the EARLIER created_at,
+        whichever arrives second, so both end holding the same row. The
+        created_at matters: the overspend verdict walks the rows in
+        (created_at, uid) order, and two copies of one row stamped with
+        different instants would order differently on the two computers."""
+        new_delta = delta if Decimal(str(delta)) < Decimal(str(existing[0])) else existing[0]
+        incoming_at = p.get("created_at")
+        new_at = incoming_at if incoming_at and (not existing[4] or str(incoming_at) < str(existing[4])) else existing[4]
+        if new_delta != existing[0] or new_at != existing[4]:
+            conn.execute("UPDATE loyalty_ledger SET points_delta=?, created_at=? WHERE uid=? AND company_id=?",
+                         (new_delta, new_at, uid, company_id))
+
+    @staticmethod
+    def _loyalty_overspending_redeems(conn, company_id, customer_id) -> list:
+        """W2a verify F2: the uids of every 'redeem' row that took this
+        customer's running balance from >= 0 to < 0, walking ALL the rows held
+        in (created_at, uid) order -- never the local id, which differs per
+        computer.
+
+        A function of the ROWS HELD and nothing else. The previous verdict
+        ("the LAST row to cross zero was a redeem") flipped with the order the
+        rows arrived in: a computer that received a later earn before the
+        other computer's redeem judged differently from one that received them
+        the other way round, so one of the two computers never recorded the
+        overspend. Both computers end holding the same rows, so both reach
+        this same answer. A claw-back that goes negative is not a redeem and is
+        not listed (the shop allows that today)."""
         balance = Decimal(0)
-        crossing = None
+        crossing = []
         for row in conn.execute(
-                "SELECT points_delta, entry_type FROM loyalty_ledger WHERE company_id=? AND customer_id=? "
+                "SELECT uid, points_delta, entry_type FROM loyalty_ledger WHERE company_id=? AND customer_id=? "
                 "ORDER BY created_at, uid", (company_id, customer_id)).fetchall():
             before = balance
-            balance += Decimal(str(row[0]))
-            if before >= 0 > balance:
-                crossing = row[1]
-            elif balance >= 0:
-                crossing = None
-        return balance, crossing
+            balance += Decimal(str(row[1]))
+            if row[2] == "redeem" and before >= 0 > balance:
+                crossing.append(row[0])
+        return crossing
+
+    @classmethod
+    def _loyalty_import_overlap_uids(cls, conn, company_id, customer_id) -> list:
+        """W2a verify F1: the uids of 'adjust' import rows that import the SAME
+        figure an 'opening' row of this customer imported -- the signature of
+        one points file loaded on two computers, one with no history for the
+        customer (it wrote an 'opening') and one with some (it wrote an
+        'adjust'). Different uids by construction, so nothing collides and both
+        rows count; the two are reported so a person can check the total.
+
+        Recomputed from the rows held, never remembered: an import 'adjust'
+        row's uid is `import_uid(customer, target, shop day)`, and an opening
+        import row's delta IS its target, so the adjust is an import of the
+        same figure exactly when its uid equals the uid derived from that
+        delta. The shop day is not on the row (created_at is UTC), so the
+        neighbouring days are tried too. A re-import with a DIFFERENT figure,
+        or a later day, derives a different uid and is not reported -- that is
+        an ordinary correction."""
+        rows = conn.execute(
+            "SELECT uid, points_delta, entry_type, created_at, sale_id, return_id FROM loyalty_ledger "
+            "WHERE company_id=? AND customer_id=? AND entry_type IN ('opening','adjust')",
+            (company_id, customer_id)).fetchall()
+        opening_uid = cls._loyalty_opening_uid(customer_id)
+        targets = [r[1] for r in rows if r[2] == "opening" and r[0] == opening_uid]
+        found = []
+        for r in rows:
+            if r[2] != "adjust" or r[4] is not None or r[5] is not None or not r[3]:
+                continue
+            try:
+                day = datetime.fromisoformat(str(r[3]).replace("Z", "")[:10])
+            except ValueError:
+                continue
+            days = [(day + timedelta(days=d)).date().isoformat() for d in (-1, 0, 1)]
+            if any(r[0] == cls._loyalty_import_uid(customer_id, t, d) for t in targets for d in days):
+                found.append(r[0])
+        return found
 
     def _apply_loyalty_entry_create(self, conn, ev: dict, p: dict, local_company_id,
                                      conflict_sink) -> bool:
@@ -6154,8 +6248,8 @@ class SyncService:
                     conn, ev, reason="missing_parent:return",
                     detail=f"return_uid={p.get('return_uid')!r} not found locally")
         existing = conn.execute(
-            "SELECT points_delta FROM loyalty_ledger WHERE uid=? AND company_id=?",
-            (uid, local_company_id)).fetchone()
+            "SELECT points_delta, entry_type, sale_id, return_id, created_at, created_by FROM loyalty_ledger "
+            "WHERE uid=? AND company_id=?", (uid, local_company_id)).fetchone()
         if existing is None:
             conn.execute(
                 "INSERT INTO loyalty_ledger (uid, company_id, customer_id, points_delta, entry_type, "
@@ -6165,27 +6259,93 @@ class SyncService:
                 (uid, local_company_id, customer_id, delta, entry_type, sale_local_id,
                  return_local_id, p.get("created_by") or "System", p.get("created_at")))
         elif entry_type == "opening" and uid == self._loyalty_opening_uid(customer_id):
+            # W2a verify F3: two computers' opening rows for one customer MEET
+            # here (same deterministic uid -> the insert above would have been a
+            # no-op). Recorded EVERY time, equal values too: before, equal
+            # values collapsed silently, which is right only if both
+            # computers were counting the SAME points. Nothing on the row says
+            # which: the migration's `sync_backfill_pending` flag is cleared
+            # once the row is announced and the writer is not in the payload,
+            # so "this computer's own v48 re-key" cannot be told from "a
+            # shop's genuinely separate balance" -- so a meeting always asks a
+            # person. What is NOT a meeting is the row's own event coming back
+            # (the relay hands a computer its own events, and a replay
+            # re-delivers one): the same delta, created_at and created_by as
+            # the local row is the same row, not a second computer's. And the
+            # reason is once EVER per customer (not per unresolved episode): a
+            # customer has exactly one opening uid, so a meeting is a single
+            # event, and a replay after someone reviewed it must not re-open it.
             local_delta = existing[0]
-            if Decimal(str(delta)) != Decimal(str(local_delta)):
-                # The ONE allowed mutation of a ledger row: both computers must
-                # land on the same opening figure whichever arrives second.
-                if Decimal(str(delta)) < Decimal(str(local_delta)):
-                    conn.execute("UPDATE loyalty_ledger SET points_delta=? WHERE uid=? AND company_id=?",
-                                 (delta, uid, local_company_id))
+            if not self._loyalty_same_row(existing, delta, p):
+                self._loyalty_converge(conn, local_company_id, uid, existing, delta, p)
                 self._record_sync_conflict_once(
                     conn, conflict_sink, local_company_id=local_company_id,
                     entity_type="loyalty_entry", entity_id=customer_id, event_type="create",
                     local_row_version=0, incoming_row_version=0, reason="loyalty_opening_differs",
                     payload={"customer_id": customer_id, "local_points": local_delta,
                              "incoming_points": delta})
+        elif (entry_type == "adjust" and existing[1] == "adjust" and not p.get("sale_uid")
+              and not p.get("return_uid") and existing[2] is None and existing[3] is None):
+            # W2a verify F1: the SAME import uid (same customer, same target,
+            # same shop day) arriving from another computer. Equal deltas are
+            # one import seen twice and collapse silently. Different deltas
+            # mean the two computers held different balances when they
+            # imported: keep the SMALLER on every computer (the same one
+            # allowed ledger mutation as the opening tie-break above, and for
+            # the same reason: both must land on one figure whichever
+            # arrives second) and ask a person.
+            local_delta = existing[0]
+            self._loyalty_converge(conn, local_company_id, uid, existing, delta, p)
+            if Decimal(str(delta)) != Decimal(str(local_delta)):
+                self._record_sync_conflict_once(
+                    conn, conflict_sink, local_company_id=local_company_id,
+                    entity_type="loyalty_entry", entity_id=customer_id, event_type="create",
+                    local_row_version=0, incoming_row_version=0, reason="loyalty_import_differs",
+                    payload={"customer_id": customer_id, "import_uid": uid,
+                             "local_points": local_delta, "incoming_points": delta},
+                    discriminator=("import_uid", uid))
         self._refresh_loyalty_points(conn, local_company_id, customer_id)
-        balance, crossing = self._loyalty_crossing_entry_type(conn, local_company_id, customer_id)
-        if balance < 0 and crossing == "redeem":
+        # W2a verify F1: one points file imported on two computers (one with no
+        # history -> 'opening', one with history -> 'adjust') -- different
+        # uids, both count. A verdict from the rows held, so both computers
+        # reach it; once per import row.
+        for import_uid in self._loyalty_import_overlap_uids(conn, local_company_id, customer_id):
+            self._record_sync_conflict_once(
+                conn, conflict_sink, local_company_id=local_company_id,
+                entity_type="loyalty_entry", entity_id=customer_id, event_type="create",
+                local_row_version=0, incoming_row_version=0, reason="loyalty_import_differs",
+                payload={"customer_id": customer_id, "import_uid": import_uid},
+                discriminator=("import_uid", import_uid))
+        # W2a verify F2: the overspend verdict is a function of the rows held
+        # (see `_loyalty_overspending_redeems`). Recorded once per OFFENDING
+        # redeem row (`sync_conflicts` has no resolved column to ask, so "once
+        # while unresolved" is expressed as "once per overspend episode": a
+        # later redeem that overspends again after the balance recovered is a
+        # new row with a new uid and is recorded again).
+        offenders = self._loyalty_overspending_redeems(conn, local_company_id, customer_id)
+        # A verdict taken on PARTIAL rows can name a redeem that the rest of the
+        # rows then exonerate (a redeem arrives before the earn that funded it:
+        # judged alone it overdraws). The record mirrors the verdict, so a
+        # record whose redeem no longer overdraws is withdrawn -- otherwise the
+        # computer that happened to see the redeem first would hold a flag the
+        # other computer never had, with identical rows.
+        for crow in conn.execute(
+                "SELECT id, incoming_payload FROM sync_conflicts WHERE company_id=? AND "
+                "entity_type='loyalty_entry' AND entity_id=? AND incoming_payload LIKE ?",
+                (local_company_id, customer_id, '%"reason": "loyalty_overspent"%')).fetchall():
+            try:
+                stale = json.loads(crow[1]).get("redeem_uid") not in offenders
+            except (TypeError, ValueError):
+                stale = False
+            if stale:
+                conn.execute("DELETE FROM sync_conflicts WHERE id=?", (crow[0],))
+        for redeem_uid in offenders:
             self._record_sync_conflict_once(
                 conn, conflict_sink, local_company_id=local_company_id,
                 entity_type="loyalty_entry", entity_id=customer_id, event_type="create",
                 local_row_version=0, incoming_row_version=0, reason="loyalty_overspent",
-                payload={"customer_id": customer_id, "balance": float(balance)})
+                payload={"customer_id": customer_id, "redeem_uid": redeem_uid},
+                discriminator=("redeem_uid", redeem_uid))
         return True
 
     # ── W3b: stock transfers (schema v47) ────────────────────────────────────

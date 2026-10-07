@@ -371,11 +371,33 @@ def test_opening_difference_is_recorded_once_per_customer(get_conn):
     assert _conflicts(get_conn) == ["loyalty_opening_differs"]
 
 
-def test_opening_that_agrees_records_nothing(get_conn):
+def test_opening_that_agrees_but_comes_from_another_computer_still_asks_a_person(get_conn):
+    # W2a verify F3: this used to assert "records nothing" -- which is only right
+    # if both computers were counting the SAME points, and nothing on the row
+    # says so. It can no longer catch "equal separate balances collapse
+    # silently"; that silence IS the defect, so it is now the thing asserted
+    # against. The values agree, the balance is unchanged, and a person is asked.
     ouid = _opening_uid()
     _exec(get_conn, "INSERT INTO loyalty_ledger (uid, company_id, customer_id, points_delta, "
-                    "entry_type) VALUES (?,?,?,?,'opening')", (ouid, CID, CUST, 40.0))
-    _apply(get_conn, _entry(uid=ouid, entry_type="opening", points_delta=40.0))
+                    "entry_type, created_by, created_at) VALUES (?,?,?,?,'opening','alice',?)",
+          (ouid, CID, CUST, 40.0, T2))
+    _apply(get_conn, _entry(uid=ouid, entry_type="opening", points_delta=40.0, created_at=T1))
+    assert _conflicts(get_conn) == ["loyalty_opening_differs"]
+    rows = _ledger(get_conn)
+    assert len(rows) == 1 and rows[0]["points_delta"] == 40.0 and _points(get_conn) == 40.0
+    # Both computers must end holding the SAME row: the earlier created_at wins.
+    assert rows[0]["created_at"] == T1
+
+
+def test_the_opening_rows_own_event_coming_back_records_nothing(get_conn):
+    # The relay hands a computer its own events; a replay re-delivers one. The
+    # same delta, created_at and created_by IS the local row, not a second
+    # computer's, and must not ask a person about it.
+    ouid = _opening_uid()
+    _exec(get_conn, "INSERT INTO loyalty_ledger (uid, company_id, customer_id, points_delta, "
+                    "entry_type, created_by, created_at) VALUES (?,?,?,?,'opening','alice',?)",
+          (ouid, CID, CUST, 40.0, T1))
+    _apply(get_conn, _entry(uid=ouid, entry_type="opening", points_delta=40.0, created_at=T1))
     assert _conflicts(get_conn) == []
     assert len(_ledger(get_conn)) == 1
 
@@ -426,6 +448,126 @@ def test_overspent_is_judged_by_the_order_of_the_facts_not_their_arrival(get_con
     assert _conflicts(get_conn) == []
 
 
+# ── W2a verify F2: the overspend verdict is a function of the rows held ─────
+
+def _overspend_rows():
+    """Probe `flag_order`: 100 points, then A redeems 100 (t2), B redeems 100
+    (t3, offline), then A earns 200 (t4). In TIME order the second redeem takes
+    the balance 0 -> -100: overspent, whatever order the rows arrive in."""
+    u = {k: str(uuid.uuid5(uuid.NAMESPACE_DNS, "w2a-f2-" + k)) for k in "0abc"}
+    return u, {
+        "0": _entry(uid=u["0"], points_delta=100.0, entry_type="earn", created_at="2026-10-07 08:00:00"),
+        "a": _entry(uid=u["a"], points_delta=-100.0, entry_type="redeem", created_at="2026-10-07 09:00:00"),
+        "b": _entry(uid=u["b"], points_delta=-100.0, entry_type="redeem", created_at="2026-10-07 10:00:00"),
+        "c": _entry(uid=u["c"], points_delta=200.0, entry_type="earn", created_at="2026-10-07 11:00:00"),
+    }
+
+
+@pytest.mark.parametrize("order", ["0abc", "0acb", "0cab", "c0ab", "b0ac", "cba0", "abc0"])
+def test_overspend_verdict_is_the_same_whatever_order_the_rows_arrive_in(get_conn, order):
+    uids, evs = _overspend_rows()
+    for k in order:
+        _apply(get_conn, evs[k])
+    # Final balance 100-100-100+200 = 100; the verdict depends on the rows, not
+    # on which computer saw the later earn before the second redeem.
+    assert _sum(get_conn) == 100.0
+    assert _conflicts(get_conn) == ["loyalty_overspent"], order
+    payload = json.loads(_rows(get_conn, "SELECT incoming_payload FROM sync_conflicts")[0]["incoming_payload"])
+    assert payload["redeem_uid"] == uids["b"], "the redeem that overdrew is the same one on every computer"
+
+
+def test_a_second_overspend_after_recovery_is_recorded_again(get_conn):
+    # W2a verify F4: sync_conflicts has no resolved column, so "once while
+    # unresolved" is "once per overspend episode" -- one record per overdrawing
+    # redeem row. A replay of the same row adds nothing.
+    first = _entry(points_delta=-15.0, entry_type="redeem", created_at=T2)
+    _apply(get_conn, _entry(points_delta=10.0, entry_type="earn", created_at=T1))
+    _apply(get_conn, first)
+    assert _conflicts(get_conn) == ["loyalty_overspent"]
+    _apply(get_conn, _entry(points_delta=30.0, entry_type="earn", created_at=T3))     # recovers to 25
+    assert _conflicts(get_conn) == ["loyalty_overspent"]
+    _apply(get_conn, _entry(points_delta=-40.0, entry_type="redeem", created_at="2026-10-07 12:00:00"))
+    assert _conflicts(get_conn) == ["loyalty_overspent", "loyalty_overspent"]
+    _apply(get_conn, first)                                                           # replay
+    assert _conflicts(get_conn) == ["loyalty_overspent", "loyalty_overspent"]
+
+
+# ── W2a verify F1: one points file imported on two computers ─────────────────
+
+_IMPORT_DAY = "2026-10-07"
+
+
+def _import_uid(target, day=_IMPORT_DAY, customer=CUST):
+    return SyncService._loyalty_import_uid(customer, target, day)
+
+
+def test_the_same_import_uid_with_the_same_delta_collapses_silently(get_conn):
+    iuid = _import_uid(200)
+    _apply(get_conn, _entry(points_delta=150.0, entry_type="earn", created_at=T1))
+    _apply(get_conn, _entry(uid=iuid, points_delta=50.0, entry_type="adjust", created_at=T2))
+    _apply(get_conn, _entry(uid=iuid, points_delta=50.0, entry_type="adjust", created_at=T3, created_by="bob"))
+    assert _sum(get_conn) == 200.0 and _points(get_conn) == 200.0       # NOT 250
+    assert _conflicts(get_conn) == []
+
+
+@pytest.mark.parametrize("local_first", [50.0, 30.0])
+def test_the_same_import_uid_with_a_different_delta_keeps_the_smaller_and_asks(get_conn, local_first):
+    iuid = _import_uid(200)
+    incoming = 30.0 if local_first == 50.0 else 50.0
+    _apply(get_conn, _entry(uid=iuid, points_delta=local_first, entry_type="adjust", created_at=T2))
+    _apply(get_conn, _entry(uid=iuid, points_delta=incoming, entry_type="adjust", created_at=T3))
+    rows = _ledger(get_conn)
+    assert len(rows) == 1 and rows[0]["points_delta"] == 30.0           # smaller, either arrival order
+    assert _points(get_conn) == 30.0
+    assert _conflicts(get_conn) == ["loyalty_import_differs"]
+    _apply(get_conn, _entry(uid=iuid, points_delta=45.0, entry_type="adjust", created_at=T3))
+    assert _conflicts(get_conn) == ["loyalty_import_differs"], "once per import"
+
+
+def test_a_return_adjust_with_a_clashing_uid_is_not_treated_as_an_import(get_conn):
+    # Only an adjust that names no sale and no return is an import row.
+    sale_id = _add_sale(get_conn)
+    iuid = _import_uid(200)
+    _apply(get_conn, _entry(uid=iuid, points_delta=-5.0, entry_type="adjust", sale_uid=SALE_UID, created_at=T1))
+    _apply(get_conn, _entry(uid=iuid, points_delta=-9.0, entry_type="adjust", sale_uid=SALE_UID, created_at=T2))
+    assert _conflicts(get_conn) == []
+    assert _ledger(get_conn)[0]["points_delta"] == -5.0 and sale_id
+
+
+def test_an_opening_and_an_adjust_importing_the_same_figure_are_reported(get_conn):
+    # Probe `import_offline_both`: A had no history for the customer (it wrote an
+    # 'opening' of 150), B had some (it wrote an 'adjust' of 120 under the import
+    # uid for target 150). Different uids -> both count; a person is asked.
+    _apply(get_conn, _entry(uid=_opening_uid(), points_delta=150.0, entry_type="opening", created_at=T1))
+    assert _conflicts(get_conn) == []
+    _apply(get_conn, _entry(uid=_import_uid(150), points_delta=120.0, entry_type="adjust", created_at=T2))
+    assert _sum(get_conn) == 270.0
+    assert _conflicts(get_conn) == ["loyalty_import_differs"]
+
+
+@pytest.mark.parametrize("target,day", [(200, _IMPORT_DAY), (150, "2026-10-12")])
+def test_an_ordinary_re_import_is_not_reported(get_conn, target, day):
+    # A later correction (a different figure, or a later day) derives a
+    # different uid and is just a delta -- the legitimate case this must not flag.
+    _apply(get_conn, _entry(uid=_opening_uid(), points_delta=150.0, entry_type="opening", created_at=T1))
+    _apply(get_conn, _entry(uid=_import_uid(target, day), points_delta=50.0, entry_type="adjust", created_at=T2))
+    assert _conflicts(get_conn) == []
+
+
+def test_import_uid_namespace_and_function_equal_the_core_module():
+    from core.retail import loyalty as core
+    assert str(ss._LOYALTY_IMPORT_NAMESPACE) == "4d9e2f7a-81c3-4b56-9e0d-6a3f1c8b5e72"   # never changes
+    assert ss._LOYALTY_IMPORT_NAMESPACE == core._IMPORT_NAMESPACE
+    for target in (150, 150.0, "150.00", 0, 0.5, -3, 1e3):
+        for day in ("2026-10-07", "2027-01-01"):
+            assert SyncService._loyalty_import_uid(CUST, target, day) == core.import_uid(CUST, target, day)
+    # The same figure spelled three ways is one uid.
+    assert core.import_uid(CUST, 150, "d") == core.import_uid(CUST, 150.0, "d") == core.import_uid(CUST, "150.00", "d")
+    assert core.import_uid(CUST, 150, "d") != core.import_uid(CUST, 151, "d")
+    assert core.import_uid(CUST, 150, "d") != core.import_uid(CUST, 150, "e")
+    assert core.import_uid(CUST, 150, "d") != core.opening_uid(CUST)
+
+
 # ── the sale apply carries points_earned ─────────────────────────────────────
 
 def test_sale_apply_stores_points_earned(get_conn):
@@ -470,6 +612,15 @@ def test_cache_refresh_equals_the_core_refresh(get_conn):
             _exec(get_conn, "INSERT INTO loyalty_ledger (uid, company_id, customer_id, "
                             "points_delta, entry_type) VALUES (?,?,?,?,?)",
                   (str(uuid.uuid4()), CID, cust, delta, kind))
+        # W2a verify F5: a SECOND company holds ledger rows under the same
+        # customer id. Neither refresh may count them -- the single-company
+        # version of this test could not catch a twin that dropped the
+        # company_id filter, and the two statements drifting is how that
+        # happens unnoticed.
+        for delta, kind in ((1000.0, "earn"), (-1.0, "redeem")):
+            _exec(get_conn, "INSERT INTO loyalty_ledger (uid, company_id, customer_id, "
+                            "points_delta, entry_type) VALUES (?,?,?,?,?)",
+                  (str(uuid.uuid4()), "another-company", cust, delta, kind))
         _exec(get_conn, "UPDATE customers SET loyalty_points=-1 WHERE id=?", (cust,))
     conn = get_conn()
     try:

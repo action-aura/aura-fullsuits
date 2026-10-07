@@ -104,6 +104,7 @@ from core.retail.stock_reconciliation import DEFAULT_TOLERANCE as _QTY_TOLERANCE
 from core.retail import general_ledger as _gl
 from core.retail import stock_books as _stock_books
 from core.retail import loyalty as _loyalty   # W2a: opening uid + cache refresh
+from core.retail import metrics as _metrics   # W2a verify F1: the shop's business day
 from core.retail import pricing as _tax_engine
 from commercial_runtime.currency import quantize_money as _quantize_money
 
@@ -2255,8 +2256,8 @@ def _sync_loyalty_ledger_to_column(cur, cid, customer_id, imported_points):
     THE 'opening' ROW'S UID IS DETERMINISTIC (loyalty.opening_uid): two
     computers that each imported or migrated an opening balance for one
     customer collide on the unique uid index instead of each adding their own,
-    and the apply side keeps the smaller figure. An 'adjust' row takes a fresh
-    uid -- it is a delta, and a delta from two computers should both count.
+    and the apply side keeps the smaller figure. An 'adjust' row's uid is derived from
+    (customer, target, shop day) -- see W2a verify F1 at the INSERT below.
     """
     try:
         points = float(imported_points or 0)
@@ -2275,7 +2276,19 @@ def _sync_loyalty_ledger_to_column(cur, cid, customer_id, imported_points):
         # value the ledger never explained) -- one rule, one refresh.
         _loyalty.refresh_points(cur.connection, cid, customer_id)
         return
-    entry_uid = str(_uuid.uuid4()) if has_history else _loyalty.opening_uid(customer_id)
+    # W2a verify F1: an 'adjust' import row's uid is a function of (customer,
+    # TARGET, shop day), not a fresh random one. The same file imported on two
+    # computers on one day used to write two +50 deltas under two random uids
+    # -> 250 on both, silently; now both rows carry ONE uid, so they collapse
+    # (same delta) or are reconciled by the apply (different delta -> the
+    # smaller wins and `loyalty_import_differs` is recorded). A re-import on a
+    # LATER day is a new uid and applies as a new delta, as before.
+    if has_history:
+        business_date = _metrics.business_now(
+            cur.connection, cid, datetime.now(timezone.utc)).date().isoformat()
+        entry_uid = _loyalty.import_uid(customer_id, points, business_date)
+    else:
+        entry_uid = _loyalty.opening_uid(customer_id)
     cur.execute(
         "INSERT INTO loyalty_ledger (uid, company_id, customer_id, points_delta, entry_type) "
         "VALUES (?,?,?,?,?)",

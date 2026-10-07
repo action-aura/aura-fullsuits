@@ -28,6 +28,7 @@ NO IMPORT OF api/ OR general_ledger: nothing here posts or queues anything.
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 
 #: NEVER CHANGE. Two computers must derive the SAME opening uid for a customer;
 #: a different namespace on one of them would make each mint its own uid, the
@@ -40,6 +41,32 @@ def opening_uid(customer_id: str) -> str:
     """The uid of customer `customer_id`'s 'opening' ledger row -- the same on
     every computer."""
     return str(uuid.uuid5(_OPENING_NAMESPACE, f"{customer_id}:opening"))
+
+
+#: W2a verify F1 -- NEVER CHANGE. The namespace of an IMPORT's 'adjust' row uid.
+#: Two computers that import the same file on the same shop day must mint the
+#: SAME uid for the same customer, so the second copy collides on the unique
+#: uid index and collapses into one row instead of crediting the difference
+#: twice. A different literal on one computer would silently mint different
+#: uids and the over-credit would come back. sync_service carries a twin; a
+#: test pins the two equal.
+_IMPORT_NAMESPACE = uuid.UUID('4d9e2f7a-81c3-4b56-9e0d-6a3f1c8b5e72')
+
+
+def canonical_points(value) -> str:
+    """A points figure as one canonical decimal string ('150', never '150.0'
+    or '1.5E+2'), so the same target spelled two ways derives the same uid."""
+    text = format(Decimal(str(value)).normalize(), 'f')
+    return '0' if text in ('-0', '') else text
+
+
+def import_uid(customer_id: str, target, business_date: str) -> str:
+    """The uid of the 'adjust' row an import writes to bring `customer_id` to
+    `target` points on shop day `business_date` -- the same on every computer
+    that imports the same figure the same day. An 'opening' import row keeps
+    `opening_uid` instead."""
+    return str(uuid.uuid5(
+        _IMPORT_NAMESPACE, f"{customer_id}:import:{canonical_points(target)}:{business_date}"))
 
 
 def balance(conn, company_id, customer_id):

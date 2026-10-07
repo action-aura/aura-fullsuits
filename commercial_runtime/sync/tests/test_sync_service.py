@@ -210,6 +210,12 @@ CREATE TABLE sales (
     -- device always read 0 redeemed points on a sale that had spent some.
     -- Now that `_apply_event` binds it, this fixture must declare it.
     points_redeemed_amount REAL DEFAULT 0,
+    -- W2a (retail schema v48): the sale apply binds `points_earned` now (the
+    -- sale create payload carries it so a return on another computer can
+    -- find the sale's earn row). Same fixture-follows-schema rule as the
+    -- column above; W2a verify: this was missed, 11 tests here failed on
+    -- "no column named points_earned". NULL = a legacy sale, like the real column.
+    points_earned REAL,
     status TEXT DEFAULT 'completed',
     idempotency_key TEXT UNIQUE,
     notes TEXT,
