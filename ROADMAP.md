@@ -7310,3 +7310,40 @@ rows get one deterministic uid per customer (smaller amount wins on every comput
 `sales.points_earned` lets a return on another computer wait until the sale's points have
 arrived; an offline double-spend converges (balance below zero on every computer) and is
 flagged. Plan: job 54e80fc2 tmp/W2A-PLAN.md.
+
+## 2026-10-07 — W2a CASHED IN (loyalty points shared between computers, retail schema v48)
+
+Commits c6f20d1a (feature), 474a4c7d (two-computer proof), f737114b (verify fixes), 7b910344
+(untracked a test-run device identity file that f737114b swept in) on feat/retail-ux-p0. Plan: job
+54e80fc2 tmp/W2A-PLAN.md.
+
+What changed: loyalty_ledger rows sync as immutable facts (`loyalty_entry`, referencing sale/return
+by uid; the receiver stores its own local ids and parks until the customer/sale/return exists). The
+balance is the synced SUM everywhere; `customers.loyalty_points` is a cache replaced from it by one
+company-scoped rule after every write, import and apply (no row_version, no customer event).
+'opening' rows have one deterministic uid per customer (v48 re-keys and merges); import 'adjust'
+rows have a deterministic uid per (customer, imported figure, business date). `sales.points_earned`
+lets a return on another computer refuse 409 LOYALTY_NOT_ARRIVED until the sale's rows are local.
+Clashes converge to the same rows on every computer and are recorded on both:
+loyalty_opening_differs (two computers' starting balances met -- smaller kept, always flagged),
+loyalty_import_differs, loyalty_overspent (a time-ordered walk of the rows held, so every computer
+reaches one verdict; re-recorded per redeem after recovery). The boot backfill announces pre-v48 rows
+once and stops (logged) if a pass makes no progress.
+
+Measured: core 8, routes 16, apply 40, migration 4, two-computer 5 (earned on A redeemed on B; a return
+on B of A's sale refunds 45 of 50 on both = the one-computer control, 5000 identical; return refused
+until the rows arrive; offline double-spend -8 + overspent on both; two pre-v48 openings 50 vs 30 ->
+one row of 30 + flag on both). Adversarial verify: 1 HIGH (the same import on two computers
+over-credited silently: 250 instead of 200) + 2 MEDIUM (overspent flag depended on arrival order;
+equal openings merged silently) + 4 LOW, all fixed and mutation-proved; the boot-loop guard proved by
+the mutant that used to hang (now finishes in 15 s, red).
+
+Full suite (run_all_tests.py retail -j 6) at 7b910344: 385 files, 385 passed, 0 failed.
+
+Residuals:
+- Offline double-spend is not prevented (balance goes negative, flagged).
+- An import racing offline sales on another computer is flagged, not corrected (both computers agree).
+- Equal starting balances from two computers keep ONE copy (flagged): if each computer had earned its
+  own points before v48, a person must add the other back.
+- Earn rate is still `int(total / 10)` (small win next). Demo seed/wipe leave ledger and cache out of
+  step; the KMP app writes loyalty_points to its own local DB.
