@@ -40,7 +40,7 @@ import com.actionaura.retail.net.ApiClient
 import com.actionaura.retail.net.IncomeStatement
 import com.actionaura.retail.net.LedgerAmount
 import com.actionaura.retail.net.apiErrorMessage
-import com.actionaura.retail.ui.CAP_REPORTS
+import com.actionaura.retail.ui.CAP_BOOKS_VIEW
 import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.components.EmptyState
 import com.actionaura.retail.ui.components.SectionHeader
@@ -136,7 +136,7 @@ fun ProfitAndLossScreen(snackbar: SnackbarHostState) {
     // Capability gate FIRST, before any fetch is scheduled -- same shape as
     // TrialBalanceScreen's identical gate; see that composable's doc comment
     // for the full reasoning.
-    if (!RetailSession.hasCapability(CAP_REPORTS)) {
+    if (!RetailSession.hasCapability(CAP_BOOKS_VIEW)) {
         EmptyState(
             Icons.Default.Shield,
             tr("Reports access required"),

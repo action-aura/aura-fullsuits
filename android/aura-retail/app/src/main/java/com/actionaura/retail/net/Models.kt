@@ -490,10 +490,55 @@ data class PurchaseOrder(
 data class PurchaseOrdersResponse(val status: String = "", val data: List<PurchaseOrder> = emptyList())
 
 data class PoLine(
+    // ANDROID-1007: `id` is the purchase_order_items row id a PARTIAL receive
+    // names in its body ({"lines":[{"item_id":..}]}); `uid` is its sync uid
+    // (kept so a future screen can show it; never sent). Defaulted so an older
+    // server that omits them still deserialises.
+    val id: Int = 0, val uid: String? = null,
     val product_name: String? = null, val sku: String? = null,
     val quantity: Double = 0.0, val unit_cost: Double = 0.0,
     val total: Double = 0.0, val received_qty: Double = 0.0,
 )
+
+// ANDROID-1007: POST /purchase-orders/<id>/receive. `lines` null (omitted by
+// Gson) means "receive everything still remaining"; a non-null list is a
+// partial receipt. `receipt_key` is the retry/double-tap dedup key: the server
+// answers a repeat of the same key with {"already_recorded":true}.
+data class PoReceiveLine(val item_id: Int, val quantity: Double)
+data class PoReceiveRequest(val lines: List<PoReceiveLine>? = null, val receipt_key: String? = null)
+
+// ── Retail: stock transfers between branches (ANDROID-1007) ──────────────────
+// Ids are STRING uuids server-side (stock_transfers.id, stock_transfer_items.id).
+data class Transfer(
+    val id: String = "", val status: String? = null,
+    val source_branch_id: Int? = null, val destination_branch_id: Int? = null,
+    val source_branch_name: String? = null, val destination_branch_name: String? = null,
+    val created_at: String? = null,
+)
+data class TransferListResponse(val status: String = "", val data: List<Transfer> = emptyList())
+data class TransferItem(
+    val id: String = "", val product_id: String? = null,
+    val product_name: String? = null, val sku: String? = null,
+    val quantity: Double = 0.0, val quantity_sent: Double? = null,
+    val quantity_received: Double? = null, val unit_cost: Double = 0.0,
+)
+data class TransferDetail(val transfer: Transfer? = null, val items: List<TransferItem> = emptyList())
+data class TransferDetailResponse(val status: String = "", val data: TransferDetail? = null)
+data class CreateTransferLine(val product_id: String, val quantity: Double)
+data class CreateTransferRequest(
+    val source_branch_id: Int, val destination_branch_id: Int, val items: List<CreateTransferLine>,
+)
+data class TransferCreated(val id: String = "")
+data class TransferCreatedResponse(val status: String = "", val message: String? = null, val data: TransferCreated? = null)
+// EVERY line must be listed on a receive (0 allowed) -- see the server contract.
+data class ReceiveTransferItem(val id: String, val quantity_received: Double)
+data class ReceiveTransferRequest(val items: List<ReceiveTransferItem>)
+data class TransferShortage(
+    val product_id: String? = null, val quantity_sent: Double = 0.0, val quantity_received: Double = 0.0,
+)
+data class TransferReceiveResult(val shortages: List<TransferShortage> = emptyList())
+data class TransferReceiveResponse(val status: String = "", val message: String? = null, val data: TransferReceiveResult? = null)
+data class TransferActionResponse(val status: String = "", val message: String? = null)
 data class PoDetail(val po: PurchaseOrder? = null, val items: List<PoLine> = emptyList())
 data class PoDetailResponse(val status: String = "", val data: PoDetail? = null)
 

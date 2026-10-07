@@ -671,6 +671,61 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Add at least one item" to "أضف صنفًا واحدًا على الأقل",
     "Create Purchase Order" to "إنشاء أمر شراء",
 
+    // ── ANDROID-1007: partial PO receive + stock transfers ───────────────────
+    // NOTE: a native Arabic speaker should confirm all of these; they were
+    // written by the builder, not reviewed by one.
+    "Pending" to "قيد الانتظار",
+    "Partial" to "مستلم جزئيًا",
+    "Received" to "تم الاستلام",
+    "Closed" to "مغلق",
+    "Cancelled" to "ملغى",
+    "Ordered" to "المطلوب",
+    "Remaining" to "المتبقي",
+    "Receive now" to "استلام الآن",
+    "Receive all" to "استلام الكل",
+    "Enter a quantity to receive" to "أدخل كمية للاستلام",
+    "Enter a valid quantity" to "أدخل كمية صحيحة",
+    "Close short" to "إغلاق بالمستلم",
+    "Close short?" to "إغلاق بالمستلم؟",
+    "The rest of this order will not be received. This cannot be undone." to
+        "لن يتم استلام باقي هذا الأمر. لا يمكن التراجع عن ذلك.",
+    "You cannot receive more than is still on order." to "لا يمكنك استلام أكثر مما تبقى في الأمر.",
+    "This hasn't finished syncing from your other device yet. Try again in a moment." to
+        "لم تكتمل مزامنة هذا من جهازك الآخر بعد. حاول مرة أخرى بعد قليل.",
+    "Only an order that is partly received can be closed short." to
+        "لا يمكن الإغلاق بالمستلم إلا للأمر المستلم جزئيًا.",
+    "This order needs a supplier before it can be closed short." to
+        "يحتاج هذا الأمر إلى مورد قبل إغلاقه بالمستلم.",
+    "Stock Transfers" to "تحويلات المخزون",
+    "Move stock between branches" to "نقل المخزون بين الفروع",
+    "No stock transfers" to "لا توجد تحويلات مخزون",
+    "Move stock from one branch to another." to "انقل المخزون من فرع إلى آخر.",
+    "Stock transfers will show here." to "ستظهر تحويلات المخزون هنا.",
+    "New Transfer" to "تحويل جديد",
+    "Transfer created" to "تم إنشاء التحويل",
+    "From branch" to "من فرع",
+    "To branch" to "إلى فرع",
+    "Choose both branches" to "اختر الفرعين",
+    "The two branches must be different" to "يجب أن يكون الفرعان مختلفين",
+    "Create Transfer" to "إنشاء تحويل",
+    "Send this transfer?" to "إرسال هذا التحويل؟",
+    "Cancel this transfer?" to "إلغاء هذا التحويل؟",
+    "Recall this transfer?" to "استرجاع هذا التحويل؟",
+    "The stock leaves the source branch now." to "ستخرج البضاعة من الفرع المرسل الآن.",
+    "Nothing has been sent, so no stock moves." to "لم يُرسل شيء، لذا لن يتحرك أي مخزون.",
+    "The stock goes back to the source branch." to "ستعود البضاعة إلى الفرع المرسل.",
+    "Confirm" to "تأكيد",
+    "Couldn't load this transfer." to "تعذّر تحميل هذا التحويل.",
+    "Sent" to "المرسل",
+    "Came up short" to "وصل أقل من المرسل",
+    "Cancel transfer" to "إلغاء التحويل",
+    "Recall" to "استرجاع",
+    "Enter how many of each item actually arrived. Use 0 if none did." to
+        "أدخل كم وصل فعليًا من كل صنف. اكتب 0 إن لم يصل شيء.",
+    "Enter a valid quantity for every item" to "أدخل كمية صحيحة لكل صنف",
+    "All" to "الكل",
+    "In transit" to "قيد النقل",
+
     // ── Settings (main) ───────────────────────────────────────────────────────
     "Appearance" to "المظهر",
     "Theme" to "السمة",

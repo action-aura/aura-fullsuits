@@ -103,6 +103,11 @@ class WriteGateContractTest {
         for (fn in listOf(
             "create_category", "update_category", "delete_category",
             "create_supplier", "create_purchase_order", "receive_purchase_order",
+            // ANDROID-1007: close-short and every stock-transfer write the phone
+            // now offers sit behind the same list as Receive.
+            "close_purchase_order_short",
+            "create_stock_transfer", "send_stock_transfer", "receive_stock_transfer",
+            "cancel_stock_transfer", "recall_stock_transfer",
         )) {
             val g = routeGate(fn)
             assertThat(g.any).isFalse()
@@ -148,7 +153,13 @@ class WriteGateContractTest {
     fun the_three_statement_books_screens_are_gated_on_reports_exactly_as_the_server_is() {
         val appRoot = kotlin("src/main/java/com/actionaura/retail/ui/AppRoot.kt")
         val list = appRoot.substringAfter("private val booksEntries = listOf(").substringBefore(") @Composable")
-        val serverReports = serverCodes.getValue("CAP_REPORTS")
+        // CHANGED (rehearsal fix B7, cfbf883f): the server moved the three
+        // statements from retail.reports to retail.books.view (managers hold
+        // reports but must not read the books). The expectation is still read
+        // from the parsed decorator, so it fails the day the gate moves again;
+        // what it can no longer catch is a statement card left on CAP_REPORTS
+        // being "right" -- that is now the bug.
+        val serverReports = serverCodes.getValue("CAP_BOOKS_VIEW")
         for ((route, fn) in listOf(
             "trial_balance" to "report_trial_balance",
             "profit_and_loss" to "report_profit_and_loss",
@@ -156,12 +167,14 @@ class WriteGateContractTest {
         )) {
             val g = routeGate(fn)
             assertThat(g.codes).containsExactly(serverReports)
-            // The entry for this route must carry CAP_REPORTS -- and only that.
-            val line = list.lines().single { it.contains("BooksEntry(\"$route\"") }
-            assertThat(line).contains(", CAP_REPORTS)")
-            assertThat(line).doesNotContain("CAP_BOOKS_VIEW")
+            // The entry for this route must carry CAP_BOOKS_VIEW -- and only that.
+            // codeOnly() collapses the list onto one line, so isolate THIS
+            // entry: from its constructor up to the next one.
+            val line = list.substringAfter("BooksEntry(\"$route\"").substringBefore("BooksEntry(")
+            assertThat(line).contains(", CAP_BOOKS_VIEW)")
+            assertThat(line).doesNotContain("CAP_REPORTS")
         }
-        assertThat(CAP_REPORTS).isEqualTo(serverReports)
+        assertThat(CAP_BOOKS_VIEW).isEqualTo(serverReports)
     }
 
     // ── WIRING: the screens read the lists, and the control sits behind them ─
@@ -199,14 +212,38 @@ class WriteGateContractTest {
             "if (orders.isNotEmpty() && canCreate) ExtendedFloatingActionButton(",
             "if (showCreate && canCreate) CreatePoSheet(",
             "if (canPayPo && (po?.payment_status ?: \"unpaid\") != \"paid\") {",
-            "if (canReceive && po?.status == \"pending\") {",
+            // ANDROID-1007 CHANGED PIN: was `po?.status == "pending"` alone. A
+            // partly received order must still offer Receive, so the gate now
+            // also admits "partial". What this line can no longer catch on its
+            // own: Receive being offered for "partial" by accident -- it is now
+            // the intended behaviour; the "received"/"closed"/"cancelled"
+            // exclusion is pinned separately in the test below.
+            "if (canReceive && (po?.status == \"pending\" || po?.status == \"partial\")) {",
+            "if (canReceive && po?.status == \"partial\") {",
         )) {
             assertThat(extra).contains(guarded)
         }
+        // The transfer screen: its own file, its own flag, every write behind it.
+        val transfers = kotlin("src/main/java/com/actionaura/retail/ui/screens/StockTransfersScreen.kt")
+        assertThat(transfers).contains("val canWrite = RetailSession.hasAnyCapability(CAPS_STOCK_WRITE)")
+        assertThat(transfers).contains("if (showCreate && canWrite) CreateTransferSheet(")
+        assertThat(transfers).contains("if (transfers.isNotEmpty() && canWrite) ExtendedFloatingActionButton(")
+        assertThat(transfers).contains("if (canWrite) {")
         val cats = kotlin("src/main/java/com/actionaura/retail/ui/screens/CategoriesScreen.kt")
         assertThat(cats).contains("if (categories.isNotEmpty() && canWrite) ExtendedFloatingActionButton(")
         assertThat(cats).contains("if (showAdd && canWrite) AddOrEditCategorySheet(")
         assertThat(cats).contains("CategoryRow(c, onClick = { if (canWrite) editing = c })")
+    }
+
+    @Test
+    fun receive_is_never_offered_for_a_finished_purchase_order() {
+        // ANDROID-1007: the other half of widening the gate to "partial" -- the
+        // terminal statuses must stay out of it.
+        val extra = kotlin("src/main/java/com/actionaura/retail/ui/screens/RetailExtraScreens.kt")
+        val gate = extra.substringAfter("if (canReceive && (po?.status").substringBefore("{")
+        for (terminal in listOf("received", "closed", "cancelled")) {
+            assertThat(gate).doesNotContain("\"$terminal\"")
+        }
     }
 
     @Test

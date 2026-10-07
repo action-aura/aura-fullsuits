@@ -149,9 +149,13 @@ class AccountantHomeContractTest {
         // SERVER demands for them (WriteGateContractTest reads the decorators).
         // They used to say books.view, which hid the statements from a manager
         // the server would have served.
-        for (statement in listOf("trial_balance", "profit_and_loss", "balance_sheet")) {
+        // CHANGED (rehearsal fix B7, cfbf883f): the three statements are now
+        // gated on retail.books.view like the server (see the comment above,
+        // now out of date on that one point); the other five stay on reports.
+        val statements = listOf("trial_balance", "profit_and_loss", "balance_sheet")
+        for (statement in statements) {
             val line = list.lines().single { it.contains("BooksEntry(\"$statement\"") }
-            assertThat(line).contains(", CAP_REPORTS)")
+            assertThat(line).contains(", CAP_BOOKS_VIEW)")
         }
         // A3: EVERY entry, not just the three statements, is a read-only report
         // view and the server demands retail.reports for each of them. Mutation
@@ -168,7 +172,8 @@ class AccountantHomeContractTest {
         for (entry in entries) {
             // this chunk is `route", "Title", "blurb", CAP_X),` (+ maybe the
             // list's own closing paren): the gate is the LAST argument.
-            assertThat(entry).containsMatch(Regex(""", CAP_REPORTS\)[\s,)]*$""").toPattern())
+            val expected = if (statements.any { entry.startsWith("$it\"") }) "CAP_BOOKS_VIEW" else "CAP_REPORTS"
+            assertThat(entry).containsMatch(Regex(""", $expected\)[\s,)]*$""").toPattern())
         }
         // and the screen filters by it
         assertThat(appRoot).contains("booksEntries.filter { RetailSession.hasCapability(it.needs) }")

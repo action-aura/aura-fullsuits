@@ -96,9 +96,14 @@ class ProfitAndLossWiringContractTest {
     @Test
     fun the_reports_entry_is_capability_gated_and_the_screen_re_checks() {
         val code = codeOnly(extraScreens)
-        assertThat(code).contains("RetailSession.hasCapability(CAP_REPORTS)")
+        // CHANGED (rehearsal fix B7, cfbf883f): server route moved from
+        // retail.reports to retail.books.view; entry + screen follow. Cannot
+        // catch the entry sitting under the old reports gate by itself (it
+        // proves the gate text exists in the file); per-route card gates are
+        // pinned in WriteGateContractTest/AccountantHomeContractTest.
+        assertThat(code).contains("RetailSession.hasCapability(CAP_BOOKS_VIEW)")
         assertThat(code).contains("""MoreItem(tr("Profit and Loss")""")
-        assertThat(codeOnly(screen)).contains("if (!RetailSession.hasCapability(CAP_REPORTS))")
+        assertThat(codeOnly(screen)).contains("if (!RetailSession.hasCapability(CAP_BOOKS_VIEW))")
     }
 
     @Test
@@ -111,8 +116,9 @@ class ProfitAndLossWiringContractTest {
         val text = api.readText()
         val routeStart = text.indexOf("def report_profit_and_loss(")
         assumeTrue("report_profit_and_loss not found in retail_api.py", routeStart >= 0)
-        val decorators = text.substring(maxOf(0, routeStart - 400), routeStart)
-        assertThat(decorators).contains("@mt_require_capability(CAP_REPORTS)")
+        val decorators = text.substring(text.lastIndexOf("@retail_bp.route(", routeStart), routeStart)
+        // CHANGED (B7): was CAP_REPORTS; still reads the real decorator.
+        assertThat(decorators).contains("@mt_require_capability(CAP_BOOKS_VIEW)")
         assertThat(decorators).contains("""@retail_bp.route('/reports/profit-and-loss'""")
     }
 

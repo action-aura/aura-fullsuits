@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.WarningAmber
@@ -75,6 +76,7 @@ import com.actionaura.retail.ui.i18n.ltrIsolate
 import com.actionaura.retail.ui.i18n.parseNum
 import com.actionaura.retail.ui.i18n.tr
 import com.actionaura.retail.ui.CAP_EMPLOYEES
+import com.actionaura.retail.ui.CAP_BOOKS_VIEW
 import com.actionaura.retail.ui.CAP_REPORTS
 import com.actionaura.retail.ui.CAPS_CREATE_RETURN
 import com.actionaura.retail.ui.CAPS_CUSTOMER_PAYMENT
@@ -139,6 +141,8 @@ fun MoreScreen(onNavigate: (String) -> Unit, onLogout: () -> Unit = {}) {
         MoreItem(tr("Suppliers"), tr("Vendors you buy from"), Icons.Default.LocalShipping) { onNavigate("suppliers") }
         MoreItem(tr("Purchase Orders"), tr("Restock & receive stock"), Icons.Default.Inventory2) { onNavigate("purchase_orders") }
         MoreItem(tr("Payables"), tr("What you owe suppliers"), Icons.Default.Payments) { onNavigate("payables") }
+        // ANDROID-1007: between-branch stock moves (not a bottom-tab route).
+        MoreItem(tr("Stock Transfers"), tr("Move stock between branches"), Icons.Default.SwapHoriz) { onNavigate("stock_transfers") }
         SectionHeader(tr("Finance"))
         MoreItem(tr("Cash Summary"), tr("Daily cash in / out / net"), Icons.Default.AccountBalanceWallet) { onNavigate("cash_summary") }
         MoreItem(tr("Aging"), tr("Receivables & payables by age"), Icons.Default.Schedule) { onNavigate("aging") }
@@ -352,11 +356,14 @@ fun ReportsScreen(snackbar: SnackbarHostState, onNavigate: (String) -> Unit) {
             if (RetailSession.hasCapability(CAP_REPORTS)) {
                 MoreItem(tr("By Employee"), tr("Takings and transactions per employee"),
                     Icons.Default.Groups) { onNavigate("employee_sales") }
-                // retail-hardware-viewports: schema v38/v39's general ledger
-                // (core/retail/general_ledger.py), read-only. Same
-                // `retail.reports` gate as the row above and as the
-                // desktop's own Insight-group nav entry (app-shell.js:
-                // { id: 'trial-balance', ..., capability: 'retail.reports' }).
+            }
+            // The three statements (general ledger, core/retail/
+            // general_ledger.py + financial_statements.py), read-only. Gated on
+            // `retail.books.view` -- NOT retail.reports -- since rehearsal fix
+            // B7 (cfbf883f) moved the server routes there: managers hold
+            // reports but not books.view, by design. Hidden, not disabled; the
+            // screens and the server re-check.
+            if (RetailSession.hasCapability(CAP_BOOKS_VIEW)) {
                 MoreItem(tr("Trial Balance"), tr("Chart of accounts and the AR/AP tie-back"),
                     Icons.Default.AccountBalance) { onNavigate("trial_balance") }
                 // The desktop's other two accounting surfaces
@@ -2402,6 +2409,9 @@ fun PurchaseOrdersScreen(snackbar: SnackbarHostState) {
         poId = detailId!!,
         onDismiss = { detailId = null },
         onReceived = { detailId = null; scope.launch { loading = true; load(); loading = false; snackbar.showSnackbar(tr("Stock received")) } },
+        // ANDROID-1007: a partial receive / close-short keeps the sheet open
+        // (its status just changed); only the list behind it is refreshed.
+        onChanged = { scope.launch { load() } },
     )
 }
 
@@ -2409,8 +2419,23 @@ fun PurchaseOrdersScreen(snackbar: SnackbarHostState) {
 private fun statusColor(status: String?): Color = when (status) {
     "received" -> Success
     "pending" -> Warning
+    // ANDROID-1007: partly received is still waiting on goods (amber, like
+    // pending); closed short is finished and quiet, not an error.
+    "partial" -> Warning
+    "closed" -> MaterialTheme.colorScheme.onSurfaceVariant
     "cancelled" -> MaterialTheme.colorScheme.error
     else -> Info
+}
+
+// ANDROID-1007: translated status word; unknown values keep the old
+// capitalised-English behaviour.
+private fun poStatusLabel(status: String?): String = when (status) {
+    "pending" -> tr("Pending")
+    "partial" -> tr("Partial")
+    "received" -> tr("Received")
+    "closed" -> tr("Closed")
+    "cancelled" -> tr("Cancelled")
+    else -> (status ?: "").replaceFirstChar { it.uppercase() }
 }
 
 @Composable
@@ -2431,7 +2456,7 @@ private fun PoRow(po: PurchaseOrder, onClick: () -> Unit) {
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(money(po.total), fontWeight = FontWeight.ExtraBold)
-                Text((po.status ?: "").replaceFirstChar { it.uppercase() },
+                Text(poStatusLabel(po.status),
                     style = MaterialTheme.typography.labelMedium, color = statusColor(po.status),
                     fontWeight = FontWeight.Bold)
                 Text((po.payment_status ?: "unpaid").replaceFirstChar { it.uppercase() },
@@ -2442,7 +2467,7 @@ private fun PoRow(po: PurchaseOrder, onClick: () -> Unit) {
 }
 
 @Composable
-private fun PoDetailSheet(poId: Int, onDismiss: () -> Unit, onReceived: () -> Unit) {
+private fun PoDetailSheet(poId: Int, onDismiss: () -> Unit, onReceived: () -> Unit, onChanged: () -> Unit = {}) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var detail by remember { mutableStateOf<PoDetail?>(null) }
@@ -2450,18 +2475,51 @@ private fun PoDetailSheet(poId: Int, onDismiss: () -> Unit, onReceived: () -> Un
     var receiving by remember { mutableStateOf(false) }
     var payAmt by remember { mutableStateOf("") }
     var paying by remember { mutableStateOf(false) }
+    // ANDROID-1007: partial receive dialog + close-short confirm + their error line.
+    var showReceive by remember { mutableStateOf(false) }
+    var confirmClose by remember { mutableStateOf(false) }
+    var closing by remember { mutableStateOf(false) }
+    var actionError by remember { mutableStateOf<String?>(null) }
     // pay_purchase_order is books.record; receive_purchase_order is stock.adjust.
     val canPayPo = RetailSession.hasAnyCapability(CAPS_SUPPLIER_PAYMENT)
     val canReceive = RetailSession.hasAnyCapability(CAPS_STOCK_WRITE)
-    LaunchedEffect(poId) {
+    // Re-fetch after any receive / close: the status may now be "partial".
+    suspend fun reload() {
         detail = try { ApiClient.get().purchaseOrder(poId).data } catch (e: Exception) { null }
+    }
+    LaunchedEffect(poId) {
+        reload()
         loading = false
     }
+    if (showReceive) PoReceiveDialog(
+        poId = poId, lines = detail?.items ?: emptyList(),
+        onDone = { showReceive = false; scope.launch { reload(); onChanged() } },
+        onDismiss = { showReceive = false },
+    )
+    if (confirmClose) AlertDialog(
+        onDismissRequest = { if (!closing) confirmClose = false },
+        title = { Text(tr("Close short?")) },
+        text = { Text(tr("The rest of this order will not be received. This cannot be undone.")) },
+        confirmButton = {
+            TextButton(enabled = !closing, onClick = {
+                closing = true; actionError = null
+                scope.launch {
+                    try {
+                        val r = ApiClient.get().closePurchaseOrder(poId)
+                        if (r.status == "success") { confirmClose = false; reload(); onChanged() }
+                        else { confirmClose = false; actionError = r.message ?: tr("Couldn't save") }
+                    } catch (e: Exception) { confirmClose = false; actionError = apiErrorMessage(e) }
+                    finally { closing = false }
+                }
+            }) { Text(tr("Close short")) }
+        },
+        dismissButton = { TextButton(enabled = !closing, onClick = { confirmClose = false }) { Text(tr("Cancel")) } },
+    )
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         Column(Modifier.padding(20.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState())) {
             val po = detail?.po
             Text(po?.po_number ?: tr("Purchase order"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("${po?.supplier_name ?: "—"} · ${(po?.status ?: "").replaceFirstChar { it.uppercase() }}",
+            Text("${po?.supplier_name ?: "—"} · ${poStatusLabel(po?.status)}",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(16.dp))
             when {
@@ -2474,6 +2532,11 @@ private fun PoDetailSheet(poId: Int, onDismiss: () -> Unit, onReceived: () -> Un
                                 Text(it.product_name ?: tr("Item"), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text("${fmtQty(it.quantity)} × ${money(it.unit_cost)}",
                                     style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                // ANDROID-1007: how much of this line has arrived so far.
+                                Text(tr("Received") + " " + ltrIsolate(fmtQty(it.received_qty)) +
+                                    " / " + ltrIsolate(fmtQty(it.quantity)),
+                                    style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Text(money(it.total), fontWeight = FontWeight.Medium)
@@ -2500,7 +2563,7 @@ private fun PoDetailSheet(poId: Int, onDismiss: () -> Unit, onReceived: () -> Un
                                         try {
                                             val r = ApiClient.get().payPurchaseOrder(poId, PaymentRequest(amt, "cash"))
                                             if (r.status == "success") onReceived() else paying = false
-                                        } catch (e: Exception) { paying = false }
+                                        } catch (e: Exception) { paying = false; actionError = apiErrorMessage(e) }
                                     }
                                 }
                             }, enabled = !paying, modifier = Modifier.height(52.dp)) {
@@ -2509,24 +2572,29 @@ private fun PoDetailSheet(poId: Int, onDismiss: () -> Unit, onReceived: () -> Un
                             }
                         }
                     }
-                    if (canReceive && po?.status == "pending") {
+                    // ANDROID-1007: a PARTLY received order still has goods to
+                    // come, so Receive stays offered for "partial" as well as
+                    // "pending" (it used to vanish after the first receipt).
+                    if (canReceive && (po?.status == "pending" || po?.status == "partial")) {
                         Spacer(Modifier.height(16.dp))
                         Button(
-                            onClick = {
-                                receiving = true
-                                scope.launch {
-                                    try {
-                                        val r = ApiClient.get().receivePurchaseOrder(poId)
-                                        if (r.status == "success") onReceived() else receiving = false
-                                    } catch (e: Exception) { receiving = false }
-                                }
-                            },
+                            onClick = { actionError = null; showReceive = true },
                             enabled = !receiving, modifier = Modifier.fillMaxWidth().height(52.dp),
                         ) {
-                            if (receiving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onPrimary)
-                            else Text(tr("Receive stock"), style = MaterialTheme.typography.labelLarge)
+                            Text(tr("Receive stock"), style = MaterialTheme.typography.labelLarge)
                         }
+                    }
+                    // Stop waiting for the rest of a partly received order.
+                    if (canReceive && po?.status == "partial") {
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = { actionError = null; confirmClose = true },
+                            enabled = !closing, modifier = Modifier.fillMaxWidth().height(48.dp),
+                        ) { Text(tr("Close short")) }
+                    }
+                    if (actionError != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(actionError!!, color = MaterialTheme.colorScheme.error)
                     }
                 }
             }

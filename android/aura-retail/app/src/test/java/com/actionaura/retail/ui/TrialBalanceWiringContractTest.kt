@@ -96,9 +96,14 @@ class TrialBalanceWiringContractTest {
         // EmployeeSalesWiringContractTest pins for its sibling entry, and
         // both entries share the SAME `if` block in ReportsScreen.
         val code = codeOnly(extraScreens)
-        assertThat(code).contains("RetailSession.hasCapability(CAP_REPORTS)")
+        // CHANGED (rehearsal fix B7, cfbf883f): server route moved from
+        // retail.reports to retail.books.view; entry + screen follow. Cannot
+        // catch the entry sitting under the old reports gate by itself (it
+        // proves the gate text exists in the file); per-route card gates are
+        // pinned in WriteGateContractTest/AccountantHomeContractTest.
+        assertThat(code).contains("RetailSession.hasCapability(CAP_BOOKS_VIEW)")
         assertThat(code).contains("""MoreItem(tr("Trial Balance")""")
-        assertThat(codeOnly(screen)).contains("if (!RetailSession.hasCapability(CAP_REPORTS))")
+        assertThat(codeOnly(screen)).contains("if (!RetailSession.hasCapability(CAP_BOOKS_VIEW))")
     }
 
     @Test
@@ -114,8 +119,9 @@ class TrialBalanceWiringContractTest {
         // The decorator stack sits immediately ABOVE the def line -- searched
         // backward from it rather than forward, so this cannot accidentally
         // match a later route's decorators instead.
-        val decorators = text.substring(maxOf(0, routeStart - 400), routeStart)
-        assertThat(decorators).contains("@mt_require_capability(CAP_REPORTS)")
+        val decorators = text.substring(text.lastIndexOf("@retail_bp.route(", routeStart), routeStart)
+        // CHANGED (B7): was CAP_REPORTS; still reads the real decorator.
+        assertThat(decorators).contains("@mt_require_capability(CAP_BOOKS_VIEW)")
         assertThat(decorators).contains("""@retail_bp.route('/reports/trial-balance'""")
     }
 

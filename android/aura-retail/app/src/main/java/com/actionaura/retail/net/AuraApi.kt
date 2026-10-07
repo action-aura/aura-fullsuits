@@ -217,7 +217,36 @@ interface AuraApi {
     suspend fun createPurchaseOrder(@Body body: CreatePoRequest): CreatedResponse
 
     @POST("api/sub/retail/purchase-orders/{id}/receive")
-    suspend fun receivePurchaseOrder(@Path("id") id: Int, @Body body: Map<String, String> = emptyMap()): CreatedResponse
+    // ANDROID-1007: body is a PoReceiveRequest. Receive-everything is
+    // PoReceiveRequest(lines = null, receipt_key = key) -- Gson omits the null
+    // `lines`, which is exactly the server's "receive all remaining" form.
+    suspend fun receivePurchaseOrder(@Path("id") id: Int, @Body body: PoReceiveRequest): CreatedResponse
+
+    // Close a partially received PO short (stop waiting for the rest). No body.
+    @POST("api/sub/retail/purchase-orders/{id}/close")
+    suspend fun closePurchaseOrder(@Path("id") id: Int): CreatedResponse
+
+    // Stock transfers between branches (ANDROID-1007). Ids are string uuids.
+    @GET("api/sub/retail/stock-transfers")
+    suspend fun stockTransfers(@Query("status") status: String? = null): TransferListResponse
+
+    @GET("api/sub/retail/stock-transfers/{id}")
+    suspend fun stockTransfer(@Path("id") id: String): TransferDetailResponse
+
+    @POST("api/sub/retail/stock-transfers")
+    suspend fun createStockTransfer(@Body body: CreateTransferRequest): TransferCreatedResponse
+
+    @POST("api/sub/retail/stock-transfers/{id}/send")
+    suspend fun sendStockTransfer(@Path("id") id: String): TransferActionResponse
+
+    @POST("api/sub/retail/stock-transfers/{id}/receive")
+    suspend fun receiveStockTransfer(@Path("id") id: String, @Body body: ReceiveTransferRequest): TransferReceiveResponse
+
+    @POST("api/sub/retail/stock-transfers/{id}/cancel")
+    suspend fun cancelStockTransfer(@Path("id") id: String): TransferActionResponse
+
+    @POST("api/sub/retail/stock-transfers/{id}/recall")
+    suspend fun recallStockTransfer(@Path("id") id: String): TransferActionResponse
 
     @POST("api/sub/retail/purchase-orders/{id}/pay")
     suspend fun payPurchaseOrder(@Path("id") id: Int, @Body body: PaymentRequest): PaymentResultResponse

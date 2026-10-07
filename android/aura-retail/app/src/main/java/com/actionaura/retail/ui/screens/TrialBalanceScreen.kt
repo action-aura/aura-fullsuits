@@ -40,7 +40,7 @@ import com.actionaura.retail.net.GlAccount
 import com.actionaura.retail.net.SubledgerTie
 import com.actionaura.retail.net.TrialBalance
 import com.actionaura.retail.net.apiErrorMessage
-import com.actionaura.retail.ui.CAP_REPORTS
+import com.actionaura.retail.ui.CAP_BOOKS_VIEW
 import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.components.EmptyState
 import com.actionaura.retail.ui.components.SectionHeader
@@ -159,7 +159,7 @@ fun TrialBalanceScreen(snackbar: SnackbarHostState) {
     // identical gate (see that composable's doc comment for the full
     // reasoning). Rendering advice only: `hasCapability` fails open until the
     // session resolves, and the route re-checks server-side regardless.
-    if (!RetailSession.hasCapability(CAP_REPORTS)) {
+    if (!RetailSession.hasCapability(CAP_BOOKS_VIEW)) {
         EmptyState(
             Icons.Default.Shield,
             tr("Reports access required"),

@@ -436,15 +436,17 @@ private data class BooksEntry(val route: String, val title: String, val hint: St
 // of these screens is a viewer", which was wrong the moment those buttons
 // existed.
 //
-// Trial balance, profit-and-loss and balance-sheet are all
-// `@mt_require_capability(CAP_REPORTS)` on the server (retail_api.py), NOT
-// books.view: gating them on books.view showed the entry to a books.view-only
-// account whose fetch then 403'd, and hid it from a reports-only account the
-// server would have served. Pinned by AccountantHomeContractTest.
+// Trial balance, profit-and-loss and balance-sheet are
+// `@mt_require_capability(CAP_BOOKS_VIEW)` on the server (retail_api.py) since
+// rehearsal fix B7 (cfbf883f): managers hold retail.reports but were able to open
+// the books, so the server moved the statements to books.view (owner +
+// bookkeeper; managers excluded on purpose). Before B7 this said the opposite
+// (CAP_REPORTS) and that was right then. The other entries below stay on
+// retail.reports. Pinned by AccountantHomeContractTest / WriteGateContractTest.
 private val booksEntries = listOf(
-    BooksEntry("trial_balance", "Trial Balance", "Every account, debits against credits.", CAP_REPORTS),
-    BooksEntry("profit_and_loss", "Profit and Loss", "Income minus cost and expenses for a period.", CAP_REPORTS),
-    BooksEntry("balance_sheet", "Balance Sheet", "What the business owns and owes.", CAP_REPORTS),
+    BooksEntry("trial_balance", "Trial Balance", "Every account, debits against credits.", CAP_BOOKS_VIEW),
+    BooksEntry("profit_and_loss", "Profit and Loss", "Income minus cost and expenses for a period.", CAP_BOOKS_VIEW),
+    BooksEntry("balance_sheet", "Balance Sheet", "What the business owns and owes.", CAP_BOOKS_VIEW),
     BooksEntry("reports", "Reports", "Sales and stock reports.", CAP_REPORTS),
     BooksEntry("receivables", "Receivables", "What customers owe.", CAP_REPORTS),
     BooksEntry("payables", "Payables", "What the shop owes suppliers.", CAP_REPORTS),
@@ -503,6 +505,7 @@ private fun MainShell(onLogout: () -> Unit) {
         "suppliers" -> "Suppliers"
         "purchase_orders" -> "Purchase Orders"
         "payables" -> "Payables"
+        "stock_transfers" -> "Stock Transfers"
         "cash_summary" -> "Cash Summary"
         "aging" -> "Aging"
         "trial_balance" -> "Trial Balance"
@@ -784,6 +787,9 @@ private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavControll
     b.composable("suppliers") { SuppliersScreen(snackbar) }
     b.composable("purchase_orders") { PurchaseOrdersScreen(snackbar) }
     b.composable("payables") { PayablesScreen(snackbar) }
+    // ANDROID-1007: stock transfers between branches (ui/screens/StockTransfersScreen.kt),
+    // reached from MoreScreen's Purchasing section.
+    b.composable("stock_transfers") { StockTransfersScreen(snackbar) }
     b.composable("cash_summary") { DailyCashScreen(snackbar) }
     b.composable("aging") { AgingScreen(snackbar) }
     // retail-hardware-viewports: schema v38/v39's general ledger, read-only

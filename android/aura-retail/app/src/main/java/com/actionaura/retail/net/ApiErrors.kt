@@ -62,6 +62,13 @@ fun apiErrorMessage(e: Throwable): String = when (e) {
             // mt_login_required (commercial_runtime/identity/mt_auth.py):
             // session cookie missing, expired, or revoked.
             401 -> tr("Your session has expired. Please log in again.")
+            // ANDROID-1007: a 409 carrying one of the purchase-order / transfer
+            // refusal codes gets a plain sentence instead of the server's
+            // developer-facing one; any other 409 falls through to the
+            // server's own message exactly as before.
+            409 -> conflictMessageFor(body.code)
+                ?: body.message?.let { tr(it) }
+                ?: (tr("Server error") + " (HTTP 409)")
             // Any other HTTP error: surface the server's message when it sent
             // one (e.g. the AI route's 503 "AI assistant is temporarily
             // unavailable."), otherwise at least name the status code instead
@@ -126,9 +133,26 @@ fun loginErrorMessage(e: Throwable): String =
  * so this is the same parser RetailExtraScreens.kt's pairing code already
  * uses for the same reason.
  */
-private data class ErrorBody(val message: String?, val reasonCode: String?)
+private data class ErrorBody(val message: String?, val reasonCode: String?, val code: String? = null)
 
 private val NO_ERROR_BODY = ErrorBody(message = null, reasonCode = null)
+
+/**
+ * ANDROID-1007: friendly, translated text for the 409 `code` values the
+ * purchase-order receive/close and stock-transfer routes answer with. Null for
+ * a code this table does not know, so the caller falls back to the server's
+ * own message. A native Arabic speaker should confirm the Arabic wording in
+ * ui/i18n/Strings.kt.
+ */
+internal fun conflictMessageFor(code: String?): String? = when (code) {
+    "OVER_RECEIPT" -> tr("You cannot receive more than is still on order.")
+    "PO_LINES_NOT_ARRIVED", "PO_RECEIPTS_NOT_ARRIVED", "PO_BOOKS_NOT_ARRIVED",
+    "TRANSFER_LINES_NOT_ARRIVED", "TRANSFER_SEND_NOT_ARRIVED", "TRANSFER_BOOKS_NOT_ARRIVED" ->
+        tr("This hasn't finished syncing from your other device yet. Try again in a moment.")
+    "CLOSE_SHORT_NOT_PARTIAL" -> tr("Only an order that is partly received can be closed short.")
+    "CLOSE_SHORT_NEEDS_SUPPLIER" -> tr("This order needs a supplier before it can be closed short.")
+    else -> null
+}
 
 private fun parseErrorBody(e: HttpException): ErrorBody = try {
     val raw = e.response()?.errorBody()?.string()
@@ -142,6 +166,11 @@ private fun parseErrorBody(e: HttpException): ErrorBody = try {
             // licence guard's shape and must not flip a permission refusal into
             // a subscription one.
             reasonCode = body.get("reason_code")
+                ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+                ?.asString?.takeIf { it.isNotBlank() },
+            // The 409 refusals carry a STRING `code`; mt_auth's 403 carries the
+            // number 403 there, which must not be mistaken for one.
+            code = body.get("code")
                 ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
                 ?.asString?.takeIf { it.isNotBlank() },
         )
