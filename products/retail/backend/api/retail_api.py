@@ -9817,6 +9817,12 @@ def get_sale(sale_id):
     # Split-tender sales only (see create_sale's response): receipts and the
     # returns picker need the per-tender lines; nothing else changes shape.
     tender_lines = _sale_tender_lines(conn, cid, sale_id) if sale['payment_method'] == 'split' else None
+    # EXTRAS: what each line carried (Large, Extra cheese), from the SNAPSHOT
+    # recorded at sale time, never from today's option rows -- so a reprint
+    # months later still names what was sold. `[]` (never a missing key) on a
+    # line with none. Display only: the line's unit_price/line_total already
+    # include the deltas and are not touched here.
+    extras_by_item = modifier_engine.read_sale_modifiers(conn, cid, [i['id'] for i in items])
     conn.close()
 
     payload = dict(sale)
@@ -9832,7 +9838,12 @@ def get_sale(sale_id):
     payload['actor_employee_id'] = identity['employee_id']
     payload['actor_email'] = identity['email']
     payload['employee_name'] = identity['employee_name']
-    return jsonify({'status': 'success', 'data': {'sale': payload, 'items': [dict(i) for i in items]}})
+    item_rows = []
+    for i in items:
+        row = dict(i)
+        row['modifiers'] = extras_by_item.get(i['id'], [])
+        item_rows.append(row)
+    return jsonify({'status': 'success', 'data': {'sale': payload, 'items': item_rows}})
 
 # ── Held Sales (park / resume) ─────────────────────────────────────────────────
 # "I had two transactions -- one was mid-payment, I forgot something, wanted
@@ -11157,6 +11168,15 @@ def list_modifier_groups():
         ).fetchall()
         row = dict(g)
         row['options'] = [dict(o) for o in options]
+        # EXTRAS: the LIVE product links (a detached link is soft-deleted and
+        # excluded), so the set-up screen can show "Used on these items".
+        links = conn.execute(
+            "SELECT product_id FROM product_modifier_groups "
+            "WHERE company_id=? AND group_id=? AND deleted_at_utc IS NULL "
+            "ORDER BY sort_order, product_id",
+            (cid, g['id'])
+        ).fetchall()
+        row['product_ids'] = [l['product_id'] for l in links]
         data.append(row)
     conn.close()
     return jsonify({'status': 'success', 'data': data})
@@ -15893,10 +15913,13 @@ def printer_receipt_payload():
         # Same join shape as get_sale's own sale_items query above (product
         # name resolved through the join, never a raw product_id on paper).
         items = conn.execute("""
-            SELECT si.product_id, si.quantity, si.line_total, p.name as product_name
+            SELECT si.id, si.product_id, si.quantity, si.line_total, p.name as product_name
             FROM sale_items si LEFT JOIN products p ON si.product_id=p.id
             WHERE si.sale_id=?
         """, (sale_id,)).fetchall()
+        # EXTRAS: snapshot names only (see get_sale); printed as priceless
+        # sub-rows by render_receipt.
+        extras_by_item = modifier_engine.read_sale_modifiers(conn, cid, [i['id'] for i in items])
 
         # Column-name mapping is deliberate, and NOT symmetrical with
         # render_receipt's own keys: `sales.change_amount` (not `change`)
@@ -15913,6 +15936,7 @@ def printer_receipt_payload():
                     'product_id': item['product_id'],
                     'quantity': item['quantity'],
                     'line_total': item['line_total'],
+                    'modifiers': extras_by_item.get(item['id'], []),
                 }
                 for item in items
             ],

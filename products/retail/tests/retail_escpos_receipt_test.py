@@ -320,3 +320,57 @@ def test_a_missing_number_or_date_omits_its_line_rather_than_inventing_one():
     text = receipt.render_receipt(sale).decode("ascii")
     assert "Receipt #" not in text
     assert not re.search(r"\d{4}-\d{2}-\d{2}", text)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# EXTRAS -- sub-rows under a line that carried modifiers
+# ═════════════════════════════════════════════════════════════════════════
+# NEW RULE (was: one sold line -> one printed row): a line that carried
+# extras prints its normal row PLUS one indented "  + <name>" sub-row per
+# extra. The sub-row carries NO price -- the line amount above it already
+# includes the deltas, so printing them again would double-count on paper.
+# A line without extras is byte-identical to before.
+
+def _extras_sale() -> dict:
+    sale = _jod_sale(5.5)
+    sale['lines'][0]['modifiers'] = [
+        {'group_name': 'Size', 'name': 'Large', 'price_delta': 0.5},
+        {'group_name': 'Extras', 'name': 'Extra cheese', 'price_delta': 0},
+    ]
+    return sale
+
+
+def test_extras_print_as_indented_priceless_sub_rows_under_their_line():
+    text = receipt.render_receipt(_extras_sale(), currency="JOD").decode("ascii")
+    lines = text.split("\n")
+    i = next(n for n, l in enumerate(lines) if "Widget x1" in l)
+    assert lines[i + 1].endswith("  + Large"), lines[i:i + 3]
+    assert lines[i + 2].endswith("  + Extra cheese"), lines[i:i + 3]
+    # The line amount is the one passed in; the sub-rows add no money.
+    assert "JD 5.500" in lines[i]
+    assert "JD" not in lines[i + 1] and "JD" not in lines[i + 2]
+
+
+def test_line_without_extras_is_byte_identical_to_before():
+    plain = receipt.render_receipt(_jod_sale(5.5), currency="JOD")
+    sale = _jod_sale(5.5)
+    sale['lines'][0]['modifiers'] = []
+    assert receipt.render_receipt(sale, currency="JOD") == plain
+
+
+@pytest.mark.parametrize("width", [32, 42])
+def test_extras_sub_rows_respect_width_and_truncate(width):
+    sale = _extras_sale()
+    sale['lines'][0]['modifiers'] = [{'group_name': 'G', 'name': 'N' * 80, 'price_delta': 0}]
+    out = receipt.render_receipt(sale, width_chars=width, currency="JOD")
+    stripped = _CONTROL_RE.sub(b"", out).decode("ascii")
+    for line in stripped.split("\n"):
+        assert len(line) <= width, line
+    assert "  + NNN" in stripped
+
+
+def test_non_ascii_extra_degrades_to_question_marks_like_every_other_string():
+    sale = _extras_sale()
+    sale['lines'][0]['modifiers'] = [{'group_name': 'G', 'name': 'كبير', 'price_delta': 0}]
+    text = receipt.render_receipt(sale, currency="JOD").decode("ascii")
+    assert "  + ????" in text

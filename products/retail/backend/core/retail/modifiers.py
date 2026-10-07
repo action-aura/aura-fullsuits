@@ -273,3 +273,43 @@ def read_sale_item_modifiers(conn, company_id, sale_item_id):
         (company_id, sale_item_id),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def read_sale_modifiers(conn, company_id, sale_item_ids):
+    """EXTRAS: the batched form of `read_sale_item_modifiers`, for a receipt
+    or sale-detail read that needs the extras of EVERY line of one sale in a
+    single query instead of one per line.
+
+    Returns `{sale_item_id: [{'group_name', 'name', 'price_delta'}, ...]}`
+    in selection order (`ORDER BY id`, the insert order). A line with no
+    extras is simply absent -- the caller defaults to `[]`.
+
+    SNAPSHOT COLUMNS ONLY, same rule and same reason as
+    `read_sale_item_modifiers`: never joins `modifier_options`, so an option
+    renamed or deactivated after the sale cannot change what the receipt
+    says was sold. Company-scoped in the WHERE, so another company's
+    sale_item ids read back nothing. Deliberately omits `cost_delta` -- a
+    customer-facing document has no business carrying what an extra cost the
+    shop.
+    """
+    ids = [int(i) for i in (sale_item_ids or [])]
+    if not ids:
+        return {}
+    out = {}
+    # SQLite caps bound parameters (999 on old builds); chunk well under it.
+    for start in range(0, len(ids), 400):
+        chunk = ids[start:start + 400]
+        marks = ",".join("?" * len(chunk))
+        rows = conn.execute(
+            "SELECT sale_item_id, group_name_snapshot AS group_name, "
+            "name_snapshot AS name, price_delta_snapshot AS price_delta "
+            "FROM sale_item_modifiers "
+            f"WHERE company_id=? AND sale_item_id IN ({marks}) ORDER BY id",
+            (company_id, *chunk),
+        ).fetchall()
+        for r in rows:
+            out.setdefault(r['sale_item_id'], []).append({
+                'group_name': r['group_name'], 'name': r['name'],
+                'price_delta': r['price_delta'],
+            })
+    return out

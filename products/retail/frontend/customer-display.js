@@ -566,6 +566,10 @@
             '<div class="cd-item-main">' +
               '<div class="cd-item-name">' + esc(it.name) + '</div>' +
               '<div class="cd-item-meta">' + esc(it.unitPrice || '') + ' × ' + esc(qty) + '</div>' +
+              // EXTRAS: the till sends the selected extras as ONE plain
+              // string ('' for a line with none). Reuses the existing meta
+              // style; <bdi> keeps a name of the other script from reordering.
+              (it.extras ? '<div class="cd-item-meta cd-item-extras"><bdi>' + esc(it.extras) + '</bdi></div>' : '') +
             '</div>' +
             '<div class="cd-item-total money">' + originalHtml + esc(it.lineTotal || '') + '</div>' +
           '</div>';

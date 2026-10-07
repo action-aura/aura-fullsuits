@@ -304,6 +304,16 @@ def render_receipt(
         qty = item.get("quantity", 1)
         amount = money_format.format_money(item.get("line_total", 0), currency)
         out += _ascii(_row(f"{name} x{qty}", amount, width_chars)) + b"\n"
+        # EXTRAS: NEW RULE -- one sold line is no longer always one printed
+        # row. A line that carried extras gets one indented "  + <name>"
+        # sub-row per extra, with NO price: the amount above already includes
+        # the deltas, so a price here would double-count on paper. Truncated
+        # to the paper width like every other row; non-ASCII prints as '?'
+        # like every other string in this byte path (see module docstring).
+        for extra in (item.get("modifiers") or []):
+            extra_name = extra.get("name")
+            if extra_name:
+                out += _line(f"  + {extra_name}", width_chars)
 
     out += _line("-" * width_chars, width_chars)
 

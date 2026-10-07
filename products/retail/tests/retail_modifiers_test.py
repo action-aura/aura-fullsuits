@@ -680,3 +680,96 @@ def test_delete_modifier_group_deactivates_and_stops_applying(shop):
     assert r3.get_json()['data']['lines'][0]['unit_price'] == 10.0
 
 
+# ── EXTRAS: receipts name the extras ─────────────────────────────────────────
+# A sale line that carried extras must say so wherever the sale is read back
+# (sale detail -> reprint, the ESC/POS payload), from the SNAPSHOT only. The
+# amounts never change: the line's price already includes the deltas.
+
+def _ring_with_extras(client, pid, option_ids, qty=1):
+    r = _sale(client, [{'product_id': pid, 'quantity': qty, 'modifier_option_ids': option_ids}])
+    assert r.status_code == 200, r.get_json()
+    return r.get_json()['data']['id']
+
+
+def test_get_sale_items_carry_snapshot_modifiers_surviving_rename_and_deactivate(shop):
+    cid, client = shop
+    pid = _create_product(client, sell_price=5.0)
+    plain_pid = _create_product(client, sell_price=2.0)
+    group = _create_group(client, name='Size')
+    large = _create_option(client, group, name='Large', price_delta=0.5)
+    _attach(client, pid, group)
+    r = _sale(client, [
+        {'product_id': pid, 'quantity': 1, 'modifier_option_ids': [large]},
+        {'product_id': plain_pid, 'quantity': 1},
+    ])
+    assert r.status_code == 200, r.get_json()
+    sale_id = r.get_json()['data']['id']
+
+    # The option is renamed and then deactivated AFTER the sale.
+    assert client.patch(f'{API}/modifier-options/{large}', json={'name': 'RENAMED', 'price_delta': 9.0}).status_code == 200
+    assert client.delete(f'{API}/modifier-options/{large}').status_code == 200
+
+    d = client.get(f'{API}/sales/{sale_id}').get_json()['data']
+    by_pid = {i['product_id']: i for i in d['items']}
+    assert by_pid[pid]['modifiers'] == [{'group_name': 'Size', 'name': 'Large', 'price_delta': 0.5}], by_pid[pid]
+    assert by_pid[plain_pid]['modifiers'] == [], "a line with no extras gets [], never a missing key"
+    # The money on the line is exactly what was charged, untouched by the read.
+    assert by_pid[pid]['unit_price'] == 5.5
+
+
+def test_receipt_payload_prints_extras_under_the_line_from_the_snapshot(shop):
+    import base64
+    cid, client = shop
+    pid = _create_product(client, name='Burger', sell_price=5.0)
+    group = _create_group(client, name='Size')
+    large = _create_option(client, group, name='Large', price_delta=0.5)
+    _attach(client, pid, group)
+    sale_id = _ring_with_extras(client, pid, [large])
+    assert client.patch(f'{API}/modifier-options/{large}', json={'name': 'RENAMED'}).status_code == 200
+
+    r = client.get(f'{API}/printer/receipt-payload?sale_id={sale_id}')
+    assert r.status_code == 200, r.get_json()
+    text = base64.b64decode(r.get_json()['data']['payload_b64']).decode('ascii', 'replace')
+    assert '  + Large' in text, text
+    assert 'RENAMED' not in text, "the receipt must show what was sold, not today's option name"
+
+
+def test_read_sale_modifiers_is_batched_company_scoped_and_snapshot_only(shop):
+    cid, client = shop
+    pid = _create_product(client, sell_price=5.0)
+    group = _create_group(client, name='Extras')
+    a = _create_option(client, group, name='Cheese', price_delta=0.5)
+    b = _create_option(client, group, name='Bacon', price_delta=1.0)
+    _attach(client, pid, group)
+    s1 = _ring_with_extras(client, pid, [a, b])
+    s2 = _ring_with_extras(client, pid, [a])
+    ids1 = [r['id'] for r in _sale_items(s1)]
+    ids2 = [r['id'] for r in _sale_items(s2)]
+    conn = sch.get_retail_conn()
+    got = modifier_engine.read_sale_modifiers(conn, cid, ids1 + ids2 + [999999])
+    other = modifier_engine.read_sale_modifiers(conn, 'another-company', ids1 + ids2)
+    empty = modifier_engine.read_sale_modifiers(conn, cid, [])
+    conn.close()
+    assert [m['name'] for m in got[ids1[0]]] == ['Cheese', 'Bacon']
+    assert [m['name'] for m in got[ids2[0]]] == ['Cheese']
+    assert got[ids1[0]][0] == {'group_name': 'Extras', 'name': 'Cheese', 'price_delta': 0.5}
+    assert 999999 not in got
+    assert other == {}, "another company must read nothing"
+    assert empty == {}
+
+
+def test_modifier_group_list_carries_live_product_ids(shop):
+    cid, client = shop
+    p1 = _create_product(client)
+    p2 = _create_product(client)
+    group = _create_group(client, name='Size')
+    lone = _create_group(client, name='Unused')
+    _attach(client, p1, group)
+    _attach(client, p2, group)
+    assert client.delete(f'{API}/products/{p2}/modifier-groups/{group}').status_code == 200
+
+    rows = {g['id']: g for g in client.get(f'{API}/modifier-groups').get_json()['data']}
+    assert rows[group]['product_ids'] == [p1], "a detached link must not be listed"
+    assert rows[lone]['product_ids'] == []
+
+

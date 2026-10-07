@@ -1677,6 +1677,10 @@ const RetailSystem = {
           // server's own `applied_promotion`, which is null on a
           // manual-wins line.
           originalLineTotal: promoWins ? this._fmt(gross) : null,
+          // EXTRAS: the cart line's selected extras as one plain string
+          // ('' when none) -- the display shows it as a small meta line. A
+          // NAME list only; lineTotal above already includes every delta.
+          extras: this._lineExtraNames(i).join(' · '),
         };
       }),
       subtotal: this._fmt(totals.subtotal || 0),
@@ -9065,7 +9069,8 @@ const RetailSystem = {
         // here) -- _showReceipt's own fallback chain (server name -> cart
         // names -> t('Item'), never the id) is what decides the id is never
         // shown, not this adapter re-deciding it a second time.
-        lines: items.map(i => ({ product_id: i.product_id, name: i.product_name, quantity: i.quantity, line_total: i.line_total })),
+        // `modifiers` (EXTRAS): the snapshot names get_sale now returns per item.
+        lines: items.map(i => ({ product_id: i.product_id, name: i.product_name, quantity: i.quantity, line_total: i.line_total, modifiers: i.modifiers })),
       };
     } catch (e) {
       return { id: saleId, sale_number: fallbackSaleNumber, lines: [] };
@@ -9208,6 +9213,31 @@ const RetailSystem = {
   // main styled app. `class="rcpt-amt"` (added at each call site, not
   // here) is a stable test hook, not a styled class -- no CSS rule targets
   // it anywhere, including inside the bare print document.
+  // EXTRAS: the names of the extras ("Large", "Extra cheese") a receipt line
+  // was sold with, normalised in this ONE place. Two shapes reach a receipt:
+  // create_sale's immediate response lines carry `modifier_snapshots`, while
+  // GET /sales/<id> items (reprint, idempotent replay) and the live cart
+  // carry `modifiers` -- both are the server's SNAPSHOT of what was applied,
+  // never today's option rows. NAMES ONLY: the line's unit_price/line_total
+  // already include every price delta, so no surface may show or add one
+  // (retail_modifiers_receipt_test.js mutation-proves exactly that).
+  _lineExtraNames(line) {
+    const src = (line && (line.modifiers || line.modifier_snapshots)) || [];
+    return Array.from(src).map(m => m && m.name).filter(Boolean);
+  },
+
+  // EXTRAS: the small sub-line under a receipt row, '' when the line has
+  // none. Names are user data: escaped, each run wrapped in <bdi> so an
+  // Arabic name inside an English slip (or the reverse) keeps its own
+  // direction. `inPrintDoc` drops the colour token: the print iframe is a
+  // bare document that none of this file's --tokens reach.
+  _receiptLineExtras(line, inPrintDoc) {
+    const names = this._lineExtraNames(line);
+    if (!names.length) return '';
+    const tone = inPrintDoc ? '' : 'color:var(--text-muted);';
+    return `<div class="rcpt-extras" style="${tone}font-size:11px;text-align:start;margin-inline-start:12px;margin-block-end:6px"><bdi>${names.map(n => this._esc(n)).join(' · ')}</bdi></div>`;
+  },
+
   _receiptLineAmountHTML(line) {
     const { gross, discountAmount } = this._receiptLineFigures(line);
     if (discountAmount > this._halfMinorUnit()) {
@@ -9270,7 +9300,7 @@ const RetailSystem = {
           ${(saleData.lines||[]).map(i=>`<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px">
             <span style="color:var(--text-secondary)">${this._esc(i.name || (cartNames && cartNames[i.product_id]) || t('Item'))} ×${i.quantity}</span>
             <span class="rcpt-amt" style="color:var(--text-money);white-space:nowrap">${this._receiptLineAmountHTML(i)}</span>
-          </div>`).join('')}
+          </div>${this._receiptLineExtras(i)}`).join('')}
           <div style="border-top:1px dashed var(--border-default);margin:10px 0;padding-top:10px">
             <!-- AUDIT (Phase 0 #8, I-2 "till half"): this modal used to skip
                  straight from the line items to Total with no Subtotal/
@@ -9462,8 +9492,12 @@ const RetailSystem = {
     const { promotions: promoAmt, discount: discAmt } = this._saleDiscountBreakdown(saleData);
     const items = (saleData.lines || []).map((line) => {
       const { gross, discountAmount } = this._receiptLineFigures(line);
+      // EXTRAS: plain text, appended to the item ("Burger (Large, Extra
+      // cheese)"); the total below is the line's own figure, untouched.
+      const extras = this._lineExtraNames(line);
+      const baseName = line.name || cartNames[line.product_id] || t('Item');
       return {
-        name: line.name || cartNames[line.product_id] || t('Item'),
+        name: extras.length ? `${baseName} (${extras.join(', ')})` : baseName,
         qty: line.quantity,
         total: gross - discountAmount,
       };
@@ -9739,7 +9773,7 @@ const RetailSystem = {
       <div class="rcpt-line">
         <span>${this._esc(i.name || cn[i.product_id] || t('Item'))} ×${i.quantity}</span>
         <span class="rcpt-amt" style="white-space:nowrap">${this._receiptLineAmountHTML(i)}</span>
-      </div>`).join('');
+      </div>${this._receiptLineExtras(i, true)}`).join('');
     const einvoiceBlock = await this._einvoiceReceiptBlock(saleData);
     // A preview supplies the branding as it is typed RIGHT NOW (unsaved), so
     // the shopkeeper sees the receipt before committing; a real print reads
@@ -15875,6 +15909,7 @@ const RetailSystem = {
       lines: items.map(i => ({
         name: i.product_name || ('#'+i.product_id), quantity: i.quantity,
         unit_price: i.unit_price, discount_pct: i.discount_pct, line_total: i.line_total,
+        modifiers: i.modifiers,   // EXTRAS: snapshot names from get_sale
       })),
     };
     await this._printReceipt(saleData);
