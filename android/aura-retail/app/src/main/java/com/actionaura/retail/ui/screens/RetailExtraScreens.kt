@@ -2085,6 +2085,10 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
             OutlinedButton(onClick = onOpenBackup, modifier = Modifier.fillMaxWidth().height(50.dp)) {
                 Text(tr("Backup & restore"))
             }
+            // In-app updates: same audience as Backup (an administrator -- it
+            // installs software on the till), and absent entirely on a build
+            // with no Owner URL, where there is nobody to ask for a build.
+            if (com.actionaura.retail.updates.UpdateCoordinator.isConfigured) UpdatesSection()
         }
 
         SectionHeader(tr("Licensing"))

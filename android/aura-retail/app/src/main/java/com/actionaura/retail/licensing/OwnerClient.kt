@@ -2,10 +2,12 @@ package com.actionaura.retail.licensing
 
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.security.SecureRandom
@@ -47,6 +49,7 @@ data class OwnerClientConfig(
 open class OwnerClientError(val reasonCode: String, message: String) : Exception(message)
 class NetworkError(reasonCode: String, message: String) : OwnerClientError(reasonCode, message)
 class MalformedResponseError(reasonCode: String, message: String) : OwnerClientError(reasonCode, message)
+class DownloadError(reasonCode: String, message: String) : OwnerClientError(reasonCode, message)
 
 class OwnerClient(
     private val config: OwnerClientConfig,
@@ -129,6 +132,128 @@ class OwnerClient(
             )
             sign(body, identity)
         }
+
+    /**
+     * Update channel: "what is the newest release I may install?". Device-signed
+     * like a check-in; mirrors client.py's find_latest_release (same field names,
+     * `release_channel` sent, `platform` deliberately NOT sent).
+     *
+     * Returns Pair(requestId, Owner's raw body). Owner echoes `request_id` inside
+     * the signed release descriptor and the local updates route refuses a
+     * descriptor whose echo differs, so a captured old answer cannot be replayed
+     * as a new one -- which only works if the caller can hand that SAME id to
+     * Python. The id is therefore minted ONCE, outside the body provider:
+     * [requestRaw] rebuilds (and re-nonces, re-signs) the body on every retry, and
+     * an id minted inside would change with it, so a retry that finally got
+     * through would carry an id the caller never saw.
+     */
+    fun findLatestRelease(
+        installationId: String,
+        appVersion: String,
+        releaseChannel: String?,
+        identity: DeviceIdentity,
+    ): Pair<String, String> {
+        val requestId = UUID.randomUUID().toString()
+        val raw = requestRaw("POST", "/releases/latest") {
+            sign(
+                linkedMapOf<String, Any?>(
+                    "contract_version" to CONTRACT_VERSION,
+                    "request_id" to requestId,
+                    "correlation_id" to UUID.randomUUID().toString(),
+                    "timestamp" to Instant.now().toString(),
+                    "nonce" to newNonce(),
+                    "installation_id" to installationId,
+                    "app_version" to appVersion,
+                    "release_channel" to releaseChannel,
+                ),
+                identity,
+            )
+        }
+        return requestId to raw
+    }
+
+    /** Asks Owner for a short-lived, SINGLE-USE download token. Returns Owner's raw body. */
+    fun authorizeReleaseDownload(installationId: String, productVersionId: String, identity: DeviceIdentity): String =
+        requestRaw("POST", "/releases/authorize-download") {
+            sign(
+                linkedMapOf<String, Any?>(
+                    "contract_version" to CONTRACT_VERSION,
+                    "request_id" to UUID.randomUUID().toString(),
+                    "correlation_id" to UUID.randomUUID().toString(),
+                    "timestamp" to Instant.now().toString(),
+                    "nonce" to newNonce(),
+                    "installation_id" to installationId,
+                    "product_version_id" to productVersionId,
+                ),
+                identity,
+            )
+        }
+
+    /**
+     * Streams the installer to [dest] (through `dest.part`, renamed only once
+     * the whole stream arrived).
+     *
+     * NO RETRY, deliberately, unlike every other call here: the token is
+     * single-use, so the moment Owner started serving it a second attempt can
+     * only fail. A failure goes to the caller, who asks for a fresh token.
+     *
+     * [expectedSize] is a CEILING, not a hint (same rule as client.py's
+     * download_release): more bytes than the signed descriptor promised means a
+     * misbehaving or impersonated server, and it must not be allowed to fill the
+     * phone. The part file is deleted on EVERY failure path, so a half-written
+     * installer never lies around looking like a candidate. Whether the finished
+     * file is the RIGHT size and hash is the caller's check, not this method's.
+     */
+    fun downloadRelease(token: String, dest: File, expectedSize: Long, progress: (Long) -> Unit = {}) {
+        val part = File(dest.path + ".part")
+        part.parentFile?.mkdirs()
+        part.delete()
+        dest.delete()
+        val url = config.baseUrl.trimEnd('/').toHttpUrl().newBuilder()
+            .addPathSegments("releases/download")
+            .addPathSegment(token) // encoded as ONE segment: a token can never add path
+            .build()
+        // A longer read timeout than the JSON calls: the cap is per-read, not for
+        // the whole transfer, and a slow mobile link stalls longer than 10s.
+        val client = http.newBuilder()
+            .readTimeout(maxOf(config.timeoutSeconds, 60L), TimeUnit.SECONDS)
+            .build()
+        try {
+            client.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
+                if (response.code != 200) throw DownloadError("DOWNLOAD_REFUSED", "HTTP ${response.code}")
+                val declared = response.header("Content-Length")?.toLongOrNull()
+                if (declared != null && declared > expectedSize) {
+                    throw DownloadError("DOWNLOAD_TOO_LARGE", "server announced $declared bytes, ceiling is $expectedSize")
+                }
+                val source = response.body?.byteStream() ?: throw DownloadError("DOWNLOAD_REFUSED", "empty body")
+                var received = 0L
+                part.outputStream().use { out ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = source.read(buffer)
+                        if (n < 0) break
+                        received += n
+                        if (received > expectedSize) {
+                            throw DownloadError("DOWNLOAD_TOO_LARGE", "more than $expectedSize bytes arrived")
+                        }
+                        out.write(buffer, 0, n)
+                        progress(received)
+                    }
+                }
+            }
+            if (!part.renameTo(dest)) throw DownloadError("DOWNLOAD_REFUSED", "could not move the finished download into place")
+        } catch (exc: SSLException) {
+            part.delete()
+            throw NetworkError("TLS_VERIFICATION_FAILED", exc.message ?: "TLS error")
+        } catch (exc: IOException) {
+            part.delete()
+            throw NetworkError("NETWORK_UNAVAILABLE", exc.message ?: "network error")
+        } catch (exc: Throwable) {
+            // DownloadError, a cancelled coroutine, anything: never leave the part behind.
+            part.delete()
+            throw exc
+        }
+    }
 
     fun fetchSigningKeys(): Map<String, Any?> = parseJson(requestRaw("GET", "/signing-keys", null))
 

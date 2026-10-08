@@ -1126,4 +1126,51 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Total Assets" to "إجمالي الأصول",
     "Total Liabilities and Equity" to "إجمالي الخصوم وحقوق الملكية",
     "Difference" to "الفرق",
+
+    // ── Settings → Updates (updates/UpdateCoordinator.kt, ui/screens/UpdatesSection.kt) ──
+    // Every error sentence is plain on purpose: the person reading it runs a
+    // shop, not a server. "Owner" never appears -- it is the update server.
+    "Updates" to "التحديثات",
+    "This version" to "هذا الإصدار",
+    "Check for updates" to "التحقق من وجود تحديثات",
+    "Checking for updates…" to "جارٍ التحقق من وجود تحديثات…",
+    "You have the latest version." to "لديك أحدث إصدار.",
+    "A new version is available: %s" to "يتوفر إصدار جديد: %s",
+    "Download size: %s MB" to "حجم التنزيل: %s ميغابايت",
+    "This update is required." to "هذا التحديث مطلوب.",
+    "Update now" to "حدّث الآن",
+    "Install now" to "ثبّت الآن",
+    "Open Settings" to "فتح الإعدادات",
+    "Downloading the update…" to "جارٍ تنزيل التحديث…",
+    "The update is downloaded and checked. Press the button to install it." to
+        "تم تنزيل التحديث والتحقق منه. اضغط الزر لتثبيته.",
+    "Android needs your permission before this app can install updates. Allow it in Settings, then come back and press Install now." to
+        "يحتاج أندرويد إلى إذنك قبل أن يتمكن هذا التطبيق من تثبيت التحديثات. اسمح بذلك من الإعدادات ثم عد واضغط ثبّت الآن.",
+    "Installing… follow the Android prompt on the screen." to "جارٍ التثبيت… اتبع رسالة أندرويد على الشاشة.",
+    "Updates are not set up on this build." to "التحديثات غير مفعّلة في هذا الإصدار.",
+    "Activate this device first, then updates can be checked." to "فعّل هذا الجهاز أولًا، ثم يمكن التحقق من التحديثات.",
+    "Couldn't reach the update server. Check the internet connection and try again." to
+        "تعذّر الوصول إلى خادم التحديثات. تحقق من اتصال الإنترنت وحاول مرة أخرى.",
+    "The app couldn't check for updates just now. Try again in a moment." to
+        "تعذّر على التطبيق التحقق من التحديثات الآن. حاول مرة أخرى بعد قليل.",
+    "This update could not be proven genuine, so it was not used." to "تعذّر إثبات أصالة هذا التحديث، لذلك لم يُستخدم.",
+    "The update details didn't match this device, so they were not used." to
+        "لم تتطابق تفاصيل التحديث مع هذا الجهاز، لذلك لم تُستخدم.",
+    "The update details were incomplete or wrong, so they were not used." to
+        "كانت تفاصيل التحديث ناقصة أو خاطئة، لذلك لم تُستخدم.",
+    "The update server says this device can't get updates right now. Check the licence." to
+        "يفيد خادم التحديثات بأن هذا الجهاز لا يستطيع تلقي التحديثات حاليًا. تحقق من الترخيص.",
+    "The update server didn't allow the download. Try again later." to "لم يسمح خادم التحديثات بالتنزيل. حاول لاحقًا.",
+    "The download failed. Check the internet connection and try again." to
+        "فشل التنزيل. تحقق من اتصال الإنترنت وحاول مرة أخرى.",
+    "The downloaded file was damaged, so it was deleted. Try again." to
+        "كان الملف الذي تم تنزيله تالفًا، لذلك حُذف. حاول مرة أخرى.",
+    "This update was not signed by Action Aura, so it was not installed." to
+        "لم يتم توقيع هذا التحديث من قبل أكشن أورا، لذلك لم يُثبَّت.",
+    "This update is for a different app, so it was not installed." to "هذا التحديث مخصص لتطبيق آخر، لذلك لم يُثبَّت.",
+    "This update is not newer than the version you already have." to "هذا التحديث ليس أحدث من الإصدار الذي لديك.",
+    "The downloaded file changed before it could be installed, so it was deleted. Try again." to
+        "تغيّر الملف الذي تم تنزيله قبل تثبيته، لذلك حُذف. حاول مرة أخرى.",
+    "Android couldn't finish the install. Try again." to "تعذّر على أندرويد إكمال التثبيت. حاول مرة أخرى.",
+    "Something went wrong with the update. Try again." to "حدث خطأ في التحديث. حاول مرة أخرى.",
 )

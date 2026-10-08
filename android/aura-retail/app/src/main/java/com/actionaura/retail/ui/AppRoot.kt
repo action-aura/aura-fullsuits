@@ -197,6 +197,13 @@ fun AppRoot() {
             // loop whose first tick is one interval away).
             LicenseCheckInCoordinator.start(ctx)
 
+            // Daily "is there a newer build?" check (updates/UpdateCoordinator).
+            // CHECK ONLY -- it never downloads or installs anything by itself;
+            // an administrator presses "Update now" on Settings -> Updates.
+            // Inert on a build with no licensing URL, same as the line above,
+            // and its first tick is two minutes away so it never delays boot.
+            com.actionaura.retail.updates.UpdateCoordinator.start(ctx)
+
             // Automatic LAN hub discovery. WITHOUT THIS LINE THE ENTIRE
             // FEATURE IS DEAD CODE ON THE DEVICE, and it was: HubAutoJoin
             // Service, HubDiscovery, HubTransport and SpkiPinning all

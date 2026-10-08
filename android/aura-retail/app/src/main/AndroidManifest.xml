@@ -25,6 +25,14 @@
       (see its own comment on the battery cost).
     -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!--
+      In-app updates (updates/ApkInstaller.kt): lets this app hand a downloaded,
+      hash- and signer-checked APK to Android's PackageInstaller. Without it the
+      session is refused outright. It is NOT a grant by itself: on API 26+ the
+      user must still switch "Install unknown apps" on for this app, and the
+      Updates card sends them to exactly that screen when it is off.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <application
@@ -48,5 +56,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          Receives the PackageInstaller's progress and result. exported=false:
+          the system reaches it through the PendingIntent this app created
+          (which carries this app's own identity), so no other app can post a
+          fake "install succeeded" or a fake confirm screen into it.
+        -->
+        <receiver
+            android:name=".updates.InstallResultReceiver"
+            android:exported="false" />
     </application>
 </manifest>
