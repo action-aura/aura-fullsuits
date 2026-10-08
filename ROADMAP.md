@@ -7442,3 +7442,13 @@ first-ever silent install without /CURRENTUSER or /ALLUSERS hung in a stub test 
 upgrades, so not on its path); a different till in the same shop on an older version is not told to
 update (the confirm dialog asks the owner to update every computer); pill/progress use existing
 classes, no dedicated CSS; Arabic strings await a native reader.
+
+## CLAIM -- Owner Alembic revision after 7c41d2e9a0b5: crash reports (2026-10-08, branch feat/crash-reports)
+
+Claimed BEFORE dispatch. Owner migration chain head on this lineage (feat/retail-ux-p0 ->
+feat/update-channel -> feat/crash-reports) is 7c41d2e9a0b5 (registry_pin_reserved_for_good). The
+next revision, down_revision = '7c41d2e9a0b5', is reserved for the crash-reports wave: one new
+table owner_crash_reports. Checked every origin branch: no branch on this lineage builds on
+7c41d2e9a0b5. The master lineage carries 56216a528eff and 5de3f36f4c21 which this lineage lacks
+(the known Owner lineage split) -- whoever reconciles the two lineages must order these. No
+product (retail/clinic) schema version is used by this wave.
