@@ -16,7 +16,8 @@ from app.licensing_service.checkin import CheckInRejected, process_checkin
 from app.licensing_service.deactivation import DeactivationRejected, process_deactivation
 from app.licensing_service.health import is_service_ready, public_service_info
 from app.licensing_service.reason_codes import to_public_reason_code
-from app.licensing_service.signing import export_signed_keyset_manifest
+from app.licensing_service.signing import SigningKeyError, export_signed_keyset_manifest
+from app.releases.discovery import find_latest_release
 from app.releases.distribution import DownloadAuthorizationRejected, authorize_download, fetch_download
 
 bp = Blueprint("api_external_licensing", __name__, url_prefix="/api/licensing/v1")
@@ -251,6 +252,49 @@ def authorize_release_download():
         return _error_response(exc.internal_reason_code, exc.http_status, correlation_id)
     except Exception:
         db_session.rollback()
+        return _error_response("INTERNAL_DECISION_FAILURE", 500, correlation_id)
+
+
+@bp.route("/releases/latest", methods=["POST"])
+def latest_release():
+    """Update-channel wave. "Which release should this install be offered?"
+    Device-signature-authenticated exactly like authorize-download (shared
+    authenticate_device_request); the answer is an Owner-SIGNED descriptor, so
+    the client can verify the offered version/checksum/size came from Owner.
+    Returns metadata only -- the file itself still goes through
+    authorize-download + the single-use download token."""
+    ready, reason = is_service_ready(current_app.config["SIGNING_KEY_DIRECTORY"], replay_protection_required=current_app.config["REPLAY_PROTECTION_REQUIRED"])
+    if not ready:
+        return _error_response(reason, 503)
+
+    try:
+        ratelimit.check_and_increment("release_latest", _client_bucket())
+    except ratelimit.RateLimitExceeded as exc:
+        resp, status = _error_response("RATE_LIMITED", 429)
+        resp.headers["Retry-After"] = str(exc.retry_after_seconds)
+        return resp, status
+
+    body = _get_json_body()
+    if body is None:
+        return _error_response("INVALID_REQUEST", 400)
+    correlation_id = body.get("correlation_id") if isinstance(body, dict) else None
+
+    try:
+        return jsonify(find_latest_release(body, config=_service_config())), 200
+    except DownloadAuthorizationRejected as exc:
+        db_session.rollback()
+        if exc.internal_reason_code == "INVALID_SIGNATURE":
+            try:
+                ratelimit.check_and_increment("activation_invalid_signature", _client_bucket())
+            except ratelimit.RateLimitExceeded:
+                pass
+        return _error_response(exc.internal_reason_code, exc.http_status, correlation_id)
+    except SigningKeyError:
+        db_session.rollback()
+        return _error_response("SIGNING_KEY_UNAVAILABLE", 503, correlation_id)
+    except Exception:
+        db_session.rollback()
+        current_app.logger.exception("Internal decision failure during release discovery (request body not logged).")
         return _error_response("INTERNAL_DECISION_FAILURE", 500, correlation_id)
 
 

@@ -41,6 +41,10 @@ POLICIES: dict[str, RateLimitPolicy] = {
     # is a stronger signal of abuse than a burst of authorization requests).
     "release_download_authorize": RateLimitPolicy("release_download_authorize", max_requests=20, window_seconds=60),
     "release_download_fetch": RateLimitPolicy("release_download_fetch", max_requests=10, window_seconds=60),
+    # Update-channel wave: discovery is a daily poll per install, but many
+    # installs can share one shop/office IP (the bucket key is the client
+    # address), so the budget is sized like check-in, not like a download.
+    "release_latest": RateLimitPolicy("release_latest", max_requests=30, window_seconds=60),
 }
 
 

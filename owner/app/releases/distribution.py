@@ -15,11 +15,12 @@ Required flow (governing instruction, M11):
      storage credential to the client;
   6. every authorization and every fetch is audited.
 
-Deliberate scoping decision: the caller must already know which
-product_version_id it wants. A "what's the latest release for my product/
-platform/channel" discovery endpoint is real, useful, future work but is a
-distinct concern from authorization -- not built here, to keep this
-milestone's surface reviewable. Documented in private-distribution-contract.md.
+Scoping: authorize_download() needs the caller to already know which
+product_version_id it wants. The "what's the latest release for my product/
+platform/channel" question is answered by app/releases/discovery.py (update
+channel wave), which reuses authenticate_device_request() below so both
+endpoints authenticate identically. Documented in
+private-distribution-contract.md.
 """
 from __future__ import annotations
 
@@ -66,16 +67,27 @@ def _validate_shape(body: dict) -> None:
         raise DownloadAuthorizationRejected("INVALID_REQUEST")
 
 
-def authorize_download(body: dict, *, source_ip: str | None, config: dict) -> tuple[ReleaseDownloadAuthorization, str]:
-    """Returns (authorization_row, raw_token). raw_token is never persisted
-    (only its hash is, on the row) -- this is the one and only place it's
-    ever available; the caller (route handler) must return it to the
-    client immediately and not log it."""
-    _validate_shape(body)
+def authenticate_device_request(body: dict, *, nonce_scope: str, config: dict) -> tuple[Installation, "License"]:  # noqa: F821
+    """Proves a request really comes from a live, licensed installation.
 
+    Extracted verbatim from authorize_download() so release DISCOVERY
+    (app/releases/discovery.py) authenticates with the exact same checks, in the
+    exact same order, producing the exact same reason codes -- a second copy of
+    this block would drift the first time one of them gained a check. Order
+    matters and is preserved: timestamp window, nonce (single use), installation
+    exists, active device key, signature over the body, installation status,
+    licence status, subscription status.
+
+    `nonce_scope` keeps nonces of different endpoints in separate namespaces
+    (replay.consume_nonce is keyed on scope+nonce), so a nonce spent on a
+    discovery call cannot be used up -- or replayed -- against a download.
+
+    The caller must already have checked that installation_id, timestamp, nonce
+    and signature are present (each endpoint has its own required-field list).
+    Returns (installation, license_row); raises DownloadAuthorizationRejected.
+    """
     try:
         installation_id = uuid.UUID(str(body["installation_id"]))
-        product_version_id = uuid.UUID(str(body["product_version_id"]))
     except (ValueError, TypeError):
         raise DownloadAuthorizationRejected("INVALID_REQUEST")
 
@@ -88,7 +100,7 @@ def authorize_download(body: dict, *, source_ip: str | None, config: dict) -> tu
     except replay.ReplayError as exc:
         raise DownloadAuthorizationRejected(str(exc))
     try:
-        replay.consume_nonce(body["nonce"], scope="release_download", ttl_seconds=config["nonce_ttl_seconds"])
+        replay.consume_nonce(body["nonce"], scope=nonce_scope, ttl_seconds=config["nonce_ttl_seconds"])
     except replay.ReplayError as exc:
         raise DownloadAuthorizationRejected(str(exc))
 
@@ -126,6 +138,27 @@ def authorize_download(body: dict, *, source_ip: str | None, config: dict) -> tu
     subscription = license_row.subscription
     if subscription is not None and subscription.status in ("SUSPENDED", "EXPIRED", "CANCELLED"):
         raise DownloadAuthorizationRejected(f"SUBSCRIPTION_{subscription.status}")
+
+    return installation, license_row
+
+
+def authorize_download(body: dict, *, source_ip: str | None, config: dict) -> tuple[ReleaseDownloadAuthorization, str]:
+    """Returns (authorization_row, raw_token). raw_token is never persisted
+    (only its hash is, on the row) -- this is the one and only place it's
+    ever available; the caller (route handler) must return it to the
+    client immediately and not log it."""
+    _validate_shape(body)
+
+    # Both ids are parsed up front, exactly as before the extraction, so a
+    # malformed product_version_id is still rejected BEFORE the nonce is
+    # consumed (a bad request must not burn a nonce).
+    try:
+        uuid.UUID(str(body["installation_id"]))
+        product_version_id = uuid.UUID(str(body["product_version_id"]))
+    except (ValueError, TypeError):
+        raise DownloadAuthorizationRejected("INVALID_REQUEST")
+
+    installation, license_row = authenticate_device_request(body, nonce_scope="release_download", config=config)
 
     release = db_session.get(ProductVersion, product_version_id)
     if release is None:

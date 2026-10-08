@@ -470,6 +470,11 @@ _EXTERNAL_LICENSING_API_ENDPOINTS = (
     'api_external_licensing.check_ins',
     'api_external_licensing.deactivations',
     'api_external_licensing.fetch_release_download',
+    # Update-channel wave: release discovery. Same caller and same device
+    # signature + nonce authentication as authorize_release_download above;
+    # its client is commercial_runtime/updates (a product install), never
+    # Owner's own UI, so no url_for() can ever reach it.
+    'api_external_licensing.latest_release',
     'api_external_licensing.service_info',
     'api_external_licensing.signing_keys',
 )

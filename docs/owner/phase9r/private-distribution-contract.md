@@ -90,12 +90,55 @@ check is documented as defense in depth against a malformed
 server-stored `artifact_path` (e.g. a future import bug), not a response
 to any client input, since client input never reaches that function.
 
+## Release discovery (update-channel wave)
+
+`POST /api/licensing/v1/releases/latest` — "which release should this
+install be offered?" Code: `app/releases/discovery.py`,
+`app/releases/versioning.py`; auth is the shared
+`distribution.authenticate_device_request()` (nonce scope
+`release_latest`), so it cannot drift from `authorize-download`.
+
+Request (device-signed, same canonical-bytes Ed25519 signature as check-in):
+`contract_version`, `request_id`, `correlation_id`, `timestamp`, `nonce`,
+`installation_id`, `app_version` (strict semver), `release_channel`
+(optional, e.g. `rc`), `signature`.
+
+Response 200: `{"contract_version": "v1", "release_descriptor": {"payload":
+{...}, "signing_key_id", "algorithm": "ed25519", "signature"}}`. The
+signature is over `canonicalize_bytes(payload)` with the active Owner
+signing key, so a client verifies the offer with the trust store it already
+holds. Payload: `descriptor_version` (1), `installation_id` and `request_id`
+(echoes — the client rejects a mismatch, which stops a recorded descriptor
+being replayed), `issued_at`, `current_version`, `update_available`,
+`update_required` (offered release has `forced_upgrade_threshold` and
+current is below it), `below_min_supported` (same for
+`min_supported_version`), and `release` (`null`, or `product_version_id`,
+`version`, `build_number`, `release_channel`, `artifact_checksum_sha256`,
+`artifact_size_bytes`, `release_notes`, `published_at`). The client checks
+the downloaded file against THIS signed checksum, not against the
+`authorize-download` response.
+
+Selection: PUBLISHED rows of the licence's product and the installation's
+platform that have a checksum and size; channels = the licence's pinned
+channel only if it has one, otherwise STABLE plus the channel named by
+`release_channel` (unknown name -> STABLE only). Highest semver precedence
+wins (semver.org §11 — `1.0.0-rc.10` > `1.0.0-rc.9`, `1.0.0` >
+`1.0.0-rc.99`), tie -> higher `build_number`; offered only if strictly newer
+than `app_version`. Rows with a non-semver `version` are skipped with a
+warning. Unparseable `app_version` -> `INVALID_REQUEST` 400.
+
+Errors reuse `_error_response()` and the `authorize-download` reason codes
+and HTTP statuses; signing key unavailable -> 503. Rate-limit bucket
+`release_latest` (30/60s per client address). Discovery is not audit-logged
+per call (daily poll); one log line per call records installation, current
+and offered version. No schema change.
+
 ## Deliberate scoping decisions
 
-- The caller must already know which `product_version_id` it wants — a
-  "what's the latest for my product/platform/channel" discovery endpoint
-  is real, valuable, distinct future work, not built here, to keep this
-  milestone's surface reviewable.
+- `authorize-download` needs the caller to already know which
+  `product_version_id` it wants. The "what's the latest for my product/
+  platform/channel" question is answered by the discovery endpoint added
+  in the update-channel wave (next section).
 - Local/test storage adapter only (`app/releases/storage.py`), per the
   governing instruction's own explicit allowance. Real external
   object-storage delivery remains **NOT VERIFIED** — blocked on
