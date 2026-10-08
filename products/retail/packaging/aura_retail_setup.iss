@@ -42,6 +42,16 @@ DisableProgramGroupPage=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
+; Update channel: the in-app updater runs this installer silently WHILE
+; AuraRetail.exe is still open. CloseApplications=force (not the default "yes")
+; closes it without a prompt a silent run could never answer, and the filter
+; limits that to our own exe so nothing else on the machine is touched.
+; RestartApplications=no: Inno's own restart only reopens apps it closed via
+; the Restart Manager and is unreliable for a PyInstaller exe -- the [Run]
+; entry below relaunches deterministically instead.
+CloseApplications=force
+CloseApplicationsFilter=AuraRetail.exe
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -59,6 +69,19 @@ Name: "{autodesktop}\Aura Retail"; Filename: "{app}\AuraRetail.exe"; Tasks: desk
 
 [Run]
 Filename: "{app}\AuraRetail.exe"; Description: "Launch Aura Retail now"; Flags: postinstall nowait skipifsilent
+; Update channel: a silent install skips the postinstall entry above
+; (skipifsilent), so the updater passes /RELAUNCH=1 and THIS entry starts the
+; new build. Not "postinstall" on purpose -- postinstall entries are shown as a
+; checkbox on the last page and are skipped when silent; a plain [Run] entry
+; with a Check runs in both modes. A normal interactive install passes no
+; /RELAUNCH, so it never double-launches alongside the checkbox.
+; runasoriginaluser: a per-machine update (/ALLUSERS) runs this installer
+; ELEVATED, and a non-postinstall [Run] entry inherits that by default. Aura
+; would then start as the administrator -- and if the admin password typed
+; at the UAC prompt belongs to a different Windows account, it would open that
+; account's %LOCALAPPDATA%\AuraRetail: an empty shop. postinstall entries get
+; this flag implicitly; this one must say it.
+Filename: "{app}\AuraRetail.exe"; Flags: nowait runasoriginaluser; Check: ShouldRelaunch
 
 [UninstallRun]
 ; Best-effort: make sure no lingering AuraRetail.exe (with its embedded
@@ -66,6 +89,12 @@ Filename: "{app}\AuraRetail.exe"; Description: "Launch Aura Retail now"; Flags: 
 Filename: "{cmd}"; Parameters: "/C taskkill /IM AuraRetail.exe /F"; Flags: runhidden skipifdoesntexist; RunOnceId: "KillAuraRetail"
 
 [Code]
+// True only when the in-app updater started this installer (/RELAUNCH=1).
+function ShouldRelaunch(): Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;
+
 // Custom "also delete my data" step -- unchecked/skipped by default, and
 // even when the user opts in, requires an explicit second confirmation
 // before anything under %LOCALAPPDATA%\AuraRetail is touched. This mirrors

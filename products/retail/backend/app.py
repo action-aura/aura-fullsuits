@@ -199,6 +199,8 @@ from api.retail_api import retail_bp, _ensure_credit_schema, install_void_revers
 from api.import_api import import_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
+from commercial_runtime.updates.routes import build_update_service, make_updates_blueprint
+from commercial_runtime.updates.scheduler import UpdateScheduler
 from commercial_runtime.identity.device_routes import device_bp
 from commercial_runtime.einvoicing.routes import make_einvoicing_blueprint
 from commercial_runtime.einvoicing.worker import OutboxWorker
@@ -644,6 +646,41 @@ app.register_blueprint(make_licensing_blueprint(
     # computer with no id yet simply sends none.
     registry_device_id_provider=_peek_registry_device_id,
 ))
+
+# Update channel (Windows desktop only). The SAME licensing directory, licence
+# database, trust store and device identity the blueprint above uses -- one
+# identity, so Owner's device-signed discovery verifies as the installation it
+# already knows. With no Owner URL (the default) `_update_service` is None:
+# /api/updates/status answers enabled=false, the actions answer 409, no
+# scheduler is built and no network call can ever be made. Android is excluded
+# on purpose: its device key lives in Kotlin and its installer path differs,
+# so it is a later wave, not a half-working one here.
+_update_service = build_update_service(
+    app_data_dir=str(Path(DATABASE_DIR).parent),
+    owner_base_url=OWNER_LICENSING_BASE_URL if LICENSING_PLATFORM != 'ANDROID' else '',
+    verify_tls=OWNER_LICENSING_VERIFY_TLS,
+    timeout_seconds=OWNER_LICENSING_TIMEOUT_SECONDS,
+    device_identity_factory=_licensing_device_identity_factory,
+    release_channel='rc',
+    app_version=APP_VERSION,
+)
+_update_scheduler = UpdateScheduler(_update_service) if _update_service is not None else None
+app.register_blueprint(make_updates_blueprint(_update_service, current_version=APP_VERSION))
+
+
+def _start_update_polling():
+    """Boot seam (init_app): tidy the updates folder, then arm the daily
+    check. Never raises -- a broken update channel must not stop a till
+    booting. A no-op when updates are off (no Owner URL)."""
+    if _update_service is None or _update_scheduler is None:
+        return
+    try:
+        _update_service.startup()
+        _update_scheduler.start()
+    except Exception:
+        logging.getLogger(__name__).warning(
+            'Update channel failed to start; this till keeps booting.', exc_info=True)
+
 
 # Multi-device sync foundation (2026-08-06), Task 5: the background push/pull
 # loop. Reuses the EXACT same licensing_dir/db_path/device-identity factory
@@ -3039,6 +3076,7 @@ def init_app():
     _resume_einvoicing_workers()
     _resume_notifications_workers()
     _resume_whatsapp_workers()
+    _start_update_polling()
     global _INIT_APP_HAS_RUN
     _INIT_APP_HAS_RUN = True
     return app

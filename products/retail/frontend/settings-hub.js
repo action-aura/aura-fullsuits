@@ -36,7 +36,10 @@
   const toast = (msg, type) => { if (window.SubsystemApp && SubsystemApp.showToast) SubsystemApp.showToast(msg, type); };
 
   // Section ids are a contract with the palette (palette.js) and the tests.
-  const SECTION_ORDER = ['shop-receipt', 'tax', 'credit', 'tills', 'extras', 'hardware', 'display', 'team', 'data-backup', 'plan-devices'];
+  // 'updates' sits right after 'data-backup' (both are "look after this
+  // installation"), but unlike every other id it is only LISTED when the update
+  // channel is switched on -- see sections() and refreshUpdatesStatus().
+  const SECTION_ORDER = ['shop-receipt', 'tax', 'credit', 'tills', 'extras', 'hardware', 'display', 'team', 'data-backup', 'updates', 'plan-devices'];
 
   // ── who is asking ──────────────────────────────────────────────────────────
   // Same two axes _renderAdminCenter uses. `!window.SubsystemApp` fails OPEN,
@@ -77,6 +80,9 @@
     ready: false,        // true once the baseline is taken; refreshBar records only then
     carry: null,         // unsaved values to bring back across a theme / language re-render
     holding: {},         // group name -> true while its fields are still loading (never "dirty")
+    updates: null,       // last GET /api/updates/status body WHEN enabled, else null (section hidden)
+    updBusy: null,       // 'check' | 'start' while one of the Updates buttons is working
+    updTimer: null,      // progress poll while a download runs
   };
 
   // `section` says which left-hand section a group's fields live in, so the bar
@@ -1910,6 +1916,8 @@
       if (window.RetailEmployees && typeof RetailEmployees.render === 'function') await RetailEmployees.render(host);
     } else if (id === 'data-backup') {
       await R()._renderBackupExport(host);
+    } else if (id === 'updates') {
+      await renderUpdatesPane(host, token);
     } else if (id === 'plan-devices') {
       if (window.PlanDevices && typeof PlanDevices.render === 'function') await PlanDevices.render(host);
       else host.innerHTML = '';
@@ -1925,8 +1933,239 @@
       if (b.dataset.sh === id) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
     });
     S.root.querySelectorAll('[data-sh-pane]').forEach((p) => { p.hidden = p.dataset.shPane !== id; });
+    // The Updates pane shows live facts (a download may have finished, or a
+    // check run from the "Update ready" pill), so it is rebuilt on every visit
+    // instead of being built once like the form panes.
+    if (id === 'updates') S.built[id] = false;
     buildPane(id, S.token);
     if (id === 'shop-receipt') schedulePreview(0);
+  }
+
+  // ── Updates (update channel) ───────────────────────────────────────────────
+  // THE SECTION EXISTS ONLY WHEN THE CHANNEL IS ON. GET /api/updates/status says
+  // enabled:false for an install with no Owner URL (the default) or one that
+  // never activated; a section whose every button answers 409 would be a dead
+  // end, so it is not listed at all (sections() filters it out). Owner-only:
+  // the three action routes are administrator-only server-side (the same guard
+  // backup/restore uses), so offering the door to anyone else would only open
+  // onto 403s.
+  //
+  // The flow the person sees: Check -> "A new version is ready" -> Update now ->
+  // progress bar -> a confirm that says plainly what is about to happen ->
+  // install. The window is closed by us (pywebview quit_app) once the installer
+  // has been launched; the installer force-closes it anyway if that is missing.
+  const UPDATE_POLL_MS = 1000;
+  const UPDATE_QUIT_DELAY_MS = 1500;   // lets "Installing..." show before the window goes
+
+  async function refreshUpdatesStatus() {
+    let body = null;
+    try {
+      if (typeof R()._get === 'function') body = await R()._get('/api/updates/status');
+    } catch (e) { body = null; }
+    S.updates = (body && body.enabled === true) ? body : null;
+    return S.updates;
+  }
+
+  // One t() literal per message (not a lookup table of keys) so the string
+  // catalogs and the scanners can see every sentence.
+  function updateErrorText(code) {
+    switch (code) {
+      case 'NOT_ACTIVATED': return t('This computer is not connected to your Aura account yet. Activate your licence first.');
+      case 'OWNER_UNREACHABLE': return t('Could not reach Aura right now. Check the internet and try again.');
+      case 'OWNER_REFUSED': return t('Aura did not answer this computer. Check your licence and try again.');
+      case 'DESCRIPTOR_UNTRUSTED':
+      case 'DESCRIPTOR_MISMATCH':
+      case 'DESCRIPTOR_INVALID': return t('The update answer could not be trusted, so nothing was downloaded. Try again later.');
+      case 'CHECK_FAILED': return t('Could not check for updates. Try again.');
+      case 'DOWNLOAD_NOT_AUTHORIZED': return t('Aura did not allow this download. Check your licence and try again.');
+      case 'DOWNLOAD_FAILED': return t('The download did not finish. Check the internet and try again.');
+      case 'DOWNLOAD_TOO_LARGE':
+      case 'DOWNLOAD_CORRUPT': return t('The downloaded file was damaged, so it was deleted. Try again.');
+      case 'INSTALLER_TAMPERED': return t('The downloaded file changed after it was checked, so it was deleted and not installed. Download it again.');
+      case 'INSTALL_LAUNCH_FAILED': return t('Could not start the installer. Try again, or ask for help.');
+      case 'UNSUPPORTED_PLATFORM': return t('This copy of Aura Retail cannot update itself.');
+      case 'NOT_READY': return t('The update is not ready yet.');
+      case 'BUSY': return t('An update is already in progress.');
+      case 'NOTHING_TO_DOWNLOAD': return t('There is nothing to download. Check for updates first.');
+      case 'UPDATES_DISABLED': return t('Updates are not turned on for this computer.');
+      default: return t('Something went wrong with the update. Try again.');
+    }
+  }
+
+  function fmtMegabytes(bytes) { return (Number(bytes) / 1048576).toFixed(1) + ' ' + t('MB'); }
+  function fmtChecked(iso) {
+    const d = iso ? new Date(iso) : null;
+    if (!d || isNaN(d.getTime())) return t('Not checked yet');
+    return d.toLocaleString((window.AuraI18n && AuraI18n.current === 'ar') ? 'ar' : 'en-GB');
+  }
+
+  function updatesBodyHtml(st) {
+    const av = st.available;
+    const busy = !!S.updBusy || st.phase === 'downloading' || st.phase === 'installing';
+    const out = [];
+    out.push(`<p class="sh-card-lead">${esc(t('This version:'))} <bdi dir="ltr">${esc(st.current_version)}</bdi><br>` +
+      `${esc(t('Last checked:'))} ${esc(fmtChecked(st.checked_at))}</p>`);
+
+    if (st.phase === 'installing') {
+      out.push(`<p class="sh-note" role="status">${esc(t('Installing. Aura Retail will close and open again by itself.'))}</p>`);
+    } else if (st.phase === 'downloading') {
+      const p = st.progress || {};
+      const pct = p.total ? Math.min(100, Math.floor((Number(p.received) / Number(p.total)) * 100)) : 0;
+      out.push(`<p class="sh-note" role="status">${esc(t('Downloading the update…'))} ${pct}%</p>` +
+        `<progress id="updates-progress" max="100" value="${pct}" style="inline-size:100%" aria-label="${esc(t('Downloading the update…'))}"></progress>`);
+    } else if (av) {
+      out.push(`<div class="sh-upd-offer"><h4 class="sh-card-title">${esc(t('A new version is ready'))}</h4>` +
+        `<p class="sh-card-lead">${esc(t('New version:'))} <bdi dir="ltr">${esc(av.version)}</bdi><br>` +
+        `${esc(t('Download size:'))} ${esc(fmtMegabytes(av.size_bytes))}</p>` +
+        // Release notes are Owner data in whatever language Action Aura wrote
+        // them; dir="auto" lets an English note read left-to-right inside the
+        // Arabic page instead of having its full stop thrown to the wrong end.
+        (av.release_notes ? `<p class="sh-card-lead"><strong>${esc(t("What's new"))}</strong><br><bdi dir="auto">${esc(av.release_notes)}</bdi></p>` : '') +
+        (av.below_min_supported ? `<p class="sh-note" role="alert">${esc(t('This version is no longer supported. Please update now.'))}</p>`
+          : (av.required ? `<p class="sh-note" role="alert">${esc(t('This update is required. Please install it as soon as you can.'))}</p>` : '')) +
+        `</div>`);
+      if (st.phase === 'ready' && !st.can_install) {
+        out.push(`<p class="sh-note">${esc(t('This copy of Aura Retail cannot update itself.'))}</p>`);
+      }
+    } else if (st.phase !== 'error') {
+      out.push(`<p class="sh-note" role="status">${esc(t('You have the newest version.'))}</p>`);
+    }
+
+    if (st.error_code) {
+      out.push(`<p class="sh-note" role="alert" id="updates-error">${esc(updateErrorText(st.error_code))}</p>`);
+    }
+
+    const buttons = [];
+    if (av && st.phase === 'ready' && st.can_install) {
+      buttons.push(`<button type="button" class="ret-btn ret-btn-primary" data-upd="install"${busy ? ' disabled' : ''}>${esc(t('Install now'))}</button>`);
+    } else if (av && st.phase !== 'ready' && st.phase !== 'downloading' && st.phase !== 'installing') {
+      buttons.push(`<button type="button" class="ret-btn ret-btn-primary" data-upd="start"${busy ? ' disabled' : ''}>${esc(t('Update now'))}</button>`);
+    }
+    buttons.push(`<button type="button" class="ret-btn ret-btn-ghost" data-upd="check"${busy ? ' disabled' : ''}>` +
+      `${esc(S.updBusy === 'check' ? t('Checking for updates…') : t('Check for updates'))}</button>`);
+    out.push(`<div class="sh-row" style="gap:10px;flex-wrap:wrap">${buttons.join('')}</div>`);
+    return out.join('');
+  }
+
+  function paintUpdates() {
+    const body = $('updates-body');
+    if (!body) return;
+    body.innerHTML = S.updates ? updatesBodyHtml(S.updates) : '';
+  }
+
+  function applyUpdatesStatus(body) {
+    // A 409 body ({error_code}) has no `enabled`; keep what we know and let the
+    // caller surface the code. Only a full status replaces the cache.
+    if (body && body.enabled === true) S.updates = body;
+  }
+
+  async function renderUpdatesPane(host, token) {
+    host.innerHTML = `<div class="sub-chart-card" id="updates-card">
+        <h3 class="sh-card-title">${esc(t('Updates'))}</h3>
+        <p class="sh-card-lead">${esc(t('Keep Aura Retail up to date. Updates come from Action Aura and are checked before they are installed.'))}</p>
+        <div id="updates-body"></div>
+      </div>`;
+    await refreshUpdatesStatus();
+    if (S.token !== token) return;
+    paintUpdates();
+    if (S.updates && S.updates.phase === 'downloading') pollUpdates(token);
+  }
+
+  // Polls while a download runs; stops by itself when the hub is re-rendered or
+  // left (S.token / isConnected), and hands over to the install confirm when
+  // the file is verified.
+  function pollUpdates(token) {
+    clearTimeout(S.updTimer);
+    const tick = async () => {
+      if (S.token !== token || !S.root || !S.root.isConnected) return;
+      await refreshUpdatesStatus();
+      if (S.token !== token) return;
+      paintUpdates();
+      const st = S.updates;
+      if (st && st.phase === 'downloading') { S.updTimer = setTimeout(tick, UPDATE_POLL_MS); return; }
+      if (st && st.phase === 'ready' && st.can_install) confirmInstall();
+    };
+    S.updTimer = setTimeout(tick, UPDATE_POLL_MS);
+  }
+
+  async function updatesCheck() {
+    S.updBusy = 'check';
+    paintUpdates();
+    try {
+      const body = await R()._post('/api/updates/check', {});
+      applyUpdatesStatus(body);
+      if (body && body.error_code) toast(updateErrorText(body.error_code), 'error');
+      else if (body && body.enabled && !body.available) toast(t('You have the newest version.'), 'success');
+    } catch (e) {
+      console.error(e);
+      toast(t('Could not check for updates. Try again.'), 'error');
+    } finally {
+      S.updBusy = null;
+      paintUpdates();
+    }
+  }
+
+  async function updatesStart() {
+    S.updBusy = 'start';
+    paintUpdates();
+    const token = S.token;
+    try {
+      const body = await R()._post('/api/updates/download', {});
+      if (body && body.error_code) {
+        toast(updateErrorText(body.error_code), 'error');
+        await refreshUpdatesStatus();
+      } else {
+        applyUpdatesStatus(body);
+        pollUpdates(token);
+      }
+    } catch (e) {
+      console.error(e);
+      toast(t('Something went wrong with the update. Try again.'), 'error');
+    } finally {
+      S.updBusy = null;
+      paintUpdates();
+    }
+  }
+
+  async function confirmInstall() {
+    const yes = await R()._confirm({
+      title: t('Install the update?'),
+      message: t('Aura Retail will close for about a minute and then open again. Finish the sale you are working on first. Every other computer in this shop needs the update too, so update each one.'),
+      confirmLabel: t('Install now'),
+      cancelLabel: t('Not now'),
+    });
+    if (!yes) { paintUpdates(); return; }
+    try {
+      const body = await R()._post('/api/updates/install', {});
+      if (body && body.result === 'INSTALLING') {
+        S.updates = Object.assign({}, S.updates, { phase: 'installing', error_code: null });
+        paintUpdates();
+        setTimeout(quitAppForInstall, UPDATE_QUIT_DELAY_MS);
+        return;
+      }
+      toast(updateErrorText(body && body.error_code), 'error');
+    } catch (e) {
+      console.error(e);
+      toast(t('Something went wrong with the update. Try again.'), 'error');
+    }
+    await refreshUpdatesStatus();
+    paintUpdates();
+  }
+
+  function quitAppForInstall() {
+    // The installer was already started and will force-close the app if this
+    // is unavailable (browser fallback); closing ourselves just makes it tidy.
+    try {
+      const api = window.pywebview && window.pywebview.api;
+      if (api && typeof api.quit_app === 'function') api.quit_app();
+    } catch (e) { console.error(e); }
+  }
+
+  function updatesAction(which) {
+    if (which === 'check') return updatesCheck();
+    if (which === 'start') return updatesStart();
+    if (which === 'install') return confirmInstall();
+    return undefined;
   }
 
   // ── the public surface ─────────────────────────────────────────────────────
@@ -1952,9 +2191,12 @@
       { id: 'display', label: t('Display'), visible: dev },
       { id: 'team', label: t('Team'), visible: dev },
       { id: 'data-backup', label: t('Data & backup'), visible: owner },
+      // Not merely invisible: absent from the list unless the update channel is
+      // on, so the palette and the nav never mention a section that cannot work.
+      { id: 'updates', label: t('Updates'), visible: owner && !!S.updates },
       { id: 'plan-devices', label: t('Plan & devices'), visible: owner && !!window.PlanDevices },
     ];
-    return SECTION_ORDER.map((id) => list.find((s) => s.id === id));
+    return SECTION_ORDER.map((id) => list.find((s) => s.id === id)).filter((s) => s.id !== 'updates' || s.visible);
   }
 
   function open(id) {
@@ -1976,6 +2218,9 @@
         message: t('Settings is limited to the store owner and delegated managers. Open the till to start ringing sales.'),
       });
     }
+    // Ask once per render whether the update channel is on: it decides whether
+    // the Updates section is listed. A local call, not Owner.
+    if (isOwner()) await refreshUpdatesStatus(); else S.updates = null;
     const token = (S.token += 1);
     const carry = takeCarry();
     S.ready = false;
@@ -2105,6 +2350,7 @@
       S.root.querySelectorAll('[data-ui-scale]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.uiScale === el.dataset.uiScale)));
       return;
     }
+    if (el.dataset.upd) { updatesAction(el.dataset.upd); return; }
     if (el.dataset.sh) { showSection(el.dataset.sh); return; }
     if (el.dataset.shGoto) { showSection(el.dataset.shGoto); return; }
     if (el.id === 'sh-save') { save(); return; }
@@ -2131,5 +2377,5 @@
     save();
     return true;
   }
-  window.SettingsHub = { render, sections, open, sampleSale, retryAfterRelogin, hasUnsaved: hubIsDirty };
+  window.SettingsHub = { render, sections, open, sampleSale, retryAfterRelogin, hasUnsaved: hubIsDirty, refreshUpdatesStatus };
 })();

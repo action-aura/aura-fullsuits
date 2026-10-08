@@ -7,12 +7,14 @@ duplicated per-platform rather than shared.
 """
 from __future__ import annotations
 
+import os
 import secrets
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional, Protocol
+from typing import Callable, Optional, Protocol
+from urllib.parse import quote
 
 import requests
 
@@ -55,6 +57,16 @@ def _new_nonce() -> str:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _remove_quietly(path) -> None:
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # Never let cleanup mask the real failure that got us here.
+        pass
 
 
 @dataclass
@@ -157,6 +169,122 @@ class LicensingClient:
             "idempotency_key": idempotency_key,
         }
         return self._post_signed("/deactivations", body, signer)
+
+    def find_latest_release(
+        self,
+        *,
+        installation_id: str,
+        app_version: str,
+        release_channel: Optional[str],
+        signer: DeviceSigner,
+        request_id: Optional[str] = None,
+    ) -> dict:
+        """Update channel: "what is the newest release I may install?".
+
+        Device-signed like a check-in. `request_id` is optional ONLY so the
+        caller can remember it: Owner echoes it inside the signed release
+        descriptor, and the updates service refuses a descriptor whose echo
+        does not match (a captured old answer cannot be replayed as a new one).
+        """
+        body = {
+            "contract_version": CONTRACT_VERSION,
+            "request_id": request_id or str(uuid.uuid4()),
+            "correlation_id": str(uuid.uuid4()),
+            "timestamp": _now_iso(),
+            "nonce": _new_nonce(),
+            "installation_id": installation_id,
+            "app_version": app_version,
+            "release_channel": release_channel,
+        }
+        return self._post_signed("/releases/latest", body, signer)
+
+    def authorize_release_download(
+        self,
+        *,
+        installation_id: str,
+        product_version_id: str,
+        signer: DeviceSigner,
+        request_id: Optional[str] = None,
+    ) -> dict:
+        """Asks Owner for a short-lived, SINGLE-USE download token."""
+        body = {
+            "contract_version": CONTRACT_VERSION,
+            "request_id": request_id or str(uuid.uuid4()),
+            "correlation_id": str(uuid.uuid4()),
+            "timestamp": _now_iso(),
+            "nonce": _new_nonce(),
+            "installation_id": installation_id,
+            "product_version_id": product_version_id,
+        }
+        return self._post_signed("/releases/authorize-download", body, signer)
+
+    def download_release(
+        self,
+        token: str,
+        dest_path,
+        *,
+        expected_size: int,
+        chunk: int = 1024 * 1024,
+        progress: Optional[Callable[[int], None]] = None,
+    ) -> None:
+        """Streams the installer to `dest_path`.
+
+        NO RETRY, deliberately, unlike every other call on this client: the
+        token is single-use, so the moment Owner has started serving it a
+        second attempt can only fail. A failed download goes back to the
+        caller, who asks for a fresh token.
+
+        `expected_size` is a ceiling, not a hint: a server that sends more than
+        the signed descriptor promised is misbehaving (or being impersonated)
+        and must not be allowed to fill the disk. The partial file is deleted
+        on EVERY failure path, so a half-written installer is never left
+        lying around looking like a candidate.
+        """
+        url = self._config.base_url.rstrip("/") + "/releases/download/" + quote(str(token), safe="")
+        try:
+            response = self._session.request(
+                "GET",
+                url,
+                stream=True,
+                timeout=(self._config.timeout_seconds, max(self._config.timeout_seconds, 60.0)),
+                verify=self._config.verify_tls,
+            )
+        except requests.exceptions.SSLError as exc:
+            raise NetworkError("TLS_VERIFICATION_FAILED", str(exc)) from exc
+        except requests.exceptions.RequestException as exc:
+            raise NetworkError("NETWORK_UNAVAILABLE", str(exc)) from exc
+
+        received = 0
+        try:
+            if response.status_code != 200:
+                raise LicensingClientError("DOWNLOAD_REFUSED", f"HTTP {response.status_code}")
+            declared = response.headers.get("Content-Length")
+            if declared and declared.isdigit() and int(declared) > expected_size:
+                raise LicensingClientError(
+                    "DOWNLOAD_TOO_LARGE", f"server announced {declared} bytes, ceiling is {expected_size}"
+                )
+            with open(dest_path, "wb") as out:
+                for block in response.iter_content(chunk_size=chunk):
+                    if not block:
+                        continue
+                    received += len(block)
+                    if received > expected_size:
+                        raise LicensingClientError(
+                            "DOWNLOAD_TOO_LARGE", f"more than {expected_size} bytes arrived"
+                        )
+                    out.write(block)
+                    if progress is not None:
+                        progress(received)
+        except requests.exceptions.RequestException as exc:
+            _remove_quietly(dest_path)
+            raise NetworkError("NETWORK_UNAVAILABLE", str(exc)) from exc
+        except BaseException:
+            _remove_quietly(dest_path)
+            raise
+        finally:
+            close = getattr(response, "close", None)
+            if close is not None:
+                close()
 
     def fetch_signing_keys(self) -> dict:
         return self._get("/signing-keys")

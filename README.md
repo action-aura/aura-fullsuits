@@ -34,8 +34,14 @@ Four things worth knowing before you run it, none of them discovered later:
   `%LOCALAPPDATA%\AuraRetail`, and a normal uninstall does not touch it, so
   reinstalling loses nothing. Deleting it is a separate opt-in step that asks
   twice.
-- **There is no update channel.** A later build cannot reach an existing
-  install by itself; you install the new one over the top.
+- **Updates (Windows desktop, opt-in).** An install connected to an Owner
+  Control Center checks once a day for a newer published build and shows it to
+  the owner in Settings > Updates; "Update now" downloads it, checks it against
+  the Owner-signed checksum, installs it silently and reopens the app. With no
+  Owner configured (the default) nothing is checked and nothing is shown.
+  Android is not covered yet: a phone is still updated by installing the new
+  APK. See `commercial_runtime/updates/` and
+  `docs/owner/phase9r/private-distribution-contract.md`.
 
 To build the installer yourself, from the repository root:
 

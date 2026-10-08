@@ -1978,6 +1978,7 @@ const SubsystemApp = {
     LogoSystem.init();
     this._startSyncHealthPoll();
     this._startLicenseCheckInPoll();
+    this._startUpdatePoll();
   },
 
   exit() {
@@ -5473,6 +5474,112 @@ const SubsystemApp = {
 
   _stopLicenseCheckInPoll() {
     if (this._licenseCheckInTimer) { clearInterval(this._licenseCheckInTimer); this._licenseCheckInTimer = null; }
+  },
+
+  // ── Update channel: the "Update ready" pill ────────────────────────────────
+  // The daily Owner check happens in the BACKEND (commercial_runtime/updates);
+  // this only reads its local answer (GET /api/updates/status), so polling it is
+  // cheap and never touches the network. Shown to the administrator only -- the
+  // three update actions are administrator-only server-side, so a pill for
+  // anyone else would lead to a door that says 403. It sits in the header next
+  // to the search control (same look, no new CSS) rather than floating over the
+  // till, where a bottom overlay can cost a sale (see _reflowBottomOverlays).
+  UPDATE_POLL_MS: 10 * 60 * 1000,
+  _updatePillDismissed: null,       // the version the person hid; this page load only
+  _updatePollTimer: null,
+  _updatePollDisabled: false,
+
+  // The decision, separated from the DOM so it can be tested on its own.
+  // Deny: not an administrator, channel off, nothing on offer, a download or
+  // install already running (the Updates screen shows that), or this exact
+  // version was dismissed. A NEWER version than the dismissed one shows again.
+  _updatePillModel(status) {
+    if (this.role !== 'admin') return { show: false };
+    if (!status || status.enabled !== true || !status.available) return { show: false };
+    if (status.phase === 'installing' || status.phase === 'downloading') return { show: false };
+    const version = String(status.available.version || '');
+    if (!version || version === this._updatePillDismissed) return { show: false };
+    return { show: true, version };
+  },
+
+  _startUpdatePoll() {
+    if (this.role !== 'admin' || this._updatePollDisabled) return;
+    if (this._updatePollTimer) {
+      // launch() re-runs on a language switch: repaint the pill in the new language.
+      this._pollUpdates();
+      return;
+    }
+    this._pollUpdates();
+    this._updatePollTimer = setInterval(() => this._pollUpdates(), this.UPDATE_POLL_MS);
+  },
+
+  _stopUpdatePoll() {
+    if (this._updatePollTimer) { clearInterval(this._updatePollTimer); this._updatePollTimer = null; }
+    this._renderUpdatePill(null);
+  },
+
+  async _pollUpdates() {
+    let status = null;
+    try {
+      const res = await fetch('/api/updates/status', { credentials: 'include', cache: 'no-store' });
+      if (!res.ok) return;                          // transient -- the next tick asks again
+      status = await res.json();
+    } catch (e) { return; }                          // a background poll must never break the app
+    if (status && status.enabled === false && status.reason_disabled === 'OWNER_NOT_CONFIGURED') {
+      // No Owner URL cannot change without a restart: stop asking, zero cost
+      // for an install that never opted in. (NOT_ACTIVATED is different -- it
+      // flips the moment the shop activates -- so that one keeps polling.)
+      this._updatePollDisabled = true;
+      this._stopUpdatePoll();
+      return;
+    }
+    this._renderUpdatePill(status);
+  },
+
+  _renderUpdatePill(status) {
+    const model = this._updatePillModel(status);
+    let wrap = document.getElementById('aura-update-pill-wrap');
+    if (!model.show) { if (wrap) wrap.remove(); return; }
+    const host = document.querySelector('.sub-header-right');
+    if (!host) return;                               // shell not on screen (login / licensing page)
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.id = 'aura-update-pill-wrap';
+      wrap.style.display = 'inline-flex';
+      wrap.style.alignItems = 'center';
+      wrap.style.gap = '4px';
+      host.insertBefore(wrap, host.firstChild);
+    }
+    wrap.dataset.version = model.version;
+    const icon = window.AuraIcons ? AuraIcons.render('download', 15) : '⬇';
+    wrap.innerHTML = `
+      <button type="button" class="sub-palette-trigger" id="aura-update-pill"
+         title="${t('A new version is ready to install. Open Updates.')}" aria-label="${t('Update ready')}"
+         onclick="SubsystemApp._openUpdates()">
+        <span class="sub-palette-trigger-icon" aria-hidden="true">${icon}</span>
+        <span class="sub-palette-trigger-text">${t('Update ready')}</span>
+      </button>
+      <button type="button" class="sub-palette-trigger" id="aura-update-pill-dismiss"
+         title="${t('Hide until next time')}" aria-label="${t('Hide until next time')}"
+         onclick="SubsystemApp._dismissUpdatePill()">
+        <span aria-hidden="true">×</span>
+      </button>`;
+  },
+
+  _dismissUpdatePill() {
+    const wrap = document.getElementById('aura-update-pill-wrap');
+    if (!wrap) return;
+    this._updatePillDismissed = wrap.dataset.version || null;
+    wrap.remove();
+  },
+
+  async _openUpdates() {
+    const hub = window.SettingsHub;
+    if (!hub) return;
+    // The hub only lists "Updates" once it has asked the backend; ask now so a
+    // click before Settings was ever opened still lands on the section.
+    try { if (typeof hub.refreshUpdatesStatus === 'function') await hub.refreshUpdatesStatus(); } catch (e) { /* open() decides */ }
+    hub.open('updates');
   },
 
   async _pollLicenseCheckIn() {

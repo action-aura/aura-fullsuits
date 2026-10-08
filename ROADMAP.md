@@ -7406,3 +7406,39 @@ RESIDUALS (recorded, not fixed): a computer whose clock runs far ahead wins conc
 rows carry no ancestry, is not recorded as a clash; a sale rung before a promotion arrived is not
 re-priced; WhatsApp receipt text does not name the promotion (modal + printed slip do); Arabic
 wording of the new sentences needs a native reader.
+
+
+## UPDATE-CHANNEL wave CASHED IN (2026-10-08, branch feat/update-channel)
+
+Closes README's "There is no update channel. A later build cannot reach an existing install by
+itself." Windows desktop Retail only; Android is a later wave (its device key lives in Kotlin and
+it needs REQUEST_INSTALL_PACKAGES + FileProvider). No schema version used (Owner columns already
+existed; retail.db untouched).
+
+Owner: POST /api/licensing/v1/releases/latest (owner/app/releases/discovery.py), device-signed,
+authentication shared verbatim with authorize-download (authenticate_device_request), answer is an
+Owner-SIGNED descriptor bound to the installation id and request id. Real semver precedence
+(owner/app/releases/versioning.py; twin in commercial_runtime/updates/versioning.py, same vectors).
+Product: commercial_runtime/updates (descriptor verify fails closed; download hashed against the
+SIGNED checksum, re-hashed right before launch; installer started detached with /VERYSILENT
+/FORCECLOSEAPPLICATIONS /RELAUNCH=1, plus /ALLUSERS when the install dir is not writable);
+/api/updates/{status,check,download,install}, actions admin-only (backup-restore guard); daily
+check only (never auto-installs); Settings > Updates + "Update ready" pill, EN + AR.
+Installer: CloseApplications=force, relaunch [Run] entry gated on /RELAUNCH=1 with
+runasoriginaluser (orchestrator review: without it an elevated update reopens Aura as the UAC
+admin -- a different account opens an empty shop).
+
+Proved: owner discovery 36, cross-stack (real product client through real Owner routes: check ->
+authorize -> download -> verify -> install, plus refusal under an untrusted key) 2, updates +
+licensing_contracts 32 files, full retail 410 files 409 passed -- the 1 red is
+retail_owner_endpoint_baked_url_test (gitignored trust_anchor.json absent in a fresh worktree;
+38 passed with it copied in, then removed). Mutation proofs per guard in the commit messages.
+Installer compiled with ISCC and an upgrade closed + relaunched a stub exe.
+
+RESIDUALS (recorded, not fixed): Android updates; crash reporting (separate item); no operator
+script yet to upload an installer into Owner's RELEASE_ARTIFACT_DIRECTORY and publish it (import
++ publish exist as Owner CLI/UI); Owner's fetch_download reads the whole artifact into memory;
+first-ever silent install without /CURRENTUSER or /ALLUSERS hung in a stub test (the updater only
+upgrades, so not on its path); a different till in the same shop on an older version is not told to
+update (the confirm dialog asks the owner to update every computer); pill/progress use existing
+classes, no dedicated CSS; Arabic strings await a native reader.

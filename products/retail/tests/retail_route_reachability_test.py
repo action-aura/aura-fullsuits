@@ -139,6 +139,13 @@ OTHER_BLUEPRINTS = (
     SUITE_ROOT / 'commercial_runtime' / 'backup' / 'routes.py',
     SUITE_ROOT / 'commercial_runtime' / 'notifications' / 'routes.py',
     SUITE_ROOT / 'commercial_runtime' / 'notifications' / 'whatsapp_routes.py',
+    # Update channel (feat/update-channel): customer-facing, so a screen must
+    # call every route. Note the heuristic's limit for THIS blueprint: the key of
+    # '/status' is the common word 'status', which any client file contains, so
+    # that route is "reached" trivially. check/download/install are distinctive;
+    # their real doorway is the Settings > Updates section (settings-hub.js),
+    # asserted by retail_update_ui_test.js, which reads the exact URLs.
+    SUITE_ROOT / 'commercial_runtime' / 'updates' / 'routes.py',
 )
 
 

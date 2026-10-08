@@ -151,6 +151,11 @@ SUITES = {
     # Same rationale as licensing_contracts above: its own key, own
     # fast-growing test surface, mirrors the existing split.
     'einvoicing': ROOT / 'commercial_runtime' / 'einvoicing' / 'tests',
+    # Update channel (feat/update-channel): same rationale -- a package under
+    # commercial_runtime keeps its tests in its own directory, so it needs its
+    # own key here or no invocation of this script (including the
+    # no-argument "everything" one) would ever discover them.
+    'updates': ROOT / 'commercial_runtime' / 'updates' / 'tests',
     # ── Suites this runner used to miss entirely ──────────────────────────
     #
     # `commercial_runtime` above points at `commercial_runtime/tests` ONLY.
