@@ -1,0 +1,35 @@
+{% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Crash reports") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("Crash reports") }}</h2>
+  <p class="muted">{{ _("Bugs installed products reported, grouped by where they break. Newest first.") }}</p>
+  <table class="responsive-table">
+    <thead>
+      <tr>
+        <th>{{ _("Bug") }}</th>
+        <th>{{ _("Where") }}</th>
+        <th>{{ _("Occurrences") }}</th>
+        <th>{{ _("Installations") }}</th>
+        <th>{{ _("Versions") }}</th>
+        <th>{{ _("Last seen") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for e in result.rows %}
+    <tr>
+      <td><a href="{{ url_for('crash_reports.detail', fingerprint=e.fingerprint) }}"><bdi dir="ltr">{{ e.exception_type }}</bdi></a></td>
+      <td><bdi dir="ltr">{{ e.first_frame }}</bdi></td>
+      <td>{{ e.total_count }}</td>
+      <td>{{ e.installs }}</td>
+      <td><bdi dir="ltr">{{ e.versions | join(", ") }}</bdi></td>
+      <td>{{ format_owner_datetime(e.last_seen) }}</td>
+    </tr>
+    {% else %}<tr><td colspan="6" class="empty">{{ _("No crash reports yet.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {{ table.pagination_nav(result) }}
+</div>
+{% endblock %}

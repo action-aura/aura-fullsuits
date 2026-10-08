@@ -156,6 +156,10 @@ SUITES = {
     # own key here or no invocation of this script (including the
     # no-argument "everything" one) would ever discover them.
     'updates': ROOT / 'commercial_runtime' / 'updates' / 'tests',
+    # Crash reports (feat/crash-reports): the privacy filter, the bounded local
+    # queue, capture, the browser endpoint and the sender. Its own key for the
+    # same reason as every package above: nothing else discovers it.
+    'crash_reports': ROOT / 'commercial_runtime' / 'crash_reports' / 'tests',
     # ── Suites this runner used to miss entirely ──────────────────────────
     #
     # `commercial_runtime` above points at `commercial_runtime/tests` ONLY.

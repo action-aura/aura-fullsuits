@@ -198,6 +198,39 @@ class LicensingClient:
         }
         return self._post_signed("/releases/latest", body, signer)
 
+    def send_crash_reports(
+        self,
+        *,
+        installation_id: str,
+        reports: list,
+        signer: DeviceSigner,
+        app_version: str,
+        platform: str,
+        request_id: Optional[str] = None,
+    ) -> dict:
+        """Crash reports: "here are the bugs this till hit". Device-signed like
+        a check-in, so Owner attributes them to the installation it already
+        knows and nobody else can file reports in its name.
+
+        `reports` must already be privacy-scrubbed (commercial_runtime/
+        crash_reports/scrub.py); this method only transports them. Returns
+        Owner's JSON body as-is: like every method here it does not raise on a
+        business rejection, so the CALLER decides success from
+        `result == "ACCEPTED"`, not from the absence of an exception.
+        """
+        body = {
+            "contract_version": CONTRACT_VERSION,
+            "request_id": request_id or str(uuid.uuid4()),
+            "correlation_id": str(uuid.uuid4()),
+            "timestamp": _now_iso(),
+            "nonce": _new_nonce(),
+            "installation_id": installation_id,
+            "app_version": app_version,
+            "platform": platform,
+            "reports": reports,
+        }
+        return self._post_signed("/crash-reports", body, signer)
+
     def authorize_release_download(
         self,
         *,

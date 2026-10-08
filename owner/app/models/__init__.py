@@ -27,6 +27,7 @@ from app.models import cash_closing  # noqa: F401
 from app.models import report_snapshots  # noqa: F401
 from app.models import sync  # noqa: F401
 from app.models import release_distribution  # noqa: F401
+from app.models import crash_reports  # noqa: F401
 
 from app.models.staff import (  # noqa: F401
     Role,

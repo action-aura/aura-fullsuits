@@ -110,6 +110,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.locale_routes import bp as locale_bp
     from app.attention.routes import bp as attention_bp
     from app.command_palette.routes import bp as command_palette_bp
+    from app.crash_reports.routes import bp as crash_reports_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(staff_bp)
@@ -141,6 +142,7 @@ def create_app(config_name: str | None = None) -> Flask:
     app.register_blueprint(locale_bp)
     app.register_blueprint(attention_bp)
     app.register_blueprint(command_palette_bp)
+    app.register_blueprint(crash_reports_bp)
 
     if app.config.get("EXTERNAL_API_ENABLED"):
         from app.api.routes import bp as external_api_bp
@@ -201,6 +203,9 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.cli import register_cli
 
     register_cli(app)
+    from app.crash_reports.cli import register_cli as register_crash_reports_cli
+
+    register_crash_reports_cli(app)
 
     @app.get("/healthz")
     def healthz():

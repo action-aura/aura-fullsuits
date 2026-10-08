@@ -146,6 +146,18 @@ OTHER_BLUEPRINTS = (
     # their real doorway is the Settings > Updates section (settings-hub.js),
     # asserted by retail_update_ui_test.js, which reads the exact URLs.
     SUITE_ROOT / 'commercial_runtime' / 'updates' / 'routes.py',
+    # Crash reports (feat/crash-reports): POST /client is called by app-shell.js'
+    # window error hook (key 'client'). GET /summary has NO screen yet -- it is
+    # the support/future-Settings read of "how many reports are waiting". It
+    # CANNOT be listed in INTENTIONALLY_UNREACHABLE: its key is the common word
+    # 'summary', which other client code contains, so this heuristic reads it as
+    # reached and test_nothing_listed_is_actually_reachable would (rightly) fail
+    # on the entry. The honest record is here instead: /summary is an
+    # administrator read for support and a future Settings line, deliberately
+    # without a screen today. retail_crash_reports_wiring_test.py asserts the
+    # exact /client URL in app-shell.js and the /summary admin guard, so the
+    # real coverage does not rest on this substring match.
+    SUITE_ROOT / 'commercial_runtime' / 'crash_reports' / 'routes.py',
 )
 
 

@@ -201,6 +201,10 @@ from commercial_runtime.backup.routes import make_backup_blueprint
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
 from commercial_runtime.updates.routes import build_update_service, make_updates_blueprint
 from commercial_runtime.updates.scheduler import UpdateScheduler
+from commercial_runtime.crash_reports import capture as crash_capture
+from commercial_runtime.crash_reports.routes import make_crash_reports_blueprint
+from commercial_runtime.crash_reports.sender import build_crash_report_sender
+from commercial_runtime.crash_reports.store import open_default_store as open_crash_store
 from commercial_runtime.identity.device_routes import device_bp
 from commercial_runtime.einvoicing.routes import make_einvoicing_blueprint
 from commercial_runtime.einvoicing.worker import OutboxWorker
@@ -666,6 +670,47 @@ _update_service = build_update_service(
 )
 _update_scheduler = UpdateScheduler(_update_service) if _update_service is not None else None
 app.register_blueprint(make_updates_blueprint(_update_service, current_version=APP_VERSION))
+
+# Crash reports. CAPTURE is always on and purely local: a crash on the server
+# or in a background thread is written to a small bounded SQLite queue
+# (<app_data>/database/subsystems/crash_reports.db, never retail.db), so a shop
+# with no Owner still keeps a record of what broke. SENDING is opt-in: the
+# sender exists only when an Owner URL is configured, and (like the update
+# channel) not on Android, whose device key lives in Kotlin -- a later wave.
+# With no Owner URL `_crash_sender` is None, no client is ever built and
+# nothing leaves the till. Everything the sender transmits has first been
+# through commercial_runtime/crash_reports/scrub.py (no names, amounts, keys
+# or home folders). A store that cannot be opened turns capture off for this
+# run rather than stopping the till booting.
+_crash_store = open_crash_store(str(Path(DATABASE_DIR).parent))
+_crash_sender = build_crash_report_sender(
+    store=_crash_store,
+    app_data_dir=str(Path(DATABASE_DIR).parent),
+    owner_base_url=OWNER_LICENSING_BASE_URL if LICENSING_PLATFORM != 'ANDROID' else '',
+    verify_tls=OWNER_LICENSING_VERIFY_TLS,
+    timeout_seconds=OWNER_LICENSING_TIMEOUT_SECONDS,
+    device_identity_factory=_licensing_device_identity_factory,
+    product_code='AURA_RETAIL',
+    app_version=APP_VERSION,
+    platform=LICENSING_PLATFORM,
+)
+if _crash_store is not None:
+    crash_capture.install(app, _crash_store, app_version=APP_VERSION, platform=LICENSING_PLATFORM)
+app.register_blueprint(make_crash_reports_blueprint(
+    _crash_store, app_version=APP_VERSION, platform=LICENSING_PLATFORM,
+    sending_enabled=_crash_sender is not None))
+
+
+def _start_crash_report_sender():
+    """Boot seam (init_app): start the background send. Never raises -- a
+    broken reporter must not stop a till booting. A no-op with no Owner URL."""
+    if _crash_sender is None:
+        return
+    try:
+        _crash_sender.start()
+    except Exception:
+        logging.getLogger(__name__).warning(
+            'Crash-report sender failed to start; this till keeps booting.', exc_info=True)
 
 
 def _start_update_polling():
@@ -3077,6 +3122,7 @@ def init_app():
     _resume_notifications_workers()
     _resume_whatsapp_workers()
     _start_update_polling()
+    _start_crash_report_sender()
     global _INIT_APP_HAS_RUN
     _INIT_APP_HAS_RUN = True
     return app

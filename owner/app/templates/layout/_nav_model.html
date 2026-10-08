@@ -183,6 +183,9 @@
 {% endif %}
 {% if has_permission('system.view') %}
   {% set _unused = system_links.append({'endpoint': 'system.list_backups', 'label': _('Backups')}) %}
+  {# Crash reports: gated on system.view like Backups above -- see
+     app/crash_reports/routes.py for why that permission and not a wider one. #}
+  {% set _unused = system_links.append({'endpoint': 'crash_reports.list_reports', 'label': _('Crash reports')}) %}
 {% endif %}
 {% set _unused = target.append({'slug': 'system', 'label': _('System'), 'links': system_links}) %}
 {% endmacro %}

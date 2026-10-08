@@ -45,6 +45,11 @@ POLICIES: dict[str, RateLimitPolicy] = {
     # installs can share one shop/office IP (the bucket key is the client
     # address), so the budget is sized like check-in, not like a download.
     "release_latest": RateLimitPolicy("release_latest", max_requests=30, window_seconds=60),
+    # Crash-reports wave: a till sends at most one batch per ~30 minutes, but
+    # many installs can share one shop/office IP (the bucket key is the client
+    # address) and a fleet that all hit the same bug after a bad release will
+    # all retry together -- sized like check-in, not like a download.
+    "crash_reports": RateLimitPolicy("crash_reports", max_requests=30, window_seconds=60),
 }
 
 

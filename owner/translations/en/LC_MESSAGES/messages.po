@@ -7968,6 +7968,62 @@ msgstr "Restore"
 msgid "No backups taken yet."
 msgstr "No backups taken yet."
 
+#: app/templates/layout/_nav_model.html app/templates/crash_reports/list.html
+msgid "Crash reports"
+msgstr "Crash reports"
+
+#: app/templates/crash_reports/list.html
+msgid "Bugs installed products reported, grouped by where they break. Newest first."
+msgstr "Bugs installed products reported, grouped by where they break. Newest first."
+
+#: app/templates/crash_reports/list.html
+msgid "Bug"
+msgstr "Bug"
+
+#: app/templates/crash_reports/list.html
+msgid "Where"
+msgstr "Where"
+
+#: app/templates/crash_reports/list.html app/templates/crash_reports/detail.html
+msgid "Occurrences"
+msgstr "Occurrences"
+
+#: app/templates/crash_reports/list.html
+msgid "No crash reports yet."
+msgstr "No crash reports yet."
+
+#: app/templates/crash_reports/detail.html
+msgid "Crash report"
+msgstr "Crash report"
+
+#: app/templates/crash_reports/detail.html
+msgid "Back to crash reports"
+msgstr "Back to crash reports"
+
+#: app/templates/crash_reports/detail.html
+msgid "Route"
+msgstr "Route"
+
+#: app/templates/crash_reports/detail.html
+msgid "Stack"
+msgstr "Stack"
+
+#: app/templates/crash_reports/detail.html
+msgid "Function"
+msgstr "Function"
+
+#: app/templates/crash_reports/detail.html
+msgid "Line"
+msgstr "Line"
+
+#: app/templates/crash_reports/detail.html
+msgid "No stack was reported."
+msgstr "No stack was reported."
+
+#: app/templates/crash_reports/detail.html
+msgid "First seen"
+msgstr "First seen"
+
 #~ msgid ""
 #~ "Each code can be used once if "
 #~ "you lose access to your authenticator."

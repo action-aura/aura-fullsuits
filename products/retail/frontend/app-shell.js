@@ -6680,3 +6680,65 @@ document.addEventListener('DOMContentLoaded', () => {
   if (document.readyState !== 'loading') start();
   else document.addEventListener('DOMContentLoaded', start);
 })();
+
+// ── Crash reports: the browser's half ─────────────────────────────────────────
+// Tells the till's own backend (POST /api/crash-reports/client) when this page
+// throws, so a bug a cashier hits at 3 p.m. is not lost the moment they reload.
+// The backend scrubs it again and decides whether anything ever leaves the till;
+// this side only has to be QUIET and SAFE:
+//   * it never throws and never shows the user anything (a crash reporter that
+//     crashes the page is worse than none) -- everything is inside try/catch;
+//   * it sends the section id ("sales") the page knows, never the page address,
+//     so a query string or an id in the URL cannot ride along;
+//   * it ignores errors that are not ours: a browser extension's script throws
+//     on the same window, and its stack names a different origin;
+//   * it is bounded: a repeat of the same error is sent once per page load, and
+//     no more than 5 reports per page load in total (a render loop must not
+//     become a flood).
+// retail_crash_report_client_test.js drives it with fake error events.
+(function () {
+  const MAX_PER_PAGE = 5;
+  const seen = new Set();
+  let sentCount = 0;
+
+  function ours(stack, filename) {
+    const origin = (window.location && window.location.origin) || '';
+    if (!origin) return false;
+    if (filename) return String(filename).indexOf(origin) === 0;
+    return !!stack && String(stack).indexOf(origin) !== -1;
+  }
+
+  function report(message, stack, filename) {
+    try {
+      if (sentCount >= MAX_PER_PAGE) return;
+      if (!ours(stack, filename)) return;
+      const text = String(message == null ? '' : message).slice(0, 500);
+      const stackText = String(stack == null ? '' : stack).slice(0, 4000);
+      const key = text + '|' + (stackText.split('\n')[1] || '');
+      if (seen.has(key)) return;
+      seen.add(key);
+      sentCount += 1;
+      const section = (window.SubsystemApp && window.SubsystemApp.currentSection) || '';
+      fetch('/api/crash-reports/client', {
+        method: 'POST', credentials: 'include', keepalive: true,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, stack: stackText, screen: String(section) }),
+      }).catch(function () { /* reporting must never be the thing that fails */ });
+    } catch (e) { /* see above */ }
+  }
+
+  if (typeof window.addEventListener !== 'function') return;
+  window.addEventListener('error', function (ev) {
+    try {
+      report(ev && ev.message, ev && ev.error && ev.error.stack, ev && ev.filename);
+    } catch (e) { /* see above */ }
+  });
+  window.addEventListener('unhandledrejection', function (ev) {
+    try {
+      const reason = ev && ev.reason;
+      // No stack means no way to tell whose code threw: stay silent.
+      if (!reason || !reason.stack) return;
+      report(reason.message || String(reason), reason.stack, null);
+    } catch (e) { /* see above */ }
+  });
+})();

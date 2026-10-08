@@ -1,0 +1,58 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Crash report") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2><bdi dir="ltr">{{ summary.exception_type }}</bdi></h2>
+    <a class="btn secondary" href="{{ url_for('crash_reports.list_reports') }}">{{ _("Back to crash reports") }}</a>
+  </div>
+  <p><bdi dir="ltr">{{ summary.message }}</bdi></p>
+  <p class="muted">
+    {{ _("Occurrences") }}: {{ summary.total_count }} &middot;
+    {{ _("Installations") }}: {{ summary.installs }} &middot;
+    {{ _("Versions") }}: <bdi dir="ltr">{{ summary.versions | join(", ") }}</bdi>
+    {% if summary.route %}&middot; {{ _("Route") }}: <bdi dir="ltr">{{ summary.route }}</bdi>{% endif %}
+  </p>
+
+  <h3>{{ _("Stack") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("File") }}</th><th>{{ _("Function") }}</th><th>{{ _("Line") }}</th></tr></thead>
+    <tbody>
+    {% for f in frames %}
+    <tr>
+      <td><bdi dir="ltr">{{ f.file }}</bdi></td>
+      <td><bdi dir="ltr">{{ f.function }}</bdi></td>
+      <td>{{ f.line }}</td>
+    </tr>
+    {% else %}<tr><td colspan="3" class="empty">{{ _("No stack was reported.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>{{ _("Installations") }}</h3>
+  <table class="responsive-table">
+    <thead>
+      <tr>
+        <th>{{ _("Installation") }}</th>
+        <th>{{ _("Version") }}</th>
+        <th>{{ _("Platform") }}</th>
+        <th>{{ _("Occurrences") }}</th>
+        <th>{{ _("First seen") }}</th>
+        <th>{{ _("Last seen") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+    <tr>
+      <td><bdi dir="ltr">{{ (r.installation_id | string)[:8] }}</bdi></td>
+      <td><bdi dir="ltr">{{ r.app_version }}</bdi></td>
+      <td>{{ r.platform }}</td>
+      <td>{{ r.count }}</td>
+      <td>{{ format_owner_datetime(r.first_seen_at) }}</td>
+      <td>{{ format_owner_datetime(r.last_seen_at) }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

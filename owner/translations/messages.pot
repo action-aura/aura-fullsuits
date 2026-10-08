@@ -7779,3 +7779,58 @@ msgstr ""
 msgid "No backups taken yet."
 msgstr ""
 
+#: app/templates/layout/_nav_model.html app/templates/crash_reports/list.html
+msgid "Crash reports"
+msgstr ""
+
+#: app/templates/crash_reports/list.html
+msgid "Bugs installed products reported, grouped by where they break. Newest first."
+msgstr ""
+
+#: app/templates/crash_reports/list.html
+msgid "Bug"
+msgstr ""
+
+#: app/templates/crash_reports/list.html
+msgid "Where"
+msgstr ""
+
+#: app/templates/crash_reports/list.html app/templates/crash_reports/detail.html
+msgid "Occurrences"
+msgstr ""
+
+#: app/templates/crash_reports/list.html
+msgid "No crash reports yet."
+msgstr ""
+
+#: app/templates/crash_reports/detail.html
+msgid "Crash report"
+msgstr ""
+
+#: app/templates/crash_reports/detail.html
+msgid "Back to crash reports"
+msgstr ""
+
+#: app/templates/crash_reports/detail.html
+msgid "Route"
+msgstr ""
+
+#: app/templates/crash_reports/detail.html
+msgid "Stack"
+msgstr ""
+
+#: app/templates/crash_reports/detail.html
+msgid "Function"
+msgstr ""
+
+#: app/templates/crash_reports/detail.html
+msgid "Line"
+msgstr ""
+
+#: app/templates/crash_reports/detail.html
+msgid "No stack was reported."
+msgstr ""
+
+#: app/templates/crash_reports/detail.html
+msgid "First seen"
+msgstr ""

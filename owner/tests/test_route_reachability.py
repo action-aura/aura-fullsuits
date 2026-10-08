@@ -475,6 +475,13 @@ _EXTERNAL_LICENSING_API_ENDPOINTS = (
     # its client is commercial_runtime/updates (a product install), never
     # Owner's own UI, so no url_for() can ever reach it.
     'api_external_licensing.latest_release',
+    # Crash-reports wave: a product install sends its scrubbed bug reports.
+    # Same caller (commercial_runtime's LicensingClient.send_crash_reports,
+    # driven by the product's CrashReportSender) and the same device
+    # signature + nonce authentication; Owner's own UI never calls it. The
+    # staff-facing half (crash_reports.list_reports / .detail) IS linked from
+    # the System nav group and is not listed here.
+    'api_external_licensing.crash_reports',
     'api_external_licensing.service_info',
     'api_external_licensing.signing_keys',
 )

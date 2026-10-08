@@ -7927,6 +7927,62 @@ msgstr "استعادة"
 msgid "No backups taken yet."
 msgstr "لم يتم أخذ أي نسخة احتياطية بعد."
 
+#: app/templates/layout/_nav_model.html app/templates/crash_reports/list.html
+msgid "Crash reports"
+msgstr "تقارير الأعطال"
+
+#: app/templates/crash_reports/list.html
+msgid "Bugs installed products reported, grouped by where they break. Newest first."
+msgstr "الأعطال التي أبلغت عنها المنتجات المثبّتة، مجمّعة حسب موضع حدوثها. الأحدث أولاً."
+
+#: app/templates/crash_reports/list.html
+msgid "Bug"
+msgstr "العطل"
+
+#: app/templates/crash_reports/list.html
+msgid "Where"
+msgstr "الموضع"
+
+#: app/templates/crash_reports/list.html app/templates/crash_reports/detail.html
+msgid "Occurrences"
+msgstr "مرات الحدوث"
+
+#: app/templates/crash_reports/list.html
+msgid "No crash reports yet."
+msgstr "لا توجد تقارير أعطال بعد."
+
+#: app/templates/crash_reports/detail.html
+msgid "Crash report"
+msgstr "تقرير عطل"
+
+#: app/templates/crash_reports/detail.html
+msgid "Back to crash reports"
+msgstr "العودة إلى تقارير الأعطال"
+
+#: app/templates/crash_reports/detail.html
+msgid "Route"
+msgstr "المسار"
+
+#: app/templates/crash_reports/detail.html
+msgid "Stack"
+msgstr "تتبّع الاستدعاءات"
+
+#: app/templates/crash_reports/detail.html
+msgid "Function"
+msgstr "الدالة"
+
+#: app/templates/crash_reports/detail.html
+msgid "Line"
+msgstr "السطر"
+
+#: app/templates/crash_reports/detail.html
+msgid "No stack was reported."
+msgstr "لم يتم الإبلاغ عن أي تتبّع للاستدعاءات."
+
+#: app/templates/crash_reports/detail.html
+msgid "First seen"
+msgstr "أول ظهور"
+
 #~ msgid ""
 #~ "Each code can be used once if "
 #~ "you lose access to your authenticator."
