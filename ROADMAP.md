@@ -7473,3 +7473,12 @@ Residuals: the optional launcher sys.excepthook (plan item 6) was not built -- a
 Flask backend starts is still invisible. Android has no crash capture (signs in Kotlin). Owner
 retention prune is a command, not scheduled (free host runs no scheduled ops). The upgrade/downgrade
 of a3d9e6c14b72 was exercised only through the test DB, not as a standalone round trip.
+
+## CLAIM -- Owner Alembic revision after a3d9e6c14b72: real email (2026-10-10, branch feat/real-email)
+
+Claimed BEFORE dispatch. Owner chain head on this lineage is a3d9e6c14b72 (crash reports, deployed live on
+owner.actionaura.me 2026-10-10). The next revision, down_revision = 'a3d9e6c14b72', is reserved for the
+real-email wave: one new table owner_email_outbox (plan: ~/.claude/aura-plans/EMAIL-PLAN.md D2). No retail /
+registry / clinic schema version is used by this wave (identity mail reuses the existing email_outbox table).
+Note: this revision will run against the LIVE Neon database on the next deploy -- deploy only after the wave is
+verified, and take a fresh run_backup.sh backup first.
