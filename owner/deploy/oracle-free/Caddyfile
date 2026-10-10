@@ -49,6 +49,13 @@
 	reverse_proxy owner:5000 {
 		header_up X-Forwarded-Proto {scheme}
 		health_uri /health/live
+		# The app enforces OWNER_ALLOWED_HOSTS (Flask TRUSTED_HOSTS, 2026-10-10).
+		# Without this the probe arrives as Host "owner:5000", gets 400, Caddy
+		# marks the only upstream unhealthy and every request becomes 503 --
+		# exactly what happened on the first live deploy of that check.
+		health_headers {
+			Host {$SITE_DOMAIN}
+		}
 		health_interval 30s
 		health_timeout 5s
 	}
