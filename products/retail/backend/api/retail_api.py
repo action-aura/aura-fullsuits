@@ -12308,8 +12308,12 @@ def _cash_session_report(conn, cid, sess):
     this drawer was open (payments.cash_session_id, stamped by
     _record_payment; direction='in', method='cash', not a sale's own payment).
     cash_sales never saw it because it is not a sale, yet the notes are in the
-    drawer. Cash paid OUT to suppliers from a till is NOT here yet (known
-    residual) -- use paid_out for it.
+    drawer.
+
+    Cash paid OUT to suppliers from a till (MONEY-3 M2, retail v51) rides the
+    `paid_out` movement a 'drawer' supplier payment writes, and its cancellation
+    rides a `paid_in` -- both inside `movements` above, so the ONE formula is
+    unchanged. `supplier_payments` below only LISTS those rows by supplier.
     """
     session_id = sess['id']
     bid = sess['branch_id']
@@ -12380,6 +12384,27 @@ def _cash_session_report(conn, cid, sess):
     for r in movement_rows:
         if r['type'] in movements:
             movements[r['type']] = float(r['amount'] or 0)
+
+    # MONEY-3 M2: the part of paid_out / paid_in that is SUPPLIER PAYMENTS (and their
+    # cancellations), listed by name so the Z report can say who was paid. INFORMATIONAL:
+    # expected_cash below already contains these rows through `movements` -- this is a
+    # breakdown of the same numbers, never a second formula, so it cannot disagree.
+    supplier_items = []
+    for r in conn.execute("""
+        SELECT m.type AS type, m.amount AS amount, p.reference AS reference,
+               COALESCE(sp.name, '') AS supplier
+        FROM cash_movements m
+        LEFT JOIN payments p ON p.uid = m.payment_uid AND p.company_id = ?
+        LEFT JOIN suppliers sp ON sp.id = p.party_id AND sp.company_id = p.company_id
+        WHERE m.session_id = ? AND m.payment_uid IS NOT NULL
+          AND m.type IN ('paid_out', 'paid_in')
+        ORDER BY m.created_at, m.id
+    """, (cid, session_id)).fetchall():
+        supplier_items.append({
+            'kind': 'paid' if r['type'] == 'paid_out' else 'returned',
+            'reference': r['reference'], 'supplier': r['supplier'],
+            'amount': float(r['amount'] or 0),
+        })
 
     opening_float = float(sess['opening_float'] or 0)
     # Read ONCE and applied to every figure this report returns. The drawer's
@@ -12452,6 +12477,11 @@ def _cash_session_report(conn, cid, sess):
         'customer_cash_in': _money(customer_cash_in, currency),
         'cash_refunds': _money(cash_refunds, currency),
         'movements': {k: _money(v, currency) for k, v in movements.items()},
+        'supplier_payments': {
+            'paid': _money(sum(i['amount'] for i in supplier_items if i['kind'] == 'paid'), currency),
+            'returned': _money(sum(i['amount'] for i in supplier_items if i['kind'] == 'returned'), currency),
+            'items': [dict(i, amount=_money(i['amount'], currency)) for i in supplier_items],
+        },
         'expected_cash': expected,
         'foreign_terminal_sales': foreign_sales,
         'unattributed_sales': unattributed_sales,
@@ -15338,7 +15368,7 @@ def _sale_tender_lines(conn, cid, sale_id):
 
 def _record_payment(conn, cid, party_type, party_id, direction, amount, method='cash',
                     related_type=None, related_id=None, notes='', device=None, doc_type='receipt',
-                    currency=None, pay_uid=None):
+                    currency=None, pay_uid=None, paid_from=None):
     """Append one immutable money-movement row to the ledger. Returns its reference.
 
     `currency` is OPTIONAL and defaults to None, the same contract `_money`
@@ -15391,6 +15421,14 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
     collapses the duplicate to one row everywhere -- see that module's own
     docstring for the double-apply this closes. A caller that passes a uid
     is responsible for its unique-ness; this function does not validate it.
+
+    `paid_from` (MONEY-3 M2, schema v51) is 'drawer' | 'office' | None and is
+    written ONLY by the supplier-payment routes, for a CASH payment: it says
+    whether the notes left this terminal's till drawer ('drawer') or came from
+    somewhere that is in no drawer ('office'). NULL means "not a drawer fact"
+    (every non-cash payment, every older row). It travels in the sync payload
+    because it is a fact ABOUT the payment; the drawer movement it caused does
+    not (a drawer belongs to one terminal).
     """
     amt = _money(amount, currency)
     if amt <= 0:
@@ -15424,11 +15462,11 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
     conn.execute("""INSERT INTO payments
         (company_id,reference,party_type,party_id,direction,amount,currency,fx_rate,method,
          related_type,related_id,sale_id,notes,status,created_by,device,created_at,uid,
-         cash_session_id)
-        VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?, 'active', ?, ?, ?, ?, ?)""",
+         cash_session_id,paid_from)
+        VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?, 'active', ?, ?, ?, ?, ?, ?)""",
         (cid, ref, party_type, party_id, direction, amt, cur, method,
          related_type, related_id, sale_id_fk,
-         notes, created_by, device, created_at, pay_uid, cash_session_id))
+         notes, created_by, device, created_at, pay_uid, cash_session_id, paid_from))
 
     # ── Phase 5 sync emission: the payment itself ────────────────────────────
     # ONE funnel, every money movement (see this function's own comment
@@ -15464,6 +15502,9 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
         'po_uid': po_uid,
         'notes': notes, 'status': 'active', 'created_by': created_by, 'device': device,
         'created_at': created_at,
+        # M2: a missing key on an older writer's event reads as NULL = 'office'
+        # (LEGACY, no drawer effect), never as "stale".
+        'paid_from': paid_from,
     })
     return ref
 
@@ -19860,6 +19901,146 @@ def supplier_statement(sid):
     return jsonify({'status': 'success', 'data': {'supplier': sup_out, 'events': out,
                                                   'balance': _money(derived_balance, currency)}})
 
+# ── MONEY-3 M2: paying a supplier in cash takes it out of the till drawer ──────
+#
+# THE BUG (D4). A cash supplier payment moved AP and credited the GL cash account,
+# but the terminal's open cash session never learned of it, so the drawer's expected
+# cash stayed too high by that amount and every such day closed "over".
+#
+# THE MODEL. `payments.paid_from` ('drawer' | 'office' | NULL) is a SYNCED fact about
+# the payment. 'drawer' ALSO writes a `paid_out` row into THIS terminal's open
+# cash session -- the drawer's EXISTING paid-out mechanism, already summed by
+# `_cash_session_report`'s one expected-cash formula (no second formula). That
+# movement is device-local like every cash movement: a drawer belongs to one till.
+#
+# CANCELLATION. The payment void flips `payments.status` (synced). The reversal is
+# a STATE-DERIVED sweep (`_post_missing_drawer_reversals`) that runs at the end of
+# every void and after every pull, exactly like the GL void-reversal sweep it sits
+# beside: for every voided 'drawer' payment whose paid-out is on THIS computer and
+# has no reversal yet, it writes ONE reversing row whose id is a pure function of
+# the payment uid. So a payment cancelled on two tills, or cancelled on the till
+# that holds the drawer, comes back exactly once, and a replay is a no-op.
+#   * the drawer is still OPEN  -> a `paid_in` in that same session (the Z report
+#     lists the payment and its return, net zero);
+#   * the drawer is already CLOSED -> a closed, counted, signed-off report must not
+#     move, so the money lands in this terminal's CURRENT open session if it has
+#     one (a `paid_in` there), else it is recorded as OFFICE: a `void_note` row in
+#     the old session that no formula sums, which also REMEMBERS the decision so a
+#     drawer opened tomorrow does not quietly absorb it.
+# The reversal belongs to the computer that holds the original paid-out, not the one
+# whose user clicked cancel: only that computer knows which drawer lost the cash.
+# (The plan said "the cancelling terminal's open session"; a second computer has no
+# way to know the original drawer is closed, so the holder decides. Same intent.)
+
+PAID_FROM_DRAWER = 'drawer'
+PAID_FROM_OFFICE = 'office'
+
+#: Fixed namespace for the deterministic ids of the drawer rows a supplier payment
+#: causes. NEVER CHANGE: two computers (or a retry) must mint the same id.
+_SUPPLIER_DRAWER_NAMESPACE = _uuid.UUID('b2f6d1a4-7c3e-5a90-8e21-4d6f0c9b3a57')
+
+
+def _supplier_drawer_movement_id(pay_uid, kind):
+    return str(_uuid.uuid5(_SUPPLIER_DRAWER_NAMESPACE, f"{pay_uid}:{kind}"))
+
+
+def _resolve_supplier_paid_from(conn, cid, method, requested):
+    """Decide where a supplier payment's cash comes from.
+
+    Returns `(paid_from, drawer_session_id, error_response)`; `error_response` is a
+    ready `(jsonify(...), status)` the caller returns after closing its connection.
+
+      * a non-cash method has no drawer effect and ignores `requested` entirely;
+      * `requested` absent -> 'drawer' if THIS terminal has an open cash session,
+        else 'office' (a back-office computer pays from the safe, not a till);
+      * 'office' is always allowed, even with a drawer open;
+      * 'drawer' with no open session on this terminal is refused: 409
+        NO_OPEN_DRAWER -- never silently downgraded, because the user asked for the
+        till and a payment the till does not know about is the bug this fixes.
+    """
+    if method != 'cash':
+        return None, None, None
+    session_id = _this_terminal_open_session_id(conn, cid)
+    if requested in (None, ''):
+        return ((PAID_FROM_DRAWER, session_id, None) if session_id
+                else (PAID_FROM_OFFICE, None, None))
+    if requested == PAID_FROM_OFFICE:
+        return PAID_FROM_OFFICE, None, None
+    if requested == PAID_FROM_DRAWER:
+        if not session_id:
+            return None, None, (jsonify({
+                'status': 'error', 'code': 'NO_OPEN_DRAWER', 'reason_code': 'NO_OPEN_DRAWER',
+                'message': 'There is no open cash drawer on this computer. Open the '
+                           'drawer first, or record the payment as paid from the office.',
+            }), 409)
+        return PAID_FROM_DRAWER, session_id, None
+    return None, None, (jsonify({
+        'status': 'error', 'code': 'INVALID_PAID_FROM',
+        'message': "paid_from must be 'drawer' or 'office'.",
+    }), 400)
+
+
+def _post_supplier_drawer_paid_out(conn, cid, session_id, pay_uid, ref, supplier_id, amount):
+    """Write the paid-out a 'drawer' supplier payment causes, in the caller's
+    transaction. The id is a pure function of the payment uid, so a retried POST that
+    reached here twice would collide on the primary key instead of paying out twice."""
+    name_row = conn.execute("SELECT name FROM suppliers WHERE id=? AND company_id=?",
+                            (supplier_id, cid)).fetchone()
+    actor, terminal, utc_now = _stamp()
+    conn.execute(
+        """INSERT INTO cash_movements
+           (id,session_id,type,amount,reason,created_by,created_at,actor_user_uid,terminal_id,created_at_utc,payment_uid)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (_supplier_drawer_movement_id(pay_uid, 'pay'), session_id, 'paid_out', amount,
+         f"Supplier payment {ref} - {name_row['name'] if name_row else ''}".strip(' -'),
+         _uid(), _now(), actor, terminal, utc_now, pay_uid))
+
+
+def _post_missing_drawer_reversals(conn, company_id):
+    """Idempotent sweep: for every VOIDED 'drawer' supplier payment whose paid-out sits
+    on this computer and has no reversal row yet, write the one reversing row (see the
+    M2 block comment above for where it lands). Runs in the caller's transaction; the
+    caller commits. Returns how many rows it wrote.
+
+    It reads the ORIGINAL paid-out (`type='paid_out'` AND `payment_uid`), not just the
+    payment: a payment that never touched a drawer here -- a legacy NULL `paid_from`,
+    an 'office' payment, a 'drawer' payment made on ANOTHER computer -- has no such
+    row, so cancelling it can never put money into this computer's drawer."""
+    rows = conn.execute(
+        "SELECT p.uid AS pay_uid, p.reference AS reference, m.amount AS amount, "
+        "       m.session_id AS orig_session, s.status AS orig_status "
+        "FROM payments p "
+        "JOIN cash_movements m ON m.payment_uid = p.uid AND m.type = 'paid_out' "
+        "JOIN cash_sessions s ON s.id = m.session_id "
+        "WHERE p.company_id=? AND p.status='voided' AND p.paid_from='drawer' "
+        "  AND p.uid IS NOT NULL AND s.company_id=p.company_id "
+        "  AND NOT EXISTS (SELECT 1 FROM cash_movements r "
+        "                  WHERE r.payment_uid = p.uid AND r.type IN ('paid_in','void_note')) "
+        "ORDER BY p.id", (company_id,)).fetchall()
+    written = 0
+    for r in rows:
+        if (r['orig_status'] or '') == CASH_SESSION_STATUS_OPEN:
+            target, mtype = r['orig_session'], 'paid_in'
+        else:
+            target = _this_terminal_open_session_id(conn, company_id)
+            mtype = 'paid_in'
+            if not target:
+                target, mtype = r['orig_session'], 'void_note'
+        # NO _stamp()/_uid() here: this sweep also runs after a sync pull, on a thread with
+        # no Flask request, where reading the session raises. The reversal belongs to the
+        # system, not to whoever pulled -- the actor stays NULL (honest) and created_by is the
+        # label 'system', both exactly as a sessionless write elsewhere in this file does.
+        conn.execute(
+            """INSERT OR IGNORE INTO cash_movements
+               (id,session_id,type,amount,reason,created_by,created_at,actor_user_uid,terminal_id,created_at_utc,payment_uid)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (_supplier_drawer_movement_id(r['pay_uid'], 'void'), target, mtype, r['amount'],
+             f"Supplier payment {r['reference']} cancelled", 'system', _now(),
+             None, local_terminal_id(), now_utc_iso(), r['pay_uid']))
+        written += 1
+    return written
+
+
 @retail_bp.route('/suppliers/<string:sid>/payments', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -19890,11 +20071,18 @@ def supplier_payment(sid):
     sup = conn.execute("SELECT id,credit_balance FROM suppliers WHERE id=? AND company_id=?", (sid, cid)).fetchone()
     if not sup:
         conn.close(); return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
+    method = data.get('method', 'cash')
+    paid_from, drawer_session, pf_err = _resolve_supplier_paid_from(conn, cid, method, data.get('paid_from'))
+    if pf_err:
+        conn.close(); return pf_err
     try:
         pay_uid = _new_uid()  # F3b: see customer_payment -- names the row AND the journal's source link
-        ref = _record_payment(conn, cid, 'supplier', sid, 'out', amt, method=data.get('method', 'cash'),
+        ref = _record_payment(conn, cid, 'supplier', sid, 'out', amt, method=method,
                               notes=data.get('notes', ''), device=data.get('device'), doc_type='supplier_payment',
-                              currency=currency, pay_uid=pay_uid)
+                              currency=currency, pay_uid=pay_uid, paid_from=paid_from)
+        if paid_from == PAID_FROM_DRAWER:
+            # M2: the notes leave THIS till's drawer. Same transaction as the payment.
+            _post_supplier_drawer_paid_out(conn, cid, drawer_session, pay_uid, ref, sid, amt)
         newbal = _refresh_party_balance(conn, 'suppliers', sid, cid, currency)  # v44: re-derived, see customer_payment
         # Schema v38 (general ledger core): Dr AP / Cr Cash. See
         # customer_payment's identical comment just above -- same
@@ -19903,7 +20091,8 @@ def supplier_payment(sid):
         _audit(conn, 'SUPPLIER_PAYMENT', 'supplier', sid, f'{ref} amount={amt}')
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
-        return jsonify({'status': 'success', 'data': {'reference': ref, 'new_balance': newbal}})
+        return jsonify({'status': 'success', 'data': {'reference': ref, 'new_balance': newbal,
+                                                      'paid_from': paid_from}})
     except Exception as e:
         conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -19943,6 +20132,10 @@ def pay_purchase_order(po_id):
     # would create a supplier credit with no debt behind it.
     if po['status'] == 'cancelled':
         conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': 'PO is cancelled and cannot be paid'}), 409
+    po_method = data.get('method', 'cash')
+    paid_from, drawer_session, pf_err = _resolve_supplier_paid_from(conn, cid, po_method, data.get('paid_from'))
+    if pf_err:
+        conn.rollback(); conn.close(); return pf_err
     try:
         # STOCK-BOOKS verify F5, kept: the status guard is still a WRITE under
         # the lock, with its rowcount checked, ahead of the money moving. It
@@ -19958,10 +20151,14 @@ def pay_purchase_order(po_id):
             conn.rollback(); conn.close()
             return jsonify({'status': 'error', 'message': 'PO is cancelled and cannot be paid'}), 409
         pay_uid = _new_uid()  # F3b: see customer_payment -- source link for a later void
-        ref = _record_payment(conn, cid, 'supplier', po['supplier_id'], 'out', amt, method=data.get('method', 'cash'),
+        ref = _record_payment(conn, cid, 'supplier', po['supplier_id'], 'out', amt, method=po_method,
                               related_type='po', related_id=po_id, notes=data.get('notes', ''),
                               device=data.get('device'), doc_type='supplier_payment', currency=currency,
-                              pay_uid=pay_uid)
+                              pay_uid=pay_uid, paid_from=paid_from)
+        if paid_from == PAID_FROM_DRAWER and po['supplier_id']:
+            # M2: same as supplier_payment -- the notes leave THIS till's drawer.
+            _post_supplier_drawer_paid_out(conn, cid, drawer_session, pay_uid, ref,
+                                           po['supplier_id'], amt)
         # W4a: `amount_paid`/`payment_status` are DERIVED from the active
         # payments that name this order, never `amount_paid + amt`. The stored
         # increment was right only on the computer that took the instalment: a
@@ -20008,7 +20205,8 @@ def pay_purchase_order(po_id):
         _audit(conn, 'PO_PAYMENT', 'purchase_order', po_id, f"{ref} amount={amt}")
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
-        return jsonify({'status': 'success', 'data': {'reference': ref, 'payment_status': status, 'amount_paid': new_paid}})
+        return jsonify({'status': 'success', 'data': {'reference': ref, 'payment_status': status,
+                                                      'amount_paid': new_paid, 'paid_from': paid_from}})
     except Exception as e:
         conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -20085,6 +20283,55 @@ def _cheque_events(conn, cheque_id):
         "FROM cheque_events WHERE cheque_id=? ORDER BY created_at_utc, id",
         (cheque_id,)
     ).fetchall()
+
+
+def _post_cheque_books(conn, cid, cheque, fold_before, event_type, is_crossing, side_to):
+    """MONEY-3 M3 (retail v51): the BOOKS half of a cheque transition.
+
+    Until v51 a cheque's money leg moved the party's balance (a `payments` row) and posted NO
+    general-ledger journal, so GL Accounts Receivable / Payable disagreed with the customer /
+    supplier balances by every cheque in flight, and the trial balance's subledger tie said so.
+    Now each transition posts its own journal, in the SAME transaction as the event:
+
+      customer cheque (direction 'in')            supplier cheque (direction 'out')
+      received / reinstated  Dr Cheques Under Collection  Cr AR     Dr AP  Cr Cheques Payable
+      cleared / endorsed     Dr Cash and Bank  Cr Cheques Under Coll. Dr Cheques Payable  Cr Bank
+      bounced / cancelled    Dr AR  Cr Cheques Under Coll.          Dr Cheques Payable  Cr AP
+      ... after clearing     Dr AR  Cr Cash and Bank                Dr Bank  Cr AP
+
+    "ENDORSED" books like "cleared": the cheque leaves the shop's hands at face value (its
+    own docstring in `endorse_cheque`: the payable it discharges is settled afterwards through
+    the ordinary supplier-payment route, which credits cash -- so the bank leg here is what that
+    later cash credit nets against). A deposit moves no money in the books (still under
+    collection); a write-off follows a bounce that already put the debt back.
+
+    WHICH FACT, NOT WHICH EVENT. The journal's uid is keyed on the CROSSING index (the same number
+    the payment row's `money_uid` is keyed on) or, for the bank leg, on the live stint's apply
+    index -- never on the event id, which differs per computer. Two computers that observe the
+    same bank fact therefore post the SAME journal and the sync apply collapses them
+    (`general_ledger.post_cheque_journal` is idempotent), exactly like the payment row.
+
+    Returns the journal id, or None when the transition books nothing (deposit, write-off)."""
+    direction = cheque['direction']
+    number = cheque['cheque_number']
+    k = len(fold_before.crossings)
+    if is_crossing and side_to:
+        kind, index = 'apply', k
+        memo = f"Cheque {number} {'received' if direction == 'in' else 'issued'}"
+    elif is_crossing:
+        banked = fold_before.status in ('cleared', 'endorsed')
+        kind, index = ('reverse_bank' if banked else 'reverse'), k
+        memo = f"Cheque {number} {event_type}"
+    elif event_type in ('cleared', 'endorsed'):
+        # A non-crossing event inside a live stint: the bank leg, once per stint. `k - 1` is
+        # the apply crossing that opened the stint (a live fold always has at least one).
+        kind, index = 'bank', k - 1
+        memo = f"Cheque {number} {event_type}"
+    else:
+        return None
+    return gl.post_cheque_journal(
+        conn, cid, cheque['branch_id'], cheque['id'], number, direction, kind, index,
+        cheque['currency'], cheque['amount'], memo)
 
 
 def _apply_cheque_event(conn, cid, cheque, event_type, *, occurred_on=None, bank_reference=None,
@@ -20178,6 +20425,11 @@ def _apply_cheque_event(conn, cid, cheque, event_type, *, occurred_on=None, bank
         # re-derived instead of moved by -/+amount.
         if party_id:
             _refresh_party_balance(conn, table, party_id, cid, cheque['currency'])
+
+    # M3: the books half. After the money leg so a failure of either rolls the whole event back
+    # (the caller's rollback), and for EVERY transition that moves money in the books -- the
+    # crossings above plus the non-crossing bank leg (cleared / endorsed).
+    _post_cheque_books(conn, cid, cheque, fold_before, event_type, is_crossing, side_to)
 
     ev_id = _new_uid()
     now_utc = now_utc_iso()
@@ -21697,6 +21949,23 @@ def post_missing_void_reversals_all_companies(conn):
     for row in conn.execute(
             "SELECT DISTINCT company_id FROM payments WHERE status='voided'").fetchall():
         total += _post_missing_void_reversals(conn, row['company_id'])
+        # M2: the drawer half of the same voids. It rides this sweep because every
+        # retail sync service already installs it (app.py x2 and the test harnesses);
+        # a second install point is one more place to forget.
+        # Its own savepoint: a failure in the drawer half must not roll back the GL
+        # reversals above (they share the caller's savepoint) -- log it and carry on;
+        # the next pull / next void runs the idempotent sweep again.
+        try:
+            conn.execute("SAVEPOINT drawer_reversal_sweep")
+            try:
+                total += _post_missing_drawer_reversals(conn, row['company_id'])
+                conn.execute("RELEASE SAVEPOINT drawer_reversal_sweep")
+            except Exception:
+                conn.execute("ROLLBACK TO SAVEPOINT drawer_reversal_sweep")
+                conn.execute("RELEASE SAVEPOINT drawer_reversal_sweep")
+                raise
+        except Exception:  # noqa: BLE001 -- see comment above
+            log.exception('drawer-reversal sweep failed')
     return total
 
 
@@ -22092,6 +22361,9 @@ def void_payment(pid):
         # is here but unreversed (idempotent -- a no-op when the line above
         # already did the work).
         _post_missing_void_reversals(conn, cid)
+        # M2: a cancelled 'drawer' supplier payment brings its cash back into the drawer
+        # that lost it (see the M2 block comment above `supplier_payment`).
+        _post_missing_drawer_reversals(conn, cid)
         _audit(conn, 'PAYMENT_VOIDED', 'payment', pid, data.get('reason', ''))
         # AUDIT-032A fix (DEFECT 2): this route mutates `payments.status` in
         # place -- the ONE documented exception to Phase 5's "money is an

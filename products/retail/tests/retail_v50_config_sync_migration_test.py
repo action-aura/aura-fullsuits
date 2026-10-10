@@ -146,8 +146,8 @@ def test_upgrade_adds_columns_arms_every_existing_row_and_stamps_uids():
     branch_uid = _make_v49(db)
     backup_dir = _migrate(sch, db)
 
-    assert sch.RETAIL_SCHEMA_VERSION == 50
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 50
+    assert sch.RETAIL_SCHEMA_VERSION == 51  # v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 51  # v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py
     assert _rows(db, 'PRAGMA integrity_check')[0]['integrity_check'] == 'ok'
     assert os.listdir(backup_dir), 'ensure_schema_version must have written its pre-migration backup'
     assert set(_PROMO_NEW) <= _cols(db, 'promotions')
@@ -219,7 +219,7 @@ def test_replay_is_byte_identical_and_never_rearms_a_cleared_flag():
 
 def test_a_fresh_install_has_the_v50_shape_and_defaults_flags_and_version():
     sch, db = _install()
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 50
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 51  # v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py
     assert set(_PROMO_NEW) <= _cols(db, 'promotions')
     for t in ('modifier_groups', 'modifier_options', 'product_modifier_groups'):
         assert 'sync_backfill_pending' in _cols(db, t)

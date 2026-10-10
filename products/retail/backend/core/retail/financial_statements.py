@@ -892,6 +892,9 @@ _CASH_FLOW_LABELS = {
     'supplier_payment': 'Payments to Suppliers',
     'po_payment': 'Payments to Suppliers',
     'purchase_order': 'Cash Paid for Inventory Purchases',
+    # MONEY-3 M3 (v51): a cheque reaching the bank (customer cheque cleared = cash in, supplier
+    # cheque cleared = cash out). One label for both: the sign of the line says which.
+    'cheque': 'Cheques Cleared at the Bank',
 }
 
 

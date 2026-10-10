@@ -601,11 +601,23 @@ const CashDrawer = {
       <div class="cd-report-row"><span>${t('Float out')}</span><b>${this._money(-Math.abs(Number(r.movements.float_out) || 0))}</b></div>
       <div class="cd-report-row"><span>${t('Paid in')}</span><b>${this._money(r.movements.paid_in)}</b></div>
       <div class="cd-report-row"><span>${t('Paid out')}</span><b>${this._money(-Math.abs(Number(r.movements.paid_out) || 0))}</b></div>
+      ${this._supplierPaymentRows(r)}
       <div class="cd-report-row cd-report-total">
         <span>${t('Expected cash in drawer')}</span><b>${this._money(r.expected_cash)}</b>
       </div>
       ${this._otherTendersRows(r)}
       ${this._contaminationNote(r)}`;
+  },
+
+  // MONEY-3 M2: the supplier payments (and their cancellations) inside Paid out / Paid in,
+  // by supplier name. A breakdown of numbers already in the total above -- it never adds to
+  // expected cash. Hidden when there are none, so a shift without them reads as before.
+  _supplierPaymentRows(r) {
+    const sp = r && r.supplier_payments;
+    if (!sp || !Array.isArray(sp.items) || !sp.items.length) return '';
+    const esc = (v) => String(v == null ? '' : v).replace(/[<>&"]/g, '');
+    return `<p class="cd-warn-note" style="color:var(--text-muted)">${t('Supplier payments')}</p>` +
+      sp.items.map(i => `<div class="cd-report-row"><span>${esc(i.supplier) || '—'}${i.reference ? ' · ' + esc(i.reference) : ''}${i.kind === 'returned' ? ' (' + t('cancelled') + ')' : ''}</span><b>${this._money(i.kind === 'returned' ? Number(i.amount) || 0 : -(Number(i.amount) || 0))}</b></div>`).join('');
   },
 
   // What this drawer's sales took by methods OTHER than cash (card, mobile,

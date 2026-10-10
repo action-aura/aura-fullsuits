@@ -58,11 +58,25 @@ Notes on the STOCK-BOOKS rows:
 * 5910 is its own line *below* gross profit. 5900 stays the only cost of goods
   sold, so a stock count never moves gross margin.
 
+## Cheques (MONEY-3 M3, retail v51)
+
+| Code | English name | Type | Normal | Arabic (proposed) | Wave |
+|------|--------------|------|--------|-------------------|------|
+| 1150 | Cheques Under Collection | asset | debit | شيكات برسم التحصيل | MONEY-3 |
+| 2050 | Cheques Payable | liability | credit | شيكات مستحقة الدفع | MONEY-3 |
+
+* 1150 holds a customer cheque from the day it is received until it reaches the bank
+  (clear, or endorsed away); a bounce or cancel before that puts it back out against AR.
+* 2050 holds a supplier cheque from the day it is issued until it clears.
+* "Bank" is 1000 Cash and Bank (one account; 1010-1080 stay reserved). A cheque that bounces
+  AFTER clearing reverses the bank leg instead of the holding account.
+* Cheques alive at the v51 upgrade each get one opening journal (memo "cheque in flight before
+  v51" / "cheque cleared before v51"); dead cheques get nothing.
+
 ## Planned, not seeded yet
 
 | Code | English name (working) | Type | Normal | Arabic (proposed) | Wave |
 |------|------------------------|------|--------|-------------------|------|
-| 1150 | Cheques Under Collection | asset | debit | شيكات برسم التحصيل | cheques |
 | 5950 | Cash Over and Short | expense | debit | العجز والزيادة في النقدية | shift/cash drawer |
 
 ## Reserved ranges (codes held, names not frozen)

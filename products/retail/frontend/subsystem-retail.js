@@ -19471,10 +19471,21 @@ const RetailSystem = {
       // into an inline onclick attribute.
       this._lastStatementContext = { kind, id, party, events, balance: resp.balance, aging: this._agingFieldsFrom(resp) };
       const netState = kind === 'supplier' ? { active: false, reason: null } : await this._shopNetworkState(true);
+      // MONEY-3 M2: a supplier payment in cash can come out of THIS computer's till
+      // drawer, so the dialog has to know whether one is open. The route is gated on
+      // the drawer capability, which a bookkeeper may lack: any failure reads as "no
+      // drawer here" (the office option stays, and the server decides again anyway).
+      let drawerOpen = false;
+      if (kind === 'supplier') {
+        try {
+          const cur = await this._get('/api/sub/retail/cash-sessions/current');
+          drawerOpen = !!(cur && cur.status === 'success' && cur.data);
+        } catch (e) { drawerOpen = false; }
+      }
       const overlay = document.createElement('div');
       overlay.className = 'ret-modal-overlay';
       overlay.id = 'ret-statement-modal';
-      overlay.innerHTML = this._partyStatementMarkup(kind, id, party, events, resp.balance, netState, this._lastStatementContext.aging);
+      overlay.innerHTML = this._partyStatementMarkup(kind, id, party, events, resp.balance, netState, this._lastStatementContext.aging, drawerOpen);
       document.body.appendChild(overlay);
       // FIX ROUND F2: wired here, not as an inline onclick -- the button
       // markup below carries no data of its own, id is a plain literal.
@@ -19488,7 +19499,7 @@ const RetailSystem = {
     }
   },
 
-  _partyStatementMarkup(kind, id, party, events, balance, netState, aging) {
+  _partyStatementMarkup(kind, id, party, events, balance, netState, aging, drawerOpen) {
     const isSupplier = kind === 'supplier';
     const balanceLabel = isSupplier ? t('You Owe') : t('Owed to You');
     const eventsHtml = events.length ? events.map(e => {
@@ -19529,7 +19540,7 @@ const RetailSystem = {
             <div class="ret-field" style="margin:0"><label for="stmt-pay-amount">${t('Amount')}</label>
               <input type="number" id="stmt-pay-amount" min="0" step="0.001" /></div>
             <div class="ret-field" style="margin:0"><label for="stmt-pay-method">${t('Method')}</label>
-              <select id="stmt-pay-method">
+              <select id="stmt-pay-method" onchange="RetailSystem._syncPaidFromVisibility()">
                 <option value="cash">${t('Cash')}</option>
                 <option value="card">${t('Card')}</option>
                 <option value="transfer">${t('Transfer')}</option>
@@ -19540,6 +19551,21 @@ const RetailSystem = {
               <input type="text" id="stmt-pay-notes" /></div>
             <button class="ret-btn ret-btn-primary" id="stmt-pay-btn" onclick="RetailSystem._submitPartyPayment('${kind}','${this._esc(id)}')">${t('Record Payment')}</button>
           </div>
+          ${isSupplier ? `
+          <!-- MONEY-3 M2: where did the cash come from? Native radios, so Tab / arrow keys /
+               Space work with no script. Only meaningful for a CASH payment; hidden otherwise.
+               'Till drawer' is greyed out when this computer has no open drawer (the server
+               refuses it with NO_OPEN_DRAWER as well). -->
+          <fieldset id="stmt-pay-from-box" style="border:0;padding:0;margin:10px 0 0">
+            <legend style="color:var(--text-muted);font-size:12px;padding:0">${t('Paid from')}</legend>
+            <label style="margin-inline-end:16px">
+              <input type="radio" name="stmt-pay-from" value="drawer" ${drawerOpen ? 'checked' : 'disabled'} />
+              ${t('Till drawer')}</label>
+            <label>
+              <input type="radio" name="stmt-pay-from" value="office" ${drawerOpen ? '' : 'checked'} />
+              ${t('Office cash (not from a drawer)')}</label>
+            ${drawerOpen ? '' : `<div style="color:var(--text-muted);font-size:12px;margin-top:4px">${t('No cash drawer is open on this computer.')}</div>`}
+          </fieldset>` : ''}
         </div>` : '';
 
     return `
@@ -19675,6 +19701,14 @@ const RetailSystem = {
     SubsystemApp.showToast(t('Opened WhatsApp — press Send there to finish.'), 'success');
   },
 
+  // MONEY-3 M2: show the "Paid from" choice only while the method is cash.
+  _syncPaidFromVisibility() {
+    const box = document.getElementById('stmt-pay-from-box');
+    if (!box) return;
+    const m = document.getElementById('stmt-pay-method')?.value || 'cash';
+    box.style.display = (m === 'cash') ? '' : 'none';
+  },
+
   async _submitPartyPayment(kind, id) {
     const amount = +(document.getElementById('stmt-pay-amount')?.value || 0);
     if (!(amount > 0)) {
@@ -19683,6 +19717,12 @@ const RetailSystem = {
     }
     const method = document.getElementById('stmt-pay-method')?.value || 'cash';
     const notes = document.getElementById('stmt-pay-notes')?.value || '';
+    // MONEY-3 M2: only a supplier's CASH payment has a "paid from"; sent only then so every
+    // other payment's request body is byte-for-byte what it was.
+    const paidFromEl = (kind === 'supplier' && method === 'cash')
+      ? document.querySelector('input[name="stmt-pay-from"]:checked') : null;
+    const body = { amount, method, notes };
+    if (paidFromEl) body.paid_from = paidFromEl.value;
     // DOUBLE-SUBMIT GUARD. Without it a double-click -- or one slow-LAN
     // click on the site-relay hub this product now ships -- records the
     // payment TWICE and silently wrongs the party's balance. There is no
@@ -19708,7 +19748,7 @@ const RetailSystem = {
       if (btn) { btn.disabled = false; btn.textContent = t('Record Payment'); }
     };
     try {
-      const d = await this._post(`${this._partyApiBase(kind)}/${id}/payments`, { amount, method, notes });
+      const d = await this._post(`${this._partyApiBase(kind)}/${id}/payments`, body);
       if (d.status === 'success') {
         SubsystemApp.showToast(t('Payment recorded'), 'success');
         // Routed through _closeModalOverlay (not a bare .remove()) so the

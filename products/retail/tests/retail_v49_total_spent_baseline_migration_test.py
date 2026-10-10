@@ -122,8 +122,8 @@ def test_upgrade_adds_the_column_and_sets_each_baseline_from_history():
     ids = _make_v48(db)
     backup_dir = _migrate(sch, db)
 
-    assert sch.RETAIL_SCHEMA_VERSION == 50  # v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 50  # v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    assert sch.RETAIL_SCHEMA_VERSION == 51  # v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py | prior: v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 51  # v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py | prior: v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     assert _rows(db, 'PRAGMA integrity_check')[0]['integrity_check'] == 'ok'
     assert os.listdir(backup_dir), 'ensure_schema_version must have written its pre-migration backup'
     assert 'total_spent_baseline' in _cols(db, 'customers')
@@ -163,7 +163,7 @@ def test_replay_is_byte_identical_and_never_rearms_a_changed_baseline():
 
 def test_a_fresh_install_has_the_column_defaulting_to_zero():
     sch, db = _install()
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 50  # v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 51  # v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py | prior: v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     assert 'total_spent_baseline' in _cols(db, 'customers')
     conn = _open(db)
     try:

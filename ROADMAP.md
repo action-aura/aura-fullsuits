@@ -7490,3 +7490,18 @@ reserved for the MONEY-3 wave closing three residuals: D2 (a split-paid sale is 
 asked 2026-10-10 to fix it -- this supersedes the earlier "one method" decision), D4 (paying a supplier in cash does not
 take it out of the till drawer), V6 (cheque money legs move party balances but post no GL journal). No registry / clinic /
 Owner schema version is used. Plan: ~/.claude/aura-plans/MONEY3-PLAN.md.
+
+### 2026-10-10 -- retail v51, crew A landed (M2 supplier cash from the drawer, M3 cheques in the books) -- NOT COMMITTED
+
+M1 (split refunds, crew B) still to append its step after crew A's two in `_migrate_retail_schema`.
+* M2 (D4): `payments.paid_from` ('drawer' | 'office' | NULL = legacy = office, synced) and
+  `cash_movements.payment_uid` (device-local). A cash supplier payment (direct and PO instalment) writes a `paid_out`
+  in this terminal's open session; cancelling it writes one `paid_in` (or a `void_note` when no drawer is open) by a
+  state-derived sweep that rides `install_void_reversal_sweep`. The holder of the original paid-out decides, not the
+  clicker (a second computer cannot know the drawer is closed). Z/X report lists "Supplier payments" by supplier.
+* M3 (V6): chart codes **1150 Cheques Under Collection** (asset) and **2050 Cheques Payable** (liability) added to
+  `DEFAULT_CHART`; every cheque transition posts a journal keyed on the fact (cheque + crossing / live stint). v51
+  books one opening journal per cheque ALIVE at upgrade (cleared/endorsed ones straight to the bank account).
+* Known gaps, written down: a rolling upgrade where a peer's cheque journals arrive AFTER this computer's upgrade
+  double-books that cheque; two computers acting on one cheque offline with CONFLICTING transitions (clear vs bounce)
+  can leave a one-cheque 1150/bank imbalance; a v50 peer's cheques produce no journals on a v51 computer.

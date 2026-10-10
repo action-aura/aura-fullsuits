@@ -211,6 +211,14 @@ ACCOUNT_STOCK_IN_TRANSIT = '1250'
 ACCOUNT_GOODS_ORDERED = '1260'
 ACCOUNT_OPENING_EQUITY = '3900'
 ACCOUNT_SHRINKAGE = '5910'
+# MONEY-3 M3 (retail v51): cheques post to the books. 1150 holds customer cheques received
+# and not yet banked (the code and working name were planned in docs/launch-readiness/
+# target-chart-of-accounts.md: "Cheques Under Collection"); 2050 holds supplier cheques issued
+# and not yet cleared. Flat accounts, no parent, like the STOCK-BOOKS four above. "Bank" is
+# ACCOUNT_CASH: this chart has ONE "Cash and Bank" account (1010-1080 stay reserved for the day
+# it is split), so a cheque clearing is a move between 1150/2050 and 1000.
+ACCOUNT_CHEQUES_ON_HAND = '1150'
+ACCOUNT_CHEQUES_PAYABLE = '2050'
 
 #: (code, name, account_type, normal_balance, parent_code). Parents are
 #: listed before children -- `ensure_default_chart` inserts in this order
@@ -266,6 +274,9 @@ DEFAULT_CHART = (
     ('1260', 'Goods Ordered Not Received', 'asset', 'debit', None),
     ('3900', 'Opening Balance Equity', 'equity', 'credit', None),
     ('5910', 'Shrinkage and Adjustments', 'expense', 'debit', None),
+    # MONEY-3 M3 (v51): names frozen once released, like every row above.
+    ('1150', 'Cheques Under Collection', 'asset', 'debit', None),
+    ('2050', 'Cheques Payable', 'liability', 'credit', None),
 )
 
 
@@ -1981,6 +1992,89 @@ def post_supplier_payment(conn, cid, branch_id, reference, currency, amount,
                          source_type, source_id, currency, lines,
                          reference=reference, posted_by=posted_by,
                          source_uid=source_uid)
+
+
+#: Deterministic uuid5 NAMESPACE for the CHEQUE journals' own `uid` (MONEY-3 M3). Same idea
+#: as `_GL_STOCK_NAMESPACE`: the uid is a pure function of WHICH FACT the journal books, so a
+#: retry, a double click, or two computers that both observe the same bank fact mint the SAME
+#: uid and the sync apply's `ON CONFLICT(uid) DO NOTHING` collapses them. Fixed literal, never
+#: regenerated.
+_GL_CHEQUE_NAMESPACE = uuid.UUID('3e8a52c7-91d4-5b60-a7f3-0c4d9e1b6285')
+
+#: leg kind -> (debit side, credit side) per cheque direction. Sides are named by role, resolved
+#: to account codes in `cheque_journal_lines`. 'party' = AR for a received cheque ('in'), AP for
+#: an issued one ('out'); 'holding' = Cheques Under Collection ('in') / Cheques Payable ('out');
+#: 'bank' = the one Cash and Bank account.
+#:   apply         the cheque comes alive (received / issued / reinstated): the party's debt is
+#:                 settled in the shop's favour and the cheque sits in its holding account
+#:   reverse       it dies while still in the holding account (bounced or cancelled before the
+#:                 bank touched it): the party owes again
+#:   bank          it clears (or is endorsed away): holding account -> bank
+#:   reverse_bank  it bounces AFTER the bank leg (cleared/endorsed -> bounced): the bank takes it
+#:                 back and the party owes again -- the plan's "reverse the bank leg instead"
+#:   opening       the v51 upgrade booking of a cheque that was alive before cheques posted
+#:   opening_bank  the same, for one that had already cleared / been endorsed
+_CHEQUE_LEGS = {
+    'in': {
+        'apply':        ('holding', 'party'),
+        'reverse':      ('party', 'holding'),
+        'bank':         ('bank', 'holding'),
+        'reverse_bank': ('party', 'bank'),
+        'opening':      ('holding', 'party'),
+        'opening_bank': ('bank', 'party'),
+    },
+    'out': {
+        'apply':        ('party', 'holding'),
+        'reverse':      ('holding', 'party'),
+        'bank':         ('holding', 'bank'),
+        'reverse_bank': ('bank', 'party'),
+        'opening':      ('party', 'holding'),
+        'opening_bank': ('party', 'bank'),
+    },
+}
+
+
+def cheque_journal_uid(cheque_id, kind, index):
+    """The deterministic uid of the cheque journal of `kind` at `index`.
+
+    `index` is the CROSSING index (core/retail/cheques.py) for 'apply'/'reverse'/'reverse_bank'
+    -- the same number `cheques.money_uid` keys the payment row on, so the journal and the money
+    leg it books are the same fact -- and the live STINT's apply-crossing index for 'bank' (a
+    cheque can clear at most once per stint between an apply and the next reverse). 'opening'
+    kinds use index 0: one opening journal per cheque, ever."""
+    return str(uuid.uuid5(_GL_CHEQUE_NAMESPACE, f"{cheque_id}:{kind}:{index}"))
+
+
+def cheque_journal_lines(direction, kind, amount, memo):
+    """The two lines of one cheque journal. Pure. `direction` is the cheque's own ('in' = a
+    customer's cheque received, 'out' = a supplier cheque issued)."""
+    debit_role, credit_role = _CHEQUE_LEGS[direction][kind]
+    codes = {
+        'party': ACCOUNT_AR if direction == 'in' else ACCOUNT_AP,
+        'holding': ACCOUNT_CHEQUES_ON_HAND if direction == 'in' else ACCOUNT_CHEQUES_PAYABLE,
+        'bank': ACCOUNT_CASH,
+    }
+    return [
+        {'account_code': codes[debit_role], 'debit': amount, 'memo': memo},
+        {'account_code': codes[credit_role], 'credit': amount, 'memo': memo},
+    ]
+
+
+def post_cheque_journal(conn, cid, branch_id, cheque_id, cheque_number, direction, kind, index,
+                        currency, amount, memo, business_date=None, posted_by=None):
+    """Post ONE cheque leg (see `_CHEQUE_LEGS`), idempotently. A second call with the same
+    (cheque, kind, index) returns the existing journal's id and posts nothing -- which is what
+    makes a retried request, a replayed transition and two computers observing the same bank
+    fact safe. `source_uid` is the cheque's own id (a UUID, global), so the upgrade can ask
+    "does any journal already book this cheque?" and a reader can find a cheque's journals.
+    Returns None for a non-positive amount (nothing to book)."""
+    if not amount or amount <= 0:
+        return None
+    return _post_once(
+        conn, cid, cheque_journal_uid(cheque_id, kind, index), branch_id,
+        business_date or _today(), 'cheque', None, currency,
+        cheque_journal_lines(direction, kind, amount, memo),
+        reference=cheque_number, memo=memo, posted_by=posted_by, source_uid=cheque_id)
 
 
 def post_purchase_order(conn, cid, branch_id, po_id, po_number, currency,

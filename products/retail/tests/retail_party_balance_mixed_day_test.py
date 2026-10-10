@@ -342,18 +342,26 @@ def test_the_trial_balance_subledger_ties_on_a_mixed_day(day):
     # The subledger side is exactly the sum of the derived balances.
     assert Decimal(str(sub['ar_subledger'])) == sum(EXPECTED_CUSTOMERS.values())
     assert Decimal(str(sub['ap_subledger'])) == sum(EXPECTED_SUPPLIERS.values())
-    # PRE-EXISTING GAP, measured here, not caused by v44 and not hidden: a
-    # cheque's money leg (a `payments` row, related_type='cheque') moves the
-    # party balance but is never posted to the general ledger
-    # (general_ledger.py has no cheque posting). On this day the books
-    # therefore sit above the subledger by exactly the NET cheque money:
-    # AR by 60 (cheque 60 received; 30 received then bounced nets 0) and AP by
-    # 40 (the supplier cheque). Everything that is NOT a cheque ties. The
-    # difference is asserted EXACTLY, so this goes red the day cheque posting
-    # lands (update CHEQUE_NET_* then) and also if any other term drifts.
-    CHEQUE_NET_AR, CHEQUE_NET_AP = Decimal('60'), Decimal('40')
-    assert Decimal(str(sub['ar_gl'])) - Decimal(str(sub['ar_subledger'])) == CHEQUE_NET_AR, sub
-    assert Decimal(str(sub['ap_gl'])) - Decimal(str(sub['ap_subledger'])) == CHEQUE_NET_AP, sub
+    # MONEY-3 M3 (retail v51) CLOSED the gap this assertion used to pin. It was written as a
+    # deliberate tripwire: "a cheque's money leg moves the party balance but is never posted to
+    # the general ledger ... the books therefore sit above the subledger by exactly the NET
+    # cheque money: AR by 60 ... and AP by 40 ... asserted EXACTLY, so this goes red the day
+    # cheque posting lands". It went red the day cheque posting landed
+    # (`assert Decimal('215.0') - Decimal('215.0') == Decimal('60')`), and is rewritten here.
+    #
+    # WHAT IT PROVES NOW instead: with a cheque in every live state on this day (60 received and
+    # alive, 30 received then bounced, a 40 supplier cheque issued) the books tie to the
+    # subledger on BOTH sides EXACTLY -- no allowance -- and the two new cheque accounts hold
+    # exactly the alive cheque money: 1150 Cheques Under Collection 60 (the bounced one is back
+    # out), 2050 Cheques Payable 40. WHAT IT NO LONGER CATCHES: the old gap, deliberately; the
+    # "cheque posting is missing" regression is now owned by retail_money3_cheque_books_test.py,
+    # which pins each transition's journal. Everything that is NOT a cheque still has to tie.
+    assert Decimal(str(sub['ar_gl'])) - Decimal(str(sub['ar_subledger'])) == 0, sub
+    assert Decimal(str(sub['ap_gl'])) - Decimal(str(sub['ap_subledger'])) == 0, sub
+    assert sub['ar_ties'] is True and sub['ap_ties'] is True, sub
+    tb = day['client'].get(f'{API}/reports/trial-balance').get_json()['data']
+    held = {a['code']: Decimal(str(a['balance'])) for a in tb['accounts']}
+    assert held['1150'] == Decimal('60') and held['2050'] == Decimal('40'), held
 
 
 def _tb(client):
@@ -366,8 +374,8 @@ def test_an_accepted_reorder_po_is_booked_and_ties():  # v44 F1
     and create_purchase_order books that debt in the general ledger; the
     reorder path posted nothing, so the AP subledger (derived) rose by the PO
     total while the books did not and ap_ties went False (verifier probe,
-    red on 1b9a89a6). Own fresh company: the shared `day` fixture carries a
-    known cheque gap that would mask a tie failure here.
+    red on 1b9a89a6). Own fresh company, so the shared `day` fixture's many
+    parties cannot mask a tie failure here (the cheque gap it once carried closed in v51).
 
     Both directions: the accepted PO makes the supplier owed exactly its total
     AND the books agree; a part payment through /pay still ties."""

@@ -1345,7 +1345,25 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 #     are never announced on their own, they travel inside their sale line's payload.
 #
 # Appended LAST and shape-gated. See `_migrate_add_config_sync`.
-RETAIL_SCHEMA_VERSION = 50
+#
+# v51 (2026-10-10, MONEY-3 -- claimed in ROADMAP.md "retail schema v51 CLAIMED"; ONE version
+# for the whole wave, UNRELEASED, so each crew adds its own step after the previous one).
+# Crew A's two steps, in this order:
+#
+#   M2 / D4 `_migrate_add_supplier_cash_drawer` -- paying a supplier in cash takes it out of
+#     the till drawer. `payments.paid_from TEXT` ('drawer' | 'office'; NULL on every legacy
+#     row = 'office' = no drawer effect, an old drawer is never re-opened) is a SYNCED fact
+#     on the payment. `cash_movements.payment_uid TEXT` names the payment a drawer paid-out
+#     (or its return, on a cancellation) belongs to; the movement itself is device-local like
+#     every cash movement (a drawer belongs to one terminal).
+#
+#   M3 / V6 `_migrate_add_cheque_books` -- cheques post to the books. Two accounts join the
+#     default chart (1150 Cheques Under Collection, 2050 Cheques Payable) and every cheque
+#     that is NOT in a terminal state at the upgrade gets ONE opening journal, so the
+#     AR/AP tie checks agree the moment the upgrade finishes. See that function.
+#
+# Appended LAST and shape-gated. Crew B (M1, split refunds) appends its step after these.
+RETAIL_SCHEMA_VERSION = 51
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2526,6 +2544,39 @@ def _migrate_retail_schema(conn):
     # touches only the promotion/modifier tables; nothing a step above may still be
     # changing. See the v50 comment on RETAIL_SCHEMA_VERSION.
     _migrate_add_config_sync(conn)
+    # v50 -> v51 (MONEY-3): appended LAST, one step per item, in the order the wave landed them.
+    # `_migrate_add_cheque_books` reads `cheques`/`cheque_events` (v32), `gl_*` (v38/v41) and the
+    # party balance derivation, none of which a step above may still be changing. Crew B's
+    # split-refund step goes AFTER these two. See the v51 comment on RETAIL_SCHEMA_VERSION.
+    _migrate_add_supplier_cash_drawer(conn)
+    _migrate_add_cheque_books(conn)
+
+
+def _migrate_add_supplier_cash_drawer(conn):
+    """One-time migration (schema v50 -> v51, MONEY-3 M2). See the v51 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    Adds `payments.paid_from` and `cash_movements.payment_uid` (both nullable TEXT) and an
+    index on the latter. NO backfill, on purpose: a supplier cash payment made before this
+    column existed was never taken out of any drawer, and writing 'drawer' on it now would
+    make a future cancellation put money back into a drawer that never lost it. NULL reads as
+    'office'.
+
+    Idempotent and shape-gated per table and per column (a hand-built minimal fixture may
+    lack either table), so the whole chain replaying is byte-identical."""
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+
+    def _cols(table):
+        return {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
+
+    if 'payments' in live and 'paid_from' not in _cols('payments'):
+        conn.execute('ALTER TABLE payments ADD COLUMN paid_from TEXT')
+    if 'cash_movements' in live:
+        if 'payment_uid' not in _cols('cash_movements'):
+            conn.execute('ALTER TABLE cash_movements ADD COLUMN payment_uid TEXT')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_cash_movements_payment_uid '
+                     'ON cash_movements(payment_uid)')
 
 
 def _migrate_add_config_sync(conn):
@@ -12178,3 +12229,77 @@ def _migrate_add_gl_journal_sync(conn):
             SELECT RAISE(ABORT, 'gl_journals is append-only: post a reversing journal, never UPDATE one');
         END;
     """)
+
+
+def _migrate_add_cheque_books(conn):
+    """One-time migration (schema v50 -> v51, MONEY-3 M3). See the v51 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    Until v51 a cheque's money leg moved the party balance and posted NO journal, so GL
+    Accounts Receivable / Payable sat ABOVE the customer / supplier balances by every cheque
+    that was alive. From v51 each transition posts its own journal (`_post_cheque_books` in
+    api/retail_api.py). THIS step books the cheques that were already alive at the upgrade, so
+    the AR/AP tie checks agree the moment it finishes -- ONE opening journal per such cheque:
+
+      * pending / deposited  -> Dr Cheques Under Collection (1150) / Cr AR   (customer cheque)
+                                Dr AP / Cr Cheques Payable (2050)            (supplier cheque)
+      * cleared / endorsed   -> Dr Cash and Bank / Cr AR   |   Dr AP / Cr Cash and Bank
+        (the cheque's bank leg was never in the books either: the AR/AP tie is the judge, and
+        an alive cheque has reduced the party balance whether or not the bank paid it yet)
+      * bounced / cancelled / written off -> NOTHING. Their party effect is already final and
+        already matches the books: the apply row and the reverse row net to zero on the party,
+        and neither was ever posted.
+
+    Dated at the upgrade, memo "cheque in flight before v51" (a bank-leg cheque says "cheque
+    cleared before v51"). The uid is a pure function of the cheque (`cheque_journal_uid(id,
+    'opening', 0)`), so a chain replay, or two computers upgrading separately, books it once.
+
+    SKIPPED for a cheque that ALREADY has a journal (`source_uid` = the cheque id): a computer
+    that upgraded earlier and posted that cheque's journals has sent them here, and booking an
+    opening on top would count it twice. Known rolling-upgrade gap, written down rather than
+    hidden: if the peer's journals have not ARRIVED when this computer upgrades, the later arrival
+    doubles that one cheque. A shop upgrades its computers together; the AR/AP tie check shows it
+    if not.
+
+    WHY ONLY ON A GENUINE UPGRADE: a replay on a later bump (`entry_user_version >= 51`) must not
+    book a cheque that came alive after the upgrade -- those post their own journals.
+
+    Shape-gated: every table it reads or writes must exist (a hand-built minimal fixture may not
+    have the cheque or ledger tables), `sync_outbox` included because `post_journal` queues one
+    sync event per journal. Sets `sqlite3.Row` on the connection for its duration (the ledger
+    helpers read rows by name) and restores it."""
+    entry_user_version = conn.execute('PRAGMA user_version').fetchone()[0]
+    if entry_user_version >= 51:
+        return
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if not {'cheques', 'cheque_events', 'gl_accounts', 'gl_journals', 'gl_journal_lines',
+            'sync_outbox'} <= live:
+        return
+    from core.retail import cheques as _cheque_engine
+    from core.retail import general_ledger as _gl
+
+    previous_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        for cheque in conn.execute(
+                "SELECT id, company_id, branch_id, direction, cheque_number, amount, currency "
+                "FROM cheques ORDER BY created_at_utc, id").fetchall():
+            events = conn.execute(
+                "SELECT id, event_type, from_status, to_status, created_at_utc "
+                "FROM cheque_events WHERE cheque_id=?", (cheque['id'],)).fetchall()
+            status = _cheque_engine.fold(events).status
+            if status not in _cheque_engine.LIVE_STATES:
+                continue
+            if conn.execute("SELECT 1 FROM gl_journals WHERE company_id=? AND source_uid=? LIMIT 1",
+                            (cheque['company_id'], cheque['id'])).fetchone():
+                continue
+            banked = status in ('cleared', 'endorsed')
+            _gl.post_cheque_journal(
+                conn, cheque['company_id'], cheque['branch_id'], cheque['id'],
+                cheque['cheque_number'], cheque['direction'],
+                'opening_bank' if banked else 'opening', 0, cheque['currency'] or 'JOD',
+                cheque['amount'],
+                'cheque cleared before v51' if banked else 'cheque in flight before v51')
+    finally:
+        conn.row_factory = previous_factory

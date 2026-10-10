@@ -3674,6 +3674,19 @@ class SyncService:
                  p.get("status", "active"), p.get("created_by"), p.get("device"), p.get("created_at"),
                  p.get("uid")),
             )
+            # MONEY-3 M2 (retail v51): `paid_from` ('drawer' | 'office') is a fact ABOUT
+            # the payment, so it travels. It is applied as its own statement, and only
+            # when the receiver has the column, so a minimal fixture / older schema keeps
+            # applying payments exactly as before. A missing key (an older writer) is
+            # LEGACY = NULL = 'office', never "stale"; an existing row is never rewritten
+            # (the INSERT above is DO NOTHING, and this only fills a NULL).
+            # IT NEVER TOUCHES A DRAWER: the paid-out a 'drawer' payment caused lives in
+            # the cash session of the till that took the cash, not here.
+            if p.get("paid_from") in ("drawer", "office") and p.get("uid") and any(
+                    r[1] == "paid_from" for r in conn.execute("PRAGMA table_info(payments)").fetchall()):
+                conn.execute(
+                    "UPDATE payments SET paid_from=? WHERE uid=? AND company_id=? AND paid_from IS NULL",
+                    (p.get("paid_from"), p.get("uid"), local_company_id))
             if po_local_id is not None:
                 self._refresh_po(conn, local_company_id, po_local_id)
         elif entity_type == "purchase_order_receipt":
