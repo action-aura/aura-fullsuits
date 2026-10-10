@@ -214,6 +214,9 @@ from commercial_runtime.einvoicing import settings as _einvoicing_settings
 from core.retail import einvoice_adapter as _einvoice_adapter
 from commercial_runtime.notifications.routes import make_notifications_blueprint
 from commercial_runtime.notifications.worker import EmailOutboxWorker
+from commercial_runtime.notifications import transport as _mail_transport
+from commercial_runtime.notifications.identity_sink import IdentityMailSink
+from commercial_runtime.identity import verification as _identity_verification
 from commercial_runtime.notifications import settings as _notification_settings
 from commercial_runtime.notifications.whatsapp_routes import make_whatsapp_notifications_blueprint
 from commercial_runtime.notifications.whatsapp_worker import WhatsAppOutboxWorker
@@ -348,19 +351,94 @@ app.register_blueprint(make_einvoicing_blueprint(
 # identical reason (this registry is genuinely multi-tenant).
 _notifications_workers = {}
 
+# Real-email wave. Mail leaves this till one of three ways, decided on every
+# worker tick (commercial_runtime/notifications/transport.py): AURA_SMTP_HOST
+# set -> direct SMTP (unchanged); else an Owner URL and an activated install ->
+# relayed THROUGH Owner (this till never holds a mailbox password); else
+# nothing, and rows wait in the outbox. The relay is built lazily and only when
+# an Owner URL is configured; Android is excluded because its device key lives
+# in Kotlin (a later wave).
+_mail_relay = None
+_mail_workers_started = set()
+#: How often a worker started because ACCOUNT mail was queued ticks. Short on
+#: purpose: someone is waiting for their verification link.
+_ACCOUNT_MAIL_TICK_SECONDS = 15
+
+
+def _mail_relay_configured():
+    return bool(OWNER_LICENSING_BASE_URL) and LICENSING_PLATFORM != 'ANDROID'
+
+
+def _mail_transport_possible():
+    return _notification_settings.transport_possible()
+
+
+def _get_mail_relay():
+    global _mail_relay
+    if _mail_relay is None and _mail_relay_configured():
+        from commercial_runtime.licensing_contracts.client import LicensingClient, LicensingClientConfig
+        from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+        _mail_app_data = Path(DATABASE_DIR).parent
+        _mail_state_db = _mail_app_data / 'database' / 'subsystems' / 'licensing.db'
+        _mail_relay = _mail_transport.RelayTransport(
+            # One retry: this runs unattended on the worker tick and the next
+            # tick (with the outbox's own backoff) is the real retry.
+            client_factory=lambda: LicensingClient(LicensingClientConfig(
+                base_url=OWNER_LICENSING_BASE_URL, timeout_seconds=OWNER_LICENSING_TIMEOUT_SECONDS,
+                verify_tls=OWNER_LICENSING_VERIFY_TLS, max_retries=1)),
+            signer_factory=lambda: _licensing_device_identity_factory(_mail_app_data / 'licensing'),
+            installation_id_provider=lambda: getattr(
+                LicenseStateRepository(_mail_state_db).load(), 'owner_installation_id', None),
+            app_version=APP_VERSION,
+            platform=LICENSING_PLATFORM,
+        )
+    return _mail_relay
+
+
+def _mail_transport_for_tick():
+    return _mail_transport.choose_transport(_get_mail_relay())
+
+
+def _mail_transport_info():
+    return _mail_transport.describe(relay_configured=_mail_relay_configured(), relay=_get_mail_relay())
+
 
 def _get_or_create_notifications_worker(company_id):
     if company_id not in _notifications_workers:
         _notifications_workers[company_id] = EmailOutboxWorker(
             conn_factory=get_retail_conn,
             company_id=company_id,
+            transport_factory=_mail_transport_for_tick,
         )
     return _notifications_workers[company_id]
 
 
+def _start_notifications_worker_once(company_id, interval_seconds):
+    if company_id in _mail_workers_started:
+        return
+    _mail_workers_started.add(company_id)
+    _get_or_create_notifications_worker(company_id).start(interval_seconds=interval_seconds)
+
+
+# "Can mail leave this install at all" for the shop-alert gate
+# (notifications.settings.is_enabled) and for account mail: own SMTP, or an
+# Owner URL to relay through. Activation is NOT required here -- mail queued
+# before activation waits and goes out after it.
+_notification_settings.set_transport_probe(_mail_relay_configured)
+
+# Verification / password-reset mail is queued, not sent inline (see
+# commercial_runtime/identity/verification.py), and its worker runs whenever a
+# transport exists, whatever the company's notifications toggle says.
+_identity_verification.set_mail_sink(IdentityMailSink(
+    conn_factory=get_retail_conn,
+    possible=_mail_transport_possible,
+    on_queued=lambda company_id: _start_notifications_worker_once(company_id, _ACCOUNT_MAIL_TICK_SECONDS),
+))
+
 app.register_blueprint(make_notifications_blueprint(
     conn_factory=get_retail_conn,
     get_worker=_get_or_create_notifications_worker,
+    transport_info=_mail_transport_info,
 ))
 
 # whatsapp-recipients -- outbound WhatsApp reports (daily sales, shift
@@ -3262,16 +3340,25 @@ def _resume_notifications_workers():
     reasoning: a company that had email notifications enabled before a
     restart must keep draining its outbox without waiting for a settings
     write to notice. A fresh/never-enabled install finds zero rows here and
-    starts zero threads, same as einvoicing's own sweep."""
+    starts zero threads, same as einvoicing's own sweep.
+
+    Real-email wave: (1) with no way for mail to leave this install at all (no
+    SMTP host, no Owner URL) nothing is started -- this sweep used to start
+    workers that could only ever no-op; (2) a company with account mail still
+    waiting (a verification link queued before a restart or before activation)
+    gets its worker even though it never touched the notifications toggle."""
+    if not _mail_transport_possible():
+        return
     conn = get_retail_conn()
     try:
         rows = conn.execute(
-            "SELECT DISTINCT company_id FROM email_settings WHERE skey='enabled' AND svalue='1'"
+            "SELECT company_id FROM email_settings WHERE skey='enabled' AND svalue='1' "
+            "UNION SELECT company_id FROM email_outbox WHERE status IN ('QUEUED','SENDING')"
         ).fetchall()
         for row in rows:
             cid = row[0]
             interval = int(_notification_settings.get_setting(conn, cid, 'submit_interval_seconds'))
-            _get_or_create_notifications_worker(cid).start(interval_seconds=interval)
+            _start_notifications_worker_once(cid, interval)
     finally:
         conn.close()
 

@@ -231,6 +231,49 @@ class LicensingClient:
         }
         return self._post_signed("/crash-reports", body, signer)
 
+    def send_mail(
+        self,
+        *,
+        installation_id: str,
+        kind: str,
+        params: dict,
+        signer: DeviceSigner,
+        app_version: str,
+        platform: str,
+        lang: str = "en",
+        shop_name: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> dict:
+        """Mail relay: "please send this templated message for me". Device-signed
+        like a check-in, so Owner attributes it (and its per-installation caps)
+        to the installation it already knows.
+
+        The body names a TEMPLATE `kind` plus `params`; Owner renders the
+        subject and the text itself, and refuses a request that carries its
+        own. There is deliberately no field here for a subject, a body, a
+        sender or a mailbox password: this client has none to send, and Owner
+        holds the only credentials. Returns Owner's JSON body as-is (202
+        `result == "QUEUED"` on success); like every method here it does not
+        raise on a business rejection, so the CALLER decides success from
+        `result`.
+        """
+        body = {
+            "contract_version": CONTRACT_VERSION,
+            "request_id": request_id or str(uuid.uuid4()),
+            "correlation_id": str(uuid.uuid4()),
+            "timestamp": _now_iso(),
+            "nonce": _new_nonce(),
+            "installation_id": installation_id,
+            "app_version": app_version,
+            "platform": platform,
+            "kind": kind,
+            "lang": lang,
+            "params": params,
+        }
+        if shop_name:
+            body["shop_name"] = shop_name
+        return self._post_signed("/mail", body, signer)
+
     def authorize_release_download(
         self,
         *,

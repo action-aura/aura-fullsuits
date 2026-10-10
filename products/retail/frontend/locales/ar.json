@@ -2660,5 +2660,8 @@
   "Something went wrong with the update. Try again.": "حدث خطأ في التحديث. حاول مرة أخرى.",
   "A new version is ready to install. Open Updates.": "نسخة جديدة جاهزة للتثبيت. افتح التحديثات.",
   "Update ready": "التحديث جاهز",
-  "Hide until next time": "أخفِ حتى المرة القادمة"
+  "Hide until next time": "أخفِ حتى المرة القادمة",
+  "We are sending a confirmation email to your address.": "نرسل رسالة تأكيد إلى بريدك الإلكتروني.",
+  "A confirmation email was sent a moment ago.": "تم إرسال رسالة تأكيد قبل لحظات.",
+  "Email is not set up on this computer yet, so no confirmation email was sent. You can confirm your address later.": "البريد الإلكتروني غير مُعدّ على هذا الجهاز بعد، لذلك لم تُرسل رسالة تأكيد. يمكنك تأكيد بريدك لاحقًا."
 }

@@ -40,6 +40,12 @@
     <button type="submit" class="secondary">{{ _("Reset MFA (requires recent authentication)") }}</button>
   </form>
   {% endif %}
+  {% if has_permission('staff.reset_mfa') and staff.is_active and not staff.disabled_at %}
+  <form class="inline" method="post" action="{{ url_for('staff.password_reset_link_route', staff_id=staff.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="secondary">{{ _("Create password reset link (requires recent authentication)") }}</button>
+  </form>
+  {% endif %}
   {% if staff.is_active and not staff.disabled_at and has_permission('staff.disable') %}
   <form class="inline" method="post" action="{{ url_for('staff.disable', staff_id=staff.id) }}"
         data-confirm="{{ _('Disable this staff account? This revokes all of its active sessions immediately.') }}">

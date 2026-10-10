@@ -50,6 +50,7 @@ def make_notifications_blueprint(
     *,
     conn_factory: Callable[[], object],
     get_worker: Optional[Callable[[object], object]] = None,
+    transport_info: Optional[Callable[[], dict]] = None,
 ):
     """`get_worker(company_id) -> EmailOutboxWorker` is a factory/registry,
     not a single instance -- identical reasoning to
@@ -73,6 +74,12 @@ def make_notifications_blueprint(
                 'data': {
                     'enabled': enabled,
                     'smtp_configured': smtp_client.is_configured(),
+                    # Real-email wave: how mail leaves this install -- 'smtp'
+                    # (own mailbox), 'relay' (through Owner; `ready` is False
+                    # until the install is activated) or 'none' (not set up).
+                    'transport': (transport_info() if transport_info is not None
+                                  else {'transport': 'smtp' if smtp_client.is_configured() else 'none',
+                                        'ready': smtp_client.is_configured()}),
                     'counts_by_state': counts,
                 },
             })

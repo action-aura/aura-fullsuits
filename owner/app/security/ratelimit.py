@@ -27,6 +27,40 @@ def record_attempt(email: str, ip_address: str | None, success: bool, reason: st
     db_session.commit()
 
 
+_RESET_KEY_PREFIX = "pwreset:"
+_RESET_REASON = "password_reset_request"
+_RESET_WINDOW_SECONDS = 3600
+
+
+def _reset_key(email: str) -> str:
+    """Password-reset requests are throttled in the same table but under a
+    NAMESPACED key (a hash, never the address), so they can never be mistaken
+    for -- or reset -- the login lockout above, which matches the plain
+    address. (A success row under the real address would unlock a locked-out
+    account; a failure row would lock a person out of logging in by merely
+    asking for a reset.)"""
+    import hashlib
+
+    return _RESET_KEY_PREFIX + hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()
+
+
+def record_reset_request(email: str, ip_address: str | None) -> None:
+    db_session.add(LoginAttempt(email_attempted=_reset_key(email), ip_address=ip_address, success=False, reason=_RESET_REASON))
+    db_session.commit()
+
+
+def count_reset_requests(email: str) -> int:
+    """Reset requests for this address in the last hour (known or unknown
+    address alike -- the caller counts every request)."""
+    window_start = utcnow() - timedelta(seconds=_RESET_WINDOW_SECONDS)
+    stmt = (
+        select(LoginAttempt)
+        .where(LoginAttempt.email_attempted == _reset_key(email))
+        .where(LoginAttempt.created_at >= window_start)
+    )
+    return len(db_session.execute(stmt).scalars().all())
+
+
 def is_locked_out(email: str, ip_address: str | None, max_attempts: int, lockout_seconds: int) -> bool:
     window_start = utcnow() - timedelta(seconds=lockout_seconds)
     stmt = (

@@ -50,6 +50,11 @@ POLICIES: dict[str, RateLimitPolicy] = {
     # address) and a fleet that all hit the same bug after a bad release will
     # all retry together -- sized like check-in, not like a download.
     "crash_reports": RateLimitPolicy("crash_reports", max_requests=30, window_seconds=60),
+    # Real-email wave: the mail relay's per-ADDRESS request budget (a flood
+    # guard in front of authentication). The real per-installation caps
+    # (50/day, 10 identity/day, same recipient 1 per 2 min) are enforced in
+    # app/mail/relay.py after the device is authenticated.
+    "mail_relay": RateLimitPolicy("mail_relay", max_requests=30, window_seconds=60),
 }
 
 

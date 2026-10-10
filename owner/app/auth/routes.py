@@ -391,6 +391,74 @@ def change_password_submit():
     return response
 
 
+@bp.route("/forgot-password", methods=["GET"])
+def forgot_password_form():
+    if load_current_staff() is not None:
+        return redirect(url_for("dashboard.index"))
+    return render_template("auth/forgot_password.html")
+
+
+@bp.route("/forgot-password", methods=["POST"])
+def forgot_password_submit():
+    """ALWAYS the same page, whether the address belongs to an account, a
+    disabled account, nothing at all, or is over its hourly limit, and whether
+    or not this server can send email. See app/auth/password_reset.py."""
+    from app.auth.password_reset import request_reset
+
+    try:
+        request_reset(request.form.get("email", ""), request.remote_addr)
+    except Exception:
+        # Even a failure must not look different from success to the person
+        # asking; it is logged for the operator.
+        db_session.rollback()
+        current_app.logger.exception("staff password reset request failed (request body not logged)")
+    return render_template("auth/forgot_password_sent.html")
+
+
+def _reset_invalid_response():
+    return render_template("auth/reset_invalid.html"), 400
+
+
+@bp.route("/reset-password/<token>", methods=["GET"])
+def reset_password_form(token: str):
+    from app.auth.password_reset import staff_for_token
+
+    if staff_for_token(token) is None:
+        return _reset_invalid_response()
+    return render_template("auth/reset_password.html", error=None, token=token)
+
+
+@bp.route("/reset-password/<token>", methods=["POST"])
+def reset_password_submit(token: str):
+    from app.auth.password_reset import staff_for_token
+    from app.auth.session import revoke_all_sessions_for_staff
+
+    staff = staff_for_token(token)
+    if staff is None:
+        return _reset_invalid_response()
+    new_password = request.form.get("new_password", "")
+    if new_password != request.form.get("confirm_password", ""):
+        return render_template("auth/reset_password.html", error=_("The two passwords do not match."), token=token), 400
+    try:
+        staff.password_hash = hash_password(new_password)
+    except PasswordPolicyError as exc:
+        return render_template("auth/reset_password.html", error=str(exc), token=token), 400
+    staff.must_change_password = False
+    # Every existing session dies with the old password. MFA is deliberately
+    # NOT touched: the next login still asks for the authenticator code.
+    staff.session_version += 1
+    db_session.commit()
+    revoke_all_sessions_for_staff(staff.id, reason="password_reset")
+    audit_record(
+        actor_staff_user_id=staff.id,
+        actor_role_snapshot=None,
+        action_code="STAFF_PASSWORD_RESET",
+        entity_type="staff_user",
+        entity_public_id=str(staff.id),
+    )
+    return redirect(url_for("auth.login_form"))
+
+
 @bp.route("/accept-invitation/<token>", methods=["GET"])
 def accept_invitation_form(token: str):
     invitation = _find_valid_invitation(token)

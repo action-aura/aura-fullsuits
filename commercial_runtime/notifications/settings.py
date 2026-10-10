@@ -110,11 +110,36 @@ def set_setting(conn: sqlite3.Connection, company_id, key: str, value: str) -> N
     )
 
 
+# Real-email wave: "can mail leave this install at all". Direct SMTP was the only
+# way; now an install with an Owner URL can also relay through Owner
+# (transport.py). A product that wires the relay registers a probe here that
+# answers "is a relay configured" (Owner URL set; activation is checked later,
+# per tick, by the worker -- mail queued before activation just waits).
+# None (the default, and what Clinic leaves) == SMTP only, bit-for-bit today's
+# behaviour.
+_transport_probe = None
+
+
+def set_transport_probe(probe) -> None:
+    global _transport_probe
+    _transport_probe = probe
+
+
+def transport_possible() -> bool:
+    if smtp_client.is_configured():
+        return True
+    return bool(_transport_probe is not None and _transport_probe())
+
+
 def is_enabled(conn: sqlite3.Connection, company_id) -> bool:
     """The single source of truth every enqueue/worker/route call must go
     through -- never re-implement this precedence check elsewhere (same
-    rule einvoicing/settings.py::is_enabled documents for itself)."""
-    if not smtp_client.is_configured():
+    rule einvoicing/settings.py::is_enabled documents for itself).
+
+    Real-email wave: "a transport exists" (own SMTP, or a relay through Owner)
+    AND this company's `enabled` toggle. Account mail (verification / reset)
+    does NOT go through this gate at all -- see worker.py."""
+    if not transport_possible():
         return False
     return get_setting(conn, company_id, 'enabled') == '1'
 

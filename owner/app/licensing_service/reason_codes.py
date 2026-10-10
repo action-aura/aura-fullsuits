@@ -41,6 +41,8 @@ PUBLIC_REASON_CODES = frozenset(
         "DEVICE_ALREADY_REGISTERED",
         "SERVICE_TEMPORARILY_UNAVAILABLE",
         "RATE_LIMITED",
+        # Real-email wave: an installation is over one of its mail-relay caps.
+        "MAIL_LIMIT",
         "SIGNING_KEY_UNAVAILABLE",
         "INTERNAL_DECISION_FAILURE",
         # Deliberately normalized/generic public code for the whole license-

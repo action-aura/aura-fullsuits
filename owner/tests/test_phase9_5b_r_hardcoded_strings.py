@@ -33,6 +33,11 @@ GATED_DIRS = (
     # actually brings quarantine_list.html under the hardcoded-string
     # scanner below, which is the point of registering it.
     "sync",
+    # Crash-reports wave (app/crash_reports/): the staff crash list/detail
+    # pages. That wave added the template directory without registering it
+    # here, so this guard was red from its commit onward; registered now,
+    # which also puts those two templates under the hardcoded-string scan.
+    "crash_reports",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form

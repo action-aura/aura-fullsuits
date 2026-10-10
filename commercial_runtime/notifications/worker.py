@@ -29,6 +29,7 @@ from typing import Callable, Optional
 from . import settings
 from .outbox import EmailOutboxRepository
 from .smtp_client import send_email
+from .transport import IDENTITY_TYPES
 
 _BACKOFF_BASE_SECONDS = 30
 _BACKOFF_CAP_SECONDS = 3600
@@ -58,7 +59,14 @@ class EmailOutboxWorker:
         batch_size: int = 25,
         lease_seconds: int = 120,
         rate_limit_seconds: float = 0.5,
+        transport_factory: Optional[Callable[[], object]] = None,
     ):
+        # `transport_factory` (real-email wave) returns the transport for THIS
+        # tick -- direct SMTP, a relay through Owner, or None -- see
+        # transport.py::choose_transport. None here (the default, and what
+        # Clinic and every older test pass) keeps the original behaviour
+        # exactly: direct SMTP, gated by settings.is_enabled().
+        self._transport_factory = transport_factory
         self._conn_factory = conn_factory
         self._company_id = company_id
         self._batch_size = batch_size
@@ -70,6 +78,12 @@ class EmailOutboxWorker:
     # ─── scheduling (mirrors LicenseCheckInScheduler / einvoicing's OutboxWorker) ──
 
     def start(self, interval_seconds: int) -> None:
+        # Idempotent: a second start() (boot resume AND an account-mail
+        # enqueue both asking for this company's worker) replaces the timer
+        # chain instead of leaving the first one running beside it.
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
         self._stopped.clear()
         self._schedule_next(interval_seconds)
 
@@ -96,6 +110,8 @@ class EmailOutboxWorker:
     # ─── one pass ───────────────────────────────────────────────────────
 
     def run_once(self) -> dict:
+        if self._transport_factory is not None:
+            return self._run_once_with_transport()
         conn = self._conn_factory()
         try:
             if not settings.is_enabled(conn, self._company_id):
@@ -130,14 +146,60 @@ class EmailOutboxWorker:
         finally:
             conn.close()
 
+    def _run_once_with_transport(self) -> dict:
+        """The real-email path: pick the transport for this tick, send account
+        mail whenever one exists, shop alerts only when the company opted in.
+
+        Decided and returned, never silent: "no transport yet" (an install
+        waiting for activation) and "ran and sent" must be told apart by the
+        caller and by a log reader."""
+        transport = self._transport_factory()
+        if transport is None:
+            return {'ran': False, 'reason': 'no_transport'}
+        conn = self._conn_factory()
+        try:
+            repo = EmailOutboxRepository(conn)
+            reclaimed = repo.reclaim_expired_leases()
+            conn.commit()
+
+            # Account mail is not a shop alert: it ignores the notifications
+            # toggle (a brand-new shop has never touched it, and the first
+            # thing it needs is its verification link).
+            claimed = repo.claim_due(
+                company_id=self._company_id, batch_size=self._batch_size,
+                lease_seconds=self._lease_seconds, only_types=IDENTITY_TYPES,
+            )
+            if settings.get_setting(conn, self._company_id, 'enabled') == '1':
+                claimed += repo.claim_due(
+                    company_id=self._company_id, batch_size=self._batch_size,
+                    lease_seconds=self._lease_seconds, exclude_types=IDENTITY_TYPES,
+                )
+            conn.commit()
+
+            outcomes = {'sent': 0, 'retry': 0, 'failed_permanent': 0}
+            for i, row in enumerate(claimed):
+                outcome = self._process_row(conn, repo, row, transport=transport)
+                conn.commit()
+                outcomes[outcome] = outcomes.get(outcome, 0) + 1
+                if self._rate_limit_seconds and i < len(claimed) - 1:
+                    time.sleep(self._rate_limit_seconds)
+
+            return {'ran': True, 'claimed': len(claimed), 'reclaimed': reclaimed,
+                    'outcomes': outcomes, 'transport': getattr(transport, 'name', None)}
+        finally:
+            conn.close()
+
     # ─── per-row send ────────────────────────────────────────────────────
 
-    def _process_row(self, conn, repo: EmailOutboxRepository, row) -> str:
+    def _process_row(self, conn, repo: EmailOutboxRepository, row, transport=None) -> str:
         try:
-            send_email(
-                recipient=row['recipient'], subject=row['subject'],
-                body_text=row['body_text'], body_html=row['body_html'],
-            )
+            if transport is not None:
+                transport.send(row)
+            else:
+                send_email(
+                    recipient=row['recipient'], subject=row['subject'],
+                    body_text=row['body_text'], body_html=row['body_html'],
+                )
         except Exception as exc:
             return self._apply_retry(conn, repo, row, error=type(exc).__name__)
 

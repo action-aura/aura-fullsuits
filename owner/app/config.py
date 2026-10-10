@@ -72,6 +72,14 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_LEAD_DISCOVERY_PROVIDER",
         "OWNER_GOOGLE_PLACES_API_KEY",
         "OWNER_LEAD_DISCOVERY_TIMEOUT_SECONDS",
+        # Real-email wave: Owner's own SMTP sender (app/mail/smtp.py)
+        "OWNER_SMTP_HOST",
+        "OWNER_SMTP_PORT",
+        "OWNER_SMTP_USER",
+        "OWNER_SMTP_PASSWORD",
+        "OWNER_SMTP_FROM",
+        "OWNER_SMTP_FROM_NAME",
+        "OWNER_SMTP_USE_TLS",
         # Read directly by other modules (not by this Config class), but
         # still legitimate OWNER_* variables -- must not trip the unknown-key
         # check in strict mode.
@@ -240,6 +248,18 @@ class BaseConfig:
     LEAD_DISCOVERY_PROVIDER = os.environ.get("OWNER_LEAD_DISCOVERY_PROVIDER", "")   # "" (disabled) | "google_places"
     GOOGLE_PLACES_API_KEY = os.environ.get("OWNER_GOOGLE_PLACES_API_KEY", "")
     LEAD_DISCOVERY_TIMEOUT_SECONDS = float(os.environ.get("OWNER_LEAD_DISCOVERY_TIMEOUT_SECONDS", "10"))
+
+    # -- Real-email wave: Owner sends email (staff invitations + the product
+    # mail relay) through ITS OWN mailbox. OWNER_SMTP_HOST unset == email off:
+    # no worker thread, mail rows stay QUEUED, the UI says email is not set up.
+    # The password lives only in this environment (see app/mail/smtp.py).
+    SMTP_HOST = os.environ.get("OWNER_SMTP_HOST", "").strip()
+    SMTP_PORT = os.environ.get("OWNER_SMTP_PORT", "587").strip() or "587"
+    SMTP_USER = os.environ.get("OWNER_SMTP_USER", "").strip()
+    SMTP_PASSWORD = os.environ.get("OWNER_SMTP_PASSWORD", "")
+    SMTP_FROM = os.environ.get("OWNER_SMTP_FROM", "").strip()                 # default: SMTP_USER
+    SMTP_FROM_NAME = os.environ.get("OWNER_SMTP_FROM_NAME", "Action Aura").strip() or "Action Aura"
+    SMTP_USE_TLS = os.environ.get("OWNER_SMTP_USE_TLS", "1").strip() != "0"   # STARTTLS
     # M2: when true, validate() also rejects any OWNER_* environment variable
     # that isn't in KNOWN_CONFIG_ENV_VARS (catches typos like a misspelled
     # override that would otherwise silently fall back to a default). Off by

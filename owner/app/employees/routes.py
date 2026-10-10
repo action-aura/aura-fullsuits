@@ -30,6 +30,7 @@ from app.models.employees import EmployeeProfile
 from app.models.staff import Role, StaffInvitation, StaffSession, StaffUser
 from app.security.rbac import require_permission, require_recent_auth
 from app.security.super_admin_guard import LastSuperAdminError
+from app.mail.invitations import queue_invitation_email
 from app.staff.services import EmployeeDraftValidationError, create_employee_invitation, reissue_employee_invitation
 
 bp = Blueprint("employees", __name__, url_prefix="/employees")
@@ -109,7 +110,8 @@ def create():
             "employees/new.html", error=str(exc), roles=_role_options(), managers=_manager_options(), plans=_commission_plan_options()
         ), 400
     link = url_for("auth.accept_invitation_form", token=raw_token, _external=True)
-    return render_template("employees/invitation_created.html", invitation=invitation, link=link)
+    email_queued = queue_invitation_email(invitation, link)
+    return render_template("employees/invitation_created.html", invitation=invitation, link=link, email_queued=email_queued)
 
 
 @bp.route("/dashboard", methods=["GET"])
@@ -326,4 +328,5 @@ def reissue_invitation(invitation_id):
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     link = url_for("auth.accept_invitation_form", token=raw_token, _external=True)
-    return render_template("employees/invitation_created.html", invitation=new_invitation, link=link)
+    email_queued = queue_invitation_email(new_invitation, link)
+    return render_template("employees/invitation_created.html", invitation=new_invitation, link=link, email_queued=email_queued)

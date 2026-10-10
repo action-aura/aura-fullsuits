@@ -8090,3 +8090,84 @@ msgstr "First seen"
 #~ msgid "No active installations yet."
 #~ msgstr "No active installations yet."
 
+
+
+#: app/templates (real-email wave)
+msgid "Forgot password?"
+msgstr "Forgot password?"
+
+#: app/templates (real-email wave)
+msgid "Forgot your password?"
+msgstr "Forgot your password?"
+
+#: app/templates (real-email wave)
+msgid "Enter your email address. If an account exists for it, we will send a link to set a new password."
+msgstr "Enter your email address. If an account exists for it, we will send a link to set a new password."
+
+#: app/templates (real-email wave)
+msgid "Send reset link"
+msgstr "Send reset link"
+
+#: app/templates (real-email wave)
+msgid "Back to sign in"
+msgstr "Back to sign in"
+
+#: app/templates (real-email wave)
+msgid "If an account exists for that email, a reset link has been sent."
+msgstr "If an account exists for that email, a reset link has been sent."
+
+#: app/templates (real-email wave)
+msgid "Set a new password"
+msgstr "Set a new password"
+
+#: app/templates (real-email wave)
+msgid "Confirm new password"
+msgstr "Confirm new password"
+
+#: app/templates (real-email wave)
+msgid "Save new password"
+msgstr "Save new password"
+
+#: app/templates (real-email wave)
+msgid "The two passwords do not match."
+msgstr "The two passwords do not match."
+
+#: app/templates (real-email wave)
+msgid "This link is no longer valid. Request a new one."
+msgstr "This link is no longer valid. Request a new one."
+
+#: app/templates (real-email wave)
+msgid "Request a new link"
+msgstr "Request a new link"
+
+#: app/templates (real-email wave)
+msgid "Password reset link created for %(email)s"
+msgstr "Password reset link created for %(email)s"
+
+#: app/templates (real-email wave)
+msgid "Send this one-time link to the person through a trusted channel. It is shown here only once and works for 30 minutes."
+msgstr "Send this one-time link to the person through a trusted channel. It is shown here only once and works for 30 minutes."
+
+#: app/templates (real-email wave)
+msgid "Create password reset link (requires recent authentication)"
+msgstr "Create password reset link (requires recent authentication)"
+
+#: app/templates (real-email wave)
+msgid "Password reset"
+msgstr "Password reset"
+
+#: app/templates (real-email wave)
+msgid "Password reset link created"
+msgstr "Password reset link created"
+
+#: app/templates (real-email wave)
+msgid "We emailed this link to %(email)s. It is also shown here once, in case the email does not arrive:"
+msgstr "We emailed this link to %(email)s. It is also shown here once, in case the email does not arrive:"
+
+#: app/templates (real-email wave)
+msgid "Copy this one-time link and send it to them manually (email is not set up on this server):"
+msgstr "Copy this one-time link and send it to them manually (email is not set up on this server):"
+
+#: app/templates (real-email wave)
+msgid "We also emailed this link to %(email)s."
+msgstr "We also emailed this link to %(email)s."

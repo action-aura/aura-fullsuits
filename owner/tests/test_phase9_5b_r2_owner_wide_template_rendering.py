@@ -32,6 +32,11 @@ REAL_TEMPLATE_DIRS = (
     # Registered here because this guard exists precisely to catch a new
     # template directory shipping unregistered; it caught this one.
     "sync",
+    # Crash-reports wave (app/crash_reports/): the staff crash list/detail
+    # pages. That wave added the template directory without registering it
+    # here, so this guard was red from its commit onward; registered now,
+    # which also puts those two templates under the hardcoded-string scan.
+    "crash_reports",
 )
 
 # No-fixture-required GET routes: real, reachable, list/index/status pages.

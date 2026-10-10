@@ -485,9 +485,10 @@ def create_admin():
         # already committed. `email_sent` tells the frontend whether to show
         # "check your inbox" or a quieter "verify later from Settings"
         # state; it is not a security signal (email_verified_at is).
-        email_sent = _verification.send_verification_email(
+        email_status = _verification.send_verification_email(
             conn, company_id=company_id, user_email=email, base_url=request.host_url,
         )
+        email_sent = email_status in ('queued', 'sent')
         conn.commit()
 
         # A company now exists on this install: announce THIS computer now, not
@@ -503,6 +504,9 @@ def create_admin():
             'success': True,
             'user': {'id': user_id, 'email': email, 'role': 'admin', 'company': company},
             'email_verification_sent': email_sent,
+            # 'queued' | 'wait' | 'not_configured' -- the setup screen shows one
+            # plain sentence for it.
+            'email': _verification.public_email_state(email_status),
         })
     except Exception as e:
         # Safe even if the transaction already committed above (nothing left
@@ -553,11 +557,12 @@ def resend_verification_email():
             return jsonify({'error': 'User not found.'}), 404
         if row['email_verified_at']:
             return jsonify({'success': True, 'already_verified': True})
-        sent = _verification.send_verification_email(
+        status = _verification.send_verification_email(
             conn, company_id=session['company_id'], user_email=row['email'], base_url=request.host_url,
         )
         conn.commit()
-        return jsonify({'success': True, 'email_verification_sent': sent})
+        return jsonify({'success': True, 'email_verification_sent': status in ('queued', 'sent'),
+                        'email': _verification.public_email_state(status)})
     finally:
         conn.close()
 
@@ -575,7 +580,10 @@ def forgot_password():
     try:
         _verification.request_password_reset(conn, email=email, base_url=request.host_url)
         conn.commit()
-        return jsonify({'success': True})
+        # `email` is derived from configuration alone (never from the account),
+        # so the response is identical for a real and an unknown address.
+        return jsonify({'success': True,
+                        'email': 'queued' if _verification.mail_possible() else 'not_configured'})
     finally:
         conn.close()
 

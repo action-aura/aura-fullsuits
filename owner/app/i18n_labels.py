@@ -653,6 +653,8 @@ def generic_audit_action_label(code: str) -> str:
         "STAFF_INVITATION_CREATED": _("Invitation created"),
         "STAFF_INVITATION_ACCEPTED": _("Invitation accepted"),
         "STAFF_INVITATION_REVOKED": _("Invitation revoked"),
+        "STAFF_PASSWORD_RESET": _("Password reset"),
+        "STAFF_PASSWORD_RESET_LINK_CREATED": _("Password reset link created"),
         "CUSTOMER_CREATED": _("Customer created"),
         "CUSTOMER_UPDATED": _("Customer updated"),
         "CUSTOMER_ARCHIVED": _("Customer archived"),

@@ -3,7 +3,11 @@
 {% block content %}
 <div class="card">
   <h2>{{ _("Invitation created for %(email)s", email=invitation.email) }}</h2>
-  <p>{{ _("Copy this one-time link and send it to them manually (no email delivery is wired up in this phase):") }}</p>
+  {% if email_queued %}
+  <p>{{ _("We emailed this link to %(email)s. It is also shown here once, in case the email does not arrive:", email=invitation.email) }}</p>
+  {% else %}
+  <p>{{ _("Copy this one-time link and send it to them manually (email is not set up on this server):") }}</p>
+  {% endif %}
   <p><code style="word-break:break-all;" dir="ltr">{{ link }}</code></p>
   <p>{{ _("Expires:") }} {{ format_owner_datetime(invitation.expires_at) }}</p>
   <a class="btn" href="{{ url_for('staff.list_staff') }}">{{ _("Back to staff") }}</a>

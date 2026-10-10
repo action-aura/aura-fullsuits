@@ -482,6 +482,12 @@ _EXTERNAL_LICENSING_API_ENDPOINTS = (
     # staff-facing half (crash_reports.list_reports / .detail) IS linked from
     # the System nav group and is not listed here.
     'api_external_licensing.crash_reports',
+    # Real-email wave: a product install asks Owner to send one templated
+    # message (verify_email / password_reset / low_stock / ...). Same caller
+    # (commercial_runtime's LicensingClient.send_mail, driven by the product's
+    # notifications worker) and the same device signature + nonce
+    # authentication; Owner's own UI never calls it.
+    'api_external_licensing.mail_relay',
     'api_external_licensing.service_info',
     'api_external_licensing.signing_keys',
 )
@@ -533,18 +539,23 @@ _IMPLICIT_FORM_SIBLING_REASON = (
     "reachable, just invisible to a url_for()-literal search because no "
     "url_for() call anywhere names it. Verified by grepping every `<form "
     "method=\"post\">` in the entire owner/app/templates tree: exactly "
-    "six lack an action attribute, all six are these auth routes, and "
-    "nowhere else in the app uses this pattern (every other form in this "
-    "codebase sets an explicit action=\"{{ url_for(...) }}\")."
+    "eight lack an action attribute (the original six plus the two "
+    "staff password-reset forms added by the real-email wave, "
+    "forgot_password_submit and reset_password_submit), all eight are "
+    "these auth routes, and nowhere else in the app uses this pattern "
+    "(every other form in this codebase sets an explicit "
+    "action=\"{{ url_for(...) }}\")."
 )
 
 _IMPLICIT_FORM_SIBLING_ENDPOINTS = (
     'auth.accept_invitation_submit',
     'auth.change_password_submit',
+    'auth.forgot_password_submit',
     'auth.login_submit',
     'auth.mfa_enroll_submit',
     'auth.mfa_verify_submit',
     'auth.reauth_submit',
+    'auth.reset_password_submit',
 )
 
 INTENTIONALLY_UNREACHABLE = {}

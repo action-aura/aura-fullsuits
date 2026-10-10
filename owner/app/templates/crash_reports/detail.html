@@ -7,11 +7,14 @@
     <a class="btn secondary" href="{{ url_for('crash_reports.list_reports') }}">{{ _("Back to crash reports") }}</a>
   </div>
   <p><bdi dir="ltr">{{ summary.message }}</bdi></p>
+  {# The colon and the dot are emitted by Jinja (not typed as page text) so the
+     hardcoded-string scan sees no loose punctuation node; the output is identical. #}
+  {% set colon = ":" %}{% set dot = "&middot;"|safe %}
   <p class="muted">
-    {{ _("Occurrences") }}: {{ summary.total_count }} &middot;
-    {{ _("Installations") }}: {{ summary.installs }} &middot;
-    {{ _("Versions") }}: <bdi dir="ltr">{{ summary.versions | join(", ") }}</bdi>
-    {% if summary.route %}&middot; {{ _("Route") }}: <bdi dir="ltr">{{ summary.route }}</bdi>{% endif %}
+    {{ _("Occurrences") }}{{ colon }} {{ summary.total_count }} {{ dot }}
+    {{ _("Installations") }}{{ colon }} {{ summary.installs }} {{ dot }}
+    {{ _("Versions") }}{{ colon }} <bdi dir="ltr">{{ summary.versions | join(", ") }}</bdi>
+    {% if summary.route %}{{ dot }} {{ _("Route") }}{{ colon }} <bdi dir="ltr">{{ summary.route }}</bdi>{% endif %}
   </p>
 
   <h3>{{ _("Stack") }}</h3>

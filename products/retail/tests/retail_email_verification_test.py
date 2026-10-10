@@ -1,9 +1,11 @@
 """
 Aura Retail -- email verification + forgot/reset password.
 
-Covers: create-admin sends a real verification email (captured via a
-monkeypatched smtp_client.send_email, never a real SMTP server) and degrades
-gracefully when SMTP isn't configured; the verification link actually marks
+Covers: create-admin QUEUES a verification email (real-email wave: account mail
+is no longer sent inline -- the notifications worker sends it on its next tick,
+which these tests drive by hand with _drain(); the transport's send is captured
+via a monkeypatched smtp_client.send_email, never a real SMTP server) and
+degrades gracefully when no transport exists; the verification link actually marks
 an account verified; an invalid/reused/wrong-purpose token is rejected;
 forgot-password never reveals whether an email is registered; a reset link
 actually changes the password.
@@ -54,6 +56,7 @@ app.config["TESTING"] = True
 
 from commercial_runtime.identity.registry_db import get_conn as registry_conn  # noqa: E402
 from commercial_runtime.identity import verification as verification_module  # noqa: E402
+from commercial_runtime.notifications import smtp_client as smtp_client_module  # noqa: E402
 from commercial_runtime.security.passwords import hash_password  # noqa: E402
 
 
@@ -66,17 +69,35 @@ _TOKEN_RE = re.compile(r'#(?:verify-email|reset-password)/([0-9a-f]{32})')
 
 @pytest.fixture
 def captured_emails(monkeypatch):
-    """Replaces the real SMTP transport with a list capture -- proves the
-    actual production code path (verification.py -> smtp_client.send_email)
-    runs end to end, without ever touching a real mail server. Returns the
-    list; each send appends a dict."""
+    """Replaces the real SMTP send with a list capture -- proves the actual
+    production path (verification.py -> mail sink -> email_outbox -> worker ->
+    SmtpTransport -> smtp_client.send_email) runs end to end, without ever
+    touching a real mail server. AURA_SMTP_HOST is set so a transport EXISTS
+    (that is what makes account mail queue at all); the background timer a
+    queued row would start is switched off so the only sender is _drain().
+    Returns the list; each send appends a dict."""
     sent = []
 
     def _fake_send_email(*, recipient, subject, body_text, body_html=None, **kwargs):
         sent.append({'recipient': recipient, 'subject': subject, 'body_text': body_text})
 
-    monkeypatch.setattr(verification_module, 'send_email', _fake_send_email)
+    monkeypatch.setenv('AURA_SMTP_HOST', 'smtp.invalid')
+    monkeypatch.setattr(smtp_client_module, 'send_email', _fake_send_email)
+    monkeypatch.setattr(_app_module, '_start_notifications_worker_once', lambda *a, **k: None)
     return sent
+
+
+def _drain():
+    """One worker tick for every company that has queued mail -- what the
+    background timer does in production."""
+    conn = _app_module.get_retail_conn()
+    try:
+        cids = [r[0] for r in conn.execute(
+            "SELECT DISTINCT company_id FROM email_outbox WHERE status='QUEUED'").fetchall()]
+    finally:
+        conn.close()
+    for cid in cids:
+        _app_module._get_or_create_notifications_worker(cid).run_once()
 
 
 def _extract_token(body_text: str) -> str:
@@ -112,6 +133,10 @@ def test_create_admin_sends_verification_email(captured_emails):
     assert r.status_code == 200, r.get_json()
     data = r.get_json()
     assert data['email_verification_sent'] is True
+    assert data['email'] == 'queued'
+    # Queued, not sent inline: nothing has left yet; the worker tick sends it.
+    assert captured_emails == []
+    _drain()
     assert len(captured_emails) == 1
     assert captured_emails[0]['recipient'] == 'admin-verify@wave0.test'
     assert 'verify' in captured_emails[0]['subject'].lower()
@@ -148,6 +173,7 @@ def test_verify_email_link_marks_account_verified(captured_emails):
     )
     conn.commit()
     conn.close()
+    _drain()
     token = _extract_token(captured_emails[-1]['body_text'])
 
     client = app.test_client()
@@ -170,6 +196,7 @@ def test_verify_email_token_cannot_be_reused(captured_emails):
     )
     conn.commit()
     conn.close()
+    _drain()
     token = _extract_token(captured_emails[-1]['body_text'])
 
     client = app.test_client()
@@ -213,6 +240,7 @@ def test_forgot_password_returns_success_for_a_real_email(captured_emails):
     r = client.post('/api/auth/forgot-password', json={'email': 'forgot-a@wave0.test'})
     assert r.status_code == 200
     assert r.get_json()['success'] is True
+    _drain()
     assert len(captured_emails) == 1
     assert captured_emails[0]['recipient'] == 'forgot-a@wave0.test'
 
@@ -222,6 +250,7 @@ def test_forgot_password_returns_identical_success_for_an_unregistered_email(cap
     r = client.post('/api/auth/forgot-password', json={'email': 'nobody-here@wave0.test'})
     assert r.status_code == 200
     assert r.get_json()['success'] is True
+    _drain()
     assert len(captured_emails) == 0, "no account exists -- nothing should actually be sent"
 
 
@@ -232,6 +261,7 @@ def test_forgot_password_cooldown_suppresses_a_second_email(captured_emails):
     r1 = client.post('/api/auth/forgot-password', json={'email': 'forgot-b@wave0.test'})
     r2 = client.post('/api/auth/forgot-password', json={'email': 'forgot-b@wave0.test'})
     assert r1.status_code == 200 and r2.status_code == 200
+    _drain()
     assert len(captured_emails) == 1, "a second request within the cooldown window must not send again"
 
 
@@ -245,6 +275,7 @@ def test_reset_password_changes_password_old_no_longer_works(captured_emails):
     assert login.status_code == 200
 
     client.post('/api/auth/forgot-password', json={'email': 'reset-a@wave0.test'})
+    _drain()
     token = _extract_token(captured_emails[-1]['body_text'])
 
     r = client.post('/api/auth/reset-password', json={'token': token, 'password': 'NewPassword2'})
@@ -266,6 +297,7 @@ def test_reset_password_token_cannot_be_reused(captured_emails):
     client = app.test_client()
 
     client.post('/api/auth/forgot-password', json={'email': 'reset-b@wave0.test'})
+    _drain()
     token = _extract_token(captured_emails[-1]['body_text'])
 
     first = client.post('/api/auth/reset-password', json={'token': token, 'password': 'FirstNew12'})
@@ -280,6 +312,7 @@ def test_reset_password_rejects_weak_password(captured_emails):
     client = app.test_client()
 
     client.post('/api/auth/forgot-password', json={'email': 'reset-c@wave0.test'})
+    _drain()
     token = _extract_token(captured_emails[-1]['body_text'])
 
     r = client.post('/api/auth/reset-password', json={'token': token, 'password': '123'})
@@ -318,6 +351,7 @@ def test_resend_verification_sends_again_for_the_signed_in_user(captured_emails)
     r = client.post('/api/auth/verify-email/resend')
     assert r.status_code == 200, r.get_json()
     assert r.get_json()['email_verification_sent'] is True
+    _drain()
     assert captured_emails[0]['recipient'] == 'resend-a@wave0.test'
 
 
@@ -329,6 +363,7 @@ def test_resend_verification_is_a_noop_once_already_verified(captured_emails):
 
     r1 = client.post('/api/auth/verify-email/resend')
     assert r1.status_code == 200
+    _drain()
     token = _extract_token(captured_emails[-1]['body_text'])
     client.post('/api/auth/verify-email', json={'token': token})
     captured_emails.clear()

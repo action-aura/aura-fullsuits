@@ -2450,9 +2450,22 @@ const SubsystemApp = {
       overlay.innerHTML = `
         <div style="font-size:56px;margin-bottom:16px;color:var(--sub-accent)">${AuraIcons.render('circle-check-big', 56, { animate: 'pop' })}</div>
         <h2 style="font-size:28px;font-weight:800;margin:0 0 8px;">${t('Account Created!')}</h2>
-        <p style="color:var(--text-secondary);margin:0;font-size:16px;">${t('Welcome')}, <bdi id="aura-setup-complete-name" style="color:var(--sub-accent);font-weight:700"></bdi>. ${t('Loading your platform...')}</p>`;
+        <p style="color:var(--text-secondary);margin:0;font-size:16px;">${t('Welcome')}, <bdi id="aura-setup-complete-name" style="color:var(--sub-accent);font-weight:700"></bdi>. ${t('Loading your platform...')}</p>
+        <p id="aura-setup-complete-mail" style="color:var(--text-secondary);margin:12px 0 0;font-size:14px;max-width:420px;text-align:center;"></p>`;
       const nameEl = overlay.querySelector('#aura-setup-complete-name');
       if (nameEl) nameEl.textContent = name;
+      // One plain sentence about the verification email. `data.email` comes
+      // from the server (queued | wait | not_configured); anything else says
+      // nothing rather than guess.
+      const mailEl = overlay.querySelector('#aura-setup-complete-mail');
+      if (mailEl) {
+        const mailSentences = {
+          queued: 'We are sending a confirmation email to your address.',
+          wait: 'A confirmation email was sent a moment ago.',
+          not_configured: 'Email is not set up on this computer yet, so no confirmation email was sent. You can confirm your address later.',
+        };
+        if (mailSentences[data.email]) mailEl.textContent = t(mailSentences[data.email]);
+      }
       document.body.appendChild(overlay);
 
       // Init the platform and remove the overlay once rendering is complete

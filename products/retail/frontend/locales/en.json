@@ -2660,5 +2660,8 @@
   "Something went wrong with the update. Try again.": "Something went wrong with the update. Try again.",
   "A new version is ready to install. Open Updates.": "A new version is ready to install. Open Updates.",
   "Update ready": "Update ready",
-  "Hide until next time": "Hide until next time"
+  "Hide until next time": "Hide until next time",
+  "We are sending a confirmation email to your address.": "We are sending a confirmation email to your address.",
+  "A confirmation email was sent a moment ago.": "A confirmation email was sent a moment ago.",
+  "Email is not set up on this computer yet, so no confirmation email was sent. You can confirm your address later.": "Email is not set up on this computer yet, so no confirmation email was sent. You can confirm your address later."
 }

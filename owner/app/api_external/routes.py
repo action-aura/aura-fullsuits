@@ -18,6 +18,7 @@ from app.licensing_service.health import is_service_ready, public_service_info
 from app.licensing_service.reason_codes import to_public_reason_code
 from app.licensing_service.signing import SigningKeyError, export_signed_keyset_manifest
 from app.crash_reports.intake import accept_crash_reports
+from app.mail.relay import MailLimitExceeded, accept_mail
 from app.releases.discovery import find_latest_release
 from app.releases.distribution import DownloadAuthorizationRejected, authorize_download, fetch_download
 
@@ -336,6 +337,52 @@ def crash_reports():
         # The request body is deliberately NOT logged: it is the one thing in
         # this API that carries free text from a customer's machine.
         current_app.logger.exception("Internal decision failure during crash-report intake (request body not logged).")
+        return _error_response("INTERNAL_DECISION_FAILURE", 500, correlation_id)
+
+
+@bp.route("/mail", methods=["POST"])
+def mail_relay():
+    """Real-email wave. A product install asks Owner to send ONE message of a
+    fixed template kind (verify_email, password_reset, low_stock, shift_close,
+    report_summary). Owner renders the subject and body itself -- a request
+    that carries its own is refused (400) -- so this is not an open relay, and
+    the product never holds a mailbox password. Device-signature-authenticated
+    like release discovery and crash reports (own nonce scope); capped per
+    installation (429 MAIL_LIMIT, nothing queued). 202 means QUEUED, not sent."""
+    ready, reason = is_service_ready(current_app.config["SIGNING_KEY_DIRECTORY"], replay_protection_required=current_app.config["REPLAY_PROTECTION_REQUIRED"])
+    if not ready:
+        return _error_response(reason, 503)
+
+    try:
+        ratelimit.check_and_increment("mail_relay", _client_bucket())
+    except ratelimit.RateLimitExceeded as exc:
+        resp, status = _error_response("RATE_LIMITED", 429)
+        resp.headers["Retry-After"] = str(exc.retry_after_seconds)
+        return resp, status
+
+    body = _get_json_body()
+    if body is None:
+        return _error_response("INVALID_REQUEST", 400)
+    correlation_id = body.get("correlation_id") if isinstance(body, dict) else None
+
+    try:
+        return jsonify(accept_mail(body, config=_service_config())), 202
+    except MailLimitExceeded:
+        db_session.rollback()
+        return _error_response("MAIL_LIMIT", 429, correlation_id)
+    except DownloadAuthorizationRejected as exc:
+        db_session.rollback()
+        if exc.internal_reason_code == "INVALID_SIGNATURE":
+            try:
+                ratelimit.check_and_increment("activation_invalid_signature", _client_bucket())
+            except ratelimit.RateLimitExceeded:
+                pass
+        return _error_response(exc.internal_reason_code, exc.http_status, correlation_id)
+    except Exception:
+        db_session.rollback()
+        # The request body is deliberately NOT logged: it carries recipient
+        # addresses and shop text from a customer's machine.
+        current_app.logger.exception("Internal decision failure during mail relay (request body not logged).")
         return _error_response("INTERNAL_DECISION_FAILURE", 500, correlation_id)
 
 

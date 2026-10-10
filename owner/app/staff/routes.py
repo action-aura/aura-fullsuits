@@ -10,6 +10,7 @@ from app.models.staff import Role, StaffInvitation, StaffUser
 from app.security.rbac import require_permission, require_recent_auth
 from app.security.super_admin_guard import LastSuperAdminError
 from app.staff import list_queries
+from app.mail.invitations import queue_invitation_email
 from app.staff.services import SelfEscalationError, assign_roles, create_invitation, disable_staff, reset_mfa, revoke_invitation
 
 bp = Blueprint("staff", __name__, url_prefix="/staff")
@@ -55,7 +56,10 @@ def invite():
     except SelfEscalationError as exc:
         return jsonify({"error": str(exc)}), 403
     link = url_for("auth.accept_invitation_form", token=raw_token, _external=True)
-    return render_template("staff/invitation_created.html", invitation=invitation, link=link)
+    # Real-email wave: when this server can send email the link is mailed too.
+    # It is shown on the page either way, so a mail problem never locks anyone out.
+    email_queued = queue_invitation_email(invitation, link)
+    return render_template("staff/invitation_created.html", invitation=invitation, link=link, email_queued=email_queued)
 
 
 @bp.route("/invitations/<uuid:invitation_id>/revoke", methods=["POST"])
@@ -100,6 +104,36 @@ def disable(staff_id):
     except LastSuperAdminError as exc:
         return jsonify({"error": str(exc)}), 400
     return redirect(url_for("staff.detail", staff_id=staff_id))
+
+
+@bp.route("/<uuid:staff_id>/password-reset-link", methods=["POST"])
+@require_permission("staff.reset_mfa")
+@require_recent_auth
+def password_reset_link_route(staff_id):
+    """The admin fallback that works with no email: shows a one-time password
+    reset link ONCE, for the admin to hand over through a trusted channel. Same
+    permission as Reset MFA. Never for your own account -- resetting your own
+    password this way would turn a stolen admin session into a password."""
+    from app.audit.services import record as audit_record
+    from app.auth.password_reset import build_link, make_token
+
+    actor = load_current_staff()
+    staff = db_session.get(StaffUser, staff_id)
+    if staff is None:
+        return jsonify({"error": "not_found"}), 404
+    if staff.id == actor.id:
+        return jsonify({"error": "cannot_reset_own_password_here"}), 403
+    if not staff.is_active or staff.disabled_at is not None:
+        return jsonify({"error": "account_disabled"}), 400
+    link = build_link(make_token(staff))
+    audit_record(
+        actor_staff_user_id=actor.id,
+        actor_role_snapshot=None,
+        action_code="STAFF_PASSWORD_RESET_LINK_CREATED",
+        entity_type="staff_user",
+        entity_public_id=str(staff.id),
+    )
+    return render_template("staff/password_reset_link.html", staff=staff, link=link)
 
 
 @bp.route("/<uuid:staff_id>/reset-mfa", methods=["POST"])

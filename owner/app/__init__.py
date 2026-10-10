@@ -206,6 +206,14 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.crash_reports.cli import register_cli as register_crash_reports_cli
 
     register_crash_reports_cli(app)
+    from app.mail.cli import register_cli as register_mail_cli
+
+    register_mail_cli(app)
+    # The one place the mail worker thread can start: SMTP host set AND not a
+    # test app. With email off no thread exists.
+    from app.mail.worker import start_worker_if_configured
+
+    start_worker_if_configured(app)
 
     @app.get("/healthz")
     def healthz():

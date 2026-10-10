@@ -88,7 +88,8 @@ class EmailOutboxRepository:
         self._conn.row_factory = sqlite3.Row
         return self._conn.execute("SELECT * FROM email_outbox WHERE id=?", (row_id,)).fetchone()
 
-    def claim_due(self, *, company_id, batch_size: int, lease_seconds: int) -> list:
+    def claim_due(self, *, company_id, batch_size: int, lease_seconds: int,
+                  only_types=None, exclude_types=None) -> list:
         """Same conditional-UPDATE-with-rowcount-check technique as
         einvoicing/outbox.py::claim_due -- see that method's docstring.
 
@@ -100,11 +101,24 @@ class EmailOutboxRepository:
         -- this file is the one it was structurally copied from."""
         self._conn.row_factory = sqlite3.Row
         now = _now()
+        # Real-email wave: the worker claims account mail (verification /
+        # reset) separately from shop alerts, because only the shop alerts
+        # obey the company's notifications toggle. Types are bound as
+        # parameters, never formatted into the SQL.
+        type_sql, type_params = '', ()
+        if only_types:
+            only_types = tuple(only_types)
+            type_sql = " AND email_type IN (%s)" % ",".join("?" * len(only_types))
+            type_params = only_types
+        elif exclude_types:
+            exclude_types = tuple(exclude_types)
+            type_sql = " AND email_type NOT IN (%s)" % ",".join("?" * len(exclude_types))
+            type_params = exclude_types
         candidates = self._conn.execute(
             "SELECT id FROM email_outbox WHERE company_id=? AND status='QUEUED' "
-            "AND (next_attempt_at IS NULL OR next_attempt_at <= ?) "
+            "AND (next_attempt_at IS NULL OR next_attempt_at <= ?)" + type_sql + " "
             "ORDER BY id LIMIT ?",
-            (company_id, now, batch_size),
+            (company_id, now) + type_params + (batch_size,),
         ).fetchall()
 
         claimed = []

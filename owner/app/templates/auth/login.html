@@ -21,5 +21,6 @@
     </div>
     <div class="aura-auth-actions"><button type="submit" class="btn">{{ _('Log in') }}</button></div>
   </form>
+  <p><a href="{{ url_for('auth.forgot_password_form') }}">{{ _('Forgot password?') }}</a></p>
 </div>
 {% endblock %}
