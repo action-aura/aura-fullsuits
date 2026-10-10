@@ -75,14 +75,16 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # gunicorn stays on ONE line: in a YAML folded block a deeper-indented line
+    # keeps its break, so a split gunicorn reaches sh as separate commands
+    # ("No application module specified"). Same defect as
+    # owner/deploy/oracle-free/docker-compose.yml, found on the real Oracle VM.
     command: >
       sh -c "python -m alembic upgrade head &&
              flask seed-rbac &&
              flask seed-catalog &&
              flask seed-offline-policy &&
-             gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 30
-                      --graceful-timeout 15 --max-requests 2000 --max-requests-jitter 200
-                      --access-logfile - --error-logfile - 'app:create_app()'"
+             gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 30 --graceful-timeout 15 --max-requests 2000 --max-requests-jitter 200 --access-logfile - --error-logfile - 'app:create_app()'"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/health/live"]
       interval: 15s

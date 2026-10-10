@@ -94,15 +94,21 @@ services:
     # stays empty forever and issue_license_direct has no plan to issue a
     # licence against, even though this container reports healthy and
     # every other route answers normally.
+    # The gunicorn invocation MUST stay on one line. In a YAML folded block
+    # (`>`) a line indented deeper than its neighbours keeps its line break,
+    # so the old three-line gunicorn reached `sh` as three commands: gunicorn
+    # with no app module ("Error: No application module specified") followed
+    # by "--graceful-timeout: not found". Found on the first real Oracle VM
+    # (2026-10-10); the container restarted forever and never served. The
+    # `&&` lines above survive their breaks only because a newline after
+    # `&&` is still one command list to sh.
     command: >
       sh -c "python -m alembic upgrade head &&
              flask --app app:create_app seed-rbac &&
              flask --app app:create_app seed-catalog &&
              flask --app app:create_app seed-plans &&
              flask --app app:create_app seed-offline-policy &&
-             gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 30
-                      --graceful-timeout 15 --max-requests 2000 --max-requests-jitter 200
-                      --access-logfile - --error-logfile - 'app:create_app()'"
+             gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 30 --graceful-timeout 15 --max-requests 2000 --max-requests-jitter 200 --access-logfile - --error-logfile - 'app:create_app()'"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/health/live"]
       interval: 15s
