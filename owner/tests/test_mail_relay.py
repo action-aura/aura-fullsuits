@@ -116,13 +116,14 @@ def test_arabic_first_when_lang_is_ar(app, client, seeded, signing_key):
 ])
 def test_every_kind_renders_and_goes_to_the_named_recipient(app, client, seeded, signing_key, kind, params, lang):
     _lic, inst, key = _activate(app, client)
-    resp = _send(client, _body(key, inst, kind=kind, params=params, lang=lang, shop_name="Ahmad & Sons"))
+    resp = _send(client, _body(key, inst, kind=kind, params=params, lang=lang))
     assert resp.status_code == 202, resp.get_data(as_text=True)
     row = _rows(app)[0]
     assert row.to_address == "a@b.example" and row.kind == kind
-    assert "Ahmad & Sons" in row.body_text
-    assert "Ahmad &amp; Sons" in row.body_html        # HTML-escaped in the HTML part
-    assert "<b>" not in row.body_html                 # a product name cannot inject markup
+    assert "Sent by Aura Retail - do not reply" in row.body_text   # fixed footer, no caller text
+    if kind == "low_stock":
+        assert "Widget &lt;b&gt;" in row.body_html    # HTML-escaped in the HTML part
+        assert "<b>" not in row.body_html             # a product name cannot inject markup
 
 
 # ---------------------------------------------------------------------------
@@ -156,11 +157,55 @@ def _refused(app, client, key, inst, status=400, **kw):
     {"params": {"email": "a@b.example\nBcc: victim@x.example", "link": LINK}},        # header injection
     {"params": {"email": "not-an-email", "link": LINK}},
     {"lang": "fr"},
-    {"shop_name": "S" * 121},
+    {"shop_name": "Ahmad & Sons"},    # removed 2026-10-10: free text in a mail from OUR address
+    {"params": {"email": "a@b.example", "link": "https://evil.example/reset/abc"}},      # off-box host
+    {"params": {"email": "a@b.example", "link": "https://aura.example@evil.example/x"}},  # userinfo trick
+    {"params": {"email": "a@b.example", "link": "http://0.0.0.0:5001/x"}},               # unspecified
+    {"params": {"email": "a@b.example", "link": "http://8.8.8.8:5001/x"}},               # public IP
+    {"params": {"email": "a@b.example", "link": "http://127.0.0.1@evil.example/x"}},
+    {"params": {"email": "a@b.example", "link": "http://MYSHOP-PC:5001/x"}},             # hostname form
 ])
 def test_invalid_requests_are_refused_and_queue_nothing(app, client, seeded, signing_key, overrides):
     _lic, inst, key = _activate(app, client)
     _refused(app, client, key, inst, **overrides)
+
+
+@pytest.mark.parametrize("link", [
+    "http://127.0.0.1:5001/#verify-email/" + "a" * 32,
+    "http://192.168.1.20:5001/#reset-password/" + "b" * 32,
+    "http://10.0.0.5/#x/1",
+    "http://localhost:5001/#verify-email/" + "c" * 32,
+    "https://[::1]:5001/#x/1",
+    "http://169.254.10.10:5001/#x/1",
+])
+def test_links_to_the_shops_own_app_are_accepted(app, client, seeded, signing_key, link):
+    _lic, inst, key = _activate(app, client)
+    resp = _send(client, _body(key, inst, params={"email": "a@b.example", "link": link}))
+    assert resp.status_code == 202, resp.get_data(as_text=True)
+    assert link in _rows(app)[0].body_text
+
+
+def test_sixth_identity_mail_to_one_address_is_refused_across_installations(app, client, seeded, signing_key):
+    _l1, inst1, key1 = _activate(app, client, label="mail-dev-1", email="m1@example.com")
+    _l2, inst2, key2 = _activate(app, client, label="mail-dev-2", email="m2@example.com")
+    # Five already sent to the victim by installation 1 (seeded as aged rows so
+    # the 2-minute same-kind rule cannot be what refuses the next one).
+    with app.app_context():
+        now = datetime.now(timezone.utc)
+        for _ in range(lim.IDENTITY_PER_RECIPIENT_PER_DAY):
+            db_session.add(EmailOutbox(
+                kind="password_reset", to_address="Victim@Shop.example", subject="s", body_text="b", status="QUEUED",
+                attempt_count=0, source="relay", installation_id=uuid_mod.UUID(inst1), created_at=now - timedelta(minutes=30),
+            ))
+        db_session.commit()
+    n = _row_count(app)
+    # A DIFFERENT installation (its own per-installation counters are at zero) is refused for that address...
+    over = _send(client, _body(key2, inst2, params={"email": "victim@shop.example", "link": LINK}))
+    assert over.status_code == 429 and over.get_json()["reason_code"] == "MAIL_LIMIT"
+    assert _row_count(app) == n
+    # ...while another address is unaffected (positive control: the route did run and accept).
+    assert _send(client, _body(key2, inst2, params={"email": "someone.else@shop.example", "link": LINK})).status_code == 202
+    assert _row_count(app) == n + 1
 
 
 def test_over_long_parameters_are_refused(app, client, seeded, signing_key):

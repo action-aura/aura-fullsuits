@@ -26,6 +26,20 @@ def create_app(config_name: str | None = None) -> Flask:
 
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxy_count, x_proto=proxy_count, x_host=proxy_count)
 
+    # Found by adversarial verification 2026-10-10, before go-live: nothing
+    # checked the Host header, and reset / invitation links are built from it
+    # (url_for(_external=True)). A forged "Host: evil.example" (or, behind
+    # ProxyFix, X-Forwarded-Host) on POST /auth/forgot-password therefore made
+    # OUR mail carry a link to the attacker, who then reads the token. Flask
+    # >= 3.1 refuses an untrusted host with 400 the moment request.host is read;
+    # that read happens on the ProxyFix-rewritten environ, so X-Forwarded-Host
+    # is validated too. 127.0.0.1 / localhost stay allowed because the container
+    # healthcheck curls http://127.0.0.1:5000/health/live from inside. Empty
+    # (dev/testing) = no enforcement.
+    allowed_hosts = tuple(app.config.get("ALLOWED_HOSTS") or ())
+    if allowed_hosts:
+        app.config["TRUSTED_HOSTS"] = [*allowed_hosts, "127.0.0.1", "localhost"]
+
     init_db(
         app.config["SQLALCHEMY_DATABASE_URI"],
         statement_timeout_ms=app.config["DB_STATEMENT_TIMEOUT_MS"],

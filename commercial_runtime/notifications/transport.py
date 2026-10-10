@@ -135,14 +135,12 @@ class RelayTransport:
         installation_id_provider: Callable[[], Optional[str]],
         app_version: str,
         platform: str,
-        shop_name_provider: Optional[Callable[[], Optional[str]]] = None,
     ):
         self._client_factory = client_factory
         self._signer_factory = signer_factory
         self._installation_id_provider = installation_id_provider
         self._app_version = app_version
         self._platform = platform
-        self._shop_name_provider = shop_name_provider
 
     def installation_id(self) -> Optional[str]:
         try:
@@ -159,12 +157,6 @@ class RelayTransport:
         if installation_id is None:
             raise RelayNotReadyError("not activated")
         payload = relay_payload_for(row)
-        shop_name = None
-        if self._shop_name_provider is not None:
-            try:
-                shop_name = self._shop_name_provider()
-            except Exception:  # noqa: BLE001
-                shop_name = None
         response = self._client_factory().send_mail(
             installation_id=installation_id,
             kind=payload["kind"],
@@ -172,7 +164,6 @@ class RelayTransport:
             signer=self._signer_factory(),
             app_version=self._app_version,
             platform=self._platform,
-            shop_name=shop_name,
         )
         if not isinstance(response, dict) or response.get("result") != "QUEUED":
             reason = response.get("reason_code") if isinstance(response, dict) else None

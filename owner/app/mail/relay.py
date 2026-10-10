@@ -31,8 +31,10 @@ audit row each would drown the real events. One log line per request.
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select, text
@@ -51,7 +53,7 @@ LANGS = frozenset({"en", "ar"})
 
 _ENVELOPE_KEYS = frozenset({
     "contract_version", "request_id", "correlation_id", "timestamp", "nonce", "installation_id", "signature",
-    "app_version", "platform", "kind", "lang", "shop_name", "params",
+    "app_version", "platform", "kind", "lang", "params",
 })
 _REQUIRED_FIELDS = ("installation_id", "timestamp", "nonce", "signature", "request_id", "kind", "params")
 _PARAM_KEYS = {
@@ -94,9 +96,35 @@ def _email(value) -> str:
     return value
 
 
+def _link_host_is_local(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False  # any other hostname: refused (see _link)
+    return (ip.is_loopback or ip.is_private or ip.is_link_local) and not (ip.is_unspecified or ip.is_multicast)
+
+
 def _link(value) -> str:
+    # Found by adversarial verification 2026-10-10, before go-live: the relay
+    # sends from Owner's trusted sender address, so a stolen/abused installation
+    # key could mail "reset your password" with a link to ANY site -- phishing
+    # with our reputation. The till builds these links from its own request
+    # host (commercial_runtime/identity/verification.py), i.e. the shop's own
+    # app on loopback or a LAN address, so only those are accepted. A hostname
+    # (a machine name) is refused on purpose: the till does not need it to be
+    # accepted, and a name is exactly what an attacker would register.
     value = _text(value, max_len=lim.LINK_MAX)
     if not value.lower().startswith(("http://", "https://")) or _BAD_LINK_CHARS.search(value):
+        raise _invalid()
+    try:
+        parts = urlsplit(value)
+        host = parts.hostname
+        parts.port  # noqa: B018 -- raises ValueError on a malformed port
+    except ValueError:
+        raise _invalid()
+    if "@" in parts.netloc or not host or not _link_host_is_local(host):
         raise _invalid()
     return value
 
@@ -118,7 +146,7 @@ def _lines(value, *, max_lines: int) -> list:
 
 
 def validate(body) -> dict:
-    """Returns {kind, to, lang, shop, link, lines}; raises INVALID_REQUEST."""
+    """Returns {kind, to, lang, link, lines}; raises INVALID_REQUEST."""
     if not isinstance(body, dict) or not all(k in body for k in _REQUIRED_FIELDS):
         raise _invalid()
     if not set(body) <= _ENVELOPE_KEYS:
@@ -129,8 +157,6 @@ def validate(body) -> dict:
     lang = body.get("lang", "en")
     if lang not in LANGS:
         raise _invalid()
-    shop = body.get("shop_name")
-    shop = _text(shop, max_len=lim.SHOP_MAX) if shop is not None else None
     params = body["params"]
     if not isinstance(params, dict) or not set(params) <= _PARAM_KEYS[kind] or not _PARAM_KEYS[kind] <= set(params):
         raise _invalid()
@@ -151,7 +177,7 @@ def validate(body) -> dict:
     else:
         to = _email(params["to"])
         lines = _lines(params["lines"], max_lines=lim.MAX_SHIFT_LINES if kind == "shift_close" else lim.MAX_REPORT_LINES)
-    return {"kind": kind, "to": to, "lang": lang, "shop": shop, "link": link, "lines": lines}
+    return {"kind": kind, "to": to, "lang": lang, "link": link, "lines": lines}
 
 
 def _check_caps(installation_id, *, kind: str, to: str, now: datetime) -> None:
@@ -165,6 +191,22 @@ def _check_caps(installation_id, *, kind: str, to: str, now: datetime) -> None:
     if db_session.execute(base).scalar_one() >= lim.TOTAL_PER_DAY:
         raise MailLimitExceeded("total_per_day")
     if kind in lim.IDENTITY_KINDS:
+        # Per-installation caps cannot stop one stolen key per victim; a person
+        # can only be mailed so many identity mails whoever asks. Counted across
+        # ALL installations (found by adversarial verification 2026-10-10).
+        # Serialised per recipient so two simultaneous requests cannot both
+        # read "4 so far".
+        db_session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"mail-relay-to:{to.lower()}"})
+        to_count = db_session.execute(
+            select(func.count(EmailOutbox.id)).where(
+                EmailOutbox.source == "relay",
+                EmailOutbox.kind.in_(lim.IDENTITY_KINDS),
+                func.lower(EmailOutbox.to_address) == to.lower(),
+                EmailOutbox.created_at >= day_ago,
+            )
+        ).scalar_one()
+        if to_count >= lim.IDENTITY_PER_RECIPIENT_PER_DAY:
+            raise MailLimitExceeded("identity_per_recipient_per_day")
         identity = db_session.execute(base.where(EmailOutbox.kind.in_(lim.IDENTITY_KINDS))).scalar_one()
         if identity >= lim.IDENTITY_PER_DAY:
             raise MailLimitExceeded("identity_per_day")
@@ -190,7 +232,7 @@ def accept_mail(body: dict, *, config: dict) -> dict:
     _check_caps(installation.id, kind=clean["kind"], to=clean["to"], now=now)
 
     subject, body_text, body_html = templates.render(
-        clean["kind"], lang=clean["lang"], link=clean["link"], lines=clean["lines"], shop=clean["shop"],
+        clean["kind"], lang=clean["lang"], link=clean["link"], lines=clean["lines"],
     )
     row = outbox.enqueue(
         kind=clean["kind"], to_address=clean["to"], subject=subject, body_text=body_text, body_html=body_html,

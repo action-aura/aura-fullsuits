@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.extensions import db_session
 from app.models.base import utcnow
@@ -47,6 +47,32 @@ def _reset_key(email: str) -> str:
 def record_reset_request(email: str, ip_address: str | None) -> None:
     db_session.add(LoginAttempt(email_attempted=_reset_key(email), ip_address=ip_address, success=False, reason=_RESET_REASON))
     db_session.commit()
+
+
+_RESET_IP_KEY_PREFIX = "pwreset-ip:"
+_RESET_IP_REASON = "password_reset_ip_request"
+
+
+def reset_ip_over_limit_and_record(ip_address: str | None, max_per_hour: int) -> bool:
+    """Per-client-IP flood limit for the forgot-password form. Returns True
+    (and writes NOTHING) once this IP has made `max_per_hour` requests in the
+    last hour; otherwise records this request and returns False. Found by
+    adversarial verification 2026-10-10: only the per-address limit existed, so
+    one client could write unlimited rows (and trigger lookups) by varying the
+    address. Namespaced key like _reset_key, so it can never touch login
+    lockout counting."""
+    key = _RESET_IP_KEY_PREFIX + (ip_address or "unknown")
+    window_start = utcnow() - timedelta(seconds=_RESET_WINDOW_SECONDS)
+    count = db_session.execute(
+        select(func.count(LoginAttempt.id))
+        .where(LoginAttempt.email_attempted == key)
+        .where(LoginAttempt.created_at >= window_start)
+    ).scalar_one()
+    if count >= max_per_hour:
+        return True
+    db_session.add(LoginAttempt(email_attempted=key, ip_address=ip_address, success=False, reason=_RESET_IP_REASON))
+    db_session.commit()
+    return False
 
 
 def count_reset_requests(email: str) -> int:

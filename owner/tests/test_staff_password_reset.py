@@ -314,3 +314,38 @@ def test_the_detail_page_shows_the_button_only_with_the_permission(app, seeded):
     boss = app.test_client()
     login_and_verify_mfa(boss, "boss@example.com")
     assert "Create password reset link" in boss.get(f"/staff/{target}").get_data(as_text=True)
+
+
+# ---------------------------------------------------------------------------
+# Per-client-IP flood limit (found by adversarial verification 2026-10-10):
+# only the per-address limit existed, so one client could write unlimited rows
+# by varying the address.
+# ---------------------------------------------------------------------------
+def _forgot_from(client, email, ip):
+    csrf = get_csrf(client.get("/auth/forgot-password").get_data(as_text=True))
+    return client.post("/auth/forgot-password", data={"csrf_token": csrf, "email": email},
+                       environ_overrides={"REMOTE_ADDR": ip})
+
+
+def _attempt_rows(app):
+    from app.models.staff import LoginAttempt
+
+    with app.app_context():
+        return len(db_session.execute(select(LoginAttempt)).scalars().all())
+
+
+def test_21st_forgot_post_from_one_ip_writes_nothing_and_looks_identical(app, client):
+    limit = password_reset.RESET_FORMS_PER_IP_PER_HOUR
+    first = _forgot_from(client, "n0@example.com", "198.51.100.7")
+    bodies = {first.get_data(as_text=True)}
+    for i in range(1, limit):
+        assert _forgot_from(client, f"n{i}@example.com", "198.51.100.7").status_code == 200
+    rows_at_limit = _attempt_rows(app)
+    over = _forgot_from(client, "n999@example.com", "198.51.100.7")
+    assert over.status_code == 200
+    assert over.get_data(as_text=True) in bodies, "throttled response must be byte-identical to a normal one"
+    assert _attempt_rows(app) == rows_at_limit, "over the limit nothing may be written"
+    assert len(_outbox(app)) == 0
+    # a different client IP is unaffected (it ran and recorded rows)
+    assert _forgot_from(client, "other@example.com", "198.51.100.8").status_code == 200
+    assert _attempt_rows(app) > rows_at_limit

@@ -241,7 +241,6 @@ class LicensingClient:
         app_version: str,
         platform: str,
         lang: str = "en",
-        shop_name: Optional[str] = None,
         request_id: Optional[str] = None,
     ) -> dict:
         """Mail relay: "please send this templated message for me". Device-signed
@@ -270,8 +269,9 @@ class LicensingClient:
             "lang": lang,
             "params": params,
         }
-        if shop_name:
-            body["shop_name"] = shop_name
+        # No shop_name: Owner's relay refuses it (free text in a mail from OUR
+        # address was a phishing vector; found by adversarial verification
+        # 2026-10-10), so sending one would make the whole request a 400.
         return self._post_signed("/mail", body, signer)
 
     def authorize_release_download(

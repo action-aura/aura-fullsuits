@@ -403,9 +403,14 @@ def forgot_password_submit():
     """ALWAYS the same page, whether the address belongs to an account, a
     disabled account, nothing at all, or is over its hourly limit, and whether
     or not this server can send email. See app/auth/password_reset.py."""
-    from app.auth.password_reset import request_reset
+    from app.auth.password_reset import RESET_FORMS_PER_IP_PER_HOUR, request_reset
+    from app.security.ratelimit import reset_ip_over_limit_and_record
 
     try:
+        if reset_ip_over_limit_and_record(request.remote_addr, RESET_FORMS_PER_IP_PER_HOUR):
+            # Same page, nothing else written: a flood must not be able to tell
+            # it was throttled, nor grow the tables.
+            return render_template("auth/forgot_password_sent.html")
         request_reset(request.form.get("email", ""), request.remote_addr)
     except Exception:
         # Even a failure must not look different from success to the person

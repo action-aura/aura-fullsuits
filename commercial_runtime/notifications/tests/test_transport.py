@@ -268,3 +268,25 @@ def test_a_relay_refusal_is_a_retry_not_a_sent_row(db):
     conn = sqlite3.connect(db)
     assert conn.execute('SELECT last_error FROM email_outbox').fetchone()[0] == 'RelayRefusedError'
     conn.close()
+
+
+# -- the relay never carries a shop name (Owner refuses the key) -------------
+
+def test_relay_wire_body_never_contains_shop_name_even_when_one_is_configured(db):
+    # shop_name used to be an optional send_mail argument fed by a provider. Owner's
+    # relay now refuses that key (400), so neither seam may exist any more.
+    session = _Session()
+    _enqueue(db, 'verify_email', recipient='boss@shop.test')
+    result = _worker(db, _relay(session, _Installation('inst-1'))).run_once()
+    assert result['outcomes']['sent'] == 1
+    (_method, _url, body), = session.posted
+    assert 'shop_name' not in body and 'shop_name' not in json.dumps(body)
+    with pytest.raises(TypeError):
+        transport.RelayTransport(
+            client_factory=lambda: None, signer_factory=_Signer, installation_id_provider=_Installation('i'),
+            app_version='1', platform='WINDOWS', shop_name_provider=lambda: 'Ahmad & Sons')
+    with pytest.raises(TypeError):
+        LicensingClient(LicensingClientConfig(base_url='http://owner.test/api/licensing/v1', max_retries=0),
+                        session=session).send_mail(
+            installation_id='i', kind='verify_email', params={}, signer=_Signer(), app_version='1',
+            platform='WINDOWS', shop_name='Ahmad & Sons')

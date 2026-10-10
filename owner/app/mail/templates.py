@@ -60,17 +60,16 @@ _LINK_NOTES = {
 }
 
 
-def _footer(shop: Optional[str]) -> tuple:
-    if shop:
-        en = f"Sent by Aura Retail for {shop} - do not reply. Questions: {SUPPORT_ADDRESS}"
-        ar = f"أُرسلت من Aura Retail لصالح {shop} - يرجى عدم الرد. للاستفسار: {SUPPORT_ADDRESS}"
-    else:
-        en = f"Sent by Aura Retail - do not reply. Questions: {SUPPORT_ADDRESS}"
-        ar = f"أُرسلت من Aura Retail - يرجى عدم الرد. للاستفسار: {SUPPORT_ADDRESS}"
+def _footer() -> tuple:
+    # No caller-supplied shop name in the footer: it was free text from the
+    # relay, placed in a mail sent from OUR address (phishing text with our
+    # reputation; found by adversarial verification 2026-10-10).
+    en = f"Sent by Aura Retail - do not reply. Questions: {SUPPORT_ADDRESS}"
+    ar = f"أُرسلت من Aura Retail - يرجى عدم الرد. للاستفسار: {SUPPORT_ADDRESS}"
     return en, ar
 
 
-def _block_text(kind: str, idx: int, link: Optional[str], lines: list, shop: Optional[str]) -> str:
+def _block_text(kind: str, idx: int, link: Optional[str], lines: list) -> str:
     parts = [_INTROS[kind][idx]]
     if link:
         parts += ["", link]
@@ -79,11 +78,11 @@ def _block_text(kind: str, idx: int, link: Optional[str], lines: list, shop: Opt
     note = _LINK_NOTES.get(kind)
     if note:
         parts += ["", note[idx]]
-    parts += ["", _footer(shop)[idx]]
+    parts += ["", _footer()[idx]]
     return "\n".join(parts)
 
 
-def _block_html(kind: str, idx: int, link: Optional[str], lines: list, shop: Optional[str]) -> str:
+def _block_html(kind: str, idx: int, link: Optional[str], lines: list) -> str:
     rtl = idx == 1
     out = [f'<div dir="{"rtl" if rtl else "ltr"}" style="margin:0 0 24px 0">',
            f"<p>{escape(_INTROS[kind][idx])}</p>"]
@@ -94,13 +93,12 @@ def _block_html(kind: str, idx: int, link: Optional[str], lines: list, shop: Opt
     note = _LINK_NOTES.get(kind)
     if note:
         out.append(f"<p>{escape(note[idx])}</p>")
-    out.append(f'<p style="color:#666;font-size:12px">{escape(_footer(shop)[idx])}</p>')
+    out.append(f'<p style="color:#666;font-size:12px">{escape(_footer()[idx])}</p>')
     out.append("</div>")
     return "".join(out)
 
 
-def render(kind: str, *, lang: str = "en", link: Optional[str] = None, lines: Optional[list] = None,
-           shop: Optional[str] = None) -> tuple:
+def render(kind: str, *, lang: str = "en", link: Optional[str] = None, lines: Optional[list] = None) -> tuple:
     """Returns (subject, body_text, body_html). `link` and `lines` must already
     have been validated by the caller; they are placed in the body only."""
     if kind not in _SUBJECTS:
@@ -110,6 +108,6 @@ def render(kind: str, *, lang: str = "en", link: Optional[str] = None, lines: Op
     lines = list(lines or [])
     order = (1, 0) if lang == "ar" else (0, 1)
     subject = _SUBJECTS[kind][order[0]]
-    body_text = ("\n\n" + "-" * 24 + "\n\n").join(_block_text(kind, i, link, lines, shop) for i in order)
-    body_html = "".join(_block_html(kind, i, link, lines, shop) for i in order)
+    body_text = ("\n\n" + "-" * 24 + "\n\n").join(_block_text(kind, i, link, lines) for i in order)
+    body_html = "".join(_block_html(kind, i, link, lines) for i in order)
     return subject, body_text, body_html

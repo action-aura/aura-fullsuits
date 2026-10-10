@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 SALT = "owner-staff-password-reset"
 MAX_AGE_SECONDS = 30 * 60
 REQUESTS_PER_HOUR = 3
+RESET_FORMS_PER_IP_PER_HOUR = 20
 _HTTPS_ENVS = ("staging", "production")
 
 

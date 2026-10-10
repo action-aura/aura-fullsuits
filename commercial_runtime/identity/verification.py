@@ -34,9 +34,11 @@ link inside it is still the till's, so nothing on Owner's side can fix this.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlsplit
 
 import logging
 
@@ -175,6 +177,30 @@ def _deliver(*, company_id, email_type: str, recipient: str, subject: str, body_
         else "not_configured"
 
 
+def _till_link_base(base_url: str) -> str:
+    """The base a mailed link is built on. Plan D7: these links are only valid
+    on the till itself, and Owner's mail relay refuses any link whose host is
+    not loopback / private / link-local (relay phishing fix, found by
+    adversarial verification 2026-10-10). A machine-name host such as
+    http://SHOP-PC:5001 would therefore be refused and the mail would never
+    arrive, so anything that is not already such an IP literal (or exactly
+    'localhost') is rebuilt on http://127.0.0.1:<same port>/."""
+    parts = urlsplit(base_url)
+    host = parts.hostname or ""
+    try:
+        ip = ipaddress.ip_address(host)
+        local = (ip.is_loopback or ip.is_private or ip.is_link_local) and not (ip.is_unspecified or ip.is_multicast)
+    except ValueError:
+        local = host == "localhost"
+    if local and parts.scheme in ("http", "https"):
+        return base_url
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return f"http://127.0.0.1:{port}/" if port else "http://127.0.0.1/"
+
+
 def send_verification_email(conn, *, company_id: str, user_email: str, base_url: str) -> str:
     """Creates a fresh email_verification link and hands the message to the
     mail sink (or sends inline when none is registered). Returns a status
@@ -194,7 +220,7 @@ def send_verification_email(conn, *, company_id: str, user_email: str, base_url:
         conn, company_id=company_id, email=user_email,
         purpose="email_verification", ttl_hours=EMAIL_VERIFICATION_TTL_HOURS,
     )
-    link = f"{base_url.rstrip('/')}/#verify-email/{raw_token}"
+    link = f"{_till_link_base(base_url).rstrip('/')}/#verify-email/{raw_token}"
     return _deliver(
         company_id=company_id,
         email_type="verify_email",
@@ -265,7 +291,7 @@ def request_password_reset(conn, *, email: str, base_url: str) -> None:
         conn, company_id=user["company_id"], email=email,
         purpose="password_reset", ttl_hours=PASSWORD_RESET_TTL_HOURS,
     )
-    link = f"{base_url.rstrip('/')}/#reset-password/{raw_token}"
+    link = f"{_till_link_base(base_url).rstrip('/')}/#reset-password/{raw_token}"
     _deliver(
         company_id=user["company_id"],
         email_type="password_reset",

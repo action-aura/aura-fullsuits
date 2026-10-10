@@ -88,3 +88,75 @@ def test_without_proxy_trust_all_callers_share_one_bucket(unproxied_app, seeded,
     for _ in range(limit):
         _post_activation(client, "203.0.113.10")
     assert _post_activation(client, "203.0.113.11").status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# Host / X-Forwarded-Host validation (found by adversarial verification
+# 2026-10-10, before go-live). Reset and invitation links are built from the
+# Host header; without an allow-list a forged Host put the attacker's domain in
+# OUR password-reset mail. These drive the real create_app() WSGI stack.
+# ---------------------------------------------------------------------------
+def _hosts_app(request, monkeypatch, *, hosts, proxies=0):
+    monkeypatch.setattr(TestingConfig, "ALLOWED_HOSTS", hosts)
+    monkeypatch.setattr(TestingConfig, "TRUSTED_PROXY_COUNT", proxies)
+    return request.getfixturevalue("app")
+
+
+def _forgot_post(application, email, headers=None, base="http://owner.example.com"):
+    from tests.conftest import get_csrf
+
+    client = application.test_client()
+    form = client.get("/auth/forgot-password", base_url=base, headers=headers or {})
+    if form.status_code != 200:
+        return form
+    csrf = get_csrf(form.get_data(as_text=True))
+    return client.post("/auth/forgot-password", data={"csrf_token": csrf, "email": email}, base_url=base, headers=headers or {})
+
+
+def _outbox_count(application):
+    from sqlalchemy import func, select
+
+    from app.extensions import db_session
+    from app.models.email_outbox import EmailOutbox
+    from app.models.staff import LoginAttempt
+
+    with application.app_context():
+        return (
+            db_session.execute(select(func.count(EmailOutbox.id))).scalar_one(),
+            db_session.execute(select(func.count(LoginAttempt.id))).scalar_one(),
+        )
+
+
+def test_forged_host_header_is_refused_and_writes_nothing(request, monkeypatch):
+    application = _hosts_app(request, monkeypatch, hosts=("owner.example.com",))
+    ok = _forgot_post(application, "nobody@example.com")                       # positive control: real host works
+    assert ok.status_code == 200
+    before = _outbox_count(application)
+    # The whole flow (form GET for a valid CSRF token, then the POST) is driven
+    # AGAINST the forged host, so a 400 can only come from the host check -- a
+    # bare POST would be refused by CSRF whether or not the host guard ran.
+    resp = _forgot_post(application, "nobody@example.com", base="http://evil.example")
+    assert resp.status_code == 400
+    assert _outbox_count(application) == before
+
+
+def test_forged_x_forwarded_host_is_refused_behind_proxyfix(request, monkeypatch):
+    application = _hosts_app(request, monkeypatch, hosts=("owner.example.com",), proxies=1)
+    resp = _forgot_post(application, "nobody@example.com", headers={"X-Forwarded-Host": "evil.example"})
+    assert resp.status_code == 400
+    good = application.test_client().get(
+        "/auth/forgot-password", base_url="http://127.0.0.1", headers={"X-Forwarded-Host": "owner.example.com"}
+    )
+    assert good.status_code == 200      # control: a forwarded host that IS allowed passes
+
+
+def test_loopback_hosts_stay_allowed_for_the_container_healthcheck(request, monkeypatch):
+    application = _hosts_app(request, monkeypatch, hosts=("owner.example.com",))
+    for base in ("http://127.0.0.1:5000", "http://localhost:5000"):
+        assert application.test_client().get("/health/live", base_url=base).status_code == 200, base
+
+
+def test_empty_allowed_hosts_enforces_nothing(request, monkeypatch):
+    application = _hosts_app(request, monkeypatch, hosts=())
+    assert "TRUSTED_HOSTS" not in application.config or not application.config["TRUSTED_HOSTS"]
+    assert application.test_client().get("/auth/forgot-password", base_url="http://anything.example").status_code == 200
