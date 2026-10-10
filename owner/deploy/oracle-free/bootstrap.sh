@@ -168,12 +168,13 @@ fi
 env_value() { grep -E "^${1}=" "$ENV_FILE" | tail -1 | cut -d= -f2-; }
 
 problems=()
-for key in OWNER_SECRET_KEY OWNER_LICENSE_PEPPER OWNER_DATABASE_URL OWNER_BACKUP_TARGET_URL; do
+for key in OWNER_SECRET_KEY OWNER_LICENSE_PEPPER OWNER_DATABASE_URL OWNER_BACKUP_TARGET_URL OWNER_SYNC_RELAY_PUBLIC_URL; do
   [ -n "$(env_value "$key")" ] || problems+=("$key is empty")
 done
 declare -A placeholders=(
   [SITE_DOMAIN]="owner.example.com"
   [OWNER_ALLOWED_HOSTS]="owner.example.com"
+  [OWNER_SYNC_RELAY_PUBLIC_URL]="https://owner.example.com"
   [OWNER_DATABASE_URL]="postgresql+psycopg://<user>:<pass>@<neon-host>/<db>?sslmode=require"
 )
 for key in "${!placeholders[@]}"; do
