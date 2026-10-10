@@ -671,6 +671,27 @@ _update_service = build_update_service(
 _update_scheduler = UpdateScheduler(_update_service) if _update_service is not None else None
 app.register_blueprint(make_updates_blueprint(_update_service, current_version=APP_VERSION))
 
+# Android half of the update channel: Kotlin (which holds the device key) makes
+# the signed Owner call and hands the RAW answer here; this process verifies it
+# against ITS trust store and ITS licence state's installation id and returns
+# the only verdict Kotlin believes. Registered only on Android with the shared
+# secret, exactly like the licensing /_internal routes -- on Windows the URL
+# does not exist (404). Same licensing dir and licence database the licensing
+# blueprint and build_update_service use: one trust set, one identity.
+if LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
+    from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository as _UpdLicenseStateRepository
+    from commercial_runtime.licensing_contracts.trust_store import OwnerTrustStore as _UpdOwnerTrustStore
+    from commercial_runtime.updates.internal_routes import make_internal_updates_blueprint
+
+    _upd_app_data_dir = Path(DATABASE_DIR).parent
+    app.register_blueprint(make_internal_updates_blueprint(
+        shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
+        trust_store_factory=lambda: _UpdOwnerTrustStore(_upd_app_data_dir / 'licensing' / 'trust_store.json'),
+        state_repository_factory=lambda: _UpdLicenseStateRepository(
+            _upd_app_data_dir / 'database' / 'subsystems' / 'licensing.db'),
+        app_version=APP_VERSION,
+    ))
+
 # Crash reports. CAPTURE is always on and purely local: a crash on the server
 # or in a background thread is written to a small bounded SQLite queue
 # (<app_data>/database/subsystems/crash_reports.db, never retail.db), so a shop

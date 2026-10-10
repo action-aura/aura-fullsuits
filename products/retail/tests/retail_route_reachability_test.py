@@ -146,6 +146,13 @@ OTHER_BLUEPRINTS = (
     # their real doorway is the Settings > Updates section (settings-hub.js),
     # asserted by retail_update_ui_test.js, which reads the exact URLs.
     SUITE_ROOT / 'commercial_runtime' / 'updates' / 'routes.py',
+    # NOT listed on purpose: commercial_runtime/updates/internal_routes.py
+    # (POST /api/updates/_internal/verify-descriptor). It is the Android
+    # Kotlin->Python seam, accounted for the same way as the licensing and sync
+    # `/_internal/*` routes: those files are not in this tuple either, because
+    # they are never reached by JS or by the net/*.kt glob below. Its real caller
+    # is android/.../updates/UpdateCoordinator.kt (LocalUpdatesHttp), and its
+    # contract is pinned by commercial_runtime/updates/tests/test_internal_routes.py.
     # Crash reports (feat/crash-reports): POST /client is called by app-shell.js'
     # window error hook (key 'client'). GET /summary has NO screen yet -- it is
     # the support/future-Settings read of "how many reports are waiting". It

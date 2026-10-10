@@ -35,7 +35,7 @@ from typing import Callable, Optional, Sequence
 
 from commercial_runtime.licensing_contracts.client import LicensingClientError
 
-from .descriptor import ReleaseOffer, UpdateError, verify_release_descriptor
+from .descriptor import ReleaseOffer, UpdateError, verify_owner_release_response
 from .versioning import is_newer, parse_semver
 
 log = logging.getLogger("aura.updates")
@@ -317,12 +317,8 @@ class UpdateService:
                 signer=self._signer_factory(),
                 request_id=request_id,
             )
-            if not isinstance(response, dict) or "release_descriptor" not in response:
-                reason = response.get("reason_code") if isinstance(response, dict) else None
-                log.warning("updates: Owner refused the discovery request (reason=%s)", reason)
-                raise UpdateError("OWNER_REFUSED", "Owner did not return a release descriptor.")
-            offer = verify_release_descriptor(
-                response["release_descriptor"],
+            offer = verify_owner_release_response(
+                response,
                 trust_store=self._trust_store_factory(),
                 expected_installation_id=installation_id,
                 expected_request_id=request_id,

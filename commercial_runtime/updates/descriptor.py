@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 import re
 from dataclasses import dataclass
 from typing import Optional
@@ -22,6 +23,8 @@ from commercial_runtime.licensing_contracts.canonical import CanonicalizationErr
 from commercial_runtime.licensing_contracts.device_identity import verify_signature
 
 from .versioning import is_newer, parse_semver
+
+log = logging.getLogger("aura.updates")
 
 MAX_INSTALLER_BYTES = 1_073_741_824  # 1 GiB: far above any real installer, far below "fill the disk"
 _SHA256_RE = re.compile(r"[0-9a-f]{64}", re.ASCII)
@@ -83,6 +86,33 @@ def _verify_envelope(envelope, trust_store) -> dict:
     if not verify_signature(public_key, canonical, signature):
         raise _untrusted("descriptor signature does not verify")
     return payload
+
+
+def verify_owner_release_response(
+    response,
+    *,
+    trust_store,
+    expected_installation_id: str,
+    expected_request_id: str,
+    current_version: str,
+) -> Optional[ReleaseOffer]:
+    """Owner's whole find-latest-release answer -> offer / None / UpdateError.
+
+    The ONE place both the Windows UpdateService and the Android internal route
+    turn "what Owner said" into a verdict, so the two cannot drift: an answer
+    without a `release_descriptor` is OWNER_REFUSED (Owner declines to serve
+    this licence), anything else goes through verify_release_descriptor."""
+    if not isinstance(response, dict) or "release_descriptor" not in response:
+        reason = response.get("reason_code") if isinstance(response, dict) else None
+        log.warning("updates: Owner refused the discovery request (reason=%s)", reason)
+        raise UpdateError("OWNER_REFUSED", "Owner did not return a release descriptor.")
+    return verify_release_descriptor(
+        response["release_descriptor"],
+        trust_store=trust_store,
+        expected_installation_id=expected_installation_id,
+        expected_request_id=expected_request_id,
+        current_version=current_version,
+    )
 
 
 def verify_release_descriptor(
