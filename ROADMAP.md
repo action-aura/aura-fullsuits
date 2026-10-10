@@ -7452,3 +7452,24 @@ table owner_crash_reports. Checked every origin branch: no branch on this lineag
 7c41d2e9a0b5. The master lineage carries 56216a528eff and 5de3f36f4c21 which this lineage lacks
 (the known Owner lineage split) -- whoever reconciles the two lineages must order these. No
 product (retail/clinic) schema version is used by this wave.
+
+## CRASH-REPORTS CASHED IN (2026-10-10, branch feat/crash-reports, Owner revision a3d9e6c14b72)
+
+The 2026-10-08 checkpoint edd80dfb was committed UNVERIFIED (builder stopped mid full-suite, possibly
+with a mutation applied). Re-audited 2026-10-10 by a fresh crew: every guard read against
+CRASH-PLAN.md, none mutated or missing, no code change needed. 29 mutation proofs, both directions,
+byte-exact restores (scrub rules x4 + frame cap + absolute-path leak + line-free fingerprint; store
+cap / oldest-sent-first / count increment; capture swallow / response unchanged; sender not-activated
+gate / backoff doubling + 6 h cap / re-scrub before send; /client 401, rate limit, 413; Owner count=max
+upsert incl. cross-stack, 20-report / 300-char / kind / fingerprint limits, nonce scope, staff page
+permission). One independent spot mutation by the orchestrator (digit scrub removed -> 3 red in
+test_scrub + test_sender, restored -> 36 green).
+Suites: retail -j 4 413 files, 412 passed, the 1 red is retail_owner_endpoint_baked_url_test
+(gitignored trust_anchor.json absent in this worktree, as before); updates + licensing_contracts +
+crash_reports 37/37; Owner files one process each: test_crash_reports 32, cross_stack 1,
+route_reachability 4, request_body_limits 4, security_controls 15, observability 9,
+release_discovery 36, private_distribution 11.
+Residuals: the optional launcher sys.excepthook (plan item 6) was not built -- a crash before the
+Flask backend starts is still invisible. Android has no crash capture (signs in Kotlin). Owner
+retention prune is a command, not scheduled (free host runs no scheduled ops). The upgrade/downgrade
+of a3d9e6c14b72 was exercised only through the test DB, not as a standalone round trip.
