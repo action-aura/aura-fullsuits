@@ -381,6 +381,48 @@ def register_cli(app: Flask) -> None:
             )
         )
 
+    @commercial_group.command("housekeeping")
+    @click.option("--apply", "apply_", is_flag=True, default=False, help="Actually delete/expire. Default is dry-run (counts only).")
+    def housekeeping_cmd(apply_: bool):
+        """Cleanup that had a function but no caller (found 2026-10-10): expire
+        stale SENT quotes, and purge expired replay nonces, expired idempotency
+        records and old rate-limit counters. Each existing function runs with
+        its own default retention; rate-limit counters have none, so anything
+        older than a day is purged (the longest window is 5 minutes). Dry-run
+        reports what --apply would touch and calls none of the deleting paths."""
+        from datetime import datetime, timezone
+
+        from app.commercial_sales import quotes
+        from app.licensing_service import idempotency, ratelimit, replay
+        from app.models.commercial_sales import Quote
+        from app.models.licensing_service import ExternalIdempotencyRecord, RateLimitCounter, SecurityNonceRecord
+
+        now = datetime.now(timezone.utc)
+        counter_cutoff = now - timedelta(days=1)
+
+        if apply_:
+            result = {
+                "dry_run": False,
+                "quotes_expired": quotes.expire_stale_quotes(),
+                "nonces_purged": replay.purge_expired_nonces(),
+                "idempotency_records_purged": idempotency.purge_expired(),
+                "rate_limit_counters_purged": ratelimit.purge_old_counters(older_than=counter_cutoff),
+            }
+        else:
+            def _count(model, *conditions) -> int:
+                return db_session.query(model).filter(*conditions).count()
+
+            result = {
+                "dry_run": True,
+                "quotes_expired": _count(
+                    Quote, Quote.status == "SENT", Quote.valid_until.is_not(None), Quote.valid_until < now.date()
+                ),
+                "nonces_purged": _count(SecurityNonceRecord, SecurityNonceRecord.expires_at < now),
+                "idempotency_records_purged": _count(ExternalIdempotencyRecord, ExternalIdempotencyRecord.expires_at < now),
+                "rate_limit_counters_purged": _count(RateLimitCounter, RateLimitCounter.window_start < counter_cutoff),
+            }
+        click.echo(json.dumps(result, indent=2))
+
     @app.cli.group("sync")
     def sync_group():
         """Phase 5 prerequisite jobs for the multi-device sync relay

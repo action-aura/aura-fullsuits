@@ -186,3 +186,14 @@ class TestScheduledOpsArgumentsParse:
             if argv[:2] == ["reports", "generate-scheduled"] and "--period-type" in argv:
                 scheduled.add(argv[argv.index("--period-type") + 1])
         assert scheduled == expected, f"scheduled period types {sorted(scheduled)} != CLI choices {sorted(expected)}"
+
+
+class TestCleanupJobsAreScheduled:
+    """2026-10-10: crash-report pruning, quote expiry and the nonce /
+    idempotency / rate-limit purges all existed with no caller. Each must be an
+    --apply run_job line (a dry-run line would schedule nothing)."""
+
+    def test_crash_report_prune_and_housekeeping_run_with_apply(self):
+        invoked = _invoked_argv_from_run_scheduled_ops_sh()
+        assert ["crash-reports", "prune", "--apply"] in invoked
+        assert ["commercial", "housekeeping", "--apply"] in invoked

@@ -81,6 +81,11 @@ run_job "commercial expiry-scan --apply" commercial expiry-scan --apply
 run_job "commercial reconcile --apply" commercial reconcile --apply
 run_job "commercial device-limit-scan --apply" commercial device-limit-scan --apply
 run_job "sync prune-events --apply" sync prune-events --apply
+# Added 2026-10-10: cleanups that had a function but no caller. Crash reports
+# keep 90 days; `commercial housekeeping` expires stale SENT quotes and purges
+# expired replay nonces / idempotency records / old rate-limit counters.
+run_job "crash-reports prune --apply" crash-reports prune --apply
+run_job "commercial housekeeping --apply" commercial housekeeping --apply
 
 report_currency="$(env_value REPORT_CURRENCY)"
 if [ -z "$report_currency" ]; then

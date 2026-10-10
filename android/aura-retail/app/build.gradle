@@ -194,7 +194,10 @@ android {
         // versionCode is one Google Play would accept as a new upload. Must
         // stay equal to aura-clinic's versionCode -- pinned by
         // test_android_version_codes_agree_between_products.
-        versionCode 9
+        // 10: the update-channel build shipped with code ten via an init script
+        // (2026-10-10); the tracked value is bumped to match so a rebuild from
+        // source is not older than the APK already on devices.
+        versionCode 10
         versionName "1.0.0-rc.8"
 
         ndk {

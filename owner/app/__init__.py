@@ -15,6 +15,17 @@ def create_app(config_name: str | None = None) -> Flask:
     app.config.from_object(config_cls)
     config_cls.validate()
 
+    # Found 2026-10-10: OWNER_TRUSTED_PROXY_COUNT was validated (>=1 in
+    # production) but never APPLIED, so behind Caddy every caller looked like
+    # Caddy's IP: the device API rate limits were one bucket for the whole
+    # fleet, audit IPs were all the proxy, and invitation links were http://.
+    # 0 (dev/testing) means no proxy in front -- do not trust the headers.
+    proxy_count = int(app.config.get("TRUSTED_PROXY_COUNT") or 0)
+    if proxy_count >= 1:
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxy_count, x_proto=proxy_count, x_host=proxy_count)
+
     init_db(
         app.config["SQLALCHEMY_DATABASE_URI"],
         statement_timeout_ms=app.config["DB_STATEMENT_TIMEOUT_MS"],

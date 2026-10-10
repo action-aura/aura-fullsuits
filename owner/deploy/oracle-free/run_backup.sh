@@ -15,7 +15,10 @@
 #   3. Encrypt both (AES-256, PBKDF2) with BACKUP_PASSPHRASE. The bucket is
 #      private and the token is scoped to it, but the dump holds customer and
 #      licence records, so a leaked token alone must not leak them.
-#   4. PUT both to Cloudflare R2 with curl --aws-sigv4 and re-read each
+#   3b. Also tar the uploaded-files directories (expense attachments and
+#      release artifacts, their own named volumes) as a THIRD encrypted object.
+#      Empty/missing directories are logged and skipped, never a failure.
+#   4. PUT each to Cloudflare R2 with curl --aws-sigv4 and re-read each
 #      object's size; a size mismatch is a FAILED backup, not a warning.
 #
 # Secrets live in .env.r2 next to this script (root-readable, gitignored by
@@ -38,6 +41,8 @@ R2_ENV_FILE="$COMPOSE_DIR/.env.r2"
 COMPOSE=(docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FILE")
 PG_MAJOR="${PG_MAJOR:-18}"
 SIGNING_KEY_DIR=/app/owner/var/signing-keys
+UPLOADS_PARENT=/app/owner/var
+UPLOAD_DIRS=(expense-attachments release-artifacts)
 
 log() { printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1"; }
 fail() { log "FAILED: $1"; exit 1; }
@@ -79,6 +84,20 @@ log "Copying the signing-key directory out of the owner container..."
 tar -tf "$work/signing-keys.tar" | grep -q '\.pem$' \
   || fail "the signing-key tar holds no .pem -- refusing to upload a backup that cannot restore licensing."
 
+log "Copying the uploaded-files directories (expense attachments, release artifacts)..."
+# Not fatal: a fresh deploy has no attachments, and a missing uploads tar must
+# never cost the database and signing-key backups above.
+uploads_ok=0
+if "${COMPOSE[@]}" exec -T owner tar -C "$UPLOADS_PARENT" -cf - "${UPLOAD_DIRS[@]}" > "$work/uploads.tar" 2>"$work/uploads.err"; then
+  if [ "$(tar -tf "$work/uploads.tar" | grep -vc '/$')" -gt 0 ]; then
+    uploads_ok=1
+  else
+    log "No uploaded files yet (both directories empty) -- skipping the uploads backup."
+  fi
+else
+  log "WARNING: could not tar the uploaded-files directories ($(head -c 200 "$work/uploads.err")) -- skipping the uploads backup."
+fi
+
 upload() {  # $1 = local file, $2 = object key
   local enc="$1.enc" size remote
   openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:BACKUP_PASSPHRASE -in "$1" -out "$enc" \
@@ -96,4 +115,7 @@ upload() {  # $1 = local file, $2 = object key
 
 upload "$work/owner.dump" "$prefix/owner-db-$stamp.dump.enc"
 upload "$work/signing-keys.tar" "$prefix/owner-signing-keys-$stamp.tar.enc"
+if [ "$uploads_ok" -eq 1 ]; then
+  upload "$work/uploads.tar" "$prefix/owner-uploads-$stamp.tar.enc"
+fi
 log "Backup OK."

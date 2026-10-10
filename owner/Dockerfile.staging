@@ -21,7 +21,11 @@ COPY requirements/base.txt requirements/owner-server.txt /app/requirements/
 RUN pip install --no-cache-dir -r requirements/owner-server.txt
 
 COPY owner/ /app/owner/
+# expense-attachments + release-artifacts: compose mounts named volumes here
+# (oracle-free); a new volume only inherits aura ownership on first mount if
+# the directory exists in the image with that owner, hence created here too.
 RUN mkdir -p /app/owner/var/signing-keys /app/owner/var/backups \
+    /app/owner/var/expense-attachments /app/owner/var/release-artifacts \
     && chown -R aura:aura /app
 
 WORKDIR /app/owner

@@ -5,13 +5,9 @@ scheduled` (app/cli.py): meant to be run by an external scheduler, refuses to
 run unless OWNER_SCHEDULER_ROLE is explicitly "owner", and is a dry run unless
 --apply is passed.
 
-KNOWN GAP, written down on purpose: the free-tier host does not run scheduled
-ops yet (deploy/oracle-free/run_scheduled_ops.sh does not list this command),
-so until someone adds `crash-reports prune --apply` there, or runs it by hand,
-the table is not pruned. It is bounded in practice -- at most one row per
-(installation, bug, build), and a till sends only what its 200-row local cap
-holds -- but "bounded in practice" is not "pruned", and it is recorded here
-rather than discovered later.
+deploy/oracle-free/run_scheduled_ops.sh runs `crash-reports prune --apply`
+nightly (added 2026-10-10; before that nothing called it and the table was
+bounded only in practice -- at most one row per (installation, bug, build)).
 
 This lives in the crash_reports package and is registered from app/__init__.py
 rather than added to app/cli.py: a new command group needs no edit to the

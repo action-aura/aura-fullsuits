@@ -62,6 +62,10 @@ services:
       OWNER_ENV: production
       OWNER_SIGNING_KEY_DIRECTORY: /app/owner/var/signing-keys
       OWNER_BACKUP_DIR: /app/owner/var/backups
+      # The config.py defaults, pinned explicitly so the volumes below and
+      # run_backup.sh can never drift from where the app really writes.
+      OWNER_EXPENSE_ATTACHMENT_DIR: /app/owner/var/expense-attachments
+      OWNER_RELEASE_ARTIFACT_DIR: /app/owner/var/release-artifacts
     volumes:
       # Named volume backed by the VM's own real disk -- this is the ENTIRE
       # point of this host choice. It survives container restarts, image
@@ -69,6 +73,11 @@ services:
       # which is why the runbook's backup step is not optional.
       - owner_signing_keys:/app/owner/var/signing-keys
       - owner_backups:/app/owner/var/backups
+      # Uploaded files (expense attachments, release installers). Without
+      # these they lived in the container's writable layer and were lost on
+      # every `up -d --build` redeploy (found 2026-10-10).
+      - owner_expense_attachments:/app/owner/var/expense-attachments
+      - owner_release_artifacts:/app/owner/var/release-artifacts
       # Read-only. scripts/deploy/restore_signing_key.py registers an
       # EXISTING signing key's metadata in a fresh database before
       # activating it (see docs/ops/free-hosting-owner.md section 4.4a --
@@ -125,5 +134,7 @@ networks:
 volumes:
   owner_signing_keys:
   owner_backups:
+  owner_expense_attachments:
+  owner_release_artifacts:
   caddy_data:
   caddy_config:
