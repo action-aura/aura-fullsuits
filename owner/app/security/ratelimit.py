@@ -87,11 +87,48 @@ def count_reset_requests(email: str) -> int:
     return len(db_session.execute(stmt).scalars().all())
 
 
-def is_locked_out(email: str, ip_address: str | None, max_attempts: int, lockout_seconds: int) -> bool:
+# Distributed-guessing backstops (found by the 2026-10-10 live-deploy audit).
+# Scoping the main lock to the (email, IP) pair means an attacker rotating IPs
+# gets a fresh 5 tries per IP, so two wider nets sit behind it. They are
+# deliberately generous (a real person never trips them) and are fixed
+# constants, not config: OWNER_LOGIN_* keep meaning "per email+IP".
+_EMAIL_ALL_IPS_MAX_FAILURES = 50
+_EMAIL_ALL_IPS_WINDOW_SECONDS = 3600
+_IP_ALL_EMAILS_MAX_FAILURES = 30
+_IP_ALL_EMAILS_WINDOW_SECONDS = 900
+
+
+def _burst_lock(conditions, max_failures: int, window_seconds: int, lock_seconds: int) -> bool:
+    """True when >= max_failures matching failures fall inside window_seconds
+    AND the newest is still within the lock duration (the lock lifts
+    lock_seconds after the last failure, like the per-pair one).
+
+    Rows under the forgot-password namespaces are excluded: that throttle
+    stores success=False rows WITH an ip_address in this same table, and
+    counting them would let merely asking for password resets lock an IP out
+    of logging in."""
+    window_start = utcnow() - timedelta(seconds=window_seconds)
+    stmt = (
+        select(func.count(LoginAttempt.id), func.max(LoginAttempt.created_at))
+        .where(LoginAttempt.success.is_(False))
+        .where(LoginAttempt.created_at >= window_start)
+        .where(~LoginAttempt.email_attempted.like(_RESET_KEY_PREFIX + "%"))
+        .where(~LoginAttempt.email_attempted.like(_RESET_IP_KEY_PREFIX + "%"))
+    )
+    for cond in conditions:
+        stmt = stmt.where(cond)
+    count, newest = db_session.execute(stmt).one()
+    if count < max_failures or newest is None:
+        return False
+    return newest >= utcnow() - timedelta(seconds=lock_seconds)
+
+
+def _pair_locked(email_norm: str, ip_address: str | None, max_attempts: int, lockout_seconds: int) -> bool:
     window_start = utcnow() - timedelta(seconds=lockout_seconds)
     stmt = (
         select(LoginAttempt)
-        .where(LoginAttempt.email_attempted == email.strip().lower())
+        .where(LoginAttempt.email_attempted == email_norm)
+        .where(LoginAttempt.ip_address == ip_address)
         .where(LoginAttempt.created_at >= window_start)
         .where(LoginAttempt.success.is_(False))
         .order_by(LoginAttempt.created_at.desc())
@@ -99,11 +136,38 @@ def is_locked_out(email: str, ip_address: str | None, max_attempts: int, lockout
     recent_failures = db_session.execute(stmt).scalars().all()
     if len(recent_failures) < max_attempts:
         return False
-    # A successful login after the most recent failure resets the counter.
+    # A successful login from THIS pair after the most recent failure resets
+    # the counter (and only this pair's).
     success_stmt = (
         select(LoginAttempt)
-        .where(LoginAttempt.email_attempted == email.strip().lower())
+        .where(LoginAttempt.email_attempted == email_norm)
+        .where(LoginAttempt.ip_address == ip_address)
         .where(LoginAttempt.success.is_(True))
         .where(LoginAttempt.created_at >= recent_failures[0].created_at)
     )
     return db_session.execute(success_stmt).scalars().first() is None
+
+
+def is_locked_out(email: str, ip_address: str | None, max_attempts: int, lockout_seconds: int) -> bool:
+    """Three independent locks; any one refuses the attempt, and the callers
+    show the same message for all of them (no hint which tripped).
+
+    1. (email, IP) pair: max_attempts failures in lockout_seconds. Scoped to
+       the pair because the old email-only lock let anyone who knew the super
+       admin's address lock them out from anywhere (a DoS on the only admins).
+    2. email across all IPs: 50 failures/hour (distributed guessing).
+    3. IP across all emails: 30 failures/15 min (password spraying)."""
+    email_norm = email.strip().lower()
+    if _pair_locked(email_norm, ip_address, max_attempts, lockout_seconds):
+        return True
+    if _burst_lock(
+        [LoginAttempt.email_attempted == email_norm],
+        _EMAIL_ALL_IPS_MAX_FAILURES, _EMAIL_ALL_IPS_WINDOW_SECONDS, lockout_seconds,
+    ):
+        return True
+    if ip_address is not None and _burst_lock(
+        [LoginAttempt.ip_address == ip_address],
+        _IP_ALL_EMAILS_MAX_FAILURES, _IP_ALL_EMAILS_WINDOW_SECONDS, lockout_seconds,
+    ):
+        return True
+    return False

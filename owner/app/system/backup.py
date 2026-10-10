@@ -99,6 +99,38 @@ def _current_schema_revision() -> str:
         return result[0] if result else SCHEMA_REVISION_UNKNOWN
 
 
+def _major(version_text: str) -> int:
+    """Major from "pg_dump (PostgreSQL) 17.11 (Debian ...)" or "18.6"."""
+    match = re.search(r"(\d+)", version_text)
+    if match is None:
+        raise BackupError(f"Could not read a PostgreSQL version from: {version_text.strip()[:200]!r}")
+    return int(match.group(1))
+
+
+def _server_major() -> int:
+    with get_engine().connect() as conn:
+        server_num = int(conn.exec_driver_sql("SHOW server_version_num").scalar_one())
+    return server_num // 10000 if server_num >= 100000 else server_num // 100
+
+
+def _assert_pg_dump_not_older_than_server(pg_dump_path: str, env: dict) -> None:
+    """pg_dump refuses to dump a NEWER server ("server version mismatch") with
+    a raw stderr that tells the operator nothing about the cure. Found by the
+    2026-10-10 live-deploy audit: the owner image shipped Debian's pg_dump 17
+    against Neon's PostgreSQL 18, so the System -> Backup button could never
+    work. Check first and say both versions plainly. (A NEWER client than the
+    server is fine -- pg_dump supports that.)"""
+    server_major = _server_major()
+    out = subprocess.run([pg_dump_path, "--version"], capture_output=True, text=True, timeout=30, env=env)
+    client_major = _major(out.stdout or "")
+    if client_major < server_major:
+        raise BackupError(
+            f"pg_dump is version {client_major} but the database server is version {server_major}; "
+            f"pg_dump cannot back up a newer server. Install postgresql-client-{server_major} "
+            f"in the Owner image (owner/Dockerfile.staging) or point OWNER_PG_BIN_DIR at matching tools."
+        )
+
+
 def create_backup(backup_dir: str, initiated_by_staff_user_id, label: str = "manual") -> DatabaseBackupRecord:
     os.makedirs(backup_dir, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -107,7 +139,9 @@ def create_backup(backup_dir: str, initiated_by_staff_user_id, label: str = "man
 
     conn_args, conn_env = _connection_args_and_env()
     try:
-        cmd = [_pg_bin("pg_dump"), "--format=custom", "--file", file_path, *conn_args]
+        pg_dump = _pg_bin("pg_dump")
+        _assert_pg_dump_not_older_than_server(pg_dump, conn_env)
+        cmd = [pg_dump, "--format=custom", "--file", file_path, *conn_args]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=conn_env)
     except (OSError, subprocess.SubprocessError, BackupError) as exc:
         safe_error = _redact_credential_leakage(str(exc))

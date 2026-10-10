@@ -10,8 +10,21 @@
 #   - a real HEALTHCHECK against the new /health/ready endpoint.
 FROM python:3.11-slim
 
+# pg_dump (System -> Backup) must be >= the database server's major version or
+# it refuses with "server version mismatch". Debian trixie's own
+# postgresql-client is 17 while Neon runs 18, so the in-app backup button could
+# never work (found by the 2026-10-10 live-deploy audit). Take the client from
+# the official PGDG repo, pinned to major 18: BUMP THIS when Neon moves to a
+# newer major (backup.py also refuses, with a clear message, if it is behind).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-client curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && . /etc/os-release \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-18 \
+    && apt-get purge -y --auto-remove gnupg \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system aura && useradd --system --gid aura --home /app --shell /usr/sbin/nologin aura
 
