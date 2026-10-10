@@ -284,7 +284,13 @@ def import_release_manifest(manifest: dict, actor_staff_user_id: uuid.UUID | Non
                 skipped_duplicates.append({"product_code": product_code, "platform": entry["platform_code"]})
             continue
 
-        channel = db_session.execute(select(ReleaseChannel).where(ReleaseChannel.channel_code == "RC")).scalars().first()
+        # Optional per-entry fields (all absent in a CI manifest, so that path
+        # is byte-for-byte unchanged): the staff upload screen
+        # (app/releases/upload.py) passes the channel and release metadata it
+        # collected through this SAME function rather than building rows itself.
+        channel = db_session.execute(
+            select(ReleaseChannel).where(ReleaseChannel.channel_code == (entry.get("channel_code") or "RC"))
+        ).scalars().first()
         row = ProductVersion(
             product_id=product.id,
             platform_id=platform.id,
@@ -293,6 +299,10 @@ def import_release_manifest(manifest: dict, actor_staff_user_id: uuid.UUID | Non
             artifact_checksum_sha256=checksum,
             artifact_path=entry.get("path"),
             artifact_size_bytes=entry.get("size_bytes"),
+            build_number=entry.get("build_number"),
+            release_notes=entry.get("release_notes"),
+            min_supported_version=entry.get("min_supported_version"),
+            forced_upgrade_threshold=entry.get("forced_upgrade_threshold"),
             imported_at=utcnow(),
             created_by_staff_user_id=actor_staff_user_id,
             # publication_state defaults to DRAFT (Phase 9R M10) -- import is

@@ -1,0 +1,36 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Upload new version") }}{% endblock %}
+{% block content %}
+<div class="card" style="max-width:640px;">
+  <h2>{{ _("Upload new version") }}</h2>
+  <p>{{ _("The upload is saved as a draft. Shops are not offered it until you publish it.") }}</p>
+  <form method="post" action="{{ url_for('releases.upload_submit') }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="product_code">{{ _("Product") }}</label>
+    <select id="product_code" name="product_code" required>
+      {% for p in products %}<option value="{{ p.product_code }}"{% if p.product_code == values.product_code %} selected{% endif %}>{{ p.name }}</option>{% endfor %}
+    </select>
+    <label for="platform_code">{{ _("Platform") }}</label>
+    <select id="platform_code" name="platform_code" required>
+      {% for p in platforms %}<option value="{{ p.platform_code }}"{% if p.platform_code == values.platform_code %} selected{% endif %}>{{ p.name }}</option>{% endfor %}
+    </select>
+    <label for="channel_code">{{ _("Release channel") }}</label>
+    <select id="channel_code" name="channel_code" required>
+      {% for c in channels %}<option value="{{ c.channel_code }}"{% if c.channel_code == values.channel_code %} selected{% endif %}>{{ c.name }}</option>{% endfor %}
+    </select>
+    <label for="version">{{ _("Version") }}</label>
+    <input id="version" name="version" dir="ltr" required value="{{ values.version }}" placeholder="1.0.0-rc.9">
+    <label for="build_number">{{ _("Build number (required for Android)") }}</label>
+    <input id="build_number" name="build_number" dir="ltr" inputmode="numeric" value="{{ values.build_number }}">
+    <label for="min_supported_version">{{ _("Oldest supported version (optional)") }}</label>
+    <input id="min_supported_version" name="min_supported_version" dir="ltr" value="{{ values.min_supported_version }}">
+    <label for="release_notes">{{ _("Release notes") }}</label>
+    <textarea id="release_notes" name="release_notes" rows="5" maxlength="4000">{{ values.release_notes }}</textarea>
+    <label for="update_required"><input id="update_required" type="checkbox" name="update_required" value="1"{% if values.update_required %} checked{% endif %}> {{ _("Update required: shops on older versions must update") }}</label>
+    <label for="artifact">{{ _("File (.exe for Windows, .apk for Android, up to 250 MB)") }}</label>
+    <input id="artifact" type="file" name="artifact" required>
+    <div style="margin-top:1rem;"><button type="submit">{{ _("Upload as draft") }}</button>
+      <a href="{{ url_for('releases.versions') }}">{{ _("Cancel") }}</a></div>
+  </form>
+</div>
+{% endblock %}

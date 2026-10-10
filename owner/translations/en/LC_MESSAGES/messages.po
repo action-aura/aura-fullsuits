@@ -8171,3 +8171,179 @@ msgstr "Copy this one-time link and send it to them manually (email is not set u
 #: app/templates (real-email wave)
 msgid "We also emailed this link to %(email)s."
 msgstr "We also emailed this link to %(email)s."
+
+#: app/templates (release-publish wave)
+msgid "Version uploaded as a draft. Shops will not be offered it until you publish it."
+msgstr "Version uploaded as a draft. Shops will not be offered it until you publish it."
+
+#: app/templates (release-publish wave)
+msgid "Published. Shops can now be offered this version."
+msgstr "Published. Shops can now be offered this version."
+
+#: app/templates (release-publish wave)
+msgid "Please say why you are withdrawing this version."
+msgstr "Please say why you are withdrawing this version."
+
+#: app/templates (release-publish wave)
+msgid "Withdrawn. Shops will no longer be offered this version."
+msgstr "Withdrawn. Shops will no longer be offered this version."
+
+#: app/templates (release-publish wave)
+msgid "An Android release needs a build number: the phone compares it with its own."
+msgstr "An Android release needs a build number: the phone compares it with its own."
+
+#: app/templates (release-publish wave)
+msgid "The build number must be a whole number of 1 or more."
+msgstr "The build number must be a whole number of 1 or more."
+
+#: app/templates (release-publish wave)
+msgid "Choose a product from the list."
+msgstr "Choose a product from the list."
+
+#: app/templates (release-publish wave)
+msgid "Choose a platform from the list."
+msgstr "Choose a platform from the list."
+
+#: app/templates (release-publish wave)
+msgid "Choose a release channel from the list."
+msgstr "Choose a release channel from the list."
+
+#: app/templates (release-publish wave)
+msgid "The version must look like 1.2.3 or 1.2.3-rc.4."
+msgstr "The version must look like 1.2.3 or 1.2.3-rc.4."
+
+#: app/templates (release-publish wave)
+msgid "The oldest supported version must look like 1.2.3 or 1.2.3-rc.4."
+msgstr "The oldest supported version must look like 1.2.3 or 1.2.3-rc.4."
+
+#: app/templates (release-publish wave)
+msgid "The oldest supported version cannot be newer than this version."
+msgstr "The oldest supported version cannot be newer than this version."
+
+#: app/templates (release-publish wave)
+msgid "The release notes are too long."
+msgstr "The release notes are too long."
+
+#: app/templates (release-publish wave)
+msgid "This version already exists for this product and platform. Use a new version number."
+msgstr "This version already exists for this product and platform. Use a new version number."
+
+#: app/templates (release-publish wave)
+msgid "This file is not the right kind for the platform you chose."
+msgstr "This file is not the right kind for the platform you chose."
+
+#: app/templates (release-publish wave)
+msgid "The file is too large."
+msgstr "The file is too large."
+
+#: app/templates (release-publish wave)
+msgid "Choose the file to upload."
+msgstr "Choose the file to upload."
+
+#: app/templates (release-publish wave)
+msgid "Upload new version"
+msgstr "Upload new version"
+
+#: app/templates (release-publish wave)
+msgid "The upload is saved as a draft. Shops are not offered it until you publish it."
+msgstr "The upload is saved as a draft. Shops are not offered it until you publish it."
+
+#: app/templates (release-publish wave)
+msgid "Release channel"
+msgstr "Release channel"
+
+#: app/templates (release-publish wave)
+msgid "Build number (required for Android)"
+msgstr "Build number (required for Android)"
+
+#: app/templates (release-publish wave)
+msgid "Oldest supported version (optional)"
+msgstr "Oldest supported version (optional)"
+
+#: app/templates (release-publish wave)
+msgid "Release notes"
+msgstr "Release notes"
+
+#: app/templates (release-publish wave)
+msgid "Update required: shops on older versions must update"
+msgstr "Update required: shops on older versions must update"
+
+#: app/templates (release-publish wave)
+msgid "File (.exe for Windows, .apk for Android, up to 250 MB)"
+msgstr "File (.exe for Windows, .apk for Android, up to 250 MB)"
+
+#: app/templates (release-publish wave)
+msgid "Upload as draft"
+msgstr "Upload as draft"
+
+#: app/templates (release-publish wave)
+msgid "Cancel"
+msgstr "Cancel"
+
+#: app/templates (release-publish wave)
+msgid "Published"
+msgstr "Published"
+
+#: app/templates (release-publish wave)
+msgid "Withdrawn"
+msgstr "Withdrawn"
+
+#: app/templates (release-publish wave)
+msgid "Build number"
+msgstr "Build number"
+
+#: app/templates (release-publish wave)
+msgid "Oldest supported version"
+msgstr "Oldest supported version"
+
+#: app/templates (release-publish wave)
+msgid "Update required below"
+msgstr "Update required below"
+
+#: app/templates (release-publish wave)
+msgid "Size (bytes)"
+msgstr "Size (bytes)"
+
+#: app/templates (release-publish wave)
+msgid "Withdrawn because"
+msgstr "Withdrawn because"
+
+#: app/templates (release-publish wave)
+msgid "Publish"
+msgstr "Publish"
+
+#: app/templates (release-publish wave)
+msgid "Withdraw"
+msgstr "Withdraw"
+
+#: app/templates (release-publish wave)
+msgid "Back to versions"
+msgstr "Back to versions"
+
+#: app/templates (release-publish wave)
+msgid "Publish this version?"
+msgstr "Publish this version?"
+
+#: app/templates (release-publish wave)
+msgid "Withdraw this version?"
+msgstr "Withdraw this version?"
+
+#: app/templates (release-publish wave)
+msgid "Once published, shops can be offered this version. Its file and checksum can no longer change."
+msgstr "Once published, shops can be offered this version. Its file and checksum can no longer change."
+
+#: app/templates (release-publish wave)
+msgid "Shops will stop being offered this version. Shops already running it keep working."
+msgstr "Shops will stop being offered this version. Shops already running it keep working."
+
+#: app/templates (release-publish wave)
+msgid "Yes, publish"
+msgstr "Yes, publish"
+
+#: app/templates (release-publish wave)
+msgid "Why are you withdrawing it?"
+msgstr "Why are you withdrawing it?"
+
+#: app/templates (release-publish wave)
+msgid "Yes, withdraw"
+msgstr "Yes, withdraw"

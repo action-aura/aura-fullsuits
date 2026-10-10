@@ -1,0 +1,28 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Version") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ v.product.name }} <bdi dir="ltr">{{ v.version }}</bdi></h2>
+  <table class="responsive-table">
+    <tbody>
+      <tr><th>{{ _("Platform") }}</th><td><bdi dir="ltr">{{ v.platform.platform_code }}</bdi></td></tr>
+      <tr><th>{{ _("Channel") }}</th><td><bdi dir="ltr">{{ v.release_channel.channel_code if v.release_channel else "-" }}</bdi></td></tr>
+      <tr><th>{{ _("Status") }}</th><td><span class="badge">{{ {"DRAFT": _("Draft"), "PUBLISHED": _("Published"), "WITHDRAWN": _("Withdrawn")}.get(v.publication_state, v.publication_state) }}</span></td></tr>
+      <tr><th>{{ _("Build number") }}</th><td><bdi dir="ltr">{{ v.build_number if v.build_number is not none else "-" }}</bdi></td></tr>
+      <tr><th>{{ _("Oldest supported version") }}</th><td><bdi dir="ltr">{{ v.min_supported_version or "-" }}</bdi></td></tr>
+      <tr><th>{{ _("Update required below") }}</th><td><bdi dir="ltr">{{ v.forced_upgrade_threshold or "-" }}</bdi></td></tr>
+      <tr><th>{{ _("Size (bytes)") }}</th><td><bdi dir="ltr">{{ v.artifact_size_bytes if v.artifact_size_bytes is not none else "-" }}</bdi></td></tr>
+      <tr><th>{{ _("Checksum") }}</th><td><code style="font-size:0.75rem;" dir="ltr">{{ v.artifact_checksum_sha256 or "-" }}</code></td></tr>
+      {% if v.withdrawn_reason %}<tr><th>{{ _("Withdrawn because") }}</th><td>{{ v.withdrawn_reason }}</td></tr>{% endif %}
+    </tbody>
+  </table>
+  {% if v.release_notes %}<h3>{{ _("Release notes") }}</h3><p style="white-space:pre-wrap;">{{ v.release_notes }}</p>{% endif %}
+  {% if has_permission('catalog.manage_versions') %}
+  <div style="margin-top:1rem;">
+    {% if v.publication_state == "DRAFT" %}<a class="btn" href="{{ url_for('releases.publish_confirm', version_id=v.id) }}">{{ _("Publish") }}</a>{% endif %}
+    {% if v.publication_state == "PUBLISHED" %}<a class="btn" href="{{ url_for('releases.withdraw_confirm', version_id=v.id) }}">{{ _("Withdraw") }}</a>{% endif %}
+  </div>
+  {% endif %}
+  <p><a href="{{ url_for('releases.versions') }}">{{ _("Back to versions") }}</a></p>
+</div>
+{% endblock %}

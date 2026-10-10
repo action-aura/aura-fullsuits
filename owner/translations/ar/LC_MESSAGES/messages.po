@@ -8130,3 +8130,179 @@ msgstr "انسخ هذا الرابط لمرة واحدة وأرسله إليهم
 #: app/templates (real-email wave)
 msgid "We also emailed this link to %(email)s."
 msgstr "أرسلنا هذا الرابط أيضًا بالبريد الإلكتروني إلى %(email)s."
+
+#: app/templates (release-publish wave)
+msgid "Version uploaded as a draft. Shops will not be offered it until you publish it."
+msgstr "تم رفع الإصدار كمسودة. لن يُعرض على المتاجر إلا بعد أن تنشره."
+
+#: app/templates (release-publish wave)
+msgid "Published. Shops can now be offered this version."
+msgstr "تم النشر. يمكن الآن عرض هذا الإصدار على المتاجر."
+
+#: app/templates (release-publish wave)
+msgid "Please say why you are withdrawing this version."
+msgstr "يرجى ذكر سبب سحب هذا الإصدار."
+
+#: app/templates (release-publish wave)
+msgid "Withdrawn. Shops will no longer be offered this version."
+msgstr "تم السحب. لن يُعرض هذا الإصدار على المتاجر بعد الآن."
+
+#: app/templates (release-publish wave)
+msgid "An Android release needs a build number: the phone compares it with its own."
+msgstr "إصدار أندرويد يحتاج إلى رقم بناء: يقارنه الهاتف برقمه الخاص."
+
+#: app/templates (release-publish wave)
+msgid "The build number must be a whole number of 1 or more."
+msgstr "يجب أن يكون رقم البناء عددًا صحيحًا يساوي 1 أو أكثر."
+
+#: app/templates (release-publish wave)
+msgid "Choose a product from the list."
+msgstr "اختر منتجًا من القائمة."
+
+#: app/templates (release-publish wave)
+msgid "Choose a platform from the list."
+msgstr "اختر منصة من القائمة."
+
+#: app/templates (release-publish wave)
+msgid "Choose a release channel from the list."
+msgstr "اختر قناة إصدار من القائمة."
+
+#: app/templates (release-publish wave)
+msgid "The version must look like 1.2.3 or 1.2.3-rc.4."
+msgstr "يجب أن يكون الإصدار بصيغة مثل 1.2.3 أو 1.2.3-rc.4."
+
+#: app/templates (release-publish wave)
+msgid "The oldest supported version must look like 1.2.3 or 1.2.3-rc.4."
+msgstr "يجب أن يكون أقدم إصدار مدعوم بصيغة مثل 1.2.3 أو 1.2.3-rc.4."
+
+#: app/templates (release-publish wave)
+msgid "The oldest supported version cannot be newer than this version."
+msgstr "لا يمكن أن يكون أقدم إصدار مدعوم أحدث من هذا الإصدار."
+
+#: app/templates (release-publish wave)
+msgid "The release notes are too long."
+msgstr "ملاحظات الإصدار طويلة جدًا."
+
+#: app/templates (release-publish wave)
+msgid "This version already exists for this product and platform. Use a new version number."
+msgstr "هذا الإصدار موجود مسبقًا لهذا المنتج وهذه المنصة. استخدم رقم إصدار جديدًا."
+
+#: app/templates (release-publish wave)
+msgid "This file is not the right kind for the platform you chose."
+msgstr "نوع هذا الملف لا يناسب المنصة التي اخترتها."
+
+#: app/templates (release-publish wave)
+msgid "The file is too large."
+msgstr "الملف كبير جدًا."
+
+#: app/templates (release-publish wave)
+msgid "Choose the file to upload."
+msgstr "اختر الملف المراد رفعه."
+
+#: app/templates (release-publish wave)
+msgid "Upload new version"
+msgstr "رفع إصدار جديد"
+
+#: app/templates (release-publish wave)
+msgid "The upload is saved as a draft. Shops are not offered it until you publish it."
+msgstr "يُحفظ الملف المرفوع كمسودة. لا يُعرض على المتاجر إلا بعد أن تنشره."
+
+#: app/templates (release-publish wave)
+msgid "Release channel"
+msgstr "قناة الإصدار"
+
+#: app/templates (release-publish wave)
+msgid "Build number (required for Android)"
+msgstr "رقم البناء (مطلوب لأندرويد)"
+
+#: app/templates (release-publish wave)
+msgid "Oldest supported version (optional)"
+msgstr "أقدم إصدار مدعوم (اختياري)"
+
+#: app/templates (release-publish wave)
+msgid "Release notes"
+msgstr "ملاحظات الإصدار"
+
+#: app/templates (release-publish wave)
+msgid "Update required: shops on older versions must update"
+msgstr "التحديث إلزامي: على المتاجر ذات الإصدارات الأقدم أن تحدّث"
+
+#: app/templates (release-publish wave)
+msgid "File (.exe for Windows, .apk for Android, up to 250 MB)"
+msgstr "الملف (‎.exe لويندوز، ‎.apk لأندرويد، حتى 250 ميغابايت)"
+
+#: app/templates (release-publish wave)
+msgid "Upload as draft"
+msgstr "رفع كمسودة"
+
+#: app/templates (release-publish wave)
+msgid "Cancel"
+msgstr "إلغاء"
+
+#: app/templates (release-publish wave)
+msgid "Published"
+msgstr "منشور"
+
+#: app/templates (release-publish wave)
+msgid "Withdrawn"
+msgstr "مسحوب"
+
+#: app/templates (release-publish wave)
+msgid "Build number"
+msgstr "رقم البناء"
+
+#: app/templates (release-publish wave)
+msgid "Oldest supported version"
+msgstr "أقدم إصدار مدعوم"
+
+#: app/templates (release-publish wave)
+msgid "Update required below"
+msgstr "التحديث إلزامي لما دون"
+
+#: app/templates (release-publish wave)
+msgid "Size (bytes)"
+msgstr "الحجم (بايت)"
+
+#: app/templates (release-publish wave)
+msgid "Withdrawn because"
+msgstr "سبب السحب"
+
+#: app/templates (release-publish wave)
+msgid "Publish"
+msgstr "نشر"
+
+#: app/templates (release-publish wave)
+msgid "Withdraw"
+msgstr "سحب"
+
+#: app/templates (release-publish wave)
+msgid "Back to versions"
+msgstr "العودة إلى الإصدارات"
+
+#: app/templates (release-publish wave)
+msgid "Publish this version?"
+msgstr "هل تريد نشر هذا الإصدار؟"
+
+#: app/templates (release-publish wave)
+msgid "Withdraw this version?"
+msgstr "هل تريد سحب هذا الإصدار؟"
+
+#: app/templates (release-publish wave)
+msgid "Once published, shops can be offered this version. Its file and checksum can no longer change."
+msgstr "بعد النشر يمكن عرض هذا الإصدار على المتاجر، ولا يمكن تغيير ملفه أو بصمته بعد ذلك."
+
+#: app/templates (release-publish wave)
+msgid "Shops will stop being offered this version. Shops already running it keep working."
+msgstr "سيتوقف عرض هذا الإصدار على المتاجر. المتاجر التي تشغّله حاليًا تواصل العمل."
+
+#: app/templates (release-publish wave)
+msgid "Yes, publish"
+msgstr "نعم، انشر"
+
+#: app/templates (release-publish wave)
+msgid "Why are you withdrawing it?"
+msgstr "لماذا تسحبه؟"
+
+#: app/templates (release-publish wave)
+msgid "Yes, withdraw"
+msgstr "نعم، اسحب"

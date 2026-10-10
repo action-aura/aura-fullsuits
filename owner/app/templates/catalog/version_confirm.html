@@ -1,0 +1,30 @@
+{% extends "layout/base.html" %}
+{% block title %}{% if action == "publish" %}{{ _("Publish this version?") }}{% else %}{{ _("Withdraw this version?") }}{% endif %}{% endblock %}
+{% block content %}
+<div class="card" style="max-width:560px;">
+  {% if action == "publish" %}
+  <h2>{{ _("Publish this version?") }}</h2>
+  <p>{{ _("Once published, shops can be offered this version. Its file and checksum can no longer change.") }}</p>
+  {% else %}
+  <h2>{{ _("Withdraw this version?") }}</h2>
+  <p>{{ _("Shops will stop being offered this version. Shops already running it keep working.") }}</p>
+  {% endif %}
+  <p><strong>{{ v.product.name }}</strong> <bdi dir="ltr">{{ v.version }}</bdi> (<bdi dir="ltr">{{ v.platform.platform_code }}</bdi>)</p>
+  <p><code style="font-size:0.75rem;" dir="ltr">{{ v.artifact_checksum_sha256 or "-" }}</code></p>
+  {% if action == "publish" %}
+  <form method="post" action="{{ url_for('releases.publish_submit', version_id=v.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">{{ _("Yes, publish") }}</button>
+    <a href="{{ url_for('releases.version_detail', version_id=v.id) }}">{{ _("Cancel") }}</a>
+  </form>
+  {% else %}
+  <form method="post" action="{{ url_for('releases.withdraw_submit', version_id=v.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="reason">{{ _("Why are you withdrawing it?") }}</label>
+    <textarea id="reason" name="reason" rows="3" required></textarea>
+    <button type="submit">{{ _("Yes, withdraw") }}</button>
+    <a href="{{ url_for('releases.version_detail', version_id=v.id) }}">{{ _("Cancel") }}</a>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

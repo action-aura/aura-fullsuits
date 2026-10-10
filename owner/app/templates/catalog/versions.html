@@ -2,18 +2,23 @@
 {% block title %}{{ _("Versions") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ _("Product versions") }}</h2>
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2>{{ _("Product versions") }}</h2>
+    {% if has_permission('catalog.manage_versions') %}<a class="btn" href="{{ url_for('releases.upload_form') }}">{{ _("Upload new version") }}</a>{% endif %}
+  </div>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Product") }}</th><th>{{ _("Platform") }}</th><th>{{ _("Version") }}</th><th>{{ _("Channel") }}</th><th>{{ _("Stable") }}</th><th>{{ _("Checksum") }}</th></tr></thead>
+    <thead><tr><th>{{ _("Product") }}</th><th>{{ _("Platform") }}</th><th>{{ _("Version") }}</th><th>{{ _("Channel") }}</th><th>{{ _("Stable") }}</th><th>{{ _("Status") }}</th><th>{{ _("Checksum") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for v in versions %}
     <tr>
       <td><bdi dir="ltr">{{ v.product.product_code }}</bdi></td><td><bdi dir="ltr">{{ v.platform.platform_code }}</bdi></td><td><bdi dir="ltr">{{ v.version }}</bdi></td>
       <td><bdi dir="ltr">{{ v.release_channel.channel_code if v.release_channel else "-" }}</bdi></td>
       <td>{{ _("Yes") if v.is_current_stable else _("No") }}</td>
+      <td>{{ {"DRAFT": _("Draft"), "PUBLISHED": _("Published"), "WITHDRAWN": _("Withdrawn")}.get(v.publication_state, v.publication_state) }}</td>
       <td><code style="font-size:0.75rem;" dir="ltr">{{ v.artifact_checksum_sha256 or "-" }}</code></td>
+      <td><a href="{{ url_for('releases.version_detail', version_id=v.id) }}">{{ _("View") }}</a></td>
     </tr>
-    {% else %}<tr><td colspan="6" class="empty">{{ _("No versions imported yet.") }}</td></tr>
+    {% else %}<tr><td colspan="8" class="empty">{{ _("No versions imported yet.") }}</td></tr>
     {% endfor %}
     </tbody>
   </table>

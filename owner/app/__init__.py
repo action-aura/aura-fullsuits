@@ -53,6 +53,11 @@ def create_app(config_name: str | None = None) -> Flask:
 
     configure_structured_logging(app)
 
+    # Must be registered BEFORE csrf.init_app(): CSRF's before_request is the first
+    # thing to read a POST body, and a per-request size limit has to be set before that.
+    from app.releases.upload import apply_request_size_limit
+
+    app.before_request(apply_request_size_limit)
     csrf.init_app(app)
     CORS(app, resources={r"/api/*": {"origins": []}})  # no external origins permitted by default
     register_security_headers(app)

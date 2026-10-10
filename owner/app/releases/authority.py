@@ -17,10 +17,23 @@ from app.audit.services import record as audit_record
 from app.extensions import db_session
 from app.models.base import utcnow
 from app.models.catalog import ProductVersion
+from app.releases import versioning
 
 
 class ReleaseAuthorityError(ValueError):
     pass
+
+
+def _semver_below(a: str, b: str) -> bool:
+    """Real semver precedence now that app/releases/versioning.py exists (this
+    check used to be a text compare, which says "1.0.0-rc.10" < "1.0.0-rc.9"
+    and would have refused a legitimate publish from the staff screen). A value
+    that is not semver at all falls back to the old text compare, so the
+    previous behaviour is kept for anything the parser cannot read."""
+    try:
+        return versioning.compare_semver(a, b) < 0
+    except ValueError:
+        return a < b
 
 
 def publish_release(release: ProductVersion, *, actor_staff_user_id: uuid.UUID) -> ProductVersion:
@@ -33,12 +46,8 @@ def publish_release(release: ProductVersion, *, actor_staff_user_id: uuid.UUID) 
     if (
         release.forced_upgrade_threshold
         and release.min_supported_version
-        and release.forced_upgrade_threshold < release.min_supported_version
+        and _semver_below(release.forced_upgrade_threshold, release.min_supported_version)
     ):
-        # Lexicographic compare is intentionally NOT a real semver compare
-        # (that needs a real parser this module doesn't have yet) -- this
-        # catches the common, obviously-wrong case (equal-length dotted
-        # numeric versions) without claiming full semver correctness.
         raise ReleaseAuthorityError("forced_upgrade_threshold must not be lower than min_supported_version.")
 
     before = {"publication_state": release.publication_state}

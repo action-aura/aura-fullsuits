@@ -46,8 +46,16 @@
 	# 64KB bound, which silently broke every expense attachment upload over
 	# 64KB (production-postgresql.md's sibling doc,
 	# request-body-limits.md, has the full root-cause).
-	request_body {
+	@release_upload path /releases/versions/upload
+	@not_release_upload not path /releases/versions/upload
+	request_body @not_release_upload {
 		max_size 15MB
+	}
+	# The one exception: staff uploading an app build (owner/app/releases/upload.py,
+	# which enforces its own 250 MB ceiling). Two request_body blocks without
+	# matchers would stack and the smaller one would win, hence the matcher pair.
+	request_body @release_upload {
+		max_size 260MB
 	}
 
 	# Edge-level rate limiting is NOT enabled here: vanilla Caddy has no

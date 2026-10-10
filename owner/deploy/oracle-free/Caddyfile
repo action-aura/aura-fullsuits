@@ -35,8 +35,16 @@
 	# reasoning: slightly above the app's own MAX_CONTENT_LENGTH so a
 	# legitimate multipart upload's boundary/header overhead doesn't get
 	# rejected at the edge before the app even sees it.
-	request_body {
+	@release_upload path /releases/versions/upload
+	@not_release_upload not path /releases/versions/upload
+	request_body @not_release_upload {
 		max_size 15MB
+	}
+	# The one exception: staff uploading an app build (owner/app/releases/upload.py,
+	# which enforces its own 250 MB ceiling). Two request_body blocks without
+	# matchers would stack and the smaller one would win, hence the matcher pair.
+	request_body @release_upload {
+		max_size 260MB
 	}
 
 	# No edge-level rate limiting here either, for the same reason as
