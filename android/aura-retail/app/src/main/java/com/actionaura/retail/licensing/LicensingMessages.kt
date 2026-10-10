@@ -138,6 +138,11 @@ object LicensingMessages {
         "DEVICE_LIMIT_REACHED" to
             "This license has reached its device limit. Deactivate another device or contact support to add capacity.",
         "RATE_LIMITED" to "Too many attempts. Please wait a moment and try again.",
+        // Owner's mail relay (real-email wave, 2026-10-10) caps how many emails
+        // one installation may send per day. The phone does not use the relay
+        // yet, but the code is public, so it gets true copy instead of the
+        // generic "check the key" fallback the day it does.
+        "MAIL_LIMIT" to "Today's email limit for this shop has been reached. Emails will send again tomorrow.",
         "NETWORK_UNAVAILABLE" to
             "Could not reach the licensing service. Check your internet connection and try again.",
         "REQUEST_TIMED_OUT" to "The request timed out. Please try again.",

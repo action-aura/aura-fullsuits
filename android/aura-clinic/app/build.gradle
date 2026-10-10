@@ -41,8 +41,8 @@ android {
         // 10: the update-channel build shipped with code ten via an init script
         // (2026-10-10); the tracked value is bumped to match so a rebuild from
         // source is not older than the APK already on devices.
-        versionCode 10
-        versionName "1.0.0-rc.8"
+        versionCode 11
+        versionName "1.0.0-rc.9"
 
         ndk {
             // Chaquopy's Python 3.12 ships only these ABIs.
