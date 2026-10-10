@@ -7482,3 +7482,11 @@ real-email wave: one new table owner_email_outbox (plan: ~/.claude/aura-plans/EM
 registry / clinic schema version is used by this wave (identity mail reuses the existing email_outbox table).
 Note: this revision will run against the LIVE Neon database on the next deploy -- deploy only after the wave is
 verified, and take a fresh run_backup.sh backup first.
+
+## 2026-10-10 — retail schema v51 CLAIMED (MONEY-3: split refunds, supplier cash from the drawer, cheques in the books)
+
+Claimed BEFORE dispatch, branch feat/money-fixes (off feat/owner-hardening-2 @3ede8878). Retail head is v50. v51 is
+reserved for the MONEY-3 wave closing three residuals: D2 (a split-paid sale is refunded through ONE method; owner
+asked 2026-10-10 to fix it -- this supersedes the earlier "one method" decision), D4 (paying a supplier in cash does not
+take it out of the till drawer), V6 (cheque money legs move party balances but post no GL journal). No registry / clinic /
+Owner schema version is used. Plan: ~/.claude/aura-plans/MONEY3-PLAN.md.
