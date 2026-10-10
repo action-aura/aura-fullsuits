@@ -247,6 +247,21 @@ else
   bold "WARNING: could not install the scheduled-ops timer ($SYSTEMD_SRC_DIR missing, or 'systemctl' not found on this host -- expected on a non-systemd VM). Expiry scan, device-limit scan, report snapshots, and sync-event pruning will NOT run automatically until this is set up by hand; see docs/ops/free-hosting-owner.md section 4.7."
 fi
 
+# 7b. Nightly encrypted off-VM backup (2026-10-10). Installed only when
+#     .env.r2 exists: without the R2 credentials and passphrase the job could
+#     only fail every night, and a timer that always fails is noise that
+#     teaches people to ignore it. Same __COMPOSE_DIR__ template as step 7.
+if [ -r "$COMPOSE_DIR/.env.r2" ] && [ -d "$SYSTEMD_SRC_DIR" ] && command -v systemctl >/dev/null 2>&1; then
+  sed "s|__COMPOSE_DIR__|$COMPOSE_DIR|g" "$SYSTEMD_SRC_DIR/aura-owner-backup.service" \
+    | sudo tee /etc/systemd/system/aura-owner-backup.service >/dev/null
+  sudo cp "$SYSTEMD_SRC_DIR/aura-owner-backup.timer" /etc/systemd/system/aura-owner-backup.timer
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now aura-owner-backup.timer
+  bold "Nightly backup timer installed. Next run: $(systemctl list-timers aura-owner-backup.timer --no-legend 2>/dev/null | awk '{print $1, $2, $3}')"
+else
+  bold "WARNING: NO nightly backup is scheduled -- $COMPOSE_DIR/.env.r2 is missing (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, BACKUP_PASSPHRASE). See run_backup.sh."
+fi
+
 cat <<'BANNER'
 
 =====================================================================

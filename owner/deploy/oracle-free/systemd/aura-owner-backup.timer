@@ -1,0 +1,13 @@
+# Daily, an hour before scheduled ops (03:00), so a backup exists from before
+# the night's expiry/reconcile jobs touch anything. Persistent=true runs a
+# missed backup at the next boot.
+[Unit]
+Description=Nightly Aura Owner encrypted backup to R2
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

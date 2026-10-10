@@ -1,0 +1,14 @@
+# Nightly off-VM backup (2026-10-10): encrypted pg_dump + signing-key tar to
+# Cloudflare R2. See run_backup.sh's header for what and why.
+# __COMPOSE_DIR__ is substituted by bootstrap.sh, like the scheduled-ops unit.
+[Unit]
+Description=Aura Owner (Oracle Free path) nightly encrypted backup to R2
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__COMPOSE_DIR__
+ExecStart=/usr/bin/env bash __COMPOSE_DIR__/run_backup.sh
+TimeoutStartSec=1800
