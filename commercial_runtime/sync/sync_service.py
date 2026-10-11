@@ -981,6 +981,43 @@ _PO_RECEIPT_NAMESPACE = uuid.UUID('a674e3be-c149-497a-b0a7-f235e22c5ae0')
 #: products/, so the literal is duplicated and a test pins the two equal.
 _LOYALTY_OPENING_NAMESPACE = uuid.UUID('b3a7d1c4-5e92-4f08-9a61-0c2d8e4f7b13')
 
+#: MONEY-3 M1: the namespace `return_refund_legs.uid` is minted under (twin of
+#: `database/schema.py::RETURN_REFUND_LEG_NAMESPACE`). NEVER CHANGE. A return that arrives WITHOUT
+#: legs (an older till) is given the one legacy leg every computer derives identically from the
+#: return's uid, the same row the v51 backfill wrote -- so it can never count twice.
+_RETURN_REFUND_LEG_NAMESPACE = uuid.UUID('3c5e8a14-7d2b-4f69-b0a3-91e4c6d85f27')
+
+
+def _apply_return_refund_legs(conn, p, company_id, branch_id, tender_refund_amount):
+    """Write a pulled `return`'s refund legs (idempotent on the leg uid). `legs` absent or null
+    = LEGACY: one leg of the return's own `refund_method` for its tender part, the identical row
+    `_migrate_add_return_refund_legs` backfills. A database without the table (a hand-built
+    fixture, or a peer mid-upgrade) is skipped, not failed. Never queues anything."""
+    ret_uid = p.get("uid")
+    if not ret_uid:
+        return
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='return_refund_legs'"
+                    ).fetchone() is None:
+        return
+    row = conn.execute("SELECT id FROM returns WHERE uid=?", (ret_uid,)).fetchone()
+    if row is None:
+        return
+    legs = p.get("legs")
+    if not isinstance(legs, (list, tuple)):
+        legs = [{"uid": str(uuid.uuid5(_RETURN_REFUND_LEG_NAMESPACE, f"{ret_uid}:legacy")),
+                 "method": p.get("refund_method") or "cash",
+                 "amount": tender_refund_amount or 0}]
+    for leg in legs:
+        if not isinstance(leg, dict) or not leg.get("uid") or not leg.get("method"):
+            continue
+        conn.execute(
+            "INSERT OR IGNORE INTO return_refund_legs "
+            "(uid, company_id, branch_id, return_id, return_uid, method, amount, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (leg["uid"], company_id, branch_id, row[0], ret_uid, leg["method"],
+             leg.get("amount") or 0, p.get("created_at")))
+
+
 #: W2a verify F1: the namespace an IMPORT's 'adjust' ledger row's uid is minted
 #: under (twin of `core/retail/loyalty.py::_IMPORT_NAMESPACE`). NEVER CHANGE.
 #: The same file imported on two computers the same shop day must derive the
@@ -3537,6 +3574,9 @@ class SyncService:
                         detail=f"return_number={p.get('return_number')!r} already exists locally "
                                f"under a different return (incoming uid={p.get('uid')!r})")
                 raise
+            # MONEY-3 M1: the refund legs ride in the return's own event.
+            _apply_return_refund_legs(conn, p, local_company_id, resolved_branch_id,
+                                      _tender_refund_amount)
             # REHEARSAL-1007 B6: a return nets the customer's "total spent"; refresh
             # the sale's customer (derived figure, see _refresh_total_spent).
             _ret_sale = conn.execute("SELECT customer_id FROM sales WHERE id=?", (sale_local_id,)).fetchone()

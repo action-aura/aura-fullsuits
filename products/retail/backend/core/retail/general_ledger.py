@@ -1856,7 +1856,7 @@ def post_sale(conn, cid, branch_id, sale_id, sale_number, currency,
 
 def post_return(conn, cid, branch_id, return_id, return_number, currency,
                  tender_refund_amount, ar_credit_amount, business_date=None,
-                 posted_by=None, tax_refunded=0, points_restored_value=0):
+                 posted_by=None, tax_refunded=0, points_restored_value=0, tender_legs=None):
     """Cr Cash (cash physically refunded) + Cr Accounts Receivable
     (`ar_forgiven_amount + store_credit_amount` combined -- both are, in
     `_adjust_credit` terms, the SAME `-amount` adjustment to
@@ -1909,7 +1909,17 @@ def post_return(conn, cid, branch_id, return_id, return_number, currency,
     """
     settled = Decimal('0')
     lines = []
-    if tender_refund_amount and tender_refund_amount > 0:
+    legs = [lg for lg in (tender_legs or ()) if lg.get('amount', 0) > 0]
+    if len(legs) > 1 and abs(sum(Decimal(str(lg['amount'])) for lg in legs)
+                              - Decimal(str(tender_refund_amount or 0))) < Decimal('0.0005'):
+        # MONEY-3 M1: one line per refund leg. Every tender method lands in ACCOUNT_CASH -- the
+        # SAME account post_sale debits for all methods (there is no per-method clearing account
+        # in this chart) -- so the totals are unchanged; the memo says which method paid back.
+        for lg in legs:
+            lines.append({'account_code': ACCOUNT_CASH, 'credit': lg['amount'],
+                           'memo': f"Refunded via {lg['method']}"})
+            settled += Decimal(str(lg['amount']))
+    elif tender_refund_amount and tender_refund_amount > 0:
         lines.append({'account_code': ACCOUNT_CASH, 'credit': tender_refund_amount,
                        'memo': 'Cash refunded'})
         settled += Decimal(str(tender_refund_amount))

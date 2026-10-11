@@ -1362,7 +1362,21 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 #     that is NOT in a terminal state at the upgrade gets ONE opening journal, so the
 #     AR/AP tie checks agree the moment the upgrade finishes. See that function.
 #
-# Appended LAST and shape-gated. Crew B (M1, split refunds) appends its step after these.
+#   M1 / D2 `_migrate_add_return_refund_legs` -- a sale paid in parts is refunded in parts.
+#     New table `return_refund_legs` (uid UNIQUE, company_id/branch_id scoped, return_id +
+#     return_uid, method, amount): the money paid back through each method. Their amounts sum
+#     to `returns.tender_refund_amount` (the on-account part stays in ar_forgiven_amount /
+#     store_credit_amount; it never reduces cash). Legs travel INSIDE the `return` sync event.
+#     The step backfills exactly ONE leg per existing return (the single method it was paid
+#     back through), uid = uuid5(NS, "<return uid>:legacy") so two computers upgrading
+#     separately derive the same leg. IDEMPOTENT BY UID, so replaying the step is a no-op.
+#     It is NOT a way to repair a database already stamped 51: ensure_schema_version
+#     (commercial_runtime/security/migration_safety.py) returns early when current == target, so the
+#     step only runs on an upgrade from < 51. Commit 53a1026e (M2/M3 only) was never pushed or built
+#     into a release, so no real database sits at 51 without legs; a database created by that code
+#     must be recreated.
+#
+# Appended LAST and shape-gated.
 RETAIL_SCHEMA_VERSION = 51
 
 # ── v13: which table gets which group of columns ────────────────────────────
@@ -2550,6 +2564,9 @@ def _migrate_retail_schema(conn):
     # split-refund step goes AFTER these two. See the v51 comment on RETAIL_SCHEMA_VERSION.
     _migrate_add_supplier_cash_drawer(conn)
     _migrate_add_cheque_books(conn)
+    # M1 / D2: a return is refunded through SEVERAL methods. Nothing above derives from legs,
+    # and nothing may read `return_refund_legs` before THIS step has backfilled it.
+    _migrate_add_return_refund_legs(conn)
 
 
 def _migrate_add_supplier_cash_drawer(conn):
@@ -12303,3 +12320,86 @@ def _migrate_add_cheque_books(conn):
                 'cheque cleared before v51' if banked else 'cheque in flight before v51')
     finally:
         conn.row_factory = previous_factory
+
+
+#: M1 / D2. The namespace every `return_refund_legs.uid` is minted under. NEVER CHANGE. Two
+#: computers must derive the SAME uid for the same return's leg, or one refund would count twice
+#: once rows meet. commercial_runtime/sync/sync_service.py duplicates the literal (it cannot
+#: import products/); a test pins the two equal.
+RETURN_REFUND_LEG_NAMESPACE = _uuid.UUID('3c5e8a14-7d2b-4f69-b0a3-91e4c6d85f27')
+
+
+def return_refund_leg_uid(return_uid, method):
+    """The deterministic uid of a return's leg for `method` ('legacy' = the single leg of a
+    return made before legs existed). Pure function of the return and the method."""
+    return str(_uuid.uuid5(RETURN_REFUND_LEG_NAMESPACE, f"{return_uid}:{method}"))
+
+
+def _migrate_add_return_refund_legs(conn):
+    """One-time migration (schema v50 -> v51, MONEY-3 M1). See the v51 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    Until now a return was refunded through ONE method the cashier picked, so a sale paid 30
+    cash + 70 card and refunded in full gave all 100 back through one channel: the drawer and the
+    card side both ended wrong. A return now carries LEGS -- (method, amount) rows whose amounts sum
+    to `returns.tender_refund_amount`.
+
+    Creates `return_refund_legs` and backfills exactly ONE leg for every return that has none:
+    method = the return's refund_method (NULL -> 'cash'), amount = its tender_refund_amount
+    (NULL, a pre-split row, -> refund_amount). A return paid back through store credit or fully
+    forgiven carries tender_refund_amount 0 and so a 0-amount leg: "exactly one leg per return"
+    holds for every row, which is what lets every reader treat "no legs" as the legacy case.
+
+    IDEMPOTENT BY UID: a return that already has a leg (made by this code, or backfilled by an
+    earlier run) is skipped, and the INSERT is OR IGNORE on the uid, so a replay is a no-op and so
+    is a second computer that derives the same row. This is NOT version-gated, but that does not
+    make it reach a database already stamped 51: ensure_schema_version returns early when
+    current == target (migration_safety.py), so the step only runs on an upgrade from < 51. Commit
+    53a1026e (the M2/M3 steps) was never pushed or built into a release, so no real database is at
+    51 without legs; a database created by that code must be recreated.
+
+    NOT queued to the sync outbox: the backfill uid is a pure function of the return's uid, so
+    every computer derives the identical row on its own; announcing it would only churn the wire.
+    A return that arrives from a computer which sends no legs gets the same legacy leg at apply
+    time (sync_service.py).
+
+    Shape-gated: a hand-built minimal fixture may have no `returns` table."""
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'returns' not in live:
+        return
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS return_refund_legs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uid TEXT NOT NULL UNIQUE,
+            company_id INTEGER,
+            branch_id INTEGER,
+            return_id INTEGER NOT NULL,
+            return_uid TEXT,
+            method TEXT NOT NULL,
+            amount REAL NOT NULL DEFAULT 0,
+            created_at TEXT,
+            FOREIGN KEY (return_id) REFERENCES returns(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_return_refund_legs_return "
+                 "ON return_refund_legs(return_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_return_refund_legs_company_method "
+                 "ON return_refund_legs(company_id, method)")
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(returns)").fetchall()}
+    uid_col = 'r.uid' if 'uid' in cols else 'NULL'
+    tender_col = 'r.tender_refund_amount' if 'tender_refund_amount' in cols else 'NULL'
+    rows = conn.execute(
+        f"SELECT r.id, {uid_col}, r.company_id, r.branch_id, r.refund_method, {tender_col}, "
+        f"r.refund_amount, r.created_at FROM returns r "
+        f"WHERE NOT EXISTS (SELECT 1 FROM return_refund_legs l WHERE l.return_id = r.id)"
+    ).fetchall()
+    for rid, ruid, company_id, branch_id, method, tender, refund, created_at in rows:
+        key = ruid or f"return-id:{rid}"
+        amount = tender if tender is not None else (refund or 0)
+        conn.execute(
+            "INSERT OR IGNORE INTO return_refund_legs "
+            "(uid, company_id, branch_id, return_id, return_uid, method, amount, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (return_refund_leg_uid(key, 'legacy'), company_id, branch_id, rid, ruid,
+             method or 'cash', amount, created_at))

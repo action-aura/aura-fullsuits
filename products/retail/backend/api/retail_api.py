@@ -98,6 +98,8 @@ from database.schema import (
     # "the branch uid every install of this licence agrees on" and the alias
     # canonicaliser. Imported, never re-derived here.
     default_branch_uid_for_company, canonical_branch_uid,
+    # MONEY-3 M1: the deterministic uid of a return's refund leg.
+    return_refund_leg_uid,
 )
 from commercial_runtime.identity import device_registry as _device_registry
 from datetime import datetime, timedelta, timezone
@@ -150,6 +152,7 @@ from core.retail import doc_series
 # full reasoning. Pure module, no database access, same contract as every
 # other core.retail import on this list.
 from core.retail import returns_settlement
+from core.retail import return_legs  # MONEY-3 M1: refund a split-paid sale through several methods
 from core.retail import tenders as tender_engine
 # Schema v38, ROADMAP.md's "retail schema v38 CLAIMED: a real general
 # ledger" entry -- the double-entry posting core. UNLIKE returns_settlement
@@ -10859,24 +10862,44 @@ def create_return():
         if _original_method == 'credit':
             _original_method = 'cash'
         refund_method = data.get('refund_method', _original_method)
-        # Split tender: a sale paid in parts has no single method to default
-        # to, and guessing one would route the refund through a channel the
-        # cashier never chose (the DEFECT-1 shape). The pool the refund may
-        # draw on is still the sale's WHOLE tender (`tender_available` above);
-        # only WHERE it is paid out is the cashier's explicit pick. Refunding
-        # across several methods would need a schema change -- out of scope.
-        if _original_method == 'split':
+        # MONEY-3 M1 (D2): `refund_legs` = the refund paid back through SEVERAL methods, as
+        # [{'method','amount'}] or the word 'default' (split in proportion to what each method
+        # still has refundable). An explicit single `refund_method` WITHOUT legs keeps its
+        # historic meaning byte for byte -- one leg of that method, no per-method cap -- which is
+        # what Android (no split tender, residual D5) and every older caller send.
+        _legs_req = data.get('refund_legs')
+        _legs_mode = _legs_req is not None
+        _needs_method = False
+        _single_on_split = None   # the lone refund_method named for a multi-tender sale (capped below)
+        if _legs_mode and str(data.get('refund_method') or '').strip().lower() == 'store_credit':
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error', 'code': 'REFUND_METHOD_INVALID',
+                            'message': 'Store credit cannot be mixed with refund parts. '
+                                       'Choose one or the other.'}), 400
+        # Split tender: a sale paid in parts has no single method to default to, and guessing one
+        # would route the refund through a channel the cashier never chose (the DEFECT-1 shape).
+        # The pool the refund may draw on is still the sale's WHOLE tender (`tender_available`
+        # above). With NO method and NO legs the request is still refused (REFUND_METHOD_REQUIRED),
+        # but the refusal now carries `default_legs` -- the proportional split -- so a client can
+        # echo them back; `dry_run` returns the same legs without refusing.
+        if _original_method == 'split' and not _legs_mode:
             _chosen = str(data.get('refund_method') or '').strip().lower()
             if not _chosen:
-                _lines = _sale_tender_lines(conn, cid, sale_id)
-                conn.rollback(); conn.close()
-                return jsonify({'status': 'error', 'code': 'REFUND_METHOD_REQUIRED',
-                                'message': 'This sale was paid in parts. Choose how to refund it.',
-                                'data': {'tenders': _lines}}), 400
-            if _chosen == 'split':
+                _needs_method = True
+                refund_method = 'cash'   # placeholder: only 'store_credit' changes the settlement
+            elif _chosen == 'split':
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'code': 'REFUND_METHOD_INVALID',
                                 'message': 'Choose one way to refund this sale, not "split".'}), 400
+            elif _chosen != 'store_credit':
+                # A single method named for a sale paid through SEVERAL: it is one leg of that method
+                # and gets the SAME per-method remainder cap the explicit legs get (checked below,
+                # once the remainders are known). Without it, a phone (Android always sends
+                # refund_method) returning a desktop 30 cash + 70 card sale as 'cash' took the whole
+                # 100 out of a drawer that only ever took 30. Single-tender sales never reach here.
+                _single_on_split = _chosen
+        elif _legs_mode:
+            refund_method = _original_method if _original_method != 'split' else 'cash'
 
         # DAY-1d round 3 R3 -- POINTS GIVEN BACK ARE SETTLEMENT TOO. A sale paid
         # partly in loyalty points booked Dr Loyalty Program Expense for those
@@ -11031,6 +11054,89 @@ def create_return():
             return jsonify({'status': 'error', 'message':
                 'This return leaves an uncollected balance with no customer to credit it to.'}), 409
 
+        # ── MONEY-3 M1 (D2): WHERE the money-back part is paid out ────────────────────────────
+        # `tender_refund` (decided above by split_return_settlement, untouched) is the money that
+        # goes back. LEGS say through which methods: rows summing to it. The on-account part is
+        # `ar_forgiven + store_credit` -- it reduces AR through the customer's balance and is NOT
+        # a leg, so it can never reduce cash. Per-method remainder = what the sale took through
+        # that method minus what earlier returns of the same sale paid back through it.
+        _sale_paid = [(_r['method'], _r['amt']) for _r in cur.execute(
+            "SELECT method, COALESCE(SUM(amount),0) AS amt FROM payments "
+            "WHERE company_id=? AND sale_id=? AND direction='in' "
+            "AND COALESCE(status,'active')='active' GROUP BY method ORDER BY MIN(id)",
+            (cid, sale_id)).fetchall()]
+        _already_by_method = {_r['method']: _r['amt'] for _r in cur.execute(
+            "SELECT l.method AS method, COALESCE(SUM(l.amount),0) AS amt FROM return_refund_legs l "
+            "JOIN returns r ON r.id = l.return_id "
+            "WHERE r.sale_id=? AND r.company_id=? AND r.status='completed' GROUP BY l.method",
+            (sale_id, cid)).fetchall()}
+        _leg_remainders = return_legs.remainders(_sale_paid, _already_by_method)
+        refund_legs = None   # None = the historic single-method leg, decided below
+        if _legs_mode:
+            if _legs_req == 'default':
+                refund_legs = return_legs.default_legs(tender_refund, _leg_remainders, currency, _eps)
+                _leg_err = None if refund_legs is not None else (
+                    return_legs.CODE_EXCEEDS,
+                    'Not enough is left to refund by the methods this sale was paid with.')
+            else:
+                refund_legs, _leg_err = return_legs.validate_legs(
+                    _legs_req, tender_refund, _leg_remainders, {m for m, _ in _sale_paid},
+                    currency, _eps)
+            if _leg_err:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'code': _leg_err[0], 'message': _leg_err[1],
+                                'data': {'tender_refund_amount': tender_refund,
+                                         'refundable': [{'method': m, 'amount': float(a)}
+                                                        for m, a in _leg_remainders]}}), 409
+        elif _needs_method:
+            refund_legs = return_legs.default_legs(tender_refund, _leg_remainders, currency, _eps)
+        elif _single_on_split:
+            # One method named for a multi-tender sale: validate it as a single leg. Success keeps
+            # the historic single-leg result (refund_legs stays None, one leg of `refund_method`);
+            # a refusal is the same 409 an explicit over-sized leg gets, plus the proportional
+            # split the cashier can echo back as refund_legs.
+            _, _leg_err = return_legs.validate_legs(
+                [{'method': _single_on_split, 'amount': tender_refund}], tender_refund,
+                _leg_remainders, {m for m, _ in _sale_paid}, currency, _eps)
+            if _leg_err:
+                _dl = return_legs.default_legs(tender_refund, _leg_remainders, currency, _eps)
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'code': _leg_err[0], 'message': _leg_err[1],
+                                'data': {'tender_refund_amount': tender_refund,
+                                         'refundable': [{'method': m, 'amount': float(a)}
+                                                        for m, a in _leg_remainders],
+                                         'default_legs': _dl or []}}), 409
+        _multi = refund_legs is not None and len(refund_legs) > 1
+        _default_legs_body = [dict(lg) for lg in refund_legs] if (_needs_method and refund_legs) else None
+        if refund_legs is None:
+            refund_legs = [{'method': refund_method, 'amount': tender_refund}]
+        elif not refund_legs:
+            refund_legs = [{'method': 'cash' if refund_method == 'split' else refund_method,
+                            'amount': 0.0}]
+        # What the return row's own `refund_method` column says: the one method, or 'split'.
+        # (metrics.revenue_by_payment_method buckets by it; the drawer reads the LEGS.)
+        if _multi:
+            refund_method = 'split'
+        elif _legs_mode or _needs_method:
+            refund_method = refund_legs[0]['method']
+
+        if data.get('dry_run'):
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'success', 'data': {
+                'dry_run': True, 'refund_amount': refund, 'refund_method': refund_method,
+                'tender_refund_amount': tender_refund, 'ar_forgiven_amount': ar_forgiven,
+                'store_credit_amount': store_credit, 'legs': refund_legs,
+                'refundable': [{'method': m, 'amount': float(a)} for m, a in _leg_remainders]}})
+        if _needs_method:
+            _lines = _sale_tender_lines(conn, cid, sale_id)
+            conn.rollback(); conn.close()
+            _body = {'tenders': _lines, 'tender_refund_amount': tender_refund}
+            if _default_legs_body:
+                _body['default_legs'] = _default_legs_body
+            return jsonify({'status': 'error', 'code': 'REFUND_METHOD_REQUIRED',
+                            'message': 'This sale was paid in parts. Choose how to refund it.',
+                            'data': _body}), 400
+
         # returns.return_number carries a bare (not company-scoped, not
         # device-scoped) UNIQUE constraint, but _next_ref()'s counter resets
         # per company AND is a per-DEVICE table (`doc_sequences` is never
@@ -11079,6 +11185,18 @@ def create_return():
               return_tax_refunded))
         ret_id = cur.lastrowid
 
+        # MONEY-3 M1: the legs, written in the same transaction and shipped INSIDE the return's
+        # own sync event (a return and its legs are one fact: apply is atomic and cannot see the
+        # return without them). uid = pure function of (return uid, method), so a replay is a no-op.
+        _leg_payload = []
+        for _lg in refund_legs:
+            _leg_uid = return_refund_leg_uid(ret_uid, _lg['method'])
+            cur.execute(
+                "INSERT INTO return_refund_legs (uid, company_id, branch_id, return_id, return_uid, "
+                "method, amount, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                (_leg_uid, cid, bid, ret_id, ret_uid, _lg['method'], _lg['amount'], now_local))
+            _leg_payload.append({'uid': _leg_uid, 'method': _lg['method'], 'amount': _lg['amount']})
+
         # ── Phase 5 sync emission: the return itself ─────────────────────────
         # `sale_uid` -- the ORIGINAL sale's wire identity, from the `uid`
         # column selected above -- not `sale_id` (local, meaningless
@@ -11101,6 +11219,9 @@ def create_return():
             # unlike cash_session_id -- the receiving device's tax report must
             # read the same figure this device's books did.
             'tax_refunded': return_tax_refunded,
+            # MONEY-3 M1: the refund legs (see the INSERT above). A sender without this key
+            # (older till) is read by the receiver as ONE legacy leg of `refund_method`.
+            'legs': _leg_payload,
             'status': 'completed', 'created_at': now_local,
             'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
         })
@@ -11391,7 +11512,8 @@ def create_return():
         gl.post_return(conn, cid, bid, ret_id, ret_num, currency,
                         tender_refund, ar_forgiven + store_credit,
                         tax_refunded=return_tax_refunded,
-                        points_restored_value=float(_points_restored_value))
+                        points_restored_value=float(_points_restored_value),
+                        tender_legs=refund_legs)
 
         # Schema v39 (cost basis for COGS): the MIRROR of create_sale's own
         # COGS posting -- Cr Cost of Goods Sold / Dr Inventory for the cost
@@ -11423,7 +11545,9 @@ def create_return():
         _audit(conn, 'RETURN_PROCESSED', 'return', ret_id, f'{ret_num} refund={refund}{loyalty_audit_note}')
         conn.commit()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
+        _resp_extra = {'legs': refund_legs} if _legs_mode else {}
         return jsonify({'status': 'success', 'data': {
+            **_resp_extra,
             # `refund` is already quantized to the company's own currency
             # precision above (see that comment) -- a bare `round(refund, 2)`
             # here silently coarsened a correctly-computed JOD (3dp) refund
@@ -12370,11 +12494,22 @@ def _cash_session_report(conn, cid, sess):
     # outflow here). `tender_refund_amount` is the server-computed, sale's-
     # own-tender-capped figure that actually paid out through this channel
     # -- see core/retail/returns_settlement.py's module docstring.
+    #
+    # MONEY-3 M1 (D2): the cash that left is the CASH LEGS of this drawer's returns -- a sale
+    # paid 30 cash + 70 card, refunded in full, takes 30 out of the drawer, not 100. On-account
+    # refunds are never a leg. The second term is the historic single-method rule for a return
+    # that has no legs at all (a database that skipped the v51 backfill) -- one leg of its method.
     cash_refunds = conn.execute("""
-        SELECT COALESCE(SUM(tender_refund_amount),0) FROM returns
-        WHERE company_id=? AND branch_id=? AND session_id=?
-          AND refund_method='cash' AND status='completed'
-    """, (cid, bid, session_id)).fetchone()[0]
+        SELECT COALESCE((SELECT SUM(l.amount) FROM return_refund_legs l
+                          JOIN returns r ON r.id = l.return_id
+                         WHERE r.company_id=? AND r.branch_id=? AND r.session_id=?
+                           AND r.status='completed' AND l.method='cash'), 0)
+             + COALESCE((SELECT SUM(r.tender_refund_amount) FROM returns r
+                          WHERE r.company_id=? AND r.branch_id=? AND r.session_id=?
+                            AND r.status='completed' AND r.refund_method='cash'
+                            AND NOT EXISTS (SELECT 1 FROM return_refund_legs l2
+                                             WHERE l2.return_id = r.id)), 0)
+    """, (cid, bid, session_id, cid, bid, session_id)).fetchone()[0]
 
     movement_rows = conn.execute("""
         SELECT type, COALESCE(SUM(amount),0) as amount FROM cash_movements
@@ -12392,10 +12527,12 @@ def _cash_session_report(conn, cid, sess):
     supplier_items = []
     for r in conn.execute("""
         SELECT m.type AS type, m.amount AS amount, p.reference AS reference,
-               COALESCE(sp.name, '') AS supplier
+               COALESCE(NULLIF(sp.name, ''), po.po_number, '') AS supplier
         FROM cash_movements m
         LEFT JOIN payments p ON p.uid = m.payment_uid AND p.company_id = ?
         LEFT JOIN suppliers sp ON sp.id = p.party_id AND sp.company_id = p.company_id
+        LEFT JOIN purchase_orders po ON p.related_type = 'po' AND po.id = p.related_id
+                                    AND po.company_id = p.company_id
         WHERE m.session_id = ? AND m.payment_uid IS NOT NULL
           AND m.type IN ('paid_out', 'paid_in')
         ORDER BY m.created_at, m.id
@@ -19944,6 +20081,25 @@ def _supplier_drawer_movement_id(pay_uid, kind):
     return str(_uuid.uuid5(_SUPPLIER_DRAWER_NAMESPACE, f"{pay_uid}:{kind}"))
 
 
+def _drawer_paid_out_refusal():
+    """MONEY-3 F3: the refusal (a ready `(response, status)`) when this caller may not take
+    cash out of a drawer, else None. A supplier payment paid 'from the drawer' IS a paid-out, and
+    the manual paid-out route (`create_cash_movement`) wears two guards -- the licence capability
+    retail.cash_session.movement.create and the user capability retail.cash.close. Holding only
+    retail.books.record (the Accountant) must not be a way round them. The guards are run through
+    the SAME decorators that route uses, so the two cannot drift: a licence state that blocks a
+    manual paid-out blocks this, and the refusal body is the one the matrix test pins."""
+    reached = object()
+    for guard in (
+            require_license_capability("retail.cash_session.movement.create",
+                                       restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST),
+            mt_require_capability(CAP_CASH_CLOSE)):
+        outcome = guard(lambda: reached)()
+        if outcome is not reached:
+            return outcome
+    return None
+
+
 def _resolve_supplier_paid_from(conn, cid, method, requested):
     """Decide where a supplier payment's cash comes from.
 
@@ -19957,16 +20113,28 @@ def _resolve_supplier_paid_from(conn, cid, method, requested):
       * 'drawer' with no open session on this terminal is refused: 409
         NO_OPEN_DRAWER -- never silently downgraded, because the user asked for the
         till and a payment the till does not know about is the bug this fixes.
+      * (F3) an EXPLICIT 'drawer' needs the authority the manual paid-out route needs
+        (`_drawer_paid_out_refusal`): 403 otherwise. The open-drawer DEFAULT (no
+        paid_from sent) instead falls back to 'office' for a caller without that
+        authority -- the pre-M2 behaviour: Android has no paid_from control, so a phone
+        user without drawer rights paying a cash PO while a drawer is open would
+        otherwise be stuck with no way out. 'office' and non-cash are untouched.
     """
     if method != 'cash':
         return None, None, None
     session_id = _this_terminal_open_session_id(conn, cid)
     if requested in (None, ''):
-        return ((PAID_FROM_DRAWER, session_id, None) if session_id
-                else (PAID_FROM_OFFICE, None, None))
+        if not session_id:
+            return PAID_FROM_OFFICE, None, None
+        if _drawer_paid_out_refusal() is not None:
+            return PAID_FROM_OFFICE, None, None   # see docstring: default degrades, explicit is refused
+        return PAID_FROM_DRAWER, session_id, None
     if requested == PAID_FROM_OFFICE:
         return PAID_FROM_OFFICE, None, None
     if requested == PAID_FROM_DRAWER:
+        refusal = _drawer_paid_out_refusal()
+        if refusal is not None:
+            return None, None, refusal
         if not session_id:
             return None, None, (jsonify({
                 'status': 'error', 'code': 'NO_OPEN_DRAWER', 'reason_code': 'NO_OPEN_DRAWER',
@@ -19980,19 +20148,26 @@ def _resolve_supplier_paid_from(conn, cid, method, requested):
     }), 400)
 
 
-def _post_supplier_drawer_paid_out(conn, cid, session_id, pay_uid, ref, supplier_id, amount):
+def _post_supplier_drawer_paid_out(conn, cid, session_id, pay_uid, ref, supplier_id, amount,
+                                   fallback_label=''):
     """Write the paid-out a 'drawer' supplier payment causes, in the caller's
     transaction. The id is a pure function of the payment uid, so a retried POST that
-    reached here twice would collide on the primary key instead of paying out twice."""
+    reached here twice would collide on the primary key instead of paying out twice.
+
+    F7: it does NOT depend on the supplier. A purchase order with no supplier still takes the
+    notes out of the till, so `supplier_id` may be empty and the label falls back to
+    `fallback_label` (the PO number) -- storing paid_from='drawer' without this row would leave
+    exactly the over-counted drawer M2 exists to fix."""
     name_row = conn.execute("SELECT name FROM suppliers WHERE id=? AND company_id=?",
-                            (supplier_id, cid)).fetchone()
+                            (supplier_id, cid)).fetchone() if supplier_id else None
+    label = (name_row['name'] if name_row else '') or fallback_label or ''
     actor, terminal, utc_now = _stamp()
     conn.execute(
         """INSERT INTO cash_movements
            (id,session_id,type,amount,reason,created_by,created_at,actor_user_uid,terminal_id,created_at_utc,payment_uid)
            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         (_supplier_drawer_movement_id(pay_uid, 'pay'), session_id, 'paid_out', amount,
-         f"Supplier payment {ref} - {name_row['name'] if name_row else ''}".strip(' -'),
+         f"Supplier payment {ref} - {label}".strip(' -'),
          _uid(), _now(), actor, terminal, utc_now, pay_uid))
 
 
@@ -20155,10 +20330,11 @@ def pay_purchase_order(po_id):
                               related_type='po', related_id=po_id, notes=data.get('notes', ''),
                               device=data.get('device'), doc_type='supplier_payment', currency=currency,
                               pay_uid=pay_uid, paid_from=paid_from)
-        if paid_from == PAID_FROM_DRAWER and po['supplier_id']:
-            # M2: same as supplier_payment -- the notes leave THIS till's drawer.
+        if paid_from == PAID_FROM_DRAWER:
+            # M2: same as supplier_payment -- the notes leave THIS till's drawer. (F7: also for
+            # an order with no supplier -- the label is the PO number.)
             _post_supplier_drawer_paid_out(conn, cid, drawer_session, pay_uid, ref,
-                                           po['supplier_id'], amt)
+                                           po['supplier_id'], amt, fallback_label=po['po_number'])
         # W4a: `amount_paid`/`payment_status` are DERIVED from the active
         # payments that name this order, never `amount_paid + amt`. The stored
         # increment was right only on the computer that took the instalment: a
@@ -22673,6 +22849,7 @@ def _require_confirmation(expected_prefix, cid):
 # emit a wipe tombstone). A sibling keeps its copies until it is wiped too.
 _WIPE_STATEMENTS = (
     ('return_items', 'DELETE FROM return_items WHERE return_id IN (SELECT id FROM returns WHERE company_id=?)'),
+    ('return_refund_legs', 'DELETE FROM return_refund_legs WHERE company_id=?'),
     ('returns', 'DELETE FROM returns WHERE company_id=?'),
     ('sale_items', 'DELETE FROM sale_items WHERE sale_id IN (SELECT id FROM sales WHERE company_id=?)'),
     ('sales', 'DELETE FROM sales WHERE company_id=?'),

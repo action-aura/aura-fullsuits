@@ -306,18 +306,34 @@ def test_8_returning_a_split_sale_requires_one_explicit_refund_method(client):
     r = _return(client, sale['id'], pid, refund_method='split')
     assert r.status_code == 400 and r.get_json()['code'] == 'REFUND_METHOD_INVALID'
     assert _count("SELECT COUNT(*) FROM returns") == n_ret, 'refusals must not write a return'
+    # CHANGED (MONEY-3 M1 fix round). This used to assert 200 and cash_refunds == 11.832: the WHOLE
+    # 5 card + 6.832 cash tender pool handed back as cash. That expectation was the bug -- the
+    # drawer only ever took 6.832, so the other 5 came out of the till's own cash (a phone returning
+    # a desktop split sale always sends a refund_method and would empty its drawer). It can no
+    # longer catch "an explicit single method on a split sale is uncapped"; the cap is now
+    # per-method, and the pinned behaviour is the refusal plus the allowed split below.
     r = _return(client, sale['id'], pid, refund_method='cash')
+    assert r.status_code == 409 and r.get_json()['code'] == 'RETURN_LEG_EXCEEDS_REMAINDER', r.get_json()
+    assert _count("SELECT COUNT(*) FROM returns") == n_ret, 'the capped refusal must not write a return'
+    assert _x(client, sid)['cash_refunds'] == 0
+    r = _return(client, sale['id'], pid, refund_legs='default')
     assert r.status_code == 200, r.get_json()
     x = _x(client, sid)
-    assert x['cash_refunds'] == 11.832, 'cap is the whole tender pool, paid out as cash'
+    assert x['cash_refunds'] == 6.832, 'only the cash the sale took comes out of the drawer'
 
 
 def test_8b_split_sale_refunded_by_card_leaves_the_drawer_alone(client):
     pid = _product(client)
     sid = _open(client, 100.0)
     sale = _split(client, pid, [{'method': 'card', 'amount': 5}, {'method': 'cash', 'amount': 6.832}]).get_json()['data']
+    # CHANGED (MONEY-3 M1 fix round): this used to assert 200 for the FULL 11.832 refunded by
+    # card, although only 5 was ever charged to a card. That expectation was the bug (the card
+    # side refunded 6.832 it never took). It can no longer catch "card refund leaves the drawer
+    # alone" through an over-sized card refund; the drawer stays untouched because the refusal
+    # writes nothing, and a card-only refund within the 5 card is covered in
+    # retail_money3_split_refund_test.py.
     r = _return(client, sale['id'], pid, refund_method='card')
-    assert r.status_code == 200, r.get_json()
+    assert r.status_code == 409 and r.get_json()['code'] == 'RETURN_LEG_EXCEEDS_REMAINDER', r.get_json()
     assert _x(client, sid)['cash_refunds'] == 0
 
 

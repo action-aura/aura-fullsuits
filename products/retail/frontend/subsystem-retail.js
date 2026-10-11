@@ -15211,6 +15211,7 @@ const RetailSystem = {
           </select>
         </div>
         <div id="ret-sale-items" style="margin-top:16px"></div>
+        <div id="ret-legs" role="group" aria-labelledby="ret-legs-title" hidden style="margin-top:14px"></div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
           <button class="ret-btn ret-btn-danger" id="ret-save-btn" onclick="RetailSystem._saveReturn()">Process Refund</button>
@@ -15333,6 +15334,13 @@ const RetailSystem = {
         const real = tl.filter(x => x.method !== 'credit');
         originalMethod = real.some(x => x.method === 'cash') ? 'cash' : (real[0] ? real[0].method : 'cash');
       }
+      // MONEY-3 M1: a split-paid sale is refunded through PARTS (the panel below the items), so
+      // the single-method select is hidden for it; a fresh lookup always starts a fresh panel.
+      this._returnLegsKey = null;
+      const legsBox = document.getElementById('ret-legs');
+      if (legsBox) { legsBox.hidden = true; legsBox.innerHTML = ''; }
+      const methodField = document.getElementById('ret-refund-method');
+      if (methodField) methodField.hidden = !!this._returnSaleTenders;
       const splitNote = document.getElementById('ret-split-note');
       if (splitNote) {
         const parts = this._returnSaleTenders ? this._returnPartsText(this._returnSaleTenders) : '';
@@ -15421,6 +15429,37 @@ const RetailSystem = {
     } catch(e) { SubsystemApp.showToast(t('Error looking up sale'),'error'); }
   },
 
+  // MONEY-3 M1: the editable refund parts of a split-paid sale. `data` is the dry-run answer:
+  // `legs` = the proportional default, `refundable` = what each method can still give back.
+  // One labelled number box per method, reachable with Tab; the server re-checks everything.
+  _renderReturnLegs(data, key) {
+    const box = document.getElementById('ret-legs');
+    if (!box) return;
+    this._returnLegsKey = key;
+    const given = {};
+    (data.legs || []).forEach(l => { given[l.method] = l.amount; });
+    const rows = (data.refundable || []).map((r, i) => `
+      <div class="ret-field" style="display:flex;align-items:center;gap:10px;margin:6px 0">
+        <label for="ret-leg-${i}" style="min-width:110px">${this._esc(this._plainMethodLabel(r.method))}</label>
+        <input type="number" step="any" min="0" id="ret-leg-${i}" class="ret-leg-input" data-method="${this._esc(r.method)}"
+          value="${given[r.method] != null ? given[r.method] : 0}" style="width:130px;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary);padding:8px 10px" />
+        <span style="font-size:12px;color:var(--text-muted)">${t('up to {amount}').replace('{amount}', this._fmt(r.amount))}</span>
+      </div>`).join('');
+    box.innerHTML = `
+      <div id="ret-legs-title" style="font-weight:600">${t('Refund parts')}</div>
+      <div style="font-size:12px;color:var(--text-muted);margin:2px 0 6px">${t('The parts must add up to the money going back: {amount}').replace('{amount}', this._fmt(data.tender_refund_amount))}</div>
+      ${rows}`;
+    box.hidden = false;
+    const first = box.querySelector('.ret-leg-input');
+    if (first && typeof first.focus === 'function') first.focus();
+  },
+
+  _readReturnLegs() {
+    return [...document.querySelectorAll('.ret-leg-input')]
+      .map(el => ({ method: el.dataset.method, amount: +el.value || 0 }))
+      .filter(l => l.amount > 0);
+  },
+
   // "Cash 6.832 + Card 5.000" for a split sale's tenders (plain text).
   _returnPartsText(tenders) {
     return (tenders || []).map(x => `${x.method === 'credit' ? t('On account') : this._plainMethodLabel(x.method)} ${this._fmt(x.amount)}`).join(' + ');
@@ -15443,17 +15482,21 @@ const RetailSystem = {
     // silently. The server still computes and caps the real amount either
     // way (see create_return); this is a "are you sure" for an unusual
     // action, not the money-safety boundary itself.
+    let refundLegs = null;
     if (this._returnSaleTenders) {
-      // Paid in parts: there is no "original method" to compare with, so ask
-      // every time -- the whole refund goes out through the ONE method chosen.
-      if (!(await this._confirm({
-        title: t('Change Refund Method'),
-        message: t('This sale was paid in parts ({parts}). Refund it all by {method}?')
-          .replace('{parts}', this._returnPartsText(this._returnSaleTenders))
-          .replace('{method}', this._plainMethodLabel(chosenMethod)),
-        confirmLabel: t('Refund'),
-        danger: false,
-      }))) return;
+      // Paid in parts (MONEY-3 M1): the refund is paid back in PARTS. The first press asks the
+      // server for the proportional default and shows it, editable; the second press sends what
+      // is in the boxes. Changing the items starts the panel over.
+      const legsKey = JSON.stringify(items.map(i => [i.product_id, i.quantity]));
+      if (this._returnLegsKey !== legsKey) {
+        const pre = await this._post('/api/sub/retail/returns', {
+          sale_id: this._returnSaleId, items, dry_run: true });
+        if (pre.status !== 'success') { SubsystemApp.showToast(pre.message||'Error','error'); return; }
+        this._renderReturnLegs(pre.data, legsKey);
+        SubsystemApp.showToast(t('Check how this refund is paid back, then press Refund again'),'success');
+        return;
+      }
+      refundLegs = this._readReturnLegs();
     } else if (this._returnSaleOriginalMethod && chosenMethod !== this._returnSaleOriginalMethod) {
       if (!(await this._confirm({
         title: t('Change Refund Method'),
@@ -15465,12 +15508,13 @@ const RetailSystem = {
     const btn = document.getElementById('ret-save-btn');
     if (btn) { btn.disabled=true; btn.textContent=t('Processing…'); }
     try {
-      const d = await this._post('/api/sub/retail/returns', {
+      const body = {
         sale_id: this._returnSaleId,
         reason: document.getElementById('ret-reason')?.value||'Customer return',
-        refund_method: chosenMethod,
         items,
-      });
+      };
+      if (refundLegs) body.refund_legs = refundLegs; else body.refund_method = chosenMethod;
+      const d = await this._post('/api/sub/retail/returns', body);
       if (d.status==='success') {
         // DEFECT 1 fix: show the REAL payout (tender_refund_amount), not
         // the full refund_amount -- the latter implies the whole value

@@ -27,6 +27,14 @@ MUTATIONS (retail_api.py unless noted):
         -> test_cancelling_the_payment_puts_the_cash_back_exactly_once
   M2-g  `_post_missing_drawer_reversals`: drop `m.type = 'paid_out'` join (any payment)
         -> test_cancelling_a_legacy_null_paid_from_payment_never_touches_a_drawer
+  F3-a  `_drawer_paid_out_refusal`: drop the `mt_require_capability(CAP_CASH_CLOSE)` guard
+        -> test_f3_an_accountant_cannot_take_cash_out_of_a_drawer
+  F3-b  `_drawer_paid_out_refusal`: drop the licence guard
+        -> test_f3_the_licence_state_that_blocks_a_manual_paid_out_blocks_this_too
+  F7-a  pay_purchase_order: put back `and po['supplier_id']` on the paid-out
+        -> test_f7_a_po_with_no_supplier_still_takes_the_cash_out_of_the_drawer
+  N2-a  `_post_missing_drawer_reversals`: replace `p.company_id=?` by `? IS NOT NULL`
+        -> test_n2_cancelling_in_one_company_never_moves_another_companys_money
 
 Run:
     pytest products/retail/tests/retail_money3_supplier_drawer_test.py -q
@@ -374,6 +382,182 @@ def test_v51_shape_and_the_step_replays_as_a_no_op():
         bare.close()
     finally:
         conn.close()
+
+
+# -- round-2 verifier findings F3 / F7 / N2 --------------------------------------
+
+def _accountant_client(company_id, grant_cash_close=False):
+    """A real Accountant: holds retail.books.record (supplier payments) and NOT
+    retail.cash.close (the authority a manual paid-out needs)."""
+    from commercial_runtime.identity import user_accounts
+    password = 'AcctPW123456'
+    email = f'acct-{uuid.uuid4().hex[:8]}@test.local'
+    user_id = str(uuid.uuid4())
+    conn = registry_conn()
+    try:
+        conn.execute(
+            'INSERT INTO users (id, uid, company_id, employee_id, email, password_hash, role, status, '
+            'require_password_change) VALUES (?,?,?,?,?,?,?,?,0)',
+            (user_id, str(uuid.uuid4()), company_id, f'EMP-{uuid.uuid4().hex[:6].upper()}', email,
+             hash_password(password), 'manager', 'active'))
+        conn.execute('INSERT INTO user_permissions (id, user_id, subsystem, access_level) VALUES (?,?,?,?)',
+                     (str(uuid.uuid4()), user_id, 'retail', 'full'))
+        user_accounts.seed_capabilities_for_user(conn, user_id, 'manager')
+        user_accounts.apply_preset(conn, user_id, user_accounts.PRESET_ACCOUNTANT, emit_sync=False)
+        if grant_cash_close:
+            # a NON-admin who DOES hold the drawer authority (the preset withholds it)
+            conn.execute("UPDATE user_permissions SET access_level='full' WHERE user_id=? AND subsystem=?",
+                         (user_id, 'retail.cash.close'))
+        conn.commit()
+    finally:
+        conn.close()
+    c = app.test_client()
+    r = c.post('/api/auth/login', json={'email': email, 'password': password})
+    assert r.status_code == 200, r.get_json()
+    return c
+
+
+def _make_po(c, supplier):
+    p = c.post(f'{API}/products', json={'name': 'W', 'sku': f'W-{uuid.uuid4().hex[:6]}',
+                                        'cost_price': 5, 'sell_price': 10, 'initial_stock': 0})
+    pid = p.get_json()['data']['id']
+    po = c.post(f'{API}/purchase-orders', json={
+        'supplier_id': supplier, 'amount_paid': 0, 'items': [{'product_id': pid, 'quantity': 10, 'unit_cost': 5}]})
+    assert po.status_code == 200, po.get_json()
+    return po.get_json()['data']['id']
+
+
+def test_f3_an_accountant_cannot_take_cash_out_of_a_drawer(client):
+    """Deny half: the Accountant (books.record, no cash.close) is refused when the cash would
+    come out of the drawer -- asked for OR the open-drawer default -- on both supplier routes,
+    and nothing is written. Allow half: 'office' still works for them, and the owner's default
+    drawer payment still takes the cash out."""
+    sup = _supplier(client)
+    sid = _open(client, 100.0)
+    acct = _accountant_client(client.test_company_id)
+    r = _pay(acct, sup, 30.0, paid_from='drawer')
+    assert r.status_code == 403, r.get_json()
+    assert _row("SELECT COUNT(*) AS n FROM payments WHERE party_id=?", (sup,))[0]['n'] == 0
+    po_id = _make_po(client, sup)
+    r = acct.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 12.0, 'paid_from': 'drawer'})
+    assert r.status_code == 403, r.get_json()
+    # No paid_from sent (Android has no control for it): a caller without drawer rights falls
+    # back to 'office' -- the pre-M2 behaviour -- instead of being stuck. Drawer untouched.
+    r = acct.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 12.0})
+    assert r.status_code == 200 and r.get_json()['data']['paid_from'] == 'office', r.get_json()
+    r = _pay(acct, sup, 7.0)
+    assert r.status_code == 200 and r.get_json()['data']['paid_from'] == 'office', r.get_json()
+    assert _x(client, sid)['expected_cash'] == 100.0
+    # allow half
+    r = _pay(acct, sup, 30.0, paid_from='office')
+    assert r.status_code == 200, r.get_json()
+    assert _x(client, sid)['expected_cash'] == 100.0
+    r = _pay(client, sup, 30.0)
+    assert r.status_code == 200 and r.get_json()['data']['paid_from'] == 'drawer', r.get_json()
+    assert _x(client, sid)['expected_cash'] == 70.0
+
+
+def test_f3_a_non_admin_who_holds_cash_close_gets_the_drawer_default_and_one_without_gets_office(client):
+    """N6, the allow half of the F3 default. The open-drawer default must key on the AUTHORITY, not
+    on 'is this the admin': an Accountant granted retail.cash.close (the licence capability is held
+    by the seeded licence) and paying with no paid_from while a drawer is open pays FROM THE DRAWER
+    and the drawer goes down. The same role without cash.close falls back to 'office' and the
+    drawer is untouched. (Only the admin and the manual route were exercised before, so a default
+    that sent every non-admin to 'office' survived.)"""
+    sup = _supplier(client)
+    sid = _open(client, 100.0)
+    with_rights = _accountant_client(client.test_company_id, grant_cash_close=True)
+    without = _accountant_client(client.test_company_id)
+    r = _pay(with_rights, sup, 30.0)
+    assert r.status_code == 200 and r.get_json()['data']['paid_from'] == 'drawer', r.get_json()
+    rep = _x(client, sid)
+    assert rep['movements']['paid_out'] == 30.0 and rep['expected_cash'] == 70.0, rep
+    r = _pay(without, sup, 20.0)
+    assert r.status_code == 200 and r.get_json()['data']['paid_from'] == 'office', r.get_json()
+    assert _x(client, sid)['expected_cash'] == 70.0
+
+
+def test_f3_the_licence_state_that_blocks_a_manual_paid_out_blocks_this_too(client, monkeypatch):
+    """The licence capability the manual paid-out route wears is asked for by name. A fake guard
+    that refuses ONLY that code proves the drawer path asks it (and 'office' does not)."""
+    from flask import jsonify
+    from api import retail_api as ra
+    asked = []
+
+    def fake_guard(code, **_kw):
+        def deco(f):
+            def wrapper(*a, **k):
+                asked.append(code)
+                if code == 'retail.cash_session.movement.create':
+                    return jsonify({'status': 'error', 'reason_code': 'TEST_LICENCE_DENIED'}), 403
+                return f(*a, **k)
+            return wrapper
+        return deco
+
+    monkeypatch.setattr(ra, 'require_license_capability', fake_guard)
+    sup = _supplier(client)
+    sid = _open(client, 100.0)
+    r = _pay(client, sup, 30.0, paid_from='drawer')
+    assert r.status_code == 403 and r.get_json().get('reason_code') == 'TEST_LICENCE_DENIED', r.get_json()
+    assert 'retail.cash_session.movement.create' in asked
+    assert _row("SELECT COUNT(*) AS n FROM payments WHERE party_id=?", (sup,))[0]['n'] == 0
+    asked.clear()
+    r = _pay(client, sup, 30.0, paid_from='office')
+    assert r.status_code == 200, r.get_json()
+    assert asked == [], 'the office path must not ask the drawer licence capability'
+    assert _x(client, sid)['expected_cash'] == 100.0
+
+
+def test_f7_a_po_with_no_supplier_still_takes_the_cash_out_of_the_drawer(client):
+    """paid_from='drawer' was STORED for a supplier-less order while the paid-out was skipped
+    (`and po['supplier_id']`), so the till closed over by that amount. The paid-out now never
+    depends on the supplier; the X report names the PO."""
+    sup = _supplier(client)
+    po_id = _make_po(client, sup)
+    conn = get_retail_conn()
+    conn.execute("UPDATE purchase_orders SET supplier_id=NULL WHERE id=?", (po_id,))
+    po_number = conn.execute("SELECT po_number FROM purchase_orders WHERE id=?", (po_id,)).fetchone()[0]
+    conn.commit(); conn.close()
+    sid = _open(client, 100.0)
+    r = client.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 12.0})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['data']['paid_from'] == 'drawer'
+    rep_ = _x(client, sid)
+    assert rep_['movements']['paid_out'] == 12.0 and rep_['expected_cash'] == 88.0, rep_
+    assert [i['supplier'] for i in rep_['supplier_payments']['items']] == [po_number], rep_
+
+
+def test_n2_cancelling_in_one_company_never_moves_another_companys_money(client):
+    """Two companies in one database. Company B has a cash supplier payment that was taken out of
+    its drawer, the drawer is closed, and the payment is now VOIDED with no reversal yet (the
+    shape a void arriving by sync has before the sweep runs). Company A cancels its own payment:
+    A's sweep must not pick up B's row and put B's money into A's open drawer."""
+    b_client = None
+    email = f'm3b-{uuid.uuid4().hex[:8]}@test.local'
+    b_company = str(uuid.uuid4())
+    conn = registry_conn()
+    conn.execute(
+        "INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status, "
+        "require_password_change) VALUES (?,?,?,?,?,?,?,0)",
+        (str(uuid.uuid4()), b_company, 'EMP-0001', email, hash_password('Money3PW12345'), 'admin', 'active'))
+    conn.commit(); conn.close()
+    b_client = app.test_client()
+    assert b_client.post('/api/auth/login', json={'email': email, 'password': 'Money3PW12345'}).status_code == 200
+    b_client.test_company_id = b_company
+    b_sup = _supplier(b_client, 'B Supplier')
+    b_sid = _open(b_client, 100.0)
+    assert _pay(b_client, b_sup, 30.0).status_code == 200
+    assert b_client.post(f'{API}/cash-sessions/{b_sid}/close', json={'closing_float_counted': 70.0}).status_code == 200
+    conn = get_retail_conn()
+    conn.execute("UPDATE payments SET status='voided' WHERE party_id=?", (b_sup,))
+    conn.commit(); conn.close()
+    # Company A: open a drawer, pay 30, cancel it. The sweep runs for A.
+    a_sup = _supplier(client, 'A Supplier')
+    a_sid = _open(client, 100.0)
+    assert _pay(client, a_sup, 30.0).status_code == 200
+    assert client.post(f'{API}/payments/{_payment_id(a_sup)}/void', json={'reason': 'mine'}).status_code == 200
+    assert _x(client, a_sid)['expected_cash'] == 100.0, 'B\'s cancelled payment landed in A\'s drawer'
+    assert _drawer_rows(b_sup, 'paid_in', 'void_note') == [], 'A\'s sweep wrote a reversal for B\'s payment'
 
 
 if __name__ == "__main__":

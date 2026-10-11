@@ -7505,3 +7505,38 @@ M1 (split refunds, crew B) still to append its step after crew A's two in `_migr
 * Known gaps, written down: a rolling upgrade where a peer's cheque journals arrive AFTER this computer's upgrade
   double-books that cheque; two computers acting on one cheque offline with CONFLICTING transitions (clear vs bounce)
   can leave a one-cheque 1150/bank imbalance; a v50 peer's cheques produce no journals on a v51 computer.
+
+### 2026-10-10 -- retail v51, crew B landed (M1 split refunds, D2) + round-1 findings F3/F7/N2 -- NOT COMMITTED
+
+* M1: new table `return_refund_legs` (uid UNIQUE, company/branch scoped, return_id + return_uid, method, amount),
+  step `_migrate_add_return_refund_legs` appended AFTER crew A's two steps. Legs sum to `returns.tender_refund_amount`;
+  the on-account part stays `ar_forgiven_amount`/`store_credit_amount` (never a leg, never cash). Backfill: exactly one
+  leg per existing return, uid `uuid5(NS, "<return uid>:legacy")`, IDEMPOTENT BY UID (a replay is a no-op). It does NOT
+  repair a DB already stamped 51: ensure_schema_version returns early when current == target, so the step only runs on
+  an upgrade from < 51. Commit 53a1026e was never pushed or released, so no real DB is at 51 without legs; a DB created
+  by that code must be recreated. Legs travel INSIDE the `return` sync event (`legs`); a return that arrives without the key is
+  read as the one legacy leg. Only CASH legs reduce a drawer; `refund_legs` = list or `"default"` (proportional to what
+  each method still has refundable, rounding residue on the largest leg); `dry_run` previews; a bare split return is still
+  refused (REFUND_METHOD_REQUIRED) but now carries `default_legs`. An explicit single `refund_method` on a SINGLE-tender
+  sale keeps its historic one-leg meaning; on a MULTI-tender (split) sale it is one leg of that method and gets the same
+  per-method remainder cap (409 RETURN_LEG_EXCEEDS_REMAINDER / RETURN_LEG_METHOD_NOT_ON_SALE, body carries
+  `default_legs`) -- otherwise a phone (Android always sends refund_method) returning a desktop 30 cash + 70 card sale
+  as 'cash' emptied its drawer by 100. Android shows the server message for the 409 (conflictMessageFor falls through),
+  so no Android change. 409 codes: RETURN_LEGS_SUM, RETURN_LEG_METHOD_NOT_ON_SALE, RETURN_LEG_EXCEEDS_REMAINDER.
+* F3: a supplier/PO payment paid from the drawer needs retail.cash.close and the licence capability
+  retail.cash_session.movement.create, run through the same decorators the manual paid-out route wears. An EXPLICIT
+  paid_from='drawer' without those rights is refused 403; the open-drawer DEFAULT (no paid_from sent, e.g. Android)
+  instead falls back to 'office' for a caller without them (so a phone user without drawer rights is not stuck), and
+  gives 'drawer' to a non-admin who holds both. 'office' is unaffected. F7: a supplier-less PO still writes the paid-out (label = PO number). N2: test pins the
+  cancel sweep's company filter.
+* RESIDUALS, written down: (1) there is NO per-method clearing account in the chart -- post_sale debits 1000 for every
+  tender -- so each leg credits 1000 (one journal line per leg, memo "Refunded via <method>"); a real card clearing
+  account is a chart/sales change, not done. (2) Per-method remainder is only as good as the legs of earlier returns: a
+  legacy return refunded through a method the sale never used leaves that method's remainder untouched. (3) A peer
+  still on pre-M1 code ignores `legs` and reads refund_method 'split'. (4) revenue_by_payment_method buckets a
+  multi-leg return as 'split' (the bucket sum identity is kept; per-method refund reporting is not split out). (5) The
+  till dialog needs two presses on Refund for a split-paid sale (preview, then submit); no browser-driven test of it.
+  (6) MIXED-VERSION PEER: a v50 receiver drops `legs` (it has no table). When that peer upgrades, the backfill writes ONE
+  legacy 'split' leg for such a return, so a LATER edited-legs return on the same sale there can mis-cap (the 'split'
+  leg is not a real method, so cash/card remainders look untouched). (7) general_ledger.py ~1914 compares against a bare
+  `Decimal('0.0005')` only to choose per-leg journal lines vs one line; totals are unaffected -- left as is, recorded.
