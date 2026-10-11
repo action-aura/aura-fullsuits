@@ -217,6 +217,49 @@ fi
 bold "owner service is healthy."
 
 # ---------------------------------------------------------------------------
+# 5b. Prove the PUBLIC path works, not just the container.
+#     The healthcheck above runs curl INSIDE the owner container, so it only
+#     proves Flask is up. On 2026-10-10 it reported healthy while the public
+#     site (Caddy) answered 503 for every request: Caddy's own upstream probe
+#     was being rejected by the app's Host allowlist, so Caddy marked its only
+#     upstream down. Nothing in this script noticed, because nothing in this
+#     script ever talked to Caddy.
+#
+#     So go through Caddy: ports 443 on this VM, SNI/Host = SITE_DOMAIN, with
+#     --resolve pinning that name to 127.0.0.1 so the check does not depend on
+#     public DNS or on the Oracle security list (those are real, separate
+#     failure modes, but "Caddy is serving this app" is what is proven here).
+#     TLS is verified (no -k): a certificate Caddy has not obtained yet is a
+#     real not-ready-yet state. Retries cover that, and Caddy's 30s upstream
+#     health interval after a fresh start. A permanent failure stops the
+#     script loudly instead of printing the "setup is done" banner.
+#     PUBLIC_CHECK_ATTEMPTS / PUBLIC_CHECK_INTERVAL exist so the retry logic
+#     can be exercised in seconds; the defaults wait up to 2 minutes.
+# ---------------------------------------------------------------------------
+public_check() {
+  local domain attempts interval n code
+  domain="$(env_value SITE_DOMAIN)"
+  attempts="${PUBLIC_CHECK_ATTEMPTS:-24}"
+  interval="${PUBLIC_CHECK_INTERVAL:-5}"
+  [ -n "$domain" ] || fail "SITE_DOMAIN is empty in $ENV_FILE -- cannot check the public path through Caddy."
+  bold "Checking the public path through Caddy (https://$domain/health/live via 127.0.0.1:443, up to $((attempts * interval))s)..."
+  n=0
+  code="000"
+  while [ "$n" -lt "$attempts" ]; do
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+      --resolve "$domain:443:127.0.0.1" "https://$domain/health/live" 2>/dev/null || true)"
+    [ "$code" = "200" ] && break
+    n=$((n + 1))
+    [ "$n" -lt "$attempts" ] && sleep "$interval"
+  done
+  if [ "$code" != "200" ]; then
+    fail "the owner container is healthy but https://$domain/health/live through Caddy returned HTTP ${code:-000} after $attempts tries. The public site is NOT serving. 503 usually means Caddy marked the app upstream unhealthy (check OWNER_ALLOWED_HOSTS includes $domain); 000 usually means no certificate yet or ports 80/443 not reachable. Check: $COMPOSE logs caddy"
+  fi
+  bold "Public path OK: Caddy answered 200 for https://$domain/health/live."
+}
+public_check
+
+# ---------------------------------------------------------------------------
 # 6. Preflight -- the real readiness picture, not just "the process is up".
 # ---------------------------------------------------------------------------
 bold "Running 'flask commercial preflight'..."
