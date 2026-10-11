@@ -1281,9 +1281,20 @@ private fun SupplierStatementSheet(supplierId: String, onDismiss: () -> Unit, on
     // narrowed to books.record in its body (a refund-only cashier is refused).
     val canPay = RetailSession.hasAnyCapability(CAPS_SUPPLIER_PAYMENT)
     val canVoid = RetailSession.hasAnyCapability(CAPS_VOID_SUPPLIER_PAYMENT)
+    // MONEY-3 M2: this screen only ever records CASH, so the "Paid from" choice is always
+    // shown; supplierPaymentRequest() is what guarantees a non-cash method would send none.
+    // Same default as the desktop: "from the till" when this device has an open drawer,
+    // otherwise "from the office" with the till option disabled. The probe is gated on the
+    // drawer capability, so ANY failure reads as "no drawer here" (the server decides again).
+    var drawerOpen by remember { mutableStateOf(false) }
+    var paidFrom by remember { mutableStateOf(PAID_FROM_OFFICE) }
     LaunchedEffect(supplierId) {
         stmt = try { ApiClient.get().supplierStatement(supplierId).data } catch (e: Exception) { null }
         loading = false
+    }
+    LaunchedEffect(supplierId) {
+        drawerOpen = try { ApiClient.get().currentCashSession().data != null } catch (e: Exception) { false }
+        if (drawerOpen) paidFrom = PAID_FROM_DRAWER
     }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         Column(Modifier.padding(20.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState())) {
@@ -1354,6 +1365,24 @@ private fun SupplierStatementSheet(supplierId: String, onDismiss: () -> Unit, on
                     HorizontalDivider(Modifier.padding(vertical = 12.dp))
                     Text(tr("Record a payment"), fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
+                    Text(tr("Paid from"), style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Column(Modifier.selectableGroup()) {
+                        listOf(PAID_FROM_DRAWER to tr("Till drawer"),
+                            PAID_FROM_OFFICE to tr("Office cash (not from a drawer)")).forEach { (value, label) ->
+                            val enabled = value != PAID_FROM_DRAWER || drawerOpen
+                            Row(Modifier.fillMaxWidth().selectable(selected = paidFrom == value, enabled = enabled && !paying,
+                                role = Role.RadioButton, onClick = { paidFrom = value }).padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = paidFrom == value, onClick = null, enabled = enabled && !paying)
+                                Spacer(Modifier.width(8.dp))
+                                Text(label)
+                            }
+                        }
+                    }
+                    if (!drawerOpen) Text(tr("No cash drawer is open on this computer."),
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(payAmount, { payAmount = it }, label = { Text(tr("Amount")) }, singleLine = true,
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
@@ -1365,7 +1394,7 @@ private fun SupplierStatementSheet(supplierId: String, onDismiss: () -> Unit, on
                             paying = true; err = null
                             scope.launch {
                                 try {
-                                    val r = ApiClient.get().supplierPayment(supplierId, PaymentRequest(amt, "cash"))
+                                    val r = ApiClient.get().supplierPayment(supplierId, supplierPaymentRequest(amt, "cash", paidFrom))
                                     if (r.status == "success") onPaid() else { err = r.message ?: tr("Failed"); paying = false }
                                 } catch (e: Exception) { err = apiErrorMessage(e); paying = false }
                             }

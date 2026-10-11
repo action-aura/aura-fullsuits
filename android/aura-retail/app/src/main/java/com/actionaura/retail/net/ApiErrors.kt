@@ -149,6 +149,8 @@ internal fun conflictMessageFor(code: String?): String? = when (code) {
     "PO_LINES_NOT_ARRIVED", "PO_RECEIPTS_NOT_ARRIVED", "PO_BOOKS_NOT_ARRIVED",
     "TRANSFER_LINES_NOT_ARRIVED", "TRANSFER_SEND_NOT_ARRIVED", "TRANSFER_BOOKS_NOT_ARRIVED" ->
         tr("This hasn't finished syncing from your other device yet. Try again in a moment.")
+    // MONEY-3 M2: the user asked for "From the till" but this device has no open cash session.
+    "NO_OPEN_DRAWER" -> tr("There is no open cash drawer on this device. Open the drawer first, or pay from the office.")
     "CLOSE_SHORT_NOT_PARTIAL" -> tr("Only an order that is partly received can be closed short.")
     "CLOSE_SHORT_NEEDS_SUPPLIER" -> tr("This order needs a supplier before it can be closed short.")
     else -> null

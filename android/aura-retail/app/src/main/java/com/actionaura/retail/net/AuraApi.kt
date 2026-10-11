@@ -259,7 +259,13 @@ interface AuraApi {
     suspend fun supplierStatement(@Path("id") id: String): SupplierStatementResponse
 
     @POST("api/sub/retail/suppliers/{id}/payments")
-    suspend fun supplierPayment(@Path("id") id: String, @Body body: PaymentRequest): PaymentResultResponse
+    suspend fun supplierPayment(@Path("id") id: String, @Body body: SupplierPaymentRequest): PaymentResultResponse
+
+    // Is a drawer open on THIS terminal? Decides the supplier-payment "Paid from" default, as
+    // on the desktop. Gated on the drawer capability, so a bookkeeper gets 403: callers treat
+    // any failure as "no drawer" (the server re-decides anyway).
+    @GET("api/sub/retail/cash-sessions/current")
+    suspend fun currentCashSession(): CurrentCashSessionResponse
 
     // Daily cash + settings + payment methods
     @GET("api/sub/retail/reports/daily-cash")

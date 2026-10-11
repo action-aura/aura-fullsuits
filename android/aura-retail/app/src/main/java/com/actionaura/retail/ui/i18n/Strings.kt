@@ -518,6 +518,13 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Enter a valid amount" to "أدخل مبلغًا صحيحًا",
     "Failed" to "فشل",
     "Pay" to "دفع",
+    // Supplier payment "Paid from" choice (MONEY-3 M2) -- wording matches the desktop locale.
+    "Paid from" to "مدفوع من",
+    "Till drawer" to "درج الصندوق",
+    "Office cash (not from a drawer)" to "نقد المكتب (ليس من الدرج)",
+    "No cash drawer is open on this computer." to "لا يوجد درج نقدي مفتوح على هذا الجهاز.",
+    "There is no open cash drawer on this device. Open the drawer first, or pay from the office." to
+        "لا يوجد درج نقدي مفتوح على هذا الجهاز. افتح الدرج أولًا، أو ادفع من المكتب.",
 
     // ── Categories screen ──────────────────────────────────────────────
     // The whole screen (ui/screens/CategoriesScreen.kt) routes every visible

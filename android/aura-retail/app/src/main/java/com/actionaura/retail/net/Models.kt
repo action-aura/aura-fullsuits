@@ -416,6 +416,33 @@ data class CustomerStatement(val customer: Customer? = null, val events: List<St
 data class CustomerStatementResponse(val status: String = "", val data: CustomerStatement? = null)
 
 data class PaymentRequest(val amount: Double, val method: String = "cash", val notes: String = "")
+/** Where a supplier's cash payment came from (MONEY-3 M2, server `payments.paid_from`). */
+const val PAID_FROM_DRAWER = "drawer"
+const val PAID_FROM_OFFICE = "office"
+
+/**
+ * Body of POST suppliers/{id}/payments -- a SEPARATE class from [PaymentRequest] so the
+ * customer and purchase-order payment bodies stay byte-for-byte what they were. Gson omits a
+ * null field, so `paid_from = null` puts NO key on the wire (an absent key makes the server
+ * pick its own default; a literal null would too, but "absent" is the contract the desktop
+ * also honours). Build it with [supplierPaymentRequest], never by hand, so a non-cash method
+ * can never carry a paid_from.
+ */
+data class SupplierPaymentRequest(val amount: Double, val method: String = "cash", val notes: String = "",
+    val paid_from: String? = null)
+
+/**
+ * paid_from only means something for CASH (the server ignores it otherwise), so any other
+ * method sends none. A blank/unknown choice is dropped rather than sent: the server answers
+ * an unknown value 400 INVALID_PAID_FROM, which is worse than letting it choose.
+ */
+fun supplierPaymentRequest(amount: Double, method: String, paidFrom: String?): SupplierPaymentRequest =
+    SupplierPaymentRequest(amount, method,
+        paid_from = if (method == "cash" && (paidFrom == PAID_FROM_DRAWER || paidFrom == PAID_FROM_OFFICE)) paidFrom else null)
+
+/** GET cash-sessions/current: `data` is the open session row, or null when no drawer is open here. */
+data class CurrentCashSessionResponse(val status: String = "", val data: com.google.gson.JsonObject? = null)
+
 data class PaymentResult(val reference: String? = null, val new_balance: Double = 0.0)
 data class PaymentResultResponse(val status: String = "", val message: String? = null, val data: PaymentResult? = null)
 
