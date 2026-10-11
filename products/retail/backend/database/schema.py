@@ -1358,9 +1358,15 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 #     every cash movement (a drawer belongs to one terminal).
 #
 #   M3 / V6 `_migrate_add_cheque_books` -- cheques post to the books. Two accounts join the
-#     default chart (1150 Cheques Under Collection, 2050 Cheques Payable) and every cheque
-#     that is NOT in a terminal state at the upgrade gets ONE opening journal, so the
-#     AR/AP tie checks agree the moment the upgrade finishes. See that function.
+#     default chart (1150 Cheques Under Collection, 2050 Cheques Payable) and the books
+#     follow each cheque's MERGED event history (M4): the upgrade replays every existing
+#     cheque's events through core/retail/cheque_books.py (journals dated by the event, same
+#     uids as the live path, so a peer's copy collapses and a replay posts nothing) and
+#     creates `cheque_reconcile_pending (company_id, cheque_id)`, the queue the sync apply of
+#     a cheque event fills and the post-pull sweep drains. The upgrade itself catches up the
+#     journals only; it also queues EVERY cheque so the first post-pull sweep runs the full
+#     reconcile (payments included) and heals a v50 database damaged by the old race. There is
+#     no boot-time drain: that first sweep runs on the first sync pull. See that function.
 #
 #   M1 / D2 `_migrate_add_return_refund_legs` -- a sale paid in parts is refunded in parts.
 #     New table `return_refund_legs` (uid UNIQUE, company_id/branch_id scoped, return_id +
@@ -12249,52 +12255,75 @@ def _migrate_add_gl_journal_sync(conn):
 
 
 def _migrate_add_cheque_books(conn):
-    """One-time migration (schema v50 -> v51, MONEY-3 M3). See the v51 comment on
+    """One-time migration (schema v50 -> v51, MONEY-3 M3 + M4). See the v51 comment on
     RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
 
     Until v51 a cheque's money leg moved the party balance and posted NO journal, so GL
     Accounts Receivable / Payable sat ABOVE the customer / supplier balances by every cheque
-    that was alive. From v51 each transition posts its own journal (`_post_cheque_books` in
-    api/retail_api.py). THIS step books the cheques that were already alive at the upgrade, so
-    the AR/AP tie checks agree the moment it finishes -- ONE opening journal per such cheque:
+    that was alive. From v51 the books follow each cheque's event history
+    (`core/retail/cheque_books.py::reconcile_cheque_journals`). THIS step runs that reconciler for
+    every existing cheque, so the AR/AP tie checks agree the moment it finishes.
 
-      * pending / deposited  -> Dr Cheques Under Collection (1150) / Cr AR   (customer cheque)
-                                Dr AP / Cr Cheques Payable (2050)            (supplier cheque)
-      * cleared / endorsed   -> Dr Cash and Bank / Cr AR   |   Dr AP / Cr Cash and Bank
-        (the cheque's bank leg was never in the books either: the AR/AP tie is the judge, and
-        an alive cheque has reduced the party balance whether or not the bank paid it yet)
-      * bounced / cancelled / written off -> NOTHING. Their party effect is already final and
-        already matches the books: the apply row and the reverse row net to zero on the party,
-        and neither was ever posted.
+    It books the HISTORY, not a lump: for each cheque the journals `cheques.desired_postings`
+    derives from its events -- the apply leg dated the day the cheque was received, the bank leg
+    dated the day it cleared, a bounce's reversal dated the day it bounced. (The first M3 revision
+    posted ONE "opening" journal per alive cheque dated at the upgrade, which put a cheque cleared
+    ten days earlier into the upgrade day's cash flow, and carried a uid no peer's per-transition
+    journal shared, so a computer that had upgraded earlier and one that upgraded later both
+    booked the cheque. Both defects vanish by construction now: every computer derives the same
+    uids from the same events, so the same journal collapses on arrival and a replay posts
+    nothing. v51 was never shipped, so the opening kinds are gone rather than kept for
+    compatibility.)
 
-    Dated at the upgrade, memo "cheque in flight before v51" (a bank-leg cheque says "cheque
-    cleared before v51"). The uid is a pure function of the cheque (`cheque_journal_uid(id,
-    'opening', 0)`), so a chain replay, or two computers upgrading separately, books it once.
+    Also creates `cheque_reconcile_pending (company_id, cheque_id)`: the sync apply of a
+    `cheque_event` queues the cheque there (the sync service may not import products/ and so
+    cannot reconcile itself) and `retail_api.reconcile_pending_cheques_all_companies` drains it
+    after each pulled batch. Created BEFORE the genuine-upgrade guard so any database this
+    function is ever run against has it.
 
-    SKIPPED for a cheque that ALREADY has a journal (`source_uid` = the cheque id): a computer
-    that upgraded earlier and posted that cheque's journals has sent them here, and booking an
-    opening on top would count it twice. Known rolling-upgrade gap, written down rather than
-    hidden: if the peer's journals have not ARRIVED when this computer upgrades, the later arrival
-    doubles that one cheque. A shop upgrades its computers together; the AR/AP tie check shows it
-    if not.
+    On a genuine upgrade it ALSO queues EVERY existing cheque there. This step itself reconciles
+    JOURNALS only (it cannot import api/), so a v50 database damaged by the old race (a crossing
+    the merged fold admits but whose payments row `money_uid(cheque, k)` was never written) is
+    healed by the first post-pull sweep, which runs the full reconcile including payments. That
+    sweep runs after a sync pull (install_void_reversal_sweep); there is no boot-time drain, so
+    a database that never pulls keeps the queue until its first pull.
 
-    WHY ONLY ON A GENUINE UPGRADE: a replay on a later bump (`entry_user_version >= 51`) must not
-    book a cheque that came alive after the upgrade -- those post their own journals.
+    WHY ONLY ON A GENUINE UPGRADE: a replay on a later bump (`entry_user_version >= 51`) has the
+    sweep and the live path to keep the books right; this step is the one-time catch-up.
 
     Shape-gated: every table it reads or writes must exist (a hand-built minimal fixture may not
     have the cheque or ledger tables), `sync_outbox` included because `post_journal` queues one
     sync event per journal. Sets `sqlite3.Row` on the connection for its duration (the ledger
     helpers read rows by name) and restores it."""
     entry_user_version = conn.execute('PRAGMA user_version').fetchone()[0]
-    if entry_user_version >= 51:
-        return
     live = {row[0] for row in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'cheques' in live:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS cheque_reconcile_pending (
+                company_id TEXT NOT NULL,
+                cheque_id TEXT NOT NULL,
+                PRIMARY KEY (company_id, cheque_id)
+            )
+        """)
+    if entry_user_version >= 51:
+        return
     if not {'cheques', 'cheque_events', 'gl_accounts', 'gl_journals', 'gl_journal_lines',
             'sync_outbox'} <= live:
         return
-    from core.retail import cheques as _cheque_engine
-    from core.retail import general_ledger as _gl
+    from core.retail import cheque_books as _cheque_books
+
+    # F1 (verifier): this step catches up the JOURNALS only (database/ may not import api/, and
+    # the payments half lives in retail_api.reconcile_cheque). A v50 database already damaged by
+    # the old race -- a crossing the merged fold admits that has no payments row under
+    # money_uid(cheque, k) -- would therefore stay out of AR tie until some later cheque_event
+    # happened to queue that cheque. So EVERY cheque is queued here and the first post-pull sweep
+    # runs the full reconcile (payments included) for each. Safe for every cheque: no cheque
+    # payment was ever written under a non-deterministic uid, so the payments half only adds rows
+    # that are missing, never doubles one. Company-scoped, OR IGNORE (a replay re-queues nothing).
+    conn.execute(
+        "INSERT OR IGNORE INTO cheque_reconcile_pending (company_id, cheque_id) "
+        "SELECT company_id, id FROM cheques")
 
     previous_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
@@ -12305,19 +12334,7 @@ def _migrate_add_cheque_books(conn):
             events = conn.execute(
                 "SELECT id, event_type, from_status, to_status, created_at_utc "
                 "FROM cheque_events WHERE cheque_id=?", (cheque['id'],)).fetchall()
-            status = _cheque_engine.fold(events).status
-            if status not in _cheque_engine.LIVE_STATES:
-                continue
-            if conn.execute("SELECT 1 FROM gl_journals WHERE company_id=? AND source_uid=? LIMIT 1",
-                            (cheque['company_id'], cheque['id'])).fetchone():
-                continue
-            banked = status in ('cleared', 'endorsed')
-            _gl.post_cheque_journal(
-                conn, cheque['company_id'], cheque['branch_id'], cheque['id'],
-                cheque['cheque_number'], cheque['direction'],
-                'opening_bank' if banked else 'opening', 0, cheque['currency'] or 'JOD',
-                cheque['amount'],
-                'cheque cleared before v51' if banked else 'cheque in flight before v51')
+            _cheque_books.reconcile_cheque_journals(conn, cheque['company_id'], dict(cheque), events)
     finally:
         conn.row_factory = previous_factory
 

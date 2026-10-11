@@ -142,6 +142,7 @@ from core.retail import money_format as _money_format
 # pure module with no database access, imported here and nowhere else --
 # commercial_runtime/sync/sync_service.py deliberately does NOT import it.
 from core.retail import cheques as cheque_engine
+from core.retail import cheque_books
 # Aseel-parity wave A-PAR (schema v34): per-document-type numbering series.
 # `resolve_series`/`allocate` are called from the four mint sites below;
 # `REF_PREFIX` is aliased to `_REF_PREFIX` just below its own dict used to
@@ -15505,7 +15506,7 @@ def _sale_tender_lines(conn, cid, sale_id):
 
 def _record_payment(conn, cid, party_type, party_id, direction, amount, method='cash',
                     related_type=None, related_id=None, notes='', device=None, doc_type='receipt',
-                    currency=None, pay_uid=None, paid_from=None):
+                    currency=None, pay_uid=None, paid_from=None, created_by=None):
     """Append one immutable money-movement row to the ledger. Returns its reference.
 
     `currency` is OPTIONAL and defaults to None, the same contract `_money`
@@ -15582,7 +15583,11 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
     # funnel through this single INSERT, so stamping it once covers the whole
     # ledger and no route can write an unnamed payment by going around it.
     pay_uid = pay_uid or _new_uid()
-    created_by = _uid()
+    # `created_by` is OPTIONAL: every request-path caller omits it and gets the signed-in user
+    # exactly as before. The one caller that passes it is the cheque reconciler (MONEY-3 M4),
+    # which runs from the post-pull sweep -- a sync thread with NO request, hence no session for
+    # `_uid()` to read -- and stamps the actor who recorded the cheque event the row books.
+    created_by = created_by if created_by is not None else _uid()
     created_at = _now()
     sale_id_fk = related_id if related_type == 'sale' else None
     # DAY-1c: a customer's CASH paid on account physically lands in the drawer
@@ -20461,53 +20466,130 @@ def _cheque_events(conn, cheque_id):
     ).fetchall()
 
 
-def _post_cheque_books(conn, cid, cheque, fold_before, event_type, is_crossing, side_to):
-    """MONEY-3 M3 (retail v51): the BOOKS half of a cheque transition.
+def _cheque_money_leg(conn, cid, cheque, k, side_to, device=None, created_by=None):
+    """THE MONEY LEG of crossing `k` of `cheque`: ONE `payments` row, keyed on the deterministic
+    `money_uid(cheque, k)`, plus the party's refreshed balance. `side_to` is the side the
+    crossing lands on (True = into live money). Shared by the write path (a transition on this
+    computer) and the reconciler (a crossing the merged history admits that no computer wrote the
+    row for), so the two can never disagree about what a crossing's row looks like.
 
-    Until v51 a cheque's money leg moved the party's balance (a `payments` row) and posted NO
-    general-ledger journal, so GL Accounts Receivable / Payable disagreed with the customer /
-    supplier balances by every cheque in flight, and the trial balance's subledger tie said so.
-    Now each transition posts its own journal, in the SAME transaction as the event:
+    `cheque['direction']` picks the PARTY this cheque's money touches ('in' = a customer's
+    cheque, 'out' = a supplier's); `side_to` picks which way it moves. Both directions and both
+    sides reduce to two lines because the underlying rule is symmetric: crossing INTO live money
+    always means "this party now owes the shop `amount` less" (customer) or "the shop now owes
+    this party `amount` less" (supplier) -- the payment row is 'in' on an apply for a customer
+    cheque and 'out' for a supplier one, and the opposite on a reversal.
 
-      customer cheque (direction 'in')            supplier cheque (direction 'out')
-      received / reinstated  Dr Cheques Under Collection  Cr AR     Dr AP  Cr Cheques Payable
-      cleared / endorsed     Dr Cash and Bank  Cr Cheques Under Coll. Dr Cheques Payable  Cr Bank
-      bounced / cancelled    Dr AR  Cr Cheques Under Coll.          Dr Cheques Payable  Cr AP
-      ... after clearing     Dr AR  Cr Cash and Bank                Dr Bank  Cr AP
-
-    "ENDORSED" books like "cleared": the cheque leaves the shop's hands at face value (its
-    own docstring in `endorse_cheque`: the payable it discharges is settled afterwards through
-    the ordinary supplier-payment route, which credits cash -- so the bank leg here is what that
-    later cash credit nets against). A deposit moves no money in the books (still under
-    collection); a write-off follows a bounce that already put the debt back.
-
-    WHICH FACT, NOT WHICH EVENT. The journal's uid is keyed on the CROSSING index (the same number
-    the payment row's `money_uid` is keyed on) or, for the bank leg, on the live stint's apply
-    index -- never on the event id, which differs per computer. Two computers that observe the
-    same bank fact therefore post the SAME journal and the sync apply collapses them
-    (`general_ledger.post_cheque_journal` is idempotent), exactly like the payment row.
-
-    Returns the journal id, or None when the transition books nothing (deposit, write-off)."""
-    direction = cheque['direction']
-    number = cheque['cheque_number']
-    k = len(fold_before.crossings)
-    if is_crossing and side_to:
-        kind, index = 'apply', k
-        memo = f"Cheque {number} {'received' if direction == 'in' else 'issued'}"
-    elif is_crossing:
-        banked = fold_before.status in ('cleared', 'endorsed')
-        kind, index = ('reverse_bank' if banked else 'reverse'), k
-        memo = f"Cheque {number} {event_type}"
-    elif event_type in ('cleared', 'endorsed'):
-        # A non-crossing event inside a live stint: the bank leg, once per stint. `k - 1` is
-        # the apply crossing that opened the stint (a live fold always has at least one).
-        kind, index = 'bank', k - 1
-        memo = f"Cheque {number} {event_type}"
+    Raises sqlite3.IntegrityError when the uid is already taken (the write path maps that to 409)
+    and RuntimeError when `_record_payment` silently skips (amount<=0 -- unreachable in practice,
+    since `amount` is validated >0 at create_cheque and immutable thereafter, but a sentinel that
+    "cannot happen" must still be checked rather than trusted: ENGINEERING.md failure shape 4)."""
+    party_type = 'customer' if cheque['direction'] == 'in' else 'supplier'
+    party_id = cheque['party_id']
+    pay_direction = 'in' if side_to == (cheque['direction'] == 'in') else 'out'
+    if side_to:
+        doc_type = 'receipt' if cheque['direction'] == 'in' else 'supplier_payment'
     else:
-        return None
-    return gl.post_cheque_journal(
-        conn, cid, cheque['branch_id'], cheque['id'], number, direction, kind, index,
-        cheque['currency'], cheque['amount'], memo)
+        # A bounce/cancel reversal, EITHER direction -- one label,
+        # deliberately: see _REF_PREFIX's own comment on 'cheque_reversal'.
+        doc_type = 'cheque_reversal'
+    ref = _record_payment(conn, cid, party_type, party_id, pay_direction, cheque['amount'],
+                          method='check', related_type='cheque', related_id=None,
+                          notes=f"Cheque {cheque['cheque_number']}", device=device,
+                          doc_type=doc_type, currency=cheque['currency'],
+                          pay_uid=cheque_engine.money_uid(cheque['id'], k), created_by=created_by)
+    if ref is None:
+        raise RuntimeError(f"cheque {cheque['id']}: money leg silently skipped for amount<=0")
+    table = 'customers' if party_type == 'customer' else 'suppliers'
+    # v44: the money-leg payment row is written above (a bounce/cancel
+    # reversal is the opposite-direction row), so the party's figure is
+    # re-derived instead of moved by -/+amount.
+    if party_id:
+        _refresh_party_balance(conn, table, party_id, cid, cheque['currency'])
+    return ref
+
+
+def reconcile_cheque(conn, cid, cheque, *, payments=True):
+    """MONEY-3 M4: make the books and the party balance say what the cheque's FULL, MERGED event
+    set says. Idempotent, never commits (the caller owns the transaction).
+
+    A cheque's state is a pure fold over an append-only SET of events, and the set is the only
+    thing two computers are guaranteed to share. Until M4 each computer also wrote its journals
+    (and its money leg) from its own LOCAL view of that set at the moment it wrote an event --
+    which two computers acting offline make disagree. This function is the other half of the
+    convergence argument in core/retail/cheques.py: wherever the event set changes, re-derive
+    what the books should hold and close the gap.
+
+      JOURNALS (`core/retail/cheque_books.py`): post the wanted ones that are missing, reverse
+      the unwanted ones that are still live, un-reverse the wanted ones that were reversed.
+      PAYMENTS (`payments=True`): write the `payments` row (and refresh the party's balance) for
+      every crossing the fold admits that has no row under its `money_uid`. This is the D2 fix:
+      when A's bounce sorts before B's clear, the merged fold admits B's clear as an APPLY
+      crossing at index 2 that B (whose local fold saw no crossing) never wrote a row for. It only
+      ever ADDS a row: a row that exists is, by the convergence proof in core/retail/cheques.py,
+      always the row the converged fold wants -- nothing is deleted or voided. (History check
+      done before writing this half: the deterministic `money_uid` has been how the money leg was
+      keyed since the cheque feature's first commit, 8bf492f5; the uuid4-per-write revision the
+      module docstring describes was a design iteration that never reached a commit, so no
+      database holds a cheque payment under a random uid that this would double.)
+
+    `payments=False` is for the v51 upgrade, which only catches the books up: the payments rows
+    of every pre-existing cheque were written by the code that moved the balances in the first
+    place."""
+    events = _cheque_events(conn, cheque['id'])
+    if payments:
+        actors = {e['id']: e['created_by'] for e in events}
+        for crossing in cheque_engine.fold(events).crossings:
+            uid = cheque_engine.money_uid(cheque['id'], crossing.index)
+            if conn.execute("SELECT 1 FROM payments WHERE company_id=? AND uid=?",
+                            (cid, uid)).fetchone() is None:
+                # Not `_uid()`: this also runs from the post-pull sweep, which has no request.
+                # The row is stamped with whoever recorded the crossing event it books.
+                _cheque_money_leg(conn, cid, cheque, crossing.index, crossing.kind == 'apply',
+                                  created_by=actors.get(crossing.event_id) or 'system')
+    cheque_books.reconcile_cheque_journals(conn, cid, cheque, events)
+
+
+def reconcile_pending_cheques_all_companies(conn):
+    """Drain `cheque_reconcile_pending`: reconcile every cheque a sync apply queued.
+
+    sync_service.py cannot import products/, so its `cheque_event` apply branch only records
+    WHICH cheque's event set changed; this sweep does the reconciling. It runs after a pulled
+    batch is fully applied (never mid-batch: a cheque's events can arrive across several rows of
+    one batch, and reconciling in the middle would book a half-seen history just to reverse it a
+    row later) -- wired into `install_void_reversal_sweep`, the post-pull hook every retail sync
+    service already installs.
+
+    COMPANY-SCOPED: a pending row is (company, cheque) and the cheque is loaded `WHERE id=? AND
+    company_id=?`, so a row naming a company that does not own the cheque is dropped without
+    posting anything -- never one company's cheque into another's books.
+
+    Each cheque has its own savepoint: one that fails (logged) keeps its pending row for the next
+    tick and does not stop the rest. Returns the number of cheques reconciled."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='cheque_reconcile_pending'").fetchone() is None:
+        return 0
+    done = 0
+    for row in conn.execute("SELECT company_id, cheque_id FROM cheque_reconcile_pending "
+                            "ORDER BY rowid").fetchall():
+        cid, cheque_id = row['company_id'], row['cheque_id']
+        cheque = conn.execute("SELECT * FROM cheques WHERE id=? AND company_id=?", (cheque_id, cid)).fetchone()
+        try:
+            conn.execute("SAVEPOINT cheque_reconcile")
+            try:
+                if cheque is not None:
+                    reconcile_cheque(conn, cid, cheque)
+                    done += 1
+                conn.execute("DELETE FROM cheque_reconcile_pending WHERE company_id=? AND cheque_id=?",
+                             (cid, cheque_id))
+                conn.execute("RELEASE SAVEPOINT cheque_reconcile")
+            except Exception:
+                conn.execute("ROLLBACK TO SAVEPOINT cheque_reconcile")
+                conn.execute("RELEASE SAVEPOINT cheque_reconcile")
+                raise
+        except Exception:  # noqa: BLE001 -- the row stays queued; the next tick retries
+            log.exception('cheque reconcile failed for %s', cheque_id)
+    return done
 
 
 def _apply_cheque_event(conn, cid, cheque, event_type, *, occurred_on=None, bank_reference=None,
@@ -20547,38 +20629,15 @@ def _apply_cheque_event(conn, cid, cheque, event_type, *, occurred_on=None, bank
     is_crossing = side_to != side_now
 
     if is_crossing:
-        # THE MONEY LEG. `cheque['direction']` picks the PARTY this cheque's
-        # money touches ('in' = a customer's cheque, 'out' = a supplier's);
-        # `side_to` (this transition's destination side) picks which way it
-        # moves. Both directions and both sides reduce to two lines because
-        # the underlying rule is symmetric: crossing INTO live money always
-        # means "this party now owes the shop `amount` less" (customer) or
-        # "the shop now owes this party `amount` less" (supplier) -- i.e.
-        # `_adjust_credit`'s delta is always `-amount` on an APPLY and
-        # `+amount` on a REVERSE, on EITHER party table.
-        party_type = 'customer' if cheque['direction'] == 'in' else 'supplier'
-        party_id = cheque['party_id']
-        pay_direction = 'in' if side_to == (cheque['direction'] == 'in') else 'out'
-        if side_to:
-            doc_type = 'receipt' if cheque['direction'] == 'in' else 'supplier_payment'
-        else:
-            # A bounce/cancel reversal, EITHER direction -- one label,
-            # deliberately: see _REF_PREFIX's own comment on 'cheque_reversal'.
-            doc_type = 'cheque_reversal'
-        # k = the crossing index this transition WOULD get, computed from
-        # the events that exist before this write. A freshly written
-        # event's own `from_status` always equals `fold_before.status` (this
-        # function reads both from the SAME fold), so it is always
-        # EFFECTIVE, and core/retail/cheques.py's own docstring proves this
-        # index never moves later even if another device's event is later
-        # found to sort before it -- see "THE CONVERGENCE PROOF" there.
+        # THE MONEY LEG -- see `_cheque_money_leg` for the table. k = the crossing index this
+        # transition WOULD get, computed from the events that exist before this write. A freshly
+        # written event's own `from_status` always equals `fold_before.status` (this function
+        # reads both from the SAME fold), so it is always EFFECTIVE, and core/retail/cheques.py's
+        # own docstring proves this index never moves later even if another device's event is
+        # later found to sort before it -- see "THE CONVERGENCE PROOF" there.
         k = len(fold_before.crossings)
-        uid = cheque_engine.money_uid(cheque['id'], k)
         try:
-            ref = _record_payment(conn, cid, party_type, party_id, pay_direction, cheque['amount'],
-                                  method='check', related_type='cheque', related_id=None,
-                                  notes=f"Cheque {cheque['cheque_number']}", device=device,
-                                  doc_type=doc_type, currency=cheque['currency'], pay_uid=uid)
+            _cheque_money_leg(conn, cid, cheque, k, side_to, device=device)
         except sqlite3.IntegrityError:
             # The deterministic uid doubles as the SAME-DEVICE idempotency
             # guard against two concurrent POSTs that both read the same
@@ -20586,26 +20645,6 @@ def _apply_cheque_event(conn, cid, cheque, event_type, *, occurred_on=None, bank
             # function's own docstring.
             return 409, {'status': 'error', 'message': 'This cheque transition was already recorded.',
                          'code': 'CHEQUE_ALREADY_TRANSITIONED'}
-        if ref is None:
-            # M4 (ENGINEERING.md failure shape 4): `_record_payment` silently
-            # returns None for amt<=0 (retail_api.py) -- unreachable in
-            # practice, since `amount` is validated >0 at create_cheque and
-            # is immutable thereafter, but a sentinel that "cannot happen"
-            # must still be checked rather than trusted: a swallowed None
-            # here would let this function report a status change that
-            # moved no money at all.
-            raise RuntimeError(f"cheque {cheque['id']}: money leg silently skipped for amount<=0")
-        table = 'customers' if party_type == 'customer' else 'suppliers'
-        # v44: the money-leg payment row is written above (a bounce/cancel
-        # reversal is the opposite-direction row), so the party's figure is
-        # re-derived instead of moved by -/+amount.
-        if party_id:
-            _refresh_party_balance(conn, table, party_id, cid, cheque['currency'])
-
-    # M3: the books half. After the money leg so a failure of either rolls the whole event back
-    # (the caller's rollback), and for EVERY transition that moves money in the books -- the
-    # crossings above plus the non-crossing bank leg (cleared / endorsed).
-    _post_cheque_books(conn, cid, cheque, fold_before, event_type, is_crossing, side_to)
 
     ev_id = _new_uid()
     now_utc = now_utc_iso()
@@ -20623,6 +20662,14 @@ def _apply_cheque_event(conn, cid, cheque, event_type, *, occurred_on=None, bank
         'bank_reference': bank_reference, 'reason': reason, 'to_party_type': to_party_type,
         'to_party_id': to_party_id, 'created_by': created_by, 'created_at_utc': now_utc,
     })
+    # M3/M4: the books half. AFTER the event is inserted AND queued, never before: a peer that
+    # received a journal ahead of the event that justifies it would reverse the journal (its merged
+    # history does not want it yet) and un-reverse it a pull later -- churn we can simply not
+    # cause. The outbox is a queue, so insertion order is delivery order. Same transaction as the
+    # event and the money leg, so a failure of any of them rolls all of it back (the caller's
+    # rollback). The reconciler derives the journals from the folded history INCLUDING this event,
+    # which for a single computer posts exactly the journal this transition always posted.
+    reconcile_cheque(conn, cid, cheque)
     _audit(conn, 'CHEQUE_' + event_type.upper(), 'cheque', cheque['id'],
           f"{event_type} amount={cheque['amount']}")
     return 200, {'status': 'success', 'data': {'id': cheque['id'], 'status': to_status, 'event_id': ev_id}}
@@ -22177,6 +22224,14 @@ def install_void_reversal_sweep(sync_service):
                 raise
         except Exception:  # noqa: BLE001 -- see docstring
             log.exception('void-reversal sweep failed after pull')
+        # MONEY-3 M4: the cheque books follow the merged event set. Its own failure isolation
+        # (a savepoint per cheque inside the sweep) and its own place after the void sweep, so a
+        # failure in one never costs the other; the same post-pull hook, because every retail
+        # sync service already installs it (app.py x2 and the test harnesses).
+        try:
+            reconcile_pending_cheques_all_companies(conn)
+        except Exception:  # noqa: BLE001 -- per-cheque failures are already isolated and logged
+            log.exception('cheque reconcile sweep failed after pull')
         return out
 
     sync_service.apply_pull_result = apply_pull_result_then_sweep

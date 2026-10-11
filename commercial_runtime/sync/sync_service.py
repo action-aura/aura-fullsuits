@@ -1003,10 +1003,25 @@ def _apply_return_refund_legs(conn, p, company_id, branch_id, tender_refund_amou
     if row is None:
         return
     legs = p.get("legs")
+    legacy_uid = str(uuid.uuid5(_RETURN_REFUND_LEG_NAMESPACE, f"{ret_uid}:legacy"))
     if not isinstance(legs, (list, tuple)):
-        legs = [{"uid": str(uuid.uuid5(_RETURN_REFUND_LEG_NAMESPACE, f"{ret_uid}:legacy")),
+        # R1: a legless event describes the return the way an older till saw it -- ONE leg for the
+        # whole tender. If this return already has ANY leg (real ones from a till that sends them,
+        # or the legacy one from an earlier copy of this same event) that description adds
+        # nothing, and writing it anyway put a bogus second leg beside real ones: the receiving
+        # computer's drawer then lost cash that never left it. So a legless event only ever
+        # supplies the leg of a return that has none.
+        if conn.execute("SELECT 1 FROM return_refund_legs WHERE return_id=? LIMIT 1", (row[0],)).fetchone():
+            return
+        legs = [{"uid": legacy_uid,
                  "method": p.get("refund_method") or "cash",
                  "amount": tender_refund_amount or 0}]
+    elif any(isinstance(leg, dict) and leg.get("uid") and leg.get("method") for leg in legs):
+        # R1, the other order: the legless copy arrived first and wrote the legacy leg; the real
+        # per-method legs that now arrive account for the same money, so the legacy stand-in must
+        # go or the tender is counted twice. Named by its deterministic uid so a real leg (whose
+        # uid is per method) can never be the one removed.
+        conn.execute("DELETE FROM return_refund_legs WHERE return_id=? AND uid=?", (row[0], legacy_uid))
     for leg in legs:
         if not isinstance(leg, dict) or not leg.get("uid") or not leg.get("method"):
             continue
@@ -4626,6 +4641,20 @@ class SyncService:
                  p.get("to_party_type"), p.get("to_party_id"), p.get("created_by", "System"),
                  p.get("created_at_utc")),
             )
+            # MONEY-3 M4: this cheque's event SET just changed, so the books must be re-derived
+            # from the merged set. This module contains no cheque business logic and cannot import
+            # products/, so it only records WHICH cheque (company-scoped, idempotent) and the
+            # product's post-pull sweep (retail_api.reconcile_pending_cheques_all_companies)
+            # reconciles it AFTER the whole batch is applied -- never mid-batch, where a cheque's
+            # events may still be arriving. Queued even when the INSERT above was a duplicate: the
+            # sweep is idempotent and a replayed event is the cheapest moment to heal a missed
+            # one. A database without the table (a hand-built fixture, or one not yet migrated)
+            # is skipped, never failed.
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                            "AND name='cheque_reconcile_pending'").fetchone() is not None:
+                conn.execute(
+                    "INSERT OR IGNORE INTO cheque_reconcile_pending (company_id, cheque_id) VALUES (?,?)",
+                    (local_company_id, p.get("cheque_id")))
         elif entity_type == "quotation":
             # Aseel-parity wave A-PAR (schema v33). Shaped on `reorder_
             # request` immediately above for its reject-stale gate (a

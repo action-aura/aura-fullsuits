@@ -7540,3 +7540,33 @@ M1 (split refunds, crew B) still to append its step after crew A's two in `_migr
   legacy 'split' leg for such a return, so a LATER edited-legs return on the same sale there can mis-cap (the 'split'
   leg is not a real method, so cash/card remainders look untouched). (7) general_ledger.py ~1914 compares against a bare
   `Decimal('0.0005')` only to choose per-leg journal lines vs one line; totals are unaffected -- left as is, recorded.
+
+### 2026-10-11 -- retail v51, M4: cheque books follow the MERGED history -- NOT COMMITTED (no version bump; v51 unshipped)
+
+Closes crew A's three written-down gaps and one defect found while planning (plan: ~/.claude/aura-plans/CHEQUE-RECONCILE-PLAN.md).
+* D1: two computers acting on one cheque offline with conflicting transitions (A bounces, B clears) left 1150 = -N /
+  bank = +N on BOTH books, because each posted journals from its own local fold. D2 (older than M3, since A-PAR v32):
+  when A's bounce sorts first the merged fold admits B's `cleared` as an APPLY crossing at index 2 that no computer
+  wrote a `payments` row for -- status "cleared" (money in), customer balance "still owes". cheques.py's old claim
+  "no reconciler ever required" was false for this case (it proves existing rows stay right, not that every crossing
+  has one); the docstring is corrected.
+* Design: `cheques.desired_postings(events)` (pure) says which journals the full event set wants (apply / reverse /
+  reverse_bank / bank, same uids as before, so single-computer behaviour is byte-identical);
+  `core/retail/cheque_books.reconcile_cheque_journals` posts the missing ones, reverses the surplus, un-reverses
+  re-wanted ones (a reversal chain of odd length = net-reversed; deterministic reversal uids make two computers
+  converge); `retail_api.reconcile_cheque` adds the missing `payments` row for every admitted crossing (add-only,
+  never deletes). Journals are dated by the driving event, not by when a computer got round to booking.
+* Wiring: the writer reconciles inside its own transaction AFTER the event is inserted and queued (a peer must never
+  receive a journal before the event that justifies it). The sync `cheque_event` apply branch inserts
+  `cheque_reconcile_pending(company_id, cheque_id)` (new table, created by the v51 migration step) and
+  `reconcile_pending_cheques_all_companies` drains it after each pulled batch, riding `install_void_reversal_sweep`.
+* The v51 upgrade now REPLAYS each cheque's history through the reconciler instead of posting one dated-today
+  "opening" journal per alive cheque (the 'opening'/'opening_bank' kinds are deleted; unshipped). That removes the
+  rolling-upgrade double-booking (every computer derives the same uids) and the cash-flow-date defect (a cheque cleared
+  10 days before the upgrade is booked on that day).
+* Also: sync `_apply_return_refund_legs` no longer adds the legacy leg to a return that already has legs, and real legs
+  arriving after a legacy leg supersede (delete) it; leg replay and the local company_id pinned by tests.
+* RESIDUALS: a computer still on pre-M4 v51 code (dev builds only) keeps posting per-transition journals; they are the
+  same uids so they collapse, but a conflicting offline pair on THAT computer is not reconciled until it upgrades. A
+  cheque reconcile that fails on the sweep stays queued and is retried each pull (logged). Two computers in different
+  time zones date the same journal by whoever posts it first (the uid collapses the other; the date can differ by a day).

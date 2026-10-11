@@ -2022,24 +2022,18 @@ _GL_CHEQUE_NAMESPACE = uuid.UUID('3e8a52c7-91d4-5b60-a7f3-0c4d9e1b6285')
 #:   bank          it clears (or is endorsed away): holding account -> bank
 #:   reverse_bank  it bounces AFTER the bank leg (cleared/endorsed -> bounced): the bank takes it
 #:                 back and the party owes again -- the plan's "reverse the bank leg instead"
-#:   opening       the v51 upgrade booking of a cheque that was alive before cheques posted
-#:   opening_bank  the same, for one that had already cleared / been endorsed
 _CHEQUE_LEGS = {
     'in': {
         'apply':        ('holding', 'party'),
         'reverse':      ('party', 'holding'),
         'bank':         ('bank', 'holding'),
         'reverse_bank': ('party', 'bank'),
-        'opening':      ('holding', 'party'),
-        'opening_bank': ('bank', 'party'),
     },
     'out': {
         'apply':        ('party', 'holding'),
         'reverse':      ('holding', 'party'),
         'bank':         ('holding', 'bank'),
         'reverse_bank': ('bank', 'party'),
-        'opening':      ('party', 'holding'),
-        'opening_bank': ('party', 'bank'),
     },
 }
 
@@ -2050,8 +2044,7 @@ def cheque_journal_uid(cheque_id, kind, index):
     `index` is the CROSSING index (core/retail/cheques.py) for 'apply'/'reverse'/'reverse_bank'
     -- the same number `cheques.money_uid` keys the payment row on, so the journal and the money
     leg it books are the same fact -- and the live STINT's apply-crossing index for 'bank' (a
-    cheque can clear at most once per stint between an apply and the next reverse). 'opening'
-    kinds use index 0: one opening journal per cheque, ever."""
+    cheque can clear at most once per stint between an apply and the next reverse)."""
     return str(uuid.uuid5(_GL_CHEQUE_NAMESPACE, f"{cheque_id}:{kind}:{index}"))
 
 

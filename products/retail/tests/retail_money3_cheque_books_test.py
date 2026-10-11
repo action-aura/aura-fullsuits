@@ -16,9 +16,13 @@ What each test proves, and what it cannot:
     asserts both tie flags AND the three accounts' exact balances -- a flag alone would pass on a
     wrong-but-balanced split between the accounts.
   * the upgrade test removes the cheque journals from a populated DB, stamps it v50 and migrates
-    through the REAL `ensure_schema_version` chain: one opening journal per ALIVE cheque, none for
-    a dead one, ties restored, replay is a no-op. The fixture is built by the real routes, never a
-    hand-written row.
+    through the REAL `ensure_schema_version` chain: the upgrade re-derives each cheque's history
+    (M4: it no longer posts one dated-today "opening" journal per alive cheque), so every cheque --
+    dead ones too -- ends with exactly the journals, by uid, that the live path posted for the same
+    events; ties restored, replay is a no-op. The fixture is built by the real routes, never a
+    hand-written row. (M4 changed this test: it can no longer catch "a dead cheque got NO journal"
+    -- a bounced cheque now carries its apply and its reversal, which net to zero; the
+    retail_money3_cheque_reconcile_test.py upgrade tests cover dates and rolling upgrades.)
 
 MUTATIONS (retail_api.py / general_ledger.py / schema.py; each performed, red quoted in the report):
   M3-a  `_post_cheque_books`: skip the `apply` leg           -> test_every_transition_posts_the_exact_journal_once
@@ -28,7 +32,8 @@ MUTATIONS (retail_api.py / general_ledger.py / schema.py; each performed, red qu
                                                               -> test_a_repost_of_the_same_fact_is_one_journal
   M3-e  `_post_cheque_books`: the bank leg is not posted for 'cleared'
                                                               -> test_the_books_tie_with_a_cheque_in_every_state
-  M3-f  migration: book dead cheques too                      -> test_upgrade_books_each_alive_cheque_once
+  M3-f  migration: book only the apply leg (skip every later event)
+                                                              -> test_upgrade_books_each_alive_cheque_once
   M3-g  migration: drop the entry-version guard / skip-if-journalled guard
                                                               -> test_upgrade_books_each_alive_cheque_once
 
@@ -355,10 +360,24 @@ def _migrate(db):
         shutil.rmtree(backup_dir, ignore_errors=True)
 
 
+def _uids_by_cheque(c):
+    conn = get_retail_conn()
+    try:
+        out = {}
+        for r in conn.execute("SELECT source_uid, uid FROM gl_journals WHERE company_id=? AND source_type='cheque'",
+                              (c.company_id,)).fetchall():
+            out.setdefault(r['source_uid'], []).append(r['uid'])
+        return out
+    finally:
+        conn.close()
+
+
 def test_upgrade_books_each_alive_cheque_once(shop):
     c = shop
     ids = _every_state(c)
     bal_before, tb_before = _tb(c)
+    live_uids = {k: sorted(v) for k, v in _uids_by_cheque(c).items()}
+    assert len(live_uids) == 11, live_uids
     db = _to_v50_without_cheque_journals(c)
 
     # Precondition, the gap v51 closes: with the journals gone the books are above the subledger.
@@ -370,30 +389,23 @@ def test_upgrade_books_each_alive_cheque_once(shop):
     sub = tb['subledger']
     assert sub['ar_ties'] is True and sub['ap_ties'] is True, sub
     assert tb['is_balanced'] is True
-    # Same TOTALS as the live-journal run (the opening journals stand in for the history) ...
+    # Same TOTALS as the live-journal run ...
     for code in ('1100', '1150', '2000', '2050', '1000'):
         assert bal[code] == bal_before[code], (code, bal[code], bal_before[code])
-    # ... booked as exactly one opening journal per ALIVE cheque (6: customer pending, deposited,
-    # cleared, endorsed; supplier pending, cleared -- 3 still in flight, 3 already banked) and
-    # nothing for the 5 dead ones.
-    conn = get_retail_conn()
-    try:
-        rows = conn.execute(
-            "SELECT j.memo, j.source_uid, COUNT(*) AS n FROM gl_journals j "
-            "WHERE j.company_id=? AND j.source_type='cheque' GROUP BY j.source_uid, j.memo",
-            (c.company_id,)).fetchall()
-    finally:
-        conn.close()
-    assert len(rows) == 6 and all(r['n'] == 1 for r in rows), [dict(r) for r in rows]
-    memos = sorted(r['memo'] for r in rows)
-    assert memos == sorted(['cheque in flight before v51'] * 3 + ['cheque cleared before v51'] * 3), memos
-    # the pending customer cheque's opening journal is exactly the apply leg
+    # ... and, uid for uid, the SAME journals the live path posted for the same events: the upgrade
+    # replays each cheque's history rather than posting a lump, so a peer that upgraded earlier
+    # (or a live transition) and this computer mint the identical journals and they collapse.
+    assert {k: sorted(v) for k, v in _uids_by_cheque(c).items()} == live_uids
     pend = _journals(ids['pending'])
-    assert len(pend) == 1 and pend[0][0] == gl.cheque_journal_uid(ids['pending'], 'opening', 0)
+    assert len(pend) == 1 and pend[0][0] == gl.cheque_journal_uid(ids['pending'], 'apply', 0)
     assert _lines(pend[0]) == dr_cr('1150', '1100', 50)
     clr = _journals(ids['cleared'])
-    assert _lines(clr[0]) == dr_cr('1000', '1100', 30), 'an already-banked cheque books the bank leg directly'
-    assert _journals(ids['bounced']) == [], 'a dead cheque gets nothing'
+    assert [j[0] for j in clr] == [gl.cheque_journal_uid(ids['cleared'], 'apply', 0),
+                                   gl.cheque_journal_uid(ids['cleared'], 'bank', 0)]
+    assert _lines(clr[1]) == dr_cr('1000', '1150', 30), 'an already-banked cheque books its bank leg'
+    bnc = _journals(ids['bounced'])
+    assert [j[0] for j in bnc] == [gl.cheque_journal_uid(ids['bounced'], 'apply', 0),
+                                   gl.cheque_journal_uid(ids['bounced'], 'reverse', 1)]
 
     # Replaying the chain (a failed launch re-enters it) books nothing more.
     conn = get_retail_conn()
@@ -436,8 +448,9 @@ def _count_cheque_journals(company_id):
 
 
 def test_a_cheque_already_journalled_is_not_booked_again(shop):
-    """A computer that upgraded earlier has posted (and synced) this cheque's journals. An opening
-    journal on top would count it twice, so the step skips any cheque that already has one."""
+    """A computer that upgraded earlier has posted (and synced) this cheque's journals. The step
+    derives the SAME uids from the same events, so it finds them present and posts nothing on top
+    (M4: this used to be a skip-if-journalled guard; the uid makes the guard unnecessary)."""
     c = shop
     _credit_sale(c, 100.0)
     ch = _cheque(c, 'in', 40.0)
