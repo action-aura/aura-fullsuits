@@ -196,6 +196,9 @@ def submit_closing(
         _check_transition("SUBMITTED", "REVIEW_REQUIRED")
     closing.status = target_status
     closing.submitted_at = utcnow()
+    # AUDIT-032: record WHO supplied the counted figure. prepared_by is the
+    # original drafter and is never reassigned, so it cannot answer this.
+    closing.submitted_by_staff_user_id = actor_staff_user_id
     closing.version += 1
     db_session.commit()
 
@@ -210,7 +213,13 @@ def submit_closing(
 def decide_closing(closing: CashClosing, *, decision: str, actor_staff_user_id: uuid.UUID, reason: str | None = None) -> CashClosing:
     if decision not in ("APPROVED", "REJECTED"):
         raise ValueError(f"Unknown decision: {decision!r}")
-    if closing.prepared_by_staff_user_id == actor_staff_user_id:
+    # AUDIT-032: maker-checker must exclude BOTH the drafter and the actual
+    # submitter. Any cash_closing.prepare holder may submit a draft someone
+    # else created, so checking prepared_by alone let a second preparer
+    # submit their own figures and then approve them. submitted_by is NULL
+    # for closings submitted before the column existed; a NULL never equals
+    # a real actor id, so those fall back to the prepared_by check alone.
+    if actor_staff_user_id in (closing.prepared_by_staff_user_id, closing.submitted_by_staff_user_id):
         raise ExpenseError("SELF_APPROVAL_FORBIDDEN_CLOSING")
     _check_transition(closing.status, decision)
 

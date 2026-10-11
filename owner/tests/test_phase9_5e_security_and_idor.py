@@ -404,3 +404,70 @@ def test_duplicate_signal_redacts_inaccessible_match_details_via_api(app, client
         for match in signal["matches"]:
             if match["accessible"] is False:
                 assert set(match.keys()) == {"expense_id", "accessible"}, "inaccessible match leaked extra fields"
+
+
+# ------------------------------------------- Cash-closing submitter maker-checker --
+
+def test_submitter_cannot_approve_via_api_but_third_party_can(app, client, seeded):
+    """AUDIT-032 regression, driven through the real HTTP boundary: Bob
+    submits Alice's draft with his own counted-cash figure, then tries to
+    approve his own submission via the JSON API (refused). ALLOW half: Carol,
+    neither preparer nor submitter, approves the same closing (succeeds)."""
+    alice, _ = _seed_active_employee(app, "cc25alice@example.com", ["FINANCE"])
+    bob, _ = _seed_active_employee(app, "cc25bob@example.com", ["FINANCE"])
+    carol, _ = _seed_active_employee(app, "cc25carol@example.com", ["FINANCE"])
+
+    from app.cash_closing.services import get_or_create_draft_closing
+    with app.app_context():
+        closing = get_or_create_draft_closing(date(2026, 8, 19), "USD", prepared_by_staff_user_id=alice, opening_cash_override=Decimal("0"), opening_cash_override_reason="t")
+        closing_id = str(closing.id)
+
+    force_login(client, app, bob)
+    csrf = _csrf(client)
+    resp = client.post(f"/api/operations/v1/cash-closings/{closing_id}/submit", json={"actual_counted_cash": "0.00"}, headers={"X-CSRFToken": csrf})
+    assert resp.status_code == 200
+
+    resp = client.post(f"/api/operations/v1/cash-closings/{closing_id}/decision", json={"decision": "APPROVED"}, headers={"X-CSRFToken": csrf})
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "SELF_APPROVAL_FORBIDDEN_CLOSING"
+
+    force_login(client, app, carol)
+    csrf = _csrf(client)
+    resp = client.post(f"/api/operations/v1/cash-closings/{closing_id}/decision", json={"decision": "APPROVED"}, headers={"X-CSRFToken": csrf})
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "APPROVED"
+
+
+def test_submitter_cannot_approve_via_web_but_third_party_can(app, client, seeded):
+    """Same scenario through the web/UI layer -- this codebase's proven
+    failure mode is 'fixed at one entry point, not the twin' (AUDIT-031),
+    so the fix is verified at both boundaries, deny AND allow."""
+    alice, _ = _seed_active_employee(app, "cc26alice@example.com", ["FINANCE"])
+    bob, _ = _seed_active_employee(app, "cc26bob@example.com", ["FINANCE"])
+    carol, _ = _seed_active_employee(app, "cc26carol@example.com", ["FINANCE"])
+
+    from app.cash_closing.services import get_or_create_draft_closing
+    with app.app_context():
+        closing = get_or_create_draft_closing(date(2026, 8, 20), "USD", prepared_by_staff_user_id=alice, opening_cash_override=Decimal("0"), opening_cash_override_reason="t")
+        closing_id = closing.id
+
+    from app.extensions import db_session
+    from app.models.cash_closing import CashClosing
+
+    force_login(client, app, bob)
+    csrf = _csrf(client)
+    resp = client.post(f"/operations/cash-closings/{closing_id}/submit", data={"csrf_token": csrf, "actual_counted_cash": "0.00"})
+    assert resp.status_code in (302, 303)
+    resp = client.post(f"/operations/cash-closings/{closing_id}/decision", data={"csrf_token": csrf, "decision": "APPROVED"})
+    assert resp.status_code in (302, 303)
+    with app.app_context():
+        refreshed = db_session.get(CashClosing, closing_id)
+        assert refreshed.status == "SUBMITTED", "self-approval block must fire for the web route too"
+
+    force_login(client, app, carol)
+    csrf = _csrf(client)
+    resp = client.post(f"/operations/cash-closings/{closing_id}/decision", data={"csrf_token": csrf, "decision": "APPROVED"})
+    assert resp.status_code in (302, 303)
+    with app.app_context():
+        db_session.expire_all()
+        assert db_session.get(CashClosing, closing_id).status == "APPROVED"
