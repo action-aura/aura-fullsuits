@@ -7581,3 +7581,26 @@ Closes crew A's three written-down gaps and one defect found while planning (pla
   this one is cashed in. This revision runs against the LIVE Neon database on the next deploy.
 * **Retail schema v52** is reserved for the TIDY-RETAIL crew (branch `feat/tidy-retail`) IF the refund-tax
   re-check needs a schema change. If it does not, the claim is released in the cash-in note.
+
+
+## 2026-10-12 -- PORT-AUG CASHED IN
+
+Re-implemented (not cherry-picked: the lineages diverged) on `feat/port-august-fixes`, each with tests in both
+directions and mutation proofs in its commit message. **New Owner Alembic head: `c7a4f2d8e613`** (down_revision
+`b5e1c8a27d94`; one nullable column, additive). The claim above is released; the next Owner revision builds on it.
+This revision runs against the LIVE Neon database on the next deploy.
+
+* PORTED: AUDIT-032 (95082067/ef27c157) submitter cannot approve own closing; AUDIT-031 JSON-API twin
+  (b5759a11) + malformed `business_date` -> `error=INVALID_REQUEST` (f59a906e); TestingConfig artifact dirs
+  anchored to `owner/` (f89948d4); CI job/step timeouts + apt retries (416e6bf9); and, not on the August list,
+  `owner/deploy/oracle-free/bootstrap.sh` now health-checks the public path through Caddy.
+* ALREADY PRESENT: duplicate-subscription race (2ba704fd) is closed on this line by a different fix
+  (`_hold_fulfillment_lock`, a Postgres advisory lock on a dedicated connection, fulfillment.py); no unique
+  constraint was added; the superuser-role split, filename-traversal sanitiser, DPAPI test gate, bandit-safe
+  `bidi_isolate`, staging `.env`, PGDG/pg_dump 17 client, secrets baseline, `/var/` and `.venv-*` ignores.
+* NOT APPLICABLE / SKIPPED: CI sharding (this line's CI was redesigned into separate gate jobs, green
+  2026-09-16); the August `.secrets.baseline` debug artifact (no longer exists); 13d867d4 (CI evidence of
+  master's runs); a88838c8 (rebase of the old migration); 3d362790 branch/release map (a 2026-08-19 snapshot of
+  master, wrong for this line, and it edits CLAUDE.md outside this crew's file set).
+* KNOWN GAPS: the CI timeout ceilings (60/20/30/45 min) are generous guesses, not measured run times; not run on
+  GitHub Actions. `bootstrap.sh` was never run for real.
