@@ -7570,3 +7570,14 @@ Closes crew A's three written-down gaps and one defect found while planning (pla
   same uids so they collapse, but a conflicting offline pair on THAT computer is not reconciled until it upgrades. A
   cheque reconcile that fails on the sweep stays queued and is retried each pull (logged). Two computers in different
   time zones date the same journal by whoever posts it first (the uid collapses the other; the date can differ by a day).
+
+## 2026-10-12 -- CLAIMS before parallel work (TIDY wave)
+
+* **Owner Alembic revision after `b5e1c8a27d94`** is reserved for the PORT-AUG crew (branch
+  `feat/port-august-fixes`): re-landing the August master-lineage fixes that never reached the main line,
+  first of all AUDIT-032 (`cash_closings.submitted_by_staff_user_id`; the submitter may not approve the
+  closing). Measured 2026-10-12: `decide_closing()` on `feat/money-fixes` still compares the approver
+  against `prepared_by` only. down_revision = 'b5e1c8a27d94'. Nobody else adds an Owner revision until
+  this one is cashed in. This revision runs against the LIVE Neon database on the next deploy.
+* **Retail schema v52** is reserved for the TIDY-RETAIL crew (branch `feat/tidy-retail`) IF the refund-tax
+  re-check needs a schema change. If it does not, the claim is released in the cash-in note.
