@@ -574,7 +574,9 @@ def item_customer(page, ids):
         shot(page, "cust_02_new_customer_form_1366_en")
         page.fill("#cp-new-phone", "0795551234")
         assert page.is_visible("#cp-new-credit"), "the owner is not offered 'Allow credit'"
-        page.check("#cp-new-credit")
+        # MONEY-4c: a Credit SELECT (Shop default first) replaced the checkbox; choose Unlimited explicitly
+        assert page.eval_on_selector("#cp-new-credit", "e => e.value") == "inherit", "Shop default is not preselected"
+        page.select_option("#cp-new-credit", "unlimited")
         page.keyboard.press("Enter")                         # Enter saves and chooses
         page.wait_for_function("() => !document.getElementById('ret-cust-pick')", timeout=8000)
         page.wait_for_timeout(300)
@@ -595,7 +597,10 @@ def item_customer(page, ids):
         probe_id = r["data"]["id"]
         _, lst3 = B.api(page, "GET", "/api/sub/retail/customers")
         probe = next(c for c in lst3["data"] if c["id"] == probe_id)
-        print(f"      MEASURED: shop default_credit_mode=unlimited; new customer credit_mode={probe['credit_mode']!r}", flush=True)
+        print(f"      MEASURED: shop default_credit_mode=unlimited; new customer credit_mode={probe['credit_mode']!r} "
+              f"effective={probe.get('effective_credit_mode')!r}", flush=True)
+        # MONEY-4c: this used to be the bug report ('none'); it is now the guard that it stays fixed
+        assert probe['credit_mode'] == 'inherit' and probe['effective_credit_mode'] == 'unlimited', probe
         close_modals(page)
         B.go_pos(page)
         page.evaluate("() => RetailSystem._loadPOSData()")

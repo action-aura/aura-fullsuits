@@ -25,6 +25,15 @@
  *      (`customer.credit_mode || shop default || 'none'`): if the till ever
  *      disagreed with create_sale it would show a Credit tile the server refuses.
  *
+ * MONEY-4c CHANGES TO THIS FILE (and what each can no longer catch): the quick-add "Allow
+ * credit" CHECKBOX became a "Credit" SELECT (inherit | none | unlimited, 'inherit' first and
+ * preselected, "Shop default (<current default>)"), so the old "ticked box -> PATCH unlimited"
+ * assertions now set the select; a new customer left on the default sends ONE request and is
+ * cached as 'inherit'. Check 5 used to pin `customer mode || shop default`; it now pins the
+ * resolver (inherit / null / '' -> shop default, explicit modes stand, an unknown word is
+ * 'none'). What it can no longer catch: nothing the old chain caught -- every old row of
+ * check 5 is still asserted -- but it is now ALSO the guard against the `||` returning.
+ *
  * Run: node products/retail/tests/retail_ui2_customer_test.js
  */
 'use strict';
@@ -113,6 +122,10 @@ async function testNewCustomerFlow() {
   const overlay = openPicker(h);
   assert.ok(/id="cp-new"/.test(overlay.innerHTML) && /New customer/.test(overlay.innerHTML), 'no "+ New customer" in the picker');
   assert.ok(/id="cp-new-credit"/.test(overlay.innerHTML), 'the owner is not offered the credit box');
+  // MONEY-4c: 'Shop default' is the FIRST option and the preselected one
+  const sel = overlay.innerHTML.match(/<select id="cp-new-credit"[\s\S]*?<\/select>/)[0];
+  assert.ok(/<option value="inherit" selected>Shop default/.test(sel), 'Shop default is not the preselected first option: ' + sel);
+  assert.ok(sel.indexOf('value="inherit"') < sel.indexOf('value="none"') && sel.indexOf('value="none"') < sel.indexOf('value="unlimited"'), 'option order');
   fire(h.el('cp-new'), 'click');
   assert.strictEqual(h.el('cp-form').hidden, false, 'the form did not show');
   assert.strictEqual(h.el('cp-pick').hidden, true, 'the list should step aside while the form is up');
@@ -123,7 +136,7 @@ async function testNewCustomerFlow() {
   assert.ok(/Name required/.test(h.el('cp-new-err').textContent), 'no message for the missing name');
 
   // fill + ENTER saves
-  h.el('cp-new-name').value = 'Lina Haddad'; h.el('cp-new-phone').value = '0795551234'; h.el('cp-new-credit').checked = true;
+  h.el('cp-new-name').value = 'Lina Haddad'; h.el('cp-new-phone').value = '0795551234'; h.el('cp-new-credit').value = 'unlimited';
   fire(h.el('cp-form'), 'keydown', { code: 'Enter' });
   await tick(); await tick();
   assert.deepStrictEqual(h.calls[0], ['POST', '/api/sub/retail/customers', { name: 'Lina Haddad', phone: '0795551234' }], 'create body');
@@ -152,11 +165,11 @@ async function testNewCustomerDenyHalves() {
   o.R._onCustomerChange = () => {};
   o.patchReply = () => ({ status: 'error', message: 'denied' });
   openPicker(o); fire(o.el('cp-new'), 'click');
-  o.el('cp-new-name').value = 'Refused Credit'; o.el('cp-new-credit').checked = true;
+  o.el('cp-new-name').value = 'Refused Credit'; o.el('cp-new-credit').value = 'unlimited';
   fire(o.el('cp-new-save'), 'click'); await tick(); await tick();
   assert.strictEqual(o.el('pos-customer').value, 'new-1', 'a refused credit must not undo the customer');
   assert.ok(o.toasts.some((t) => /only a manager can allow credit/.test(t.msg)), 'the person is not told credit was refused: ' + JSON.stringify(o.toasts));
-  assert.strictEqual(o.R._customers.find((x) => x.id === 'new-1').credit_mode, 'none', 'the cache must not claim credit that was refused');
+  assert.strictEqual(o.R._customers.find((x) => x.id === 'new-1').credit_mode, 'inherit', 'the cache must say what the server really holds (the default), not the refused grant');
 
   // a failed create: not chosen, the reason is shown, and a retry works
   const f = till(OWNER_CAPS, []);
@@ -170,6 +183,21 @@ async function testNewCustomerDenyHalves() {
   f.postReply = null;
   fire(f.el('cp-new-save'), 'click'); await tick(); await tick();
   assert.strictEqual(f.el('pos-customer').value, 'new-1', 'retry after a failure did not work');
+  // MONEY-4c allow half: left on "Shop default" the customer is created inherit with ONE request
+  const d = till(OWNER_CAPS, []);
+  d.R._onCustomerChange = () => {};
+  openPicker(d); fire(d.el('cp-new'), 'click');
+  d.el('cp-new-name').value = 'Default Terms';
+  fire(d.el('cp-new-save'), 'click'); await tick(); await tick();
+  assert.deepStrictEqual(d.calls.map((x) => x[0]), ['POST'], 'the default needs no credit PATCH: ' + JSON.stringify(d.calls));
+  assert.strictEqual(d.R._customers.find((x) => x.id === 'new-1').credit_mode, 'inherit');
+  // an explicit "No credit" IS a decision and is sent
+  const n = till(OWNER_CAPS, []);
+  n.R._onCustomerChange = () => {};
+  openPicker(n); fire(n.el('cp-new'), 'click');
+  n.el('cp-new-name').value = 'No Credit'; n.el('cp-new-credit').value = 'none';
+  fire(n.el('cp-new-save'), 'click'); await tick(); await tick();
+  assert.deepStrictEqual(n.calls[1], ['PATCH', '/api/sub/retail/customers/new-1', { credit_mode: 'none' }]);
   console.log('PASS: + New customer deny halves -- cashier gets no credit box/PATCH; refused credit keeps the customer and says so; failed create is not chosen and can retry');
 }
 
@@ -220,7 +248,7 @@ async function testAddDialogCredit() {
   const owner = till(OWNER_CAPS, []);
   owner.R._loadCustomers = async () => {};
   owner.R._showCustomerModal({});
-  assert.ok(/id="cm-credit-mode"[^>]*>/.test(owner.overlays[0].innerHTML) && /<option value="none" selected>/.test(owner.overlays[0].innerHTML), 'new customers start at "No credit"');
+  assert.ok(/id="cm-credit-mode"[^>]*>/.test(owner.overlays[0].innerHTML) && /<option value="inherit" selected>Shop default/.test(owner.overlays[0].innerHTML) && !/<option value="none" selected>/.test(owner.overlays[0].innerHTML), 'new customers start at "Shop default"');
   assert.ok(/id="cm-limit-wrap" hidden/.test(owner.overlays[0].innerHTML), 'no limit box until "Up to a limit"');
   owner.el('cm-name').value = 'New Debtor'; owner.el('cm-credit-mode').value = 'limited'; owner.el('cm-credit-limit').value = '25';
   await owner.R._saveCustomer(null);
@@ -230,9 +258,24 @@ async function testAddDialogCredit() {
   // "No credit" left alone: a single POST
   const plain = till(OWNER_CAPS, []);
   plain.R._loadCustomers = async () => {};
-  plain.R._showCustomerModal({}); plain.el('cm-name').value = 'Cash Only'; plain.el('cm-credit-mode').value = 'none';
+  plain.R._showCustomerModal({}); plain.el('cm-name').value = 'Cash Only'; plain.el('cm-credit-mode').value = 'inherit';
   await plain.R._saveCustomer(null);
-  assert.deepStrictEqual(plain.calls.map((c) => c[0]), ['POST'], 'no credit chosen -> no second request');
+  assert.deepStrictEqual(plain.calls.map((c) => c[0]), ['POST'], 'shop default left alone -> no second request');
+  // an explicit "No credit" on a NEW customer is a decision: it rides a second PATCH
+  const refuse = till(OWNER_CAPS, []);
+  refuse.R._loadCustomers = async () => {};
+  refuse.R._showCustomerModal({}); refuse.el('cm-name').value = 'Never Credit'; refuse.el('cm-credit-mode').value = 'none';
+  await refuse.R._saveCustomer(null);
+  assert.deepStrictEqual(refuse.calls.map((c) => c[0]), ['POST', 'PATCH']);
+  assert.deepStrictEqual(refuse.calls[1][2], { credit_mode: 'none', credit_limit: 0 });
+  // editing a legacy row (null mode) without touching credit sends no credit keys; the dialog shows Shop default
+  const legacy = till(OWNER_CAPS, [{ id: 'L', name: 'Old', phone: '', credit_mode: null }]);
+  legacy.R._loadCustomers = async () => {};
+  legacy.R._showCustomerModal(legacy.R._customers[0]);
+  assert.ok(/<option value="inherit" selected>/.test(legacy.overlays[0].innerHTML), 'a null mode shows as Shop default');
+  legacy.el('cm-name').value = 'Old'; legacy.el('cm-credit-mode').value = 'inherit';
+  await legacy.R._saveCustomer('L');
+  assert.ok(!('credit_mode' in legacy.calls[0][2]), 'an untouched credit setting must not ride the PATCH');
   console.log('PASS: Add Customer -- credit is a second PATCH only when chosen');
 }
 
@@ -267,7 +310,18 @@ function testCreditGateMirrorsTheServer() {
   assert.strictEqual(gate('c', 'unlimited'), null, "an EMPTY mode falls back to the shop default, as create_sale does");
   assert.strictEqual(gate('d', 'unlimited'), null, 'a null mode falls back to the shop default');
   assert.strictEqual(gate('c', 'none'), 'Not a credit customer');
-  console.log('PASS: the till gates Credit by the SAME `customer mode || shop default` chain as create_sale');
+  // MONEY-4c: 'inherit' is the stored word for "follow the shop default"
+  h.R._customers.push({ id: 'e', credit_mode: 'inherit' }, { id: 'f', credit_mode: 'banana' },
+                      { id: 'g', credit_mode: 'inherit', effective_credit_mode: 'unlimited' },
+                      { id: 'k', credit_mode: 'none', effective_credit_mode: 'none' });
+  assert.strictEqual(gate('e', 'unlimited'), null, "'inherit' follows a shop default of unlimited (the UI-2 bug: tile was disabled)");
+  assert.strictEqual(gate('e', 'limited'), null);
+  assert.strictEqual(gate('e', 'none'), 'Not a credit customer', "'inherit' with a shop default of none is refused");
+  assert.strictEqual(gate('e', undefined), 'Not a credit customer', 'default not read yet -> none, the same fail-closed fallback');
+  assert.strictEqual(gate('f', 'unlimited'), 'Not a credit customer', 'an unknown stored word fails closed, as the server does');
+  assert.strictEqual(gate('g', 'none'), 'Not a credit customer', 'an inheriting row follows the CURRENT shop default, not a stale server-resolved value');
+  assert.strictEqual(gate('k', 'unlimited'), 'Not a credit customer', "explicit 'none' still refuses under an unlimited shop default");
+  console.log('PASS: the till gates Credit by the SAME resolver as create_sale (inherit / null / empty -> shop default, explicit stands, unknown -> none)');
 }
 
 (async function main() {

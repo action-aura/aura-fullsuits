@@ -223,6 +223,8 @@ SCHEMAS = {
                 {'key': 'address',        'label': 'Address',         'required': False, 'type': 'text',   'example': '123 Main St, City'},
                 {'key': 'loyalty_points', 'label': 'Loyalty Points',  'required': False, 'type': 'number', 'example': '150'},
                 {'key': 'total_spent',    'label': 'Total Spent',     'required': False, 'type': 'number', 'example': '2400.00'},
+                # MONEY-4c: optional. Blank / absent = follow the shop's default credit terms.
+                {'key': 'credit_mode',    'label': 'Credit Terms',    'required': False, 'type': 'text',   'example': 'inherit'},
             ]
         },
         'suppliers': {
@@ -490,6 +492,7 @@ FIELD_ALIASES = {
     'total_spent':       ['totalspent', 'lifetimevalue', 'ltv', 'totalpurchases', 'totalsales',
                           'totalrevenue', 'spent', 'totalspend', 'cumulativespend', 'amountspent',
                           'totalpaid', 'lifetimespend', 'totalbilled', 'purchasetotal'],
+    'credit_mode':       ['creditmode', 'credittype', 'creditterms'],
     'loyalty_points':    ['loyaltypoints', 'points', 'rewardpoints', 'bonuspoints',
                           'membershippoints', 'pts', 'earnedpoints', 'accruedpoints',
                           'pointsbalance', 'rewardbalance', 'loyaltybalance',
@@ -2126,6 +2129,14 @@ def _handle_retail_customers(records):
         # must not reset a baseline an earlier import set, so the update branch only
         # touches it when the row actually carried one.
         has_ts = ts is not None
+        # MONEY-4c: a file with no credit column (or a blank / unrecognised cell) imports the
+        # customer as 'inherit' = follow the shop default. It used to store 'none', which is
+        # an explicit refusal and silently defeated the shop default. An unrecognised word
+        # is NOT guessed into 'unlimited': it falls to 'inherit', which can only grant what
+        # the owner's own default already grants.
+        credit_mode = str(rec.get('credit_mode') or '').strip().lower()
+        if credit_mode not in ('none', 'limited', 'unlimited'):
+            credit_mode = 'inherit'
         ts = float(ts) if has_ts else 0
         if existing:
             resurrecting = existing['deleted_at_utc'] is not None
@@ -2197,21 +2208,23 @@ def _handle_retail_customers(records):
             nid = str(_uuid.uuid4())
             cur.execute(
                 "INSERT INTO customers (id,company_id,name,phone,email,address,loyalty_points,total_spent,"
-                "total_spent_baseline,row_version,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "total_spent_baseline,credit_mode,row_version,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 # W2a: starts at 0; the ledger delta below and its cache refresh
                 # set the real figure (never a figure the ledger cannot explain).
                 # B6b: the typed total is the baseline; the new row has no sales yet, so
                 # the cache equals it.
-                (nid, cid, name, rec.get('phone',''), email, rec.get('address',''), 0, ts, ts, 1, utc_now))
+                (nid, cid, name, rec.get('phone',''), email, rec.get('address',''), 0, ts, ts, credit_mode, 1, utc_now))
             # Mirrors create_customer's payload key-for-key (see the
             # loyalty_points/total_spent note on the update branch above).
             _queue_sync_event(cur, 'customer', nid, 'create', {
                 'id': nid, 'name': name, 'phone': rec.get('phone', ''),
                 'email': email, 'address': rec.get('address', ''),
-                # REHEARSAL-1007 B2: credit terms are synced customer fields now
-                # (payload-coverage ratchet); an imported customer starts at the
-                # column defaults, same as create_customer.
-                'credit_mode': 'none', 'credit_limit': 0,
+                # REHEARSAL-1007 B2: credit terms are synced customer fields (payload-coverage
+                # ratchet). MONEY-4c: an imported customer INHERITS the shop default unless the
+                # file stated a mode; an inheriting create event carries null, never the word
+                # 'inherit' -- exactly as create_customer does, for the same mixed-version reason
+                # (see there).
+                'credit_mode': None if credit_mode == 'inherit' else credit_mode, 'credit_limit': 0,
                 # REHEARSAL-1007 B6b (v49): the history typed into the import travels so
                 # every computer shows the same total spent.
                 'total_spent_baseline': ts,
