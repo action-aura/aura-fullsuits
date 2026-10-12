@@ -57,7 +57,6 @@ import androidx.compose.ui.unit.dp
 import com.actionaura.retail.licensing.DeviceIdentity
 import com.actionaura.retail.licensing.LicensingCoordinator
 import com.actionaura.retail.net.*
-import com.actionaura.retail.printer.PrinterPrefs
 import com.actionaura.retail.sync.HubPrefs
 import com.actionaura.retail.sync.PairingPayload
 import com.actionaura.retail.sync.SpkiPinMismatchException
@@ -1600,14 +1599,6 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
     var modeMenu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    // Receipt Printer (retail-hardware-viewports) -- seeded once from
-    // PrinterPrefs (a plain SharedPreferences read, see its own doc comment
-    // for why this is not cached global state like AppTheme/AppLocale
-    // above) and written back on "Save printer settings" below.
-    var printerHost by remember { mutableStateOf(PrinterPrefs.getHost(ctx)) }
-    var printerPort by remember { mutableStateOf(PrinterPrefs.getPort(ctx).toString()) }
-    var printerWidth by remember { mutableStateOf(PrinterPrefs.getWidth(ctx)) }
-    var printerAutoPrint by remember { mutableStateOf(PrinterPrefs.getAutoPrint(ctx)) }
 
     // Shop network (retail-hardware-viewports): pairs this phone to another
     // till acting as the shop's LAN hub, by redeeming the pairing text that
@@ -1944,76 +1935,8 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
             }, modifier = Modifier.height(52.dp)) { Text(tr("Add")) }
         }
 
-        // Receipt Printer (retail-hardware-viewports): network/LAN ESC/POS
-        // only -- see NetworkPrinterAdapter.kt for why that transport (and
-        // not Bluetooth or a vendor SDK) is what this app implements. An
-        // honest empty-state note below beats a setting that silently does
-        // nothing on hardware this doesn't support.
-        SectionHeader(tr("Receipt Printer"))
-        Text(
-            tr("For a network (LAN) ESC/POS receipt printer only. Bluetooth and built-in printers are not supported yet."),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedTextField(printerHost, { printerHost = it },
-            label = { Text(tr("Printer IP address")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(printerPort, { printerPort = it.filter(Char::isDigit) },
-            label = { Text(tr("Port")) }, singleLine = true,
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth())
-        Text(tr("Paper width"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = printerWidth == PrinterPrefs.WIDE_CHARS,
-                onClick = { printerWidth = PrinterPrefs.WIDE_CHARS },
-                label = { Text(tr("80mm (42 chars)")) })
-            FilterChip(selected = printerWidth == PrinterPrefs.NARROW_CHARS,
-                onClick = { printerWidth = PrinterPrefs.NARROW_CHARS },
-                label = { Text(tr("58mm (32 chars)")) })
-        }
-        // The Row itself carries the toggleable + Role.Switch semantics, and
-        // Switch gets onCheckedChange = null -- the standard Compose
-        // accessibility recipe for a labelled switch row. Without this, the
-        // Switch is its own separate semantics node with no name of its own
-        // (the label Text is a SIBLING, not merged into it): TalkBack would
-        // announce "Switch, off" with no indication of what it toggles.
-        Row(
-            Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                .toggleable(
-                    value = printerAutoPrint,
-                    role = Role.Switch,
-                    onValueChange = { printerAutoPrint = it },
-                ),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(tr("Auto-print after each sale"), fontWeight = FontWeight.Medium)
-                Text(
-                    tr("Prints automatically as soon as a sale completes, with no extra tap."),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(checked = printerAutoPrint, onCheckedChange = null)
-        }
-        // A real limitation of the byte path itself (core/retail/
-        // escpos_receipt.py's ASCII-only text encoding, not an Android
-        // gap) -- a shopkeeper needs to learn this here, not from a
-        // customer at the counter.
-        Text(
-            tr("Printed receipts are in English only, even when the app is in Arabic — ESC/POS text mode cannot render Arabic script."),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Button(
-            onClick = {
-                val portNum = printerPort.toIntOrNull() ?: PrinterPrefs.DEFAULT_PORT
-                PrinterPrefs.set(ctx, printerHost, portNum, printerWidth, printerAutoPrint)
-                printerPort = portNum.toString()
-                scope.launch { snackbar.showSnackbar(tr("Settings saved")) }
-            },
-            modifier = Modifier.fillMaxWidth().height(50.dp),
-        ) { Text(tr("Save printer settings")) }
+        // Receipt Printer (PRINT-2): built-in / Bluetooth / USB / network, see ReceiptPrinterSection.kt.
+        ReceiptPrinterSection(snackbar)
 
         // Shop network (retail-hardware-viewports): pairs this phone to the
         // shop's till so it can sync over the shop's own network -- see

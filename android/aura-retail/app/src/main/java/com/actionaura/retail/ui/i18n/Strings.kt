@@ -607,8 +607,10 @@ private val AR_STRINGS: Map<String, String> = mapOf(
 
     // ── Retail settings → Receipt Printer (retail-hardware-viewports) ─────────
     "Receipt Printer" to "طابعة الإيصالات",
-    "For a network (LAN) ESC/POS receipt printer only. Bluetooth and built-in printers are not supported yet." to
-        "لطابعة إيصالات ESC/POS عبر الشبكة المحلية (LAN) فقط. البلوتوث والطابعات المدمجة غير مدعومة بعد.",
+    // PRINT-2: the old "network only / English only" notes were true until this
+    // wave; the receipt is now drawn as a picture, so Arabic prints.
+    "Choose how this phone prints receipts. A Bluetooth printer must be paired in Android settings first." to
+        "اختر طريقة طباعة الإيصالات من هذا الهاتف. يجب إقران طابعة البلوتوث أولاً من إعدادات أندرويد.",
     "Printer IP address" to "عنوان IP الخاص بالطابعة",
     "Port" to "المنفذ",
     "Paper width" to "عرض الورق",
@@ -617,11 +619,32 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Auto-print after each sale" to "الطباعة التلقائية بعد كل عملية بيع",
     "Prints automatically as soon as a sale completes, with no extra tap." to
         "تتم الطباعة تلقائيًا فور اكتمال البيع، دون الحاجة لأي لمسة إضافية.",
-    // A real limitation of the ESC/POS text byte path itself (see
-    // escpos_receipt.py's module docstring), not something Android could
-    // fix on its own -- a shopkeeper needs to know this up front.
-    "Printed receipts are in English only, even when the app is in Arabic — ESC/POS text mode cannot render Arabic script." to
-        "الإيصالات المطبوعة تكون بالإنجليزية فقط، حتى عند استخدام التطبيق بالعربية — وضع النص ESC/POS لا يمكنه عرض الحروف العربية.",
+    // Receipts print as a picture (drawn on the phone), which is why Arabic is
+    // correct on every printer brand. Not yet checked on real printers.
+    "Receipts print as a picture, so Arabic prints correctly. Always do a test print on your own printer before relying on it." to
+        "تُطبع الإيصالات كصورة، لذلك تظهر العربية بشكل صحيح. أجرِ طباعة تجريبية على طابعتك قبل الاعتماد عليها.",
+    "Printer type" to "نوع الطابعة",
+    "Built-in" to "مدمجة",
+    "Bluetooth" to "بلوتوث",
+    "USB" to "USB",
+    "Network" to "الشبكة",
+    "None" to "بدون",
+    "Choose a paired printer" to "اختر طابعة مقترنة",
+    "No paired Bluetooth devices. Pair the printer in Android settings first." to
+        "لا توجد أجهزة بلوتوث مقترنة. أقرن الطابعة من إعدادات أندرويد أولاً.",
+    "Allow Nearby devices to list paired printers." to "اسمح بالأجهزة القريبة لعرض الطابعات المقترنة.",
+    "Choose a USB printer" to "اختر طابعة USB",
+    "No USB printer is plugged in." to "لا توجد طابعة USB موصولة.",
+    "Refresh" to "تحديث",
+    "Selected" to "المحدد",
+    "Test print" to "طباعة تجريبية",
+    "Printed the test receipt" to "تمت طباعة الإيصال التجريبي",
+    "Open cash drawer (test)" to "فتح درج النقود (تجربة)",
+    "Sent the drawer signal" to "تم إرسال إشارة فتح الدرج",
+    "Open the drawer after a cash sale" to "فتح الدرج بعد البيع النقدي",
+    "Only after a cash sale printed automatically. A reprint never opens it." to
+        "فقط بعد بيع نقدي يُطبع تلقائيًا. إعادة الطباعة لا تفتحه أبدًا.",
+    "The built-in printer of this terminal." to "الطابعة المدمجة في هذا الجهاز.",
     "Save printer settings" to "حفظ إعدادات الطابعة",
 
     // ── Retail settings → Shop network (retail-hardware-viewports) ─────────────
