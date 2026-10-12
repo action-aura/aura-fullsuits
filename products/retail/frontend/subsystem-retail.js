@@ -4262,7 +4262,8 @@ const RetailSystem = {
           background:var(--surface-card);border-block-end:1px solid var(--border-mid);box-shadow:0 8px 18px rgba(0,0,0,.14); }
         .pos-cashpanel[hidden] { display:none; }
         .pos-cp-top { display:flex;align-items:center;gap:8px;flex-shrink:0; }
-        .pos-cp-status { flex:1;min-inline-size:0;display:flex;flex-direction:column;gap:0;color:var(--text); }
+        /* no colour here: both children set their own (.pos-cp-lbl muted, .money from main.css), so a colour on the container paints nothing -- retail_design_contrast_test.js "no colour semantic is silently overridden" caught exactly that. */
+        .pos-cp-status { flex:1;min-inline-size:0;display:flex;flex-direction:column;gap:0; }
         .pos-cp-lbl { font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted); }
         /* 30px, not var(--text-size-display): that token resolves to 32px in the
            live stylesheet, which is exactly where a short till's total is
