@@ -803,6 +803,22 @@ const RetailSystem = {
       .ret-field-row { display:grid;grid-template-columns:1fr 1fr;gap:12px; }
       .ret-field-row3 { display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px; }
       .ret-modal-footer { display:flex;gap:10px;justify-content:flex-end;margin-top:22px; }
+      /* UI-2 item 2: "Recent sales" in the Returns dialog. A scroll box of real
+         buttons, one 44px+ row per sale: number / time / customer / total. It has
+         to live HERE (the global screen styles): the Returns screen never mounts
+         the till, whose own stylesheet is a different one. Hover and
+         focus-visible are paired (the retail_surface_pos_test rule). */
+      .ret-recent { max-block-size:150px;overflow-y:auto;border:1px solid var(--border-soft);border-radius:10px; }
+      .ret-recent-note { padding:12px;color:var(--text-dim);font-size:13px; }
+      .ret-recent-row { appearance:none;-webkit-appearance:none;display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1.4fr) auto;
+        gap:10px;align-items:center;inline-size:100%;min-block-size:var(--touch-target-min, 44px);padding-block:4px;padding-inline:12px;
+        background:transparent;border:0;border-block-end:1px solid var(--border-soft);color:var(--text);font:inherit;font-size:13px;
+        text-align:start;cursor:pointer; }
+      .ret-recent-row:last-child { border-block-end:0; }
+      .ret-recent-row:hover, .ret-recent-row:focus-visible { background:var(--surface-hover); }
+      .ret-recent-time { color:var(--text-dim); }
+      .ret-recent-cust { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+      .ret-recent-total { font-weight:700;text-align:end; }
       .ret-btn { padding:10px 20px;border-radius:8px;font-weight:600;font-size:14px;cursor:pointer;border:none;transition:all .2s; }
       /* Touchscreen press feedback (retail-hardware-viewports): every variant
          below is always used WITH this base class (never bare), so one rule
@@ -8256,7 +8272,9 @@ const RetailSystem = {
       const el = document.activeElement;
       const tag = el ? el.tagName : '';
       const editable = tag === 'INPUT' || tag === 'TEXTAREA' || (el && el.isContentEditable);
-      const isSearchBox = !!el && (el.id === 'pos-search' || el.id === 'prod-search' || el.id === 'pc-search');
+      // `ret-sale-search` (UI-2 item 2): the Returns dialog's receipt-number box is
+      // where a receipt barcode is expected to land, same as the till's search box.
+      const isSearchBox = !!el && (el.id === 'pos-search' || el.id === 'prod-search' || el.id === 'pc-search' || el.id === 'ret-sale-search');
       if (editable && !isSearchBox) return;
     }
 
@@ -8347,6 +8365,11 @@ const RetailSystem = {
     if (openReceipt) { this._closeModalOverlay(openReceipt); this._refocusScan(true); }
     // F11 price check open: the scan is a lookup, not a sale line.
     if (document.getElementById('ret-pricecheck')) return this._priceCheckScan(code);
+    // UI-2 item 2: the Returns dialog is open -- a scanned receipt barcode loads
+    // that sale (see _returnScan). Before the product-modal / section routes: a
+    // receipt number must never be taken for a product barcode while a return
+    // is being processed.
+    if (document.getElementById('ret-return-modal')) return this._returnScan(code);
     if (document.getElementById('ret-prod-modal')) {  // Add/Edit Product → barcode field
       const f = document.getElementById('pm-barcode');
       if (f) { f.value = code; f.focus(); SubsystemApp.showToast(t('Barcode captured'), 'success'); }
@@ -10472,6 +10495,23 @@ const RetailSystem = {
   // History) already resolves each line's `name` from the real
   // product_name before calling this, so it never touches the fallback
   // below at all, whatever `this._lastReceiptCartNames` happens to hold.
+  // What the receipt's Code 128 carries: the number the customer SEES (the short
+  // `SALE-000016`, not the 30-character legacy string -- see receipt_model.py's
+  // barcode_value_for for why), or '' for "print none" (empty / not encodable).
+  _receiptBarcodeValue(saleNumber) {
+    const v = this._docNo(saleNumber).main;
+    return (v && /^[\x20-\x7e]+$/.test(v)) ? v : '';
+  },
+
+  _receiptBarcodeBlock(saleNumber, widthMm) {
+    const value = this._receiptBarcodeValue(saleNumber);
+    if (!value || !window.AuraCode128) return '';
+    // ~96 CSS px per inch minus the 2mm page margins either side.
+    const usablePx = Math.floor(((widthMm || 80) - 4) * 96 / 25.4);
+    const svg = window.AuraCode128.svg(value, { maxWidth: usablePx, height: 46 });
+    return svg ? `<div class="rcpt-center rcpt-barcode-wrap" style="margin-top:6px">${svg}</div>` : '';
+  },
+
   async _printReceipt(saleData) {
     const cn = this._lastReceiptCartNames || {};
     // Phase 0 #8 (I-2 "till half"): see _saleDiscountBreakdown's own
@@ -10508,6 +10548,10 @@ const RetailSystem = {
     const brandingBlock = this._brandingReceiptBlock(branding, logoDataUri);
     const footerLine = branding.branding_receipt_footer
       ? `<div class="rcpt-center" style="font-size:11px">${this._esc(branding.branding_receipt_footer)}</div>` : '';
+    // UI-2 item 2: the sale number as a Code 128, so a scanner can load THIS sale
+    // into the Returns dialog (see _dispatchScan). Same value the raster receipt
+    // prints (receipt_model.barcode_value_for) -- two receipts, one barcode.
+    const barcodeBlock = this._receiptBarcodeBlock(saleData.sale_number, widthMm);
     // `rt` (receipt-scoped translator) -- NOT window.t -- resolved from
     // branding_receipt_language ('auto' | 'en' | 'ar'). See
     // _receiptTranslator's own comment for the full reasoning; in short,
@@ -10577,6 +10621,7 @@ const RetailSystem = {
       <div class="rcpt-hr"></div>
       <div class="rcpt-center">${rt('Thank you')}</div>
       ${footerLine}
+      ${barcodeBlock}
       ${einvoiceBlock}
       </body></html>`;
 
@@ -15922,6 +15967,15 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal ret-modal-wide" id="ret-return-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-return-dialog-title">
         <h3 id="ret-return-dialog-title">${this._icon('undo-2', 18, '↩️')} <span>${t('Process Return')}</span></h3>
+        <!-- UI-2 item 2: the last 30 sales, newest first. A return starts from the
+             sale the customer is standing there with, not from a number someone
+             has to read off a slip and type. Filled by _loadRecentSalesForReturn. -->
+        <div class="ret-field" id="ret-recent-wrap">
+          <div class="ret-field-label" id="ret-recent-title">${t('Recent sales')}</div>
+          <div class="ret-recent" id="ret-recent" role="group" aria-labelledby="ret-recent-title">
+            <div class="ret-recent-note">${t('Loading…')}</div>
+          </div>
+        </div>
         <div class="ret-field-row">
           <div class="ret-field"><label for="ret-sale-search">${t('Sale / Receipt Number *')}</label>
             <div style="display:flex;gap:8px">
@@ -15960,6 +16014,60 @@ const RetailSystem = {
     document.getElementById('ret-sale-search')?.addEventListener('keydown', e => {
       if (e.key==='Enter') RetailSystem._findSaleForReturn();
     });
+    // Typing a different number brings the recent list back (it is hidden once
+    // a sale is loaded, to give the item table the room).
+    document.getElementById('ret-sale-search')?.addEventListener('input', () => {
+      const w = document.getElementById('ret-recent-wrap'); if (w) w.hidden = false;
+    });
+    this._loadRecentSalesForReturn();
+  },
+
+  // UI-2 item 2 -- "Recent sales" in the Returns dialog. The route is the SAME
+  // /sales/recent the number lookup uses, so a cashier gets exactly what that
+  // route already allows them (limit <= the till cap, identity columns dropped);
+  // no new route and nothing loosened. Voided / cancelled sales are not offered
+  // (there is nothing to return against them). Rows are real <button>s: the list
+  // is reachable by Tab and operable by Enter/Space like every other control.
+  async _loadRecentSalesForReturn() {
+    const box = document.getElementById('ret-recent');
+    if (!box) return;
+    let rows = null;
+    try {
+      const res = await this._get('/api/sub/retail/sales/recent?limit=30');
+      rows = (res && res.status === 'success' && Array.isArray(res.data)) ? res.data : null;
+    } catch (e) { rows = null; }
+    if (!document.getElementById('ret-recent')) return;      // dialog closed meanwhile
+    if (rows === null) { box.innerHTML = `<div class="ret-recent-note">${t('Could not load recent sales. Type the receipt number instead.')}</div>`; return; }
+    const open = rows.filter(s => !s.status || s.status === 'completed').slice(0, 30);
+    if (!open.length) { box.innerHTML = `<div class="ret-recent-note">${t('No sales yet.')}</div>`; return; }
+    box.innerHTML = open.map(s => `
+      <button type="button" class="ret-recent-row" data-sn="${this._esc(s.sale_number)}"
+        onclick="RetailSystem._pickRecentReturnSale(this.dataset.sn)">
+        <span class="ret-recent-no">${this._docNoHtml(s.sale_number)}</span>
+        <span class="ret-recent-time">${this._bdi((s.created_at || '').slice(0, 16))}</span>
+        <span class="ret-recent-cust" dir="auto">${this._esc(s.customer_name) || t('Walk-in')}</span>
+        <span class="ret-recent-total">${this._money(s.total)}</span>
+      </button>`).join('');
+  },
+
+  // A tap on a recent sale loads it exactly as typing its number and pressing
+  // Lookup would -- the same function, so the exact-match / ambiguity rules
+  // are not duplicated.
+  _pickRecentReturnSale(saleNumber) {
+    const input = document.getElementById('ret-sale-search');
+    if (!input) return;
+    input.value = saleNumber || '';
+    return this._findSaleForReturn();
+  },
+
+  // A receipt barcode scanned while the Returns dialog is open: put the number
+  // in the box and look it up (called by _dispatchScan). Returns the lookup's
+  // promise so a test can await the outcome.
+  _returnScan(code) {
+    const input = document.getElementById('ret-sale-search');
+    if (!input) return;
+    input.value = code;
+    return this._findSaleForReturn();
   },
 
   // The "select all" box in the return item table. Was an inline arrow
@@ -16044,6 +16152,10 @@ const RetailSystem = {
       if (!sale) { SubsystemApp.showToast(t('Sale not found'),'error'); return; }
       const full = (await this._get(`/api/sub/retail/sales/${sale.id}`)).data || {};
       this._returnSaleId = sale.id;
+      // UI-2 item 2: a sale is loaded -- fold the recent list away so the item
+      // table gets the room (typing a new number in the box brings it back).
+      const recentWrap = document.getElementById('ret-recent-wrap');
+      if (recentWrap) recentWrap.hidden = true;
       // DEFECT 1 fix: pre-select the ORIGINAL sale's own payment method
       // instead of leaving 'cash' picked by nothing more than being first
       // in the <option> list. 'credit' -> 'cash' coercion mirrors

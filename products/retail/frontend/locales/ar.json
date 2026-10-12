@@ -2751,5 +2751,11 @@
   "Add to Favourites": "إضافة إلى المفضلة",
   "No favourites yet. The shop owner can pin products with the star.": "لا توجد منتجات مفضلة بعد. يمكن لصاحب المحل تثبيت المنتجات بالنجمة.",
   "Show on the Favourites page of the till": "إظهار في صفحة المفضلة في نقطة البيع",
-  "Low stock": "مخزون منخفض"
+  "Low stock": "مخزون منخفض",
+  "Recent sales": "المبيعات الأخيرة",
+  "Could not load recent sales. Type the receipt number instead.": "تعذّر تحميل المبيعات الأخيرة. اكتب رقم الإيصال بدلًا من ذلك.",
+  "No sales yet.": "لا توجد مبيعات بعد.",
+  "Filled in from the last count on this terminal. Change it if the drawer has changed since.": "تم تعبئته من آخر عدّ لهذا الجهاز. غيّره إذا تغيّر محتوى الدرج منذ ذلك الحين.",
+  "{n} held sale(s) are still parked. Ending the shift keeps them, but check them before you leave.": "{n} فاتورة معلّقة ما زالت محفوظة. إنهاء الوردية يُبقيها، لكن راجعها قبل أن تغادر.",
+  "Count notes and coins": "عدّ الأوراق النقدية والعملات المعدنية"
 }

@@ -55,7 +55,7 @@ const SHELL_FILE = path.join(FRONTEND_DIR, 'app-shell.js');
 // label (the connected-services group uses a stable non-translated key,
 // since `label` alone is what gets translated for display).
 const GROUPS = [
-  { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'quotations'] },
+  { label: 'Sell',    items: ['pos', 'sales', 'returns', 'scanner', 'customers', 'quotations'] },
   { label: 'Grow',    items: ['promotions'] },
   { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
   { label: 'Money',   items: ['receivables', 'payables', 'cheques'] },
@@ -78,7 +78,7 @@ const UNGROUPED_BY_DESIGN = new Set(['dashboard', 'admin-center', 'employees', '
 // click shape, for whatsapp/einvoicing/site-relay) somewhere in the shell:
 // every UNGROUPED_BY_DESIGN id PLUS every grouped id.
 const ALL_DESTINATIONS = ['dashboard', 'admin-center', ...GROUPS.flatMap((g) => g.items)];
-// 28 = dashboard + admin-center (2 ungrouped, footer-rendered) + 26 grouped.
+// 29 = dashboard + admin-center (2 ungrouped, footer-rendered) + 27 grouped (UI-2 added 'sales').
 // 'employees'/'branches'/'backup-export' are DELIBERATELY NOT in this list
 // -- they are reachable (see UNGROUPED_BY_DESIGN's own comment above), but
 // through the gear's own MENU, not through anything `_navigate`-shaped this
@@ -399,12 +399,12 @@ function testAllDestinationsReachableForOwner() {
     'group UNLESS it is named in UNGROUPED_BY_DESIGN (employees/branches/backup-export reach ' +
     'through the gear menu instead -- tested separately, below).'
   );
-  // 28 = dashboard + admin-center (both ungrouped-by-design but reachable)
-  // + 26 grouped entries. Bumped together with this message on purpose --
+  // 29 = dashboard + admin-center (both ungrouped-by-design but reachable)
+  // + 27 grouped entries (UI-2: 'sales' joined Sell). Bumped together with this message on purpose --
   // this assertion exists to catch ALL_DESTINATIONS drifting from the
   // product, so a count that disagrees with its own prose is the exact
   // failure it is supposed to make loud.
-  assert.strictEqual(ALL_DESTINATIONS.length, 28, "sanity: this file's own expectation list drifted from 28 reachable destinations");
+  assert.strictEqual(ALL_DESTINATIONS.length, 29, "sanity: this file's own expectation list drifted from 29 reachable destinations");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

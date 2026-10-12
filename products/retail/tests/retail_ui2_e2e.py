@@ -184,7 +184,188 @@ def item_fav(page, ids):
     set_size(page, 1366, 768); set_lang(page, "en")
 
 
-ITEMS = {"fav": item_fav}
+# ───────────────────── shared: ring sales, decode barcodes, cashier ─────────────────────
+
+ZX_LIB = Path(r"C:\Users\MSI\.claude\jobs\b6c06c3b\tmp\ui2\pylib")
+
+
+def zx_decode(png_bytes):
+    """Read barcodes out of a PNG with an INDEPENDENT decoder (ZXing-cpp, installed in
+    a scratch dir outside the repo and outside CI). Returns [(format, text)]."""
+    sys.path.insert(0, str(ZX_LIB))
+    import io
+    import numpy as np
+    import zxingcpp
+    from PIL import Image
+    img = Image.open(io.BytesIO(png_bytes)).convert("L")
+    return [(b.format.name, b.text) for b in zxingcpp.read_barcodes(np.array(img))]
+
+
+def ring_cash_sale(page, product_ids, qty=1):
+    page.evaluate("() => RetailSystem._clearCart()")
+    for pid in product_ids:
+        for _ in range(qty):
+            page.evaluate("(id) => RetailSystem._addToCart(id)", pid)
+    page.wait_for_timeout(250)
+    page.evaluate("() => RetailSystem._exactCashCharge()")
+    page.wait_for_selector("#ret-receipt-dialog", timeout=8000)
+    page.wait_for_timeout(250)
+    page.evaluate("() => RetailSystem._closeModalOverlay(document.getElementById('ret-receipt-dialog'))")
+    page.wait_for_timeout(250)
+
+
+def make_cashier(email="cashier@ui2.local", password="Ui2CashierPW1!"):
+    """A real cashier account in the in-process registry (same recipe as the py tests)."""
+    import uuid
+    from commercial_runtime.identity import user_accounts
+    from commercial_runtime.identity.registry_db import get_conn
+    from commercial_runtime.security.passwords import hash_password
+    conn = get_conn()
+    row = conn.execute("SELECT company_id FROM users WHERE role='admin' LIMIT 1").fetchone()
+    company_id = row[0]
+    uid = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status, require_password_change) "
+        "VALUES (?,?,?,?,?,?,?,0)",
+        (uid, company_id, "EMP-0099", email, hash_password(password), "cashier", "active"))
+    conn.execute("INSERT INTO user_permissions (id, user_id, subsystem, access_level) VALUES (?,?,?,?)",
+                 (str(uuid.uuid4()), uid, "retail", "full"))
+    user_accounts.seed_capabilities_for_user(conn, uid, "cashier")
+    conn.commit(); conn.close()
+    return email, password
+
+
+OWNER = ("owner@p1c.local", "P1cTillTest12345!")
+CASHIER = ("cashier@ui2.local", "Ui2CashierPW1!")
+
+
+def login_as(page, creds):
+    status, body = B.api(page, "POST", "/api/auth/login", {"email": creds[0], "password": creds[1]})
+    assert status == 200, f"login failed {status} {body}"
+    page.reload(); B.dismiss_intro_overlay(page)
+    page.wait_for_selector("#sub-header-section", timeout=20000)
+    page.wait_for_timeout(900)
+
+
+def short_number(n):
+    import re
+    return re.sub(r"-[0-9a-f]{8}-[0-9a-f]{8}$", "", n)
+
+
+# ───────────────────────── item 2: returns from the sale ─────────────────────────
+
+def item_returns(page, ids):
+    B.go_pos(page)
+    # three sales; the first rung is the OLDEST
+    ring_cash_sale(page, [ids["widget"]])                          # 10.000
+    ring_cash_sale(page, [ids["doohickey"], ids["thingamajig"]])   # 15.000
+    ring_cash_sale(page, [ids["widget"]], qty=2)                   # 20.000
+    _, recent = B.api(page, "GET", "/api/sub/retail/sales/recent?limit=10")
+    rows = recent["data"]
+    assert len(rows) >= 3, rows
+    newest, oldest = rows[0], rows[2]
+
+    def nav_door():
+        B.go(page, "dashboard")
+        link = page.locator("[onclick*=\"_navigate('sales')\"]").first
+        assert link.count() >= 1 and link.is_visible(), "no Sales entry in the sidebar"
+        link.click(); page.wait_for_selector("#sh-table tbody tr", timeout=8000)
+        n = page.locator("#sh-table tbody tr").count()
+        assert n >= 3, f"Sales History shows {n} rows"
+        shot(page, "ret_01_sales_screen_1366_en")
+    B.check("returns: the Sales door is in the sidebar and opens the Sales History with the sales", nav_door)
+
+    def recent_list():
+        B.go(page, "returns")
+        page.click("text=Process Return")
+        page.wait_for_selector("#ret-recent .ret-recent-row", timeout=8000)
+        nums = page.evaluate("() => [...document.querySelectorAll('#ret-recent .ret-recent-row')].map(r => r.dataset.sn)")
+        assert nums[0] == newest["sale_number"] and nums[2] == oldest["sale_number"], f"order: {nums[:4]}"
+        assert len(nums) <= 30
+        shot(page, "ret_02_recent_list_1366_en")
+        page.locator("#ret-recent .ret-recent-row").nth(1).click()
+        page.wait_for_selector("#ret-sale-items table", timeout=8000)
+        header = page.inner_text("#ret-sale-items > div")
+        assert "Items from" in header, header
+        assert page.evaluate("() => RetailSystem._returnSaleId") == rows[1]["id"]
+        assert page.evaluate("() => document.getElementById('ret-recent-wrap').hidden") is True
+        shot(page, "ret_03_sale_loaded_1366_en")
+    B.check("returns: Recent sales lists newest first; clicking one loads its items", recent_list)
+
+    def scan_into_dialog():
+        page.evaluate("() => RetailSystem._closeModalOverlay(document.getElementById('ret-return-modal'))")
+        page.click("text=Process Return")
+        page.wait_for_selector("#ret-recent .ret-recent-row", timeout=8000)
+        page.evaluate("() => document.activeElement && document.activeElement.blur()")
+        page.keyboard.type(short_number(oldest["sale_number"]), delay=4)
+        page.keyboard.press("Enter")
+        page.wait_for_selector("#ret-sale-items table", timeout=8000)
+        loaded = page.evaluate("() => RetailSystem._returnSaleId")
+        assert loaded == oldest["id"], f"the scan (focus off the box) loaded sale {loaded}, wanted {oldest['id']}"
+        page.evaluate("() => RetailSystem._closeModalOverlay(document.getElementById('ret-return-modal'))")
+        page.click("text=Process Return")
+        page.wait_for_selector("#ret-recent .ret-recent-row", timeout=8000)
+        page.focus("#ret-sale-search")
+        page.keyboard.type(short_number(newest["sale_number"]), delay=4)
+        page.keyboard.press("Enter")
+        page.wait_for_selector("#ret-sale-items table", timeout=8000)
+        assert page.evaluate("() => RetailSystem._returnSaleId") == newest["id"], "the scan (focus on the box) did not load the sale"
+        page.evaluate("() => RetailSystem._closeModalOverlay(document.getElementById('ret-return-modal'))")
+    B.check("returns: a wedge-scanner burst of the receipt number loads the sale (focus on the box AND off it)", scan_into_dialog)
+
+    def barcodes_scan_back():
+        import base64
+        number = short_number(newest["sale_number"])
+        # (a) the browser-print receipt's inline SVG, rendered by the real browser
+        page.evaluate("""(n) => { const d = document.createElement('div'); d.id = 'bc-probe';
+            d.style.cssText = 'position:fixed;left:20px;top:20px;background:#fff;padding:20px;z-index:99999';
+            d.innerHTML = RetailSystem._receiptBarcodeBlock(n, 80); document.body.appendChild(d); }""", newest["sale_number"])
+        png = page.locator("#bc-probe").screenshot()
+        (B.SHOTS / "ret_04_print_barcode.png").write_bytes(png)
+        got = zx_decode(png)
+        assert got == [("Code128", number)], f"browser-print barcode read back as {got}"
+        page.evaluate("() => document.getElementById('bc-probe').remove()")
+        # (b) the raster receipt: the real server model painted by the real canvas, at both widths
+        for width in (576, 384):
+            data = page.evaluate("""async ([id, w]) => {
+                const r = await fetch('/api/sub/retail/printer/receipt-model?sale_id=' + id + '&width_dots=' + w);
+                const j = await r.json();
+                const lines = j.data.lines.filter(l => l.kind === 'barcode');
+                const out = await ReceiptRaster.render(j.data);
+                return { value: lines.length ? lines[0].value : null, png: out.canvas.toDataURL('image/png') }; }""", [newest["id"], width])
+            assert data["value"] == number, f"model barcode value {data['value']!r}"
+            png = base64.b64decode(data["png"].split(",", 1)[1])
+            (B.SHOTS / f"ret_05_raster_receipt_{width}.png").write_bytes(png)
+            got = zx_decode(png)
+            assert ("Code128", number) in got, f"raster receipt at {width} dots read back as {got}"
+    B.check("returns: both receipts' barcodes are read back by an independent decoder (print SVG; raster canvas 80mm + 58mm)", barcodes_scan_back)
+
+    for (w, h) in SIZES:
+        for lang in ("en", "ar"):
+            def sized(w=w, h=h, lang=lang):
+                set_size(page, w, h); set_lang(page, lang)
+                B.go(page, "returns")
+                page.evaluate("() => RetailSystem._openCreateReturn()")
+                page.wait_for_selector("#ret-recent .ret-recent-row", timeout=8000)
+                over = page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
+                assert over <= 1, f"horizontal overflow {over}"
+                rows_h = page.evaluate("() => [...document.querySelectorAll('.ret-recent-row')].slice(0, 3).map(x => x.getBoundingClientRect().height)")
+                assert rows_h and min(rows_h) >= 44, f"recent rows under the touch floor: {rows_h}"
+                shot(page, f"ret_06_dialog_{w}x{h}_{lang}")
+                page.evaluate("() => RetailSystem._closeModalOverlay(document.getElementById('ret-return-modal'))")
+            B.check(f"returns: {w}x{h} {lang}: dialog renders the recent list, rows >=44px, no overflow (screenshot)", sized)
+    set_size(page, 1366, 768); set_lang(page, "en")
+
+    def sales_door_for_roles():
+        make_cashier(*CASHIER)
+        login_as(page, CASHIER)
+        B.go(page, "dashboard")
+        assert page.locator("[onclick*=\"_navigate('sales')\"]").count() >= 1, "a cashier does not see the Sales door"
+        login_as(page, OWNER)
+    B.check("returns: a cashier sees the Sales door (retail.sell), via a real login", sales_door_for_roles)
+
+
+ITEMS = {"fav": item_fav, "returns": item_returns}
 
 
 def main():

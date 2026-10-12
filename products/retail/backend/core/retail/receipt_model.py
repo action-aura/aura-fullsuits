@@ -45,6 +45,8 @@ f-string -- see that module's docstring for the 12.35-instead-of-12.345 bug.
 """
 from __future__ import annotations
 
+import re
+
 from core.retail import money_format, pricing
 
 MODEL_VERSION = 1
@@ -91,6 +93,37 @@ FSI = "\u2068"
 #: with LRMs makes the bidi algorithm resolve the neutral multiplication sign
 #: and the digit as left-to-right, so the isolate is kept and this is added.
 LRM = "\u200e"
+
+
+#: The long legacy sale-number shape (`SALE-000016-<company8>-<device8>`).
+#: Mirrors `RetailSystem._docNo` in the frontend: only the first two parts are
+#: what a person reads off the receipt.
+_LEGACY_DOC_NUMBER = re.compile(r"^([A-Za-z]+-\d+)-[0-9a-f]{8}-[0-9a-f]{8}$")
+
+
+def barcode_value_for(sale_number) -> str | None:
+    """The text the receipt's Code 128 carries, or None for "print no barcode".
+
+    It is the number the customer SEES (`SALE-000016`, or a per-till series
+    `MAI1-000001`), not the 30-character legacy string: that one is 365 modules
+    wide, which is 1 dot per module on a 58 mm head -- a barcode most scanners
+    will not read. The Returns lookup already accepts the short form and, when two
+    tills minted the same short number, REFUSES with the device tags listed
+    instead of guessing (see `_findSaleForReturn`), so the shorter value costs a
+    clear message in the one ambiguous case, never a wrong refund.
+
+    Only printable ASCII is encodable (Code 128 subset B, see code128.js): a
+    number with anything else prints no barcode rather than one that decodes to
+    something other than the text beside it.
+    """
+    text = "" if sale_number is None else str(sale_number).strip()
+    if not text:
+        return None
+    m = _LEGACY_DOC_NUMBER.match(text)
+    value = m.group(1) if m else text
+    if not all(32 <= ord(ch) <= 126 for ch in value):
+        return None
+    return value
 
 
 def _tr(text: str, lang: str) -> str:
@@ -274,6 +307,12 @@ def build_receipt_model(
     lines.append(_text(tr("Thank you")))
     if branding.get("branding_receipt_footer"):
         lines.append(_text(branding["branding_receipt_footer"], size="small"))
+
+    # UI-2 item 2: a Code 128 of the sale number, so a scanner can load THIS sale
+    # into the Returns dialog. The renderer draws it; the model only says WHAT.
+    barcode_value = barcode_value_for(sale.get("sale_number"))
+    if barcode_value:
+        lines.append({"kind": "barcode", "value": barcode_value})
 
     qr_payload = None
     if einvoice is not None:

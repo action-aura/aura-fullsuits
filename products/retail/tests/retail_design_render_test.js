@@ -1944,6 +1944,26 @@ async function buildCorpus() {
     assert.ok(overlay, 'The held-sales modal never reached document.body.');
     screens.push(screenFrom('held-sales-modal', ctx, content.innerHTML, overlayMarkup(overlay)));
   }
+  // UI-2 item 2: the Returns dialog and its "Recent sales" rows. The rows are
+  // written into #ret-recent AFTER the overlay is appended (the list loads async),
+  // so the overlay markup alone would only ever show the "Loading..." note and the
+  // row colours would sit in the unexercised-chrome budget unmeasured -- the rows
+  // are folded back into the screen here so their text is contrast-checked.
+  {
+    const ctx = loadRetailSystem(['retail.reports']);
+    const content = makeStub();
+    await ctx.RetailSystem._renderReturns(content);
+    await settle();
+    await ctx.RetailSystem._openCreateReturn();
+    await settle();
+    const overlay = ctx.overlays[ctx.overlays.length - 1];
+    assert.ok(overlay, 'The returns modal never reached document.body.');
+    const rows = (ctx.els['ret-recent'] && ctx.els['ret-recent'].innerHTML) || '';
+    assert.ok(/class="ret-recent-row"/.test(rows),
+      'the Recent sales list rendered no rows in this corpus -- the fixture has no /sales/recent data, so this screen would measure nothing');
+    screens.push(screenFrom('return-modal', ctx, content.innerHTML,
+      overlayMarkup(overlay) + '<div class="ret-modal"><div class="ret-recent">' + rows + '</div></div>'));
+  }
   // THE PRE-LOGIN SCREEN -- the first surface the product ever shows, and the
   // only one a shop sees before it has an account. It shipped a near-black
   // ground under a warm-paper card on the Sand theme because nothing here had
@@ -2173,7 +2193,7 @@ const DECLARED_SCREENS = [
   // 'trial-balance'/'balance-sheet' immediately above rather than the
   // profit-and-loss pair -- see the CASH_FLOW fixture's own comment.
   'cash-flow',
-  'customer-modal', 'sale-modal', 'held-sales-modal',
+  'customer-modal', 'sale-modal', 'held-sales-modal', 'return-modal',
   // The pre-login surface. Not a router section -- it renders before any
   // section exists.
   'first-run-auth',
