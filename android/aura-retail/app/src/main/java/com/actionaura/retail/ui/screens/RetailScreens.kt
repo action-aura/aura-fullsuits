@@ -67,6 +67,17 @@ import com.actionaura.retail.ui.pos.buildSaleItems
 import com.actionaura.retail.ui.pos.clampDiscountPct
 import com.actionaura.retail.ui.pos.discountAccess
 import com.actionaura.retail.ui.pos.buildHoldRequest
+import com.actionaura.retail.ui.pos.EstimateLine
+import com.actionaura.retail.ui.pos.TenderPartMinor
+import com.actionaura.retail.ui.pos.addTenderPart
+import com.actionaura.retail.ui.pos.buildCreateSaleRequest
+import com.actionaura.retail.ui.pos.effectiveLinePct
+import com.actionaura.retail.ui.pos.estimateDueMinor
+import com.actionaura.retail.ui.pos.fromMinor
+import com.actionaura.retail.ui.pos.parseAmountMinor
+import com.actionaura.retail.ui.pos.removeTenderPart
+import com.actionaura.retail.ui.pos.summarizeSplit
+import com.actionaura.retail.ui.pos.toMinor
 import com.actionaura.retail.ui.pos.overLimit
 import com.actionaura.retail.ui.CAPS_HOLD_SALE
 import com.actionaura.retail.ui.i18n.Currency
@@ -159,6 +170,11 @@ fun PosScreen(snackbar: SnackbarHostState) {
     var salePctText by remember { mutableStateOf("") }
     val lineDiscounts = remember { mutableStateMapOf<String, Double>() }
     var discountLineId by remember { mutableStateOf<String?>(null) }
+    // -- Split tender (ANDROID-2a; ui/pos/SplitTender.kt is the rulebook). `splitParts` are exact
+    // minor units; the amount box is text. The payment chips choose the method of the NEXT part.
+    var splitMode by remember { mutableStateOf(false) }
+    var splitParts by remember { mutableStateOf<List<TenderPartMinor>>(emptyList()) }
+    var splitAmountText by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     // Needed here (not just inside PaymentSuccess below) for auto-print:
     // PrinterPrefs is a per-device Context read, and the fire-and-forget
@@ -351,6 +367,18 @@ fun PosScreen(snackbar: SnackbarHostState) {
     val loyaltyRequestedPoints = if (loyaltyEligible) (parseIntFlexible(loyaltyRedeemInput) ?: 0).coerceAtLeast(0) else 0
     val loyaltyPointsToSend = kotlin.math.min(loyaltyRequestedPoints, loyaltyMaxRedeemable)
     val loyaltyValue = if (loyaltyPointsToSend > 0) kotlin.math.min(loyaltyPointsToSend * loyaltyPointValue, total) else 0.0
+
+    // DISPLAY-ONLY estimate of the amount due, for the split screen's Remaining (see
+    // SaleEstimate.kt for its limits). The server prices the sale and settles the parts against ITS
+    // figure; nothing sent is derived from this.
+    val dpPlaces = Currency.decimals
+    val estimateMinor = estimateDueMinor(cart.entries.map { (id, q) ->
+        val pr = byId[id]
+        EstimateLine(pr?.sell_price ?: 0.0, q,
+            if (access is DiscountAccess.None) 0.0 else effectiveLinePct(lineDiscounts[id], salePct), pr?.tax_rate ?: 0.0)
+    }, dpPlaces)
+    val dueMinor = (estimateMinor - toMinor(loyaltyValue, dpPlaces)).coerceAtLeast(0L)
+    val splitSummary = summarizeSplit(dueMinor, splitParts, customer != null)
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -692,13 +720,36 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             label = { Text(tr(label)) })
                     }
                 }
-                if (paymentMethod == "credit") {
+                if (paymentMethod == "credit" && !splitMode) {
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(downPayment, { downPayment = it },
                         label = { Text(tr("Paid now (optional) — rest goes on credit")) }, singleLine = true,
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                             keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth())
+                }
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { splitMode = !splitMode; splitParts = emptyList(); splitAmountText = "" }) {
+                    Text(if (splitMode) tr("Pay with one method") else tr("Split payment"))
+                }
+                if (splitMode) {
+                    val methodName = payOptions.firstOrNull { it.second == paymentMethod }?.first ?: paymentMethod
+                    SplitPaymentPanel(
+                        methodLabel = tr(methodName),
+                        estimateMinor = dueMinor,
+                        parts = splitParts,
+                        amountText = splitAmountText,
+                        summary = splitSummary,
+                        labelFor = { m -> tr(payOptions.firstOrNull { it.second == m }?.first ?: m.replaceFirstChar { it.uppercase() }) },
+                        onAmountChange = { splitAmountText = it },
+                        onFillRemaining = { splitAmountText = remainingInput(splitSummary) },
+                        onAdd = {
+                            val minor = parseAmountMinor(splitAmountText, dpPlaces)
+                            if (minor == null) scope.launch { snackbar.showSnackbar(tr("Enter a valid amount")) }
+                            else { splitParts = addTenderPart(splitParts, paymentMethod, minor); splitAmountText = "" }
+                        },
+                        onRemove = { i -> splitParts = removeTenderPart(splitParts, i) },
+                    )
                 }
                 Spacer(Modifier.height(16.dp))
                 OutlinedButton(onClick = { showHoldDialog = true }, enabled = RetailSession.hasAnyCapability(CAPS_HOLD_SALE),
@@ -709,7 +760,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
                         val pm = paymentMethod
                         val cust = customer
                         val overLim = (listOf(salePct) + lineDiscounts.values).mapNotNull { overLimit(it, access) }.firstOrNull()
-                        if (pm == "credit" && cust == null) {
+                        if (!splitMode && pm == "credit" && cust == null) {
                             scope.launch { snackbar.showSnackbar(tr("Select a customer for credit sales (walk-in not allowed)")) }
                         } else if (access !is DiscountAccess.None && overLim != null) {
                             // Courtesy only: the server refuses an over-limit discount itself
@@ -735,7 +786,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             // way). Omitting it lets the server default amount_paid to
                             // its own computed, authoritative total -- guaranteeing a
                             // "pay in full" sale is always recorded as fully paid.
-                            val paidNow: Double? = if (pm == "credit") (parseNum(downPayment)?.coerceIn(0.0, previewTotal) ?: 0.0) else null
+                            val paidNow: Double? = if (pm == "credit" && !splitMode) (parseNum(downPayment)?.coerceIn(0.0, previewTotal) ?: 0.0) else null
                             // Commercial intent only: product_id + quantity per line (no
                             // discount-entry UI exists in this source, so discount_pct
                             // stays at its default of 0). unit_price/tax_rate/subtotal/
@@ -749,16 +800,15 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             val items = buildSaleItems(cart.toMap(), lineDiscounts.toMap(), salePct, access)
                             scope.launch {
                                 try {
-                                    val r = ApiClient.get().createSale(CreateSaleRequest(
-                                        amount_paid = paidNow, payment_method = pm, customer_id = cust?.id,
-                                        items = items, idempotency_key = UUID.randomUUID().toString(),
-                                        // The locally-clamped preview, not the raw typed
-                                        // value -- see `loyaltyPointsToSend`'s own comment
-                                        // above for why it is already bounded the same
-                                        // three ways create_sale clamps server-side. The
-                                        // server still re-derives and re-clamps this from
-                                        // the ledger itself (CLIENT-SUBMITTED INTENT ONLY).
-                                        points_redeemed = loyaltyPointsToSend))
+                                    // ui/pos/SaleRequestBuilder.kt: a single-method sale is byte for byte what it
+                                    // always was; two or more parts become the desktop's split shape
+                                    // (payment_method "split" + tenders, no amount_paid). Loyalty points
+                                    // are the locally-clamped preview, the server re-clamps (see
+                                    // `loyaltyPointsToSend`).
+                                    val r = ApiClient.get().createSale(buildCreateSaleRequest(
+                                        items = items, customerId = cust?.id, idempotencyKey = UUID.randomUUID().toString(),
+                                        pointsRedeemed = loyaltyPointsToSend, singleMethod = pm, creditDownPayment = paidNow,
+                                        splitParts = if (splitMode) splitParts else emptyList(), dp = dpPlaces))
                                     if (r.status == "success") {
                                         // Authoritative result: always the backend's own
                                         // response, never the local preview above -- this is
@@ -768,6 +818,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                         cart.clear(); showCart = false; successSale = r.data
                                         paymentMethod = "cash"; customer = null; downPayment = ""; loyaltyRedeemInput = ""
                                         salePctText = ""; lineDiscounts.clear()
+                                        splitMode = false; splitParts = emptyList(); splitAmountText = ""
                                         r.data?.warning?.takeIf { it.isNotBlank() }?.let { snackbar.showSnackbar(it) }
                                         // Auto-print (Settings toggle, default off): fire-and-
                                         // forget, no blocking, no error dialog -- printReceipt's
@@ -791,7 +842,8 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             }
                         }
                     },
-                    enabled = !charging, modifier = Modifier.fillMaxWidth().height(54.dp),
+                    enabled = !charging && (!splitMode || (splitParts.size >= 2 && splitSummary.chargeable)),
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
                 ) {
                     if (charging) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
                         color = MaterialTheme.colorScheme.onPrimary)
@@ -813,7 +865,8 @@ fun PosScreen(snackbar: SnackbarHostState) {
                     // contracts.md), which is exactly why this stays labelled
                     // "Charge" and never "Total". CartTotalHonestyContractTest
                     // pins that distinction.
-                    else Text(tr("Charge") + "  " + money((total - loyaltyValue).coerceAtLeast(0.0)),
+                    else Text(tr("Charge") + "  " + (if (splitMode) money(fromMinor(splitSummary.enteredMinor - splitSummary.changeMinor, dpPlaces))
+                                                        else money((total - loyaltyValue).coerceAtLeast(0.0))),
                         style = MaterialTheme.typography.labelLarge)
                 }
             }

@@ -1248,4 +1248,32 @@ private val AR_STRINGS: Map<String, String> = mapOf(
         "تم تجاهل الفاتورة المعلّقة",
     "Resumed" to
         "تم الاستئناف",
+    "Split payment" to
+        "دفع مجزّأ",
+    "Pay with one method" to
+        "الدفع بطريقة واحدة",
+    "Estimated amount due" to
+        "المبلغ المستحق المقدّر",
+    "Tax and promotions are confirmed at checkout. If the final amount differs, the till will tell you what is missing." to
+        "تُحسب الضريبة والعروض عند إتمام البيع. إذا اختلف المبلغ النهائي فستبيّن لك الصندوق ما ينقص.",
+    "Remove part" to
+        "إزالة الدفعة",
+    "Add part" to
+        "إضافة دفعة",
+    "Rest" to
+        "الباقي",
+    "Add the first payment part." to
+        "أضف أول دفعة.",
+    "A sale can be paid in at most 6 parts." to
+        "يمكن دفع الفاتورة على 6 دفعات كحد أقصى.",
+    "The parts do not cover the amount due yet." to
+        "الدفعات لا تغطي المبلغ المستحق بعد.",
+    "The part on account is more than what is left to pay." to
+        "الجزء على الحساب أكبر من المتبقي للدفع.",
+    "Only cash can be more than what is due. Lower the card or other amount." to
+        "النقد وحده يمكن أن يزيد عن المستحق. خفّض مبلغ البطاقة أو الطريقة الأخرى.",
+    "The cash part would all come back as change. Remove it." to
+        "الجزء النقدي سيعود كله كباقٍ. أزله.",
+    "Add a second part to split, or turn split payment off." to
+        "أضف دفعة ثانية للتجزئة، أو أوقف الدفع المجزّأ.",
 )
