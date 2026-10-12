@@ -7604,3 +7604,35 @@ This revision runs against the LIVE Neon database on the next deploy.
   master, wrong for this line, and it edits CLAUDE.md outside this crew's file set).
 * KNOWN GAPS: the CI timeout ceilings (60/20/30/45 min) are generous guesses, not measured run times; not run on
   GitHub Actions. `bootstrap.sh` was never run for real.
+
+
+## 2026-10-12 — OWNER-SEC (review D findings) — no Owner revision
+
+Owner Alembic head is unchanged at `c7a4f2d8e613`: none of these needed a migration. Each finding was
+re-verified in the code before fixing; tests assert both directions and every guard was mutation-proved.
+
+* FIXED: SEC-06 open redirect (`_safe_next` now refuses backslash / encoded-backslash / control chars / any
+  scheme or netloc); SEC-03a device-slot release/replace in `commercial_ops/ui_routes.py` now require recent
+  MFA like their twin `licensing_admin.replace_device`; SEC-03b the generic subscription transition route
+  gates SUSPENDED/CANCELLED/EXPIRED behind `subscriptions.suspend`/`subscriptions.cancel` (held by SUPER_ADMIN
+  only today) plus recent MFA — SALES keeps every transition it needs to sell; SEC-05 Caddy (oracle-free) no
+  longer sets Content-Security-Policy / Referrer-Policy, so the app's own CSP (which allows the MFA enrolment
+  QR `data:` image) is the only one — takes effect on the NEXT deploy only; SEC-08 MFA is mandatory at login
+  for super admins, SUPER_ADMIN/ADMIN/FINANCE/SALES and any role holding licence/subscription/money/staff
+  capabilities, via the existing enrol-at-login flow (derived at login, no data migration); SEC-02 optional
+  `OWNER_MFA_ENCRYPTION_KEY` + `flask rekey-mfa [--dry-run]` + corrected `secret-and-key-management.md` (unset =
+  old behaviour, so the live server is unchanged until the owner opts in); CI now also triggers on push to
+  `feat/**` and `fix/**`; `bootstrap.sh` default REPO_BRANCH is `feat/money-fixes` (live server runs
+  `feat/real-email`; pass the branch explicitly).
+* SKIPPED, needs an owner decision: SEC-07 signing keys ride the nightly backup sweep. The repo has NO
+  separate signing-key backup path (backup-policy.md describes a manual procedure only), so excluding the keys
+  from `run_backup.sh` would leave them with no off-VM copy. Script left unchanged. Decide where key backups
+  go first, then exclude. (CBC without integrity is also unchanged: out of scope this wave.)
+* NOT FIXED, noted: `device_slot_exceptions.manage` create/revoke routes also lack recent auth (no exact
+  twin, so not touched); `deploy/staging/Caddyfile` (repo root) carries the same CSP override line and
+  `docs/ops/free-hosting-owner.md` still quotes the old bootstrap branch (both outside this wave's file set);
+  Attention "Failed Backups" reads only in-app `DatabaseBackupRecord` rows, so a failed NIGHTLY off-VM
+  `run_backup.sh` run is invisible to it; SUPPORT stays MFA-optional, which means a Support account without
+  MFA cannot perform the now recent-auth-gated slot release/replace until it enrols; FINANCE holds neither
+  `subscriptions.update` nor `subscriptions.suspend/cancel`, so only SUPER_ADMIN can suspend/cancel via the
+  generic route (grant them to FINANCE in `seed_data.py` if that is wanted).
