@@ -128,6 +128,9 @@ def test_a_restore_that_fails_reports_failed_and_runs_no_installer(L):
 def _drive_main(monkeypatch, L, ready, offer_result='not_offered'):
     offered = []
     fatal = []
+    trail_calls = []
+    monkeypatch.setattr(L, '_install_crash_trail', lambda **k: trail_calls.append(1) or {})   # hooks stay out of the test process
+    L._trail_calls = trail_calls
     monkeypatch.setattr(L, '_acquire_single_instance', lambda: 'handle')
     monkeypatch.setattr(L, '_bind_free_socket',
                         lambda: SimpleNamespace(getsockname=lambda: ('127.0.0.1', 5999)))
@@ -160,6 +163,7 @@ def test_healthy_post_update_boot_marks_ok_and_never_offers(monkeypatch, L):
     _arm_update(L)
     offered, fatal = _drive_main(monkeypatch, L, ready=True)
     L.main()
+    assert L._trail_calls == [1]                                # the crash trail is installed at the top of main()
     assert offered == [] and fatal == []                        # asked ZERO times
     marker = json.loads((Path(L._app_data) / 'updates' / 'boot_ok.json').read_text())
     assert marker == {'version': RUNNING}

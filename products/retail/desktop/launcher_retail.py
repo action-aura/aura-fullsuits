@@ -220,6 +220,89 @@ def _run_server(sock):
            channel_timeout=120, connection_limit=200, _quiet=True)
 
 
+# ── Crash trail (INSTALL-1, review #5 item 5) ──────────────────────────────
+# The frozen exe is windowed (console=False): sys.stderr is None, so a hard
+# crash (native fault in WebView2/pythonnet/sqlite) and an exception that
+# escapes main() both vanished without a trace -- startup.log only holds what
+# was logged on purpose. Two sinks, both under the shop's own data folder:
+#   * logs/faulthandler.log -- C-level tracebacks (access violations, aborts)
+#     that no Python hook can catch;
+#   * the crash-report store (commercial_runtime/crash_reports) -- uncaught
+#     Python exceptions on the main thread / on a thread that died before
+#     app.py installed its own hook, so a boot failure is a queued, scrubbed
+#     report rather than a line in a log nobody reads.
+_faulthandler_file = None        # kept open for the life of the process
+_crash_trail_state = {}
+
+
+def _install_crash_trail(*, app_data=None, store_factory=None, version_fn=None) -> dict:
+    """Install faulthandler + sys.excepthook + threading.excepthook. Never
+    raises: a crash reporter that stops the till starting is worse than none.
+    Returns what it installed (used by tests)."""
+    global _faulthandler_file
+    import faulthandler
+    app_data = app_data or _app_data
+    installed = {'faulthandler_path': None, 'store': None}
+    try:
+        path = Path(app_data, 'logs', 'faulthandler.log')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _faulthandler_file = open(path, 'a', encoding='utf-8')
+        faulthandler.enable(file=_faulthandler_file, all_threads=True)
+        installed['faulthandler_path'] = str(path)
+    except Exception as exc:
+        log.warning(f'faulthandler not enabled: {exc}')
+    try:
+        if store_factory is None:
+            from commercial_runtime.crash_reports.store import open_default_store as store_factory
+        store = store_factory(app_data)
+    except Exception as exc:
+        log.warning(f'crash store unavailable; uncaught errors will only reach the log: {exc}')
+        store = None
+    installed['store'] = store
+    version_fn = version_fn or _running_version
+
+    def _record(exc, kind):
+        if store is None or exc is None:
+            return
+        try:
+            from commercial_runtime.crash_reports import capture
+            store.record(capture.report_from_exception(
+                exc, kind=kind, route=None, app_version=version_fn() or 'unknown', platform='WINDOWS'))
+        except Exception as inner:
+            log.warning(f'could not record a crash: {inner}')
+
+    previous_sys_hook = sys.excepthook
+
+    def _sys_hook(exc_type, exc, tb):
+        if not issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
+            log.error('Uncaught exception in the launcher', exc_info=(exc_type, exc, tb))
+            _record(exc, 'launcher')
+        previous_sys_hook(exc_type, exc, tb)
+
+    previous_thread_hook = threading.excepthook
+
+    def _thread_hook(args):
+        # If something was chained ON TOP of this hook after we installed it
+        # (app.py's crash capture does exactly that when it is imported), it
+        # has already recorded this crash before calling us: recording here too
+        # would count one crash twice. We only record when we are the outermost
+        # hook -- i.e. the thread died before the app's own capture existed
+        # (an import-time failure, the one the rollback offer exists for).
+        try:
+            if threading.excepthook is _thread_hook and args.exc_type is not SystemExit \
+                    and args.exc_value is not None:
+                _record(args.exc_value, 'thread')
+        finally:
+            previous_thread_hook(args)
+
+    sys.excepthook = _sys_hook
+    threading.excepthook = _thread_hook
+    installed['sys_hook'] = _sys_hook
+    installed['thread_hook'] = _thread_hook
+    _crash_trail_state.update(installed)
+    return installed
+
+
 def _acquire_single_instance():
     """Best-effort single-instance guard via a named Windows mutex. Returns the
     handle if we are first, None if another instance already holds it."""
@@ -295,10 +378,42 @@ def _open_app_window(url):
             # browser Fullscreen API, which Esc/the button can always leave.
             '--window-size=1400,900', '--start-maximized',
             '--no-first-run', '--no-default-browser-check',
+            # No resident background owner of this profile after the window
+            # closes: _wait_for_app_window relies on the browser process
+            # ending with the window.
+            '--disable-background-mode',
         ])
     except Exception as exc:
         log.warning(f'Could not open app window via {exe}: {exc}')
         return None
+
+
+def _wait_for_app_window(proc, server_alive, poll_seconds=1.0, sleep=time.sleep) -> str:
+    """Block while the fallback window is open; return when the person closes
+    it (INSTALL-1, review #8 item 5).
+
+    This loop used to be `while server_thread.is_alive(): sleep(1)` -- the
+    server thread never ends by itself, so closing the Edge/Chrome window left
+    AuraRetail.exe running with no window, holding the single-instance mutex;
+    the next double-click then said "already running" and showed nothing.
+
+    `proc` is the browser we started with OUR OWN --user-data-dir (see
+    _open_app_window): a profile directory nothing else uses means the browser
+    does not hand the window to an already-running instance and exit, so this
+    process lives exactly as long as the window and is waitable. (If a stray
+    Edge ever does own that profile the launch returns at once and we would
+    quit with the window still open -- a known limit, mitigated by
+    --disable-background-mode so a closed window leaves no resident owner.)
+
+    `proc is None` is the default-browser path: there is no process to watch,
+    so it keeps the old behaviour of running until the server stops.
+    Returns 'window_closed' | 'server_stopped'."""
+    while True:
+        if not server_alive():
+            return 'server_stopped'
+        if proc is not None and proc.poll() is not None:
+            return 'window_closed'
+        sleep(poll_seconds)
 
 
 def _window_prefs_path() -> Path:
@@ -894,6 +1009,7 @@ def _run_native_window(url: str) -> bool:
 
 
 def main():
+    _install_crash_trail()
     instance = _acquire_single_instance()
     if instance is None:
         log.info('Another instance is already running -- exiting this launch.')
@@ -982,8 +1098,8 @@ def main():
             webbrowser.open(f'http://{HOST}:{port}')
 
         try:
-            while server_thread.is_alive():
-                time.sleep(1)
+            outcome = _wait_for_app_window(proc, server_thread.is_alive)
+            log.info(f'Edge/Chrome fallback wait ended: {outcome}')
         except KeyboardInterrupt:
             pass
 
