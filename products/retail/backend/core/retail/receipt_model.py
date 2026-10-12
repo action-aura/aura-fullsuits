@@ -82,7 +82,13 @@ _METHOD_LABELS = {
 
 #: Unicode bidi isolates: keep a number / amount a self-contained LTR island
 #: inside an RTL line instead of letting neighbours reorder its digits.
-LRI, PDI = "⁦", "⁩"
+LRI, PDI = "\u2066", "\u2069"
+#: Left-to-right mark: a strong-LTR character with no glyph. Measured on the
+#: real artefact (Chromium canvas, 2026-10-12): an isolate alone did NOT keep
+#: "x2" in order beside Arabic text -- it printed "2x". Flanking the quantity
+#: with LRMs makes the bidi algorithm resolve the neutral multiplication sign
+#: and the digit as left-to-right, so the isolate is kept and this is added.
+LRM = "\u200e"
 
 
 def _tr(text: str, lang: str) -> str:
@@ -95,7 +101,12 @@ def _fmt_money(value, currency, lang) -> str:
     text = money_format.format_money(value, currency)
     sym = pricing.currency_symbol(currency)
     if lang == "ar" and sym in AR_LABELS and text.startswith(sym):
-        text = AR_LABELS[sym] + text[len(sym):]
+        # The mark is isolated: an Arabic letter run followed by Western digits
+        # makes the bidi algorithm turn the digits into "Arabic numbers" and
+        # print the amount as "7.000 JD-mark" (mark on the wrong side).
+        # Measured on the real canvas 2026-10-12; an isolate keeps the mark
+        # first, as the till shows it.
+        text = LRI + AR_LABELS[sym] + PDI + text[len(sym):]
     return text
 
 
@@ -174,15 +185,20 @@ def build_receipt_model(
     # Branding block -- same fallback chain as `_brandingReceiptBlock`.
     name = branding.get("branding_business_name") or branding.get("business_name") or "Aura Retail"
     lines.append(_text(name, bold=True, size="large"))
-    for key in ("branding_address", "branding_phone"):
-        if branding.get(key):
-            lines.append(_text(branding[key], size="small"))
+    if branding.get("branding_address"):
+        lines.append(_text(branding["branding_address"], size="small"))
+    if branding.get("branding_phone"):
+        # Isolated: on an RTL line the digit groups of a phone number would
+        # otherwise come out in reverse order ("9485 006 78 962+").
+        lines.append(_text(f"{LRI}{branding['branding_phone']}{PDI}", size="small"))
     if branding.get("branding_tax_number"):
         lines.append(_text(f"Tax #: {LRI}{branding['branding_tax_number']}{PDI}", size="small"))
     if branding.get("branding_receipt_header"):
         lines.append(_text(branding["branding_receipt_header"], size="small"))
 
-    lines.append(_text(f"{tr('Receipt')} #{LRI}{sale.get('sale_number', '')}{PDI}"))
+    # "#" goes INSIDE the isolate, like the HTML slip's <bdi dir="ltr">#n</bdi>;
+    # outside it, an RTL line prints the hash on the wrong side of the number.
+    lines.append(_text(f"{tr('Receipt')} {LRI}#{sale.get('sale_number', '')}{PDI}"))
     if sale.get("created_at"):
         lines.append(_text(f"{LRI}{sale['created_at']}{PDI}"))
 
@@ -203,7 +219,7 @@ def build_receipt_model(
         if isinstance(promo, dict):
             promotions += discount
         label = item.get("name") or tr("Item")
-        label = f"{label} {LRI}×{_qty_text(qty)}{PDI}"
+        label = f"{label} {LRI}{LRM}\u00d7{_qty_text(qty)}{LRM}{PDI}"
         if discount > half:
             lines.append(_row(label, money(gross - discount), strike=money(gross)))
         else:

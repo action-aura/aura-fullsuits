@@ -16187,9 +16187,18 @@ def printer_test():
     }
 
     try:
-        payload = escpos_receipt.render_receipt(
-            sample_sale, width_chars=width_chars, currency=currency, shop=shop, kick=kick,
-        )
+        if kick and data.get('drawer_only') is True:
+            # PRINT-1: the Settings "Open Cash Drawer" button used to land here
+            # with only kick=True and so printed a WHOLE sample receipt with the
+            # pulse behind it -- a paper-wasting "drawer test" that also made
+            # it impossible to tell the pulse from the print. `drawer_only`
+            # sends the pulse and nothing else, the same bytes printer_kick
+            # sends. Opt-in, so every existing caller's bytes are unchanged.
+            payload = escpos_receipt.drawer_kick()
+        else:
+            payload = escpos_receipt.render_receipt(
+                sample_sale, width_chars=width_chars, currency=currency, shop=shop, kick=kick,
+            )
     except Exception as exc:
         return jsonify({'status': 'error', 'message': f'Could not render the test receipt: {exc}'}), 400
 

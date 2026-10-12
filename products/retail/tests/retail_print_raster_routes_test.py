@@ -278,13 +278,32 @@ def test_arabic_language_translates_labels_and_mirrors(shop):
     assert receipt_model.AR_LABELS['Total'] in labels
     assert 'Total' not in labels
     # Currency mark is the Arabic one, digits stay Western at 3 decimals.
-    assert any(t.startswith(receipt_model.AR_LABELS['JD']) for t in _texts(m))
+    assert any(receipt_model.AR_LABELS['JD'] in t for t in _texts(m))
 
 
 def test_ar_labels_match_the_shipped_arabic_catalogue():
     catalogue = json.loads((PRODUCT_DIR / 'frontend' / 'locales' / 'ar.json').read_text(encoding='utf-8'))
     for english, arabic in receipt_model.AR_LABELS.items():
         assert catalogue.get(english) == arabic, english
+
+
+def test_arabic_bidi_guards_are_in_the_model_strings():
+    """Pure (no sale): the three strings that came out WRONG on the real canvas
+    on 2026-10-12 and the isolate that fixes each. Without them the Arabic
+    receipt printed "9485 006 78 962+" for the phone, the hash on the wrong side
+    of the receipt number, and the currency mark after the digits."""
+    m = receipt_model.build_receipt_model(
+        sale={'sale_number': 'SALE-9', 'subtotal': 7, 'total': 7, 'amount_paid': 7},
+        items=[{'name': 'x', 'quantity': 2, 'unit_price': 3.5, 'applied_promotion': None}],
+        branding={'branding_phone': '+962 78 006 9485', 'business_name': 'S'},
+        currency='JOD', requested_lang='ar')
+    texts = _texts(m)
+    lrm = receipt_model.LRM
+    assert f"{receipt_model.LRI}+962 78 006 9485{receipt_model.PDI}" in texts
+    assert any(t.endswith(f"{receipt_model.LRI}#SALE-9{receipt_model.PDI}") for t in texts)
+    assert any(t.startswith(receipt_model.LRI + receipt_model.AR_LABELS['JD'] + receipt_model.PDI) for t in texts)
+    # quantity is flanked by LRMs so "x2" keeps its order beside Arabic text
+    assert any(f"{lrm}×2{lrm}" in t for t in texts)
 
 
 def test_model_other_company_sale_is_404(shop, other_company_admin):

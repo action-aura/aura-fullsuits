@@ -132,6 +132,10 @@
 #printer-card .ret-field:has(> #pr-auto-kick) { justify-content: flex-start; }
 #printer-card #pr-auto-kick { flex: 0 0 auto; inline-size: auto; }
 #printer-card #pr-auto-kick + label { flex: 0 1 auto; inline-size: auto; }
+/* PRINT-1: the "print receipt automatically" row sits beside it and needs the same rule. */
+#printer-card .ret-field:has(> #pr-auto-print) { justify-content: flex-start; }
+#printer-card #pr-auto-print { flex: 0 0 auto; inline-size: auto; }
+#printer-card #pr-auto-print + label { flex: 0 1 auto; inline-size: auto; }
 
 /* Category tax. */
 .sh-cat-status { min-block-size: 1.4em; margin: var(--space-snug) 0 0; font-size: var(--text-size-meta); color: var(--text-secondary); }
