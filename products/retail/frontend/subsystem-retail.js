@@ -4242,6 +4242,56 @@ const RetailSystem = {
            a screenshot happened to check. */
         #pos-change { font-size:clamp(24px, 2.4vw, var(--text-size-display, 30px)); }
 
+        /* ── Cash panel (UI-1, review A #1) ───────────────────────────────────
+           Cash was a 100px, 14px number box with a browser spinner: a touch-only
+           till needed the Windows on-screen keyboard, there were no note buttons,
+           and the figure the cashier says aloud (change) was the smallest text on
+           screen. The panel is an OVERLAY on the cart area, not a new row: the
+           tender footer is tuned to the pixel (retail_p0_till_e2e.py item 7, the
+           size e2e), and a permanent 190px block would push Charge off a 768px
+           till. It opens on Cash / F1 / "go to pay", and closes on Esc, another
+           tender, Charge or the cart emptying. #pos-tendered stays the one model
+           (the pad writes into it, physical typing still goes to it), so every
+           existing keyboard path keeps working.
+           Sizes: the figure is the design system's display token (30px) -- never
+           the total's size, so retail_surface_pos_test.js's "total is the largest
+           money element" still holds. */
+        .pos-right { position:relative; }
+        .pos-cashpanel { position:absolute;inset-inline:0;z-index:6;display:flex;flex-direction:column;gap:8px;
+          padding-block:10px;padding-inline:12px;overflow:auto;box-sizing:border-box;
+          background:var(--surface-card);border-block-end:1px solid var(--border-mid);box-shadow:0 8px 18px rgba(0,0,0,.14); }
+        .pos-cashpanel[hidden] { display:none; }
+        .pos-cp-top { display:flex;align-items:center;gap:8px;flex-shrink:0; }
+        .pos-cp-status { flex:1;min-inline-size:0;display:flex;flex-direction:column;gap:0;color:var(--text); }
+        .pos-cp-lbl { font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted); }
+        /* 30px, not var(--text-size-display): that token resolves to 32px in the
+           live stylesheet, which is exactly where a short till's total is
+           floored (.pos-grand-value, max-height:820px) -- the figure would TIE
+           the total at 1024x768. Measured by retail_ui1_cash_e2e.py: figure 30px
+           against a 32-36px total on every size. */
+        #pos-cp-fig { font-size:30px;font-weight:800;line-height:1.1;white-space:nowrap;font-variant-numeric:tabular-nums; }
+        .pos-cp-status[data-state="change"] .pos-cp-lbl, .pos-cp-status[data-state="change"] #pos-cp-fig { color:var(--text-money-positive, var(--text)); }
+        .pos-cp-body { display:flex;gap:12px;align-items:stretch;min-block-size:0; }
+        .pos-cp-pad { display:grid;grid-template-columns:repeat(3,minmax(54px,1fr));gap:6px;flex:1 1 0;min-inline-size:0;direction:ltr; }
+        .pos-cp-chips { display:flex;flex-direction:column;gap:6px;flex:0 0 38%;min-inline-size:0; }
+        button.pos-cp-key, button.pos-cp-chip { min-block-size:var(--touch-target-min, 44px);min-inline-size:44px;border-radius:10px;
+          border:1px solid var(--border-mid);background:var(--surface-soft);color:var(--text);
+          font-family:inherit;font-size:20px;font-weight:700;cursor:pointer;font-variant-numeric:tabular-nums;
+          transition:background .12s ease, transform .1s ease; }
+        button.pos-cp-key:hover, button.pos-cp-chip:hover, button.pos-cp-key:focus-visible, button.pos-cp-chip:focus-visible { background:var(--surface-hover); }
+        button.pos-cp-key:active, button.pos-cp-chip:active { transform:scale(0.96); }
+        button.pos-cp-chip { flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;font-size:18px;line-height:1.15; }
+        button.pos-cp-chip-exact { background:var(--sub-accent);border-color:var(--sub-accent);color:var(--text-on-accent, var(--text-inverse)); }
+        .pos-cp-chip-sub { font-size:13px;font-weight:600; }
+        button.pos-cp-back, button.pos-cp-close { flex:0 0 auto;font-size:18px; }
+        /* A 768px till has ~310px between the sale header and the Total row.
+           The keys keep their 44px touch floor; only the gaps and padding give. */
+        @media (max-height: 800px) {
+          .pos-cashpanel { gap:6px;padding-block:8px; }
+          .pos-cp-pad { gap:4px; }
+          .pos-cp-chips { gap:4px; }
+        }
+
         /* ── Tender + charge ─────────────────────────────────────────────── */
         /* ROUND 2, T1 (item #7(c) REGRESSION): repeat(3,1fr) kept -- a
            repeat(6,1fr) single-row variant was built and measured live
@@ -5166,10 +5216,10 @@ const RetailSystem = {
             <div class="pos-sum-row" id="pos-tendered-row">
               <span id="pos-amount-label">${t('Cash Tendered')}</span>
               <span style="display:flex;gap:10px;align-items:baseline">
-                <input type="number" id="pos-tendered" placeholder="${(0).toFixed(this._currencyDp())}" min="0" step="${(1 / Math.pow(10, this._currencyDp())).toFixed(this._currencyDp())}"
+                <input type="text" inputmode="decimal" autocomplete="off" id="pos-tendered" placeholder="${(0).toFixed(this._currencyDp())}" min="0" step="${(1 / Math.pow(10, this._currencyDp())).toFixed(this._currencyDp())}"
                   class="pos-mini-input" style="inline-size:100px;padding-inline:10px;font-size:14px"
                   aria-label="${this._esc(t('Cash Tendered'))}"
-                  oninput="RetailSystem._calcChange()" />
+                  oninput="RetailSystem._onTenderedInput(this)" />
                 <span class="pos-change-row" id="pos-change-row" style="display:none">
                   <span class="pos-change-lbl" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.03em">${t('Change Due')}</span><span class="pos-sum-val money" id="pos-change">$0.00</span>
                 </span>
@@ -5177,6 +5227,7 @@ const RetailSystem = {
             </div>
             <button class="pos-checkout-btn" id="pos-checkout-btn" aria-keyshortcuts="F10" onclick="RetailSystem._checkout()">${this._esc(this._checkoutLabel(0))}</button>
           </div>
+          ${this._cashPanelHtml()}
         </div>
         <!-- retail-hardware-viewports Step 9 (docs/design/phone-ui-redesign.md
              §3.1 "POS -- the money screen"): the phone "money edge". Measured
@@ -6403,6 +6454,7 @@ const RetailSystem = {
   // caret genuinely does belong back at the scan field for the next customer.
   _clearCart() {
     this._cart = [];
+    this._closeCashPanel(false);
     this._resetSaleControls();
     this._renderCart();
     this._refocusScan(true);
@@ -7241,6 +7293,204 @@ const RetailSystem = {
     } else {
       if (changeRow) changeRow.style.display = 'none';
     }
+    this._updateCashPanel();
+  },
+
+  // ══ CASH PANEL (UI-1) ═════════════════════════════════════════════════════
+  // See the .pos-cashpanel CSS block for why this is an overlay. The panel never
+  // holds a number of its own: #pos-tendered is the model; the pad edits it, the
+  // chips set it, and _calcChange()/_updateCashPanel() read it back.
+
+  // The notes a cashier is actually handed. Three-decimal currencies are the
+  // dinar family (JOD notes: 1, 5, 10, 20, 50); everything else gets the usual
+  // 1..100 ladder. A chip is a NOTE (or the exact total) -- never a rounded
+  // version of the total.
+  POS_CASH_NOTES_3DP: [1, 5, 10, 20, 50],
+  POS_CASH_NOTES_DEFAULT: [1, 5, 10, 20, 50, 100],
+  // "Exact" + at most four notes: five chips fit beside the pad on a 768px till.
+  POS_CASH_CHIP_MAX: 5,
+
+  // Pure: the chips for `total` (major units) at `dp` decimals. Exact first
+  // (the total itself, to the minor unit, never rounded), then the notes ABOVE
+  // the total in ascending order. A note equal to or below the total is no
+  // chip: it could not pay the sale. When the total is at or beyond the
+  // largest note, the next multiple of that note is offered so the row is
+  // never just "Exact" on a 60-dinar sale.
+  _cashChips(total, dp) {
+    const unit = Math.pow(10, dp);
+    const totalMinor = Math.round((Number(total) || 0) * unit);
+    if (!(totalMinor > 0)) return [];
+    const ladder = dp === 3 ? this.POS_CASH_NOTES_3DP : this.POS_CASH_NOTES_DEFAULT;
+    const notes = ladder.filter((d) => d * unit > totalMinor);
+    if (!notes.length) {
+      const top = ladder[ladder.length - 1];
+      let next = Math.ceil(totalMinor / unit / top) * top;
+      if (next * unit <= totalMinor) next += top;
+      notes.push(next);
+    }
+    const chips = [{ exact: true, value: totalMinor / unit }];
+    notes.slice(0, this.POS_CASH_CHIP_MAX - 1).forEach((d) => chips.push({ exact: false, value: d }));
+    return chips;
+  },
+
+  // What must still be handed over in cash, in minor units -- the same figure
+  // _calcChange() compares the tendered amount against (loyalty redemption and
+  // already-taken part payments both lower it).
+  _cashDueMinor() {
+    const cu = this._currentTotals || {};
+    let due = cu.amountDue != null ? cu.amountDue : (cu.total || 0);
+    if (this._tenderParts && this._tenderParts.length) due = this._fromMinor(this._remainingMinor());
+    return this._toMinor(due);
+  },
+
+  _cashPanelHtml() {
+    const key = (k) => `<button type="button" class="pos-cp-key" data-k="${k}" onmousedown="event.preventDefault()" onclick="RetailSystem._cashPadKey('${k}')">${k}</button>`;
+    return `
+      <div class="pos-cashpanel" id="pos-cashpanel" role="group" aria-label="${this._esc(t('Cash payment'))}" hidden>
+        <div class="pos-cp-top">
+          <div class="pos-cp-status" id="pos-cp-status" data-state="due" aria-live="polite">
+            <span class="pos-cp-lbl" id="pos-cp-lbl">${t('Amount due')}</span>
+            <span class="pos-cp-fig money" id="pos-cp-fig"></span>
+          </div>
+          <button type="button" class="pos-cp-key pos-cp-back" id="pos-cp-back" aria-label="${this._esc(t('Delete last digit'))}" onmousedown="event.preventDefault()" dir="ltr" onclick="RetailSystem._cashPadKey('back')">←</button>
+          <button type="button" class="pos-cp-key pos-cp-close" id="pos-cp-close" aria-label="${this._esc(t('Close'))}" onmousedown="event.preventDefault()" onclick="RetailSystem._closeCashPanel(true)">✕</button>
+        </div>
+        <div class="pos-cp-body">
+          <div class="pos-cp-pad" id="pos-cp-pad" dir="ltr">${['7', '8', '9', '4', '5', '6', '1', '2', '3', '.', '0', '00'].map(key).join('')}</div>
+          <div class="pos-cp-chips" id="pos-cp-chips"></div>
+        </div>
+      </div>`;
+  },
+
+  // Physical typing in the amount box: keep it a plain decimal number (the box
+  // is type=text now -- type=number cannot hold "3." while the cashier is
+  // mid-entry, which is what a pad's "." key needs -- and carries no spinner).
+  // Arabic-Indic digits typed on an Arabic layout are folded to 0-9.
+  _onTenderedInput(el) {
+    if (el) {
+      const dp = this._currencyDp();
+      let v = String(el.value == null ? '' : el.value)
+        .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+        .replace(/[^0-9.]/g, '');
+      const dot = v.indexOf('.');
+      if (dot !== -1) {
+        v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '');
+        v = dp === 0 ? v.slice(0, dot) : v.slice(0, dot + 1 + dp);
+      }
+      if (v !== el.value) el.value = v;
+    }
+    this._calcChange();
+  },
+
+  // A pad key. Appends to / edits #pos-tendered the way a calculator would:
+  // no leading zeros ("0" then "5" is "5"), one ".", at most _currencyDp()
+  // decimals (so 3 for JOD -- a 4th digit is ignored, never silently rounded),
+  // "00" does nothing on an empty box, "back" drops the last character.
+  _cashPadKey(k) {
+    const box = document.getElementById('pos-tendered');
+    if (!box) return;
+    const dp = this._currencyDp();
+    let v = String(box.value == null ? '' : box.value);
+    if (k === 'back') {
+      v = v.slice(0, -1);
+    } else if (k === '.') {
+      if (dp === 0 || v.indexOf('.') !== -1) return;
+      v = (v === '' ? '0' : v) + '.';
+    } else {
+      if (k === '00' && (v === '' || v === '0')) return;
+      if (v === '0') v = '';
+      const next = v + k;
+      const dot = next.indexOf('.');
+      if (dot !== -1 && next.length - dot - 1 > dp) return;
+      if (next.replace('.', '').length > 9) return;
+      v = next;
+    }
+    box.value = v;
+    this._calcChange();
+  },
+
+  // A chip sets the amount received. It never charges: the cashier still
+  // confirms with Charge / F10 / Enter, exactly as after typing the amount.
+  _cashChipPick(i) {
+    const chip = (this._cpChips || [])[i];
+    const box = document.getElementById('pos-tendered');
+    if (!chip || !box) return;
+    box.value = chip.exact ? chip.value.toFixed(this._currencyDp()) : String(chip.value);
+    this._calcChange();
+  },
+
+  _openCashPanel() {
+    const panel = document.getElementById('pos-cashpanel');
+    if (!panel || !this._cart.length || this._paymentMethod !== 'cash') return;
+    panel.hidden = false;
+    this._cashPanelOpen = true;   // the DOM flag alone is not trusted: see _updateCashPanel
+    this._cpDue = null;      // force the chips to be rebuilt
+    this._updateCashPanel();
+  },
+
+  _closeCashPanel(refocus) {
+    const panel = document.getElementById('pos-cashpanel');
+    this._cashPanelOpen = false;
+    if (!panel || panel.hidden !== false) return;
+    panel.hidden = true;
+    if (refocus) this._refocusScan(true);
+  },
+
+  _cashPanelIsOpen() {
+    const panel = document.getElementById('pos-cashpanel');
+    return !!panel && panel.hidden === false && !!this._cashPanelOpen;
+  },
+
+  // Re-reads #pos-tendered and the amount due and repaints the panel: the big
+  // figure is "Amount due" until something is typed, "Still to pay" while the
+  // amount is short, and "Change due" (green) once it covers the total. Change
+  // is computed in integer minor units, so 10 - 6.9 is 3.100, not 3.0999999999999996.
+  _updateCashPanel() {
+    const panel = document.getElementById('pos-cashpanel');
+    // Open = this code opened it AND the element is shown. `hidden` alone is
+    // not enough: several test harnesses hand this file element stubs whose
+    // `hidden` defaults to false, which would read as "open" on every sale.
+    if (!this._cashPanelOpen || !panel || panel.hidden !== false) return;
+    const dp = this._currencyDp();
+    const dueMinor = this._cashDueMinor();
+    const box = document.getElementById('pos-tendered');
+    const raw = box && box.value !== '' ? parseFloat(box.value) : NaN;
+    const typedMinor = raw > 0 ? this._toMinor(raw) : 0;
+    let state = 'due';
+    let shownMinor = dueMinor;
+    if (typedMinor > 0 && typedMinor >= dueMinor) { state = 'change'; shownMinor = typedMinor - dueMinor; }
+    else if (typedMinor > 0) { state = 'short'; shownMinor = dueMinor - typedMinor; }
+    const status = document.getElementById('pos-cp-status');
+    const lbl = document.getElementById('pos-cp-lbl');
+    const fig = document.getElementById('pos-cp-fig');
+    if (status && typeof status.setAttribute === 'function') status.setAttribute('data-state', state);
+    if (lbl) lbl.textContent = t(state === 'change' ? 'Change Due' : state === 'short' ? 'Still to pay' : 'Amount due');
+    if (fig) this._setMoney(fig, this._fromMinor(shownMinor));
+    if (this._cpDue !== dueMinor) {
+      this._cpDue = dueMinor;
+      this._cpChips = this._cashChips(this._fromMinor(dueMinor), dp);
+      const chipBox = document.getElementById('pos-cp-chips');
+      if (chipBox) {
+        chipBox.innerHTML = this._cpChips.map((c, i) => c.exact
+          ? `<button type="button" class="pos-cp-chip pos-cp-chip-exact" data-chip="exact" onmousedown="event.preventDefault()" onclick="RetailSystem._cashChipPick(${i})"><span>${t('Exact')}</span><span class="pos-cp-chip-sub">${this._esc(c.value.toFixed(dp))}</span></button>`
+          : `<button type="button" class="pos-cp-chip" data-chip="note" onmousedown="event.preventDefault()" onclick="RetailSystem._cashChipPick(${i})">${this._esc(String(c.value))}</button>`).join('');
+      }
+    }
+    // Sit just under the sale header and stop above the Total row, so the
+    // total (the number the customer checks) is never covered while paying.
+    if (typeof panel.getBoundingClientRect === 'function' && panel.parentElement) {
+      const pane = panel.parentElement;
+      const hdr = pane.querySelector ? pane.querySelector('.pos-pane-hdr') : null;
+      const totalEl = document.getElementById('pos-total');
+      const top = hdr ? hdr.offsetHeight : 0;
+      panel.style.insetBlockStart = top + 'px';
+      if (totalEl && typeof totalEl.getBoundingClientRect === 'function') {
+        // The figure itself, not its row: the 32-36px total overflows its row's
+        // box upwards, and a row-based stop clipped its top edge at 1024x768.
+        const stop = totalEl.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+        panel.style.maxBlockSize = Math.max(140, stop - top - 6) + 'px';
+      }
+    }
   },
 
   // ══ TENDER GRID ═══════════════════════════════════════════════════════════
@@ -7466,6 +7716,7 @@ const RetailSystem = {
     if (method !== 'cash') {
       if (document.getElementById('pos-tendered')) document.getElementById('pos-tendered').value = '';
       if (changeRow) changeRow.style.display = 'none';
+      this._closeCashPanel(false);
     }
     // Picking a tender is a button press, not a typing target — hand the
     // keyboard back to the scanner.
@@ -7495,6 +7746,9 @@ const RetailSystem = {
   _pickTender(method, btn) {
     if (this._tryAddTenderPart(method)) return;
     this._setPayment(method, btn);
+    // UI-1: choosing Cash (tile or F1) opens the cash panel. Not inside
+    // _setPayment: _syncCreditButtonState calls that internally.
+    if (method === 'cash') this._focusTendered();
   },
 
   // Returns true when the keypress was consumed as a part (or refused as one).
@@ -8402,6 +8656,8 @@ const RetailSystem = {
   // the key -- see _onPOSShortcut's dialog guard) > clear the search > clear
   // the line selection > cancel a pending quantity. It never voids the sale.
   _onEscapeKey(e, el) {
+    // UI-1: an open cash panel is the innermost thing, so it closes first.
+    if (this._cashPanelIsOpen()) { this._closeCashPanel(true); return; }
     const search = document.getElementById('pos-search');
     if (search && search.value) {
       search.value = '';
@@ -8468,6 +8724,9 @@ const RetailSystem = {
     if (!f || typeof f.focus !== 'function') return;
     this._syncTenderUI('cash');
     try { f.focus(); if (typeof f.select === 'function') f.select(); } catch (err) { /* focus is a courtesy */ }
+    // UI-1: the cash panel opens wherever the cashier is sent to the amount box
+    // (F1, Enter-to-pay, the Cash tile, the next part of a split).
+    this._openCashPanel();
   },
 
   _focusDiscount() {
@@ -9368,7 +9627,13 @@ const RetailSystem = {
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:380px;text-align:center" id="ret-receipt-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-receipt-dialog-title">
+      <!-- UI-1: the dialog is a flex column with overflow hidden; ONLY .rcpt-body
+           scrolls. With five or more lines the whole .ret-modal used to scroll as
+           one block (max-height:88vh; overflow-y:auto), so on a 768px till the
+           WhatsApp row -- and, with a long sale, New Sale -- were cut off below
+           the fold. The actions are a sibling of the scroller and stay put. -->
+      <div class="ret-modal" style="width:380px;text-align:center;display:flex;flex-direction:column;overflow:hidden" id="ret-receipt-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-receipt-dialog-title">
+        <div class="rcpt-body" id="rcpt-body" style="flex:1 1 auto;min-block-size:0;overflow-y:auto;padding-inline-end:4px">
         <div style="font-size:52px;margin-bottom:12px">${this._icon('circle-check-big', 52, '✅', { animate: 'pop' })}</div>
         <h3 id="ret-receipt-dialog-title" style="margin:0 0 6px">${t('Sale Complete!')}</h3>
         <!-- The receipt number is DATA and stays OUT of the translated
@@ -9382,7 +9647,16 @@ const RetailSystem = {
              _docNoHtml() (Phase 0 #16) is what actually builds that <bdi>
              now -- see its own comment for why the legacy company/device
              fragments are dropped from the PROMINENT number here. -->
-        <p style="color:var(--text-muted);margin:0 0 20px">${t('Receipt #')} ${this._docNoHtml(saleData.sale_number)}</p>
+        <p style="color:var(--text-muted);margin:0 0 16px">${t('Receipt #')} ${this._docNoHtml(saleData.sale_number)}</p>
+        <!-- UI-1 (review A #1): "Change due" is the number the cashier says aloud
+             and hands back, and it used to be a 13px line at the BOTTOM of the
+             summary box -- the least prominent text on the screen. It leads the
+             dialog now, 40px and green (the money-in token). It is MOVED, not
+             duplicated: the small summary row is gone. -->
+        ${saleData.change > 0 ? `<div class="rcpt-change" id="rcpt-change" style="margin:0 0 18px">
+          <div class="rcpt-change-lbl" style="font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-money-positive)">${t('Change due')}</div>
+          <div class="rcpt-change-fig money" id="rcpt-change-fig" dir="ltr" style="font-size:40px;font-weight:800;line-height:1.1;color:var(--text-money-positive);white-space:nowrap;font-variant-numeric:tabular-nums">${this._fmt(saleData.change)}</div>
+        </div>` : ''}
         <div style="background:var(--surface-sunken);border-radius:10px;padding:16px;text-align:left;margin-bottom:20px">
           <!-- AUDIT (Phase 0 #6): fallback chain is server name -> this
                cart's OWN captured name (cartNames, before _clearCart() ran)
@@ -9444,11 +9718,10 @@ const RetailSystem = {
             ${saleData.points_redeemed_amount > 0 ? `<div style="display:flex;justify-content:space-between;font-size:13px">
               <span style="color:var(--text-secondary)">${t('Points Redeemed')}</span><span style="color:var(--text-money-positive);font-weight:700;white-space:nowrap">-${this._fmt(saleData.points_redeemed_amount)}</span>
             </div>` : ''}
-            ${saleData.change > 0 ? `<div style="display:flex;justify-content:space-between;font-size:13px">
-              <span style="color:var(--text-secondary)">${t('Change due')}</span><span style="color:var(--text-money-positive);font-weight:700;white-space:nowrap">${this._fmt(saleData.change)}</span>
-            </div>` : ''}
           </div>
         </div>
+        </div><!-- /rcpt-body -->
+        <div class="rcpt-actions" style="flex:0 0 auto">
         <div style="display:flex;gap:10px">
           <button class="ret-btn ret-btn-ghost" style="flex:1" onclick="RetailSystem._printFromModal()"><span aria-hidden="true">${this._icon('printer', 16, '🖨️')}</span> ${t('Print')}</button>
           <button class="ret-btn ret-btn-primary" style="flex:1" onclick="RetailSystem._closeModalOverlay(this)">${t('New Sale')}</button>
@@ -9473,6 +9746,7 @@ const RetailSystem = {
                WHERE it sends. The verb names the channel. -->
           <button type="button" class="ret-btn ret-btn-ghost" id="rcpt-wa-send-btn" style="white-space:nowrap">${t('Send on WhatsApp')}</button>
         </div>
+        </div><!-- /rcpt-actions -->
       </div>`;
     document.body.appendChild(overlay);
     // P1a item #6: prefill the WhatsApp field from the sale's OWN customer,
