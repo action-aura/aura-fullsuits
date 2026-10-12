@@ -2712,7 +2712,6 @@
   "Sale / Receipt Number *": "رقم البيع / الإيصال *",
   "Lookup": "بحث",
   "Return Reason": "سبب الإرجاع",
-  "Items from {sale}": "أصناف من {sale}",
   "Sold Qty": "الكمية المباعة",
   "Return Qty": "الكمية المرتجعة",
   "Choose how the customer pays": "اختيار طريقة دفع العميل",
@@ -2740,5 +2739,6 @@
   "Still to pay": "المتبقي للدفع",
   "Exact": "بالضبط",
   "Delete last digit": "حذف آخر رقم",
-  "Aura Retail": "Aura للتجزئة"
+  "Aura Retail": "Aura للتجزئة",
+  "Phone and WhatsApp": "الهاتف وواتساب"
 }

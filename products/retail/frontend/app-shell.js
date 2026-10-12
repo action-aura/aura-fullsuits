@@ -3958,7 +3958,7 @@ const SubsystemApp = {
 
         <div class="sub-sidebar-bottom">
           ${hasAI ? `
-          <button class="sub-ai-btn" id="sub-ai-sidebar-btn" onclick="SubAI.open('${systemId}')">
+          <button class="sub-ai-btn" id="sub-ai-sidebar-btn"${window.SubAI && window.SubAI._configured === false ? ' hidden' : ''} onclick="SubAI.open('${systemId}')">
             <span>${window.AuraIcons ? AuraIcons.render('sparkles', 18) : '🤖'}</span> <span>${t('AI Assistant')}</span>
             <!-- P0 review-fix (2026-09-27) -- this dot used to render
                  unconditionally, an always-on "the assistant is live" claim
@@ -4071,6 +4071,13 @@ const SubsystemApp = {
     // operate -- which is arguably worse than being skipped, because it looks
     // like it should work.
     this._wireNavKeyboardActivation(shell);
+    // UI-1: learn whether an assistant is configured, so the AI button is not
+    // offered on a shop where it can only say "Not set up". Quiet and
+    // authoritative-answers-only (see SubAI.refreshAvailability). Only when the
+    // button exists at all (hasAI): a cashier has no retail.reports, the status
+    // route answers them 403, and retail_p2_today_e2e.py counts that refusal as
+    // an error on the cashier's screen -- caught the first time it ran.
+    if (hasAI && window.SubAI && typeof window.SubAI.refreshAvailability === 'function') window.SubAI.refreshAvailability(systemId);
   },
 
   // ── Identity chip helpers (P1a item 2) ──────────────────────────────────
@@ -5345,7 +5352,7 @@ const SubsystemApp = {
               <span>${t('Backup & Export')}</span>
             </button>` : '',
       hasAI ? `
-            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubAI.open('${this.active}')">
+            <button class="sub-more-row sub-more-ai"${window.SubAI && window.SubAI._configured === false ? ' hidden' : ''} onclick="SubsystemApp._closeMoreSheet();SubAI.open('${this.active}')">
               <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('sparkles', 20) : '🤖'}</span>
               <span>${t('AI Assistant')}</span>
             </button>` : '',

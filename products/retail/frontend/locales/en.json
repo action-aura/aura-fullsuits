@@ -2712,7 +2712,6 @@
   "Sale / Receipt Number *": "Sale / Receipt Number *",
   "Lookup": "Lookup",
   "Return Reason": "Return Reason",
-  "Items from {sale}": "Items from {sale}",
   "Sold Qty": "Sold Qty",
   "Return Qty": "Return Qty",
   "Choose how the customer pays": "Choose how the customer pays",
@@ -2740,5 +2739,6 @@
   "Still to pay": "Still to pay",
   "Exact": "Exact",
   "Delete last digit": "Delete last digit",
-  "Aura Retail": "Aura Retail"
+  "Aura Retail": "Aura Retail",
+  "Phone and WhatsApp": "Phone and WhatsApp"
 }

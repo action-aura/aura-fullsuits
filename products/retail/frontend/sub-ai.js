@@ -91,6 +91,7 @@
       this._systemId = systemId || 'retail';
       const panel = document.getElementById(PANEL_ID);
       if (!panel) return;
+      this._returnFocusTo = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
       panel.classList.remove('hidden');
       panel.setAttribute('aria-hidden', 'false');
       if (!this._history.length) {
@@ -174,6 +175,54 @@
       if (!panel) return;
       panel.classList.add('hidden');
       panel.setAttribute('aria-hidden', 'true');
+      // Hand the keyboard back to where it was (the till's scan box, a field):
+      // closing a side panel must not strand focus on a hidden textarea.
+      const back = this._returnFocusTo;
+      this._returnFocusTo = null;
+      if (back && back.isConnected && typeof back.focus === 'function') { try { back.focus(); } catch (e) { /* courtesy */ } }
+    },
+
+    // UI-1: the panel sits over the till's right pane and had no Escape-to-
+    // close -- the only way out was the small x. Escape closes it when the
+    // keystroke is the panel's own (focus inside it) or nobody else's (focus on
+    // the page body); a dialog, a field elsewhere or an already-handled key
+    // (defaultPrevented) is left alone, so one Esc never closes two things.
+    _onEscape(e) {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const panel = document.getElementById(PANEL_ID);
+      if (!panel || panel.classList.contains('hidden')) return;
+      const tgt = e.target;
+      const own = !!(tgt && panel.contains && panel.contains(tgt));
+      const bare = !tgt || tgt === document.body || tgt === document.documentElement;
+      if (!own && !bare) return;
+      e.preventDefault();
+      this.close();
+    },
+
+    // UI-1: while no assistant is configured there is nothing behind the
+    // sidebar button but a panel that says "Not set up" -- a dead door on every
+    // screen. Ask the server once (quietly: no 'Checking...' flash in the panel,
+    // and ONLY an authoritative answer counts -- a 401 before sign-in or a
+    // network blip must not hide the button for the whole session), then show
+    // or hide the button. The first-time owner reaches the setup from Settings.
+    async refreshAvailability(systemId) {
+      try {
+        const res = await fetch(`/api/sub/${systemId || this._systemId}/ai/status`, { credentials: 'include', cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => null);
+        if (!data || typeof data.configured !== 'boolean') return;
+        this._configured = data.configured === true;
+      } catch (e) { return; }
+      this._syncAvailability();
+      this._syncPulseDot();
+    },
+
+    _syncAvailability() {
+      const hide = this._configured === false;
+      const btn = document.getElementById(SIDEBAR_BTN_ID);
+      if (btn) btn.hidden = hide;
+      document.querySelectorAll('.sub-more-ai').forEach((row) => { row.hidden = hide; });
+      if (hide) this.close();
     },
 
     toggle(systemId) {
@@ -558,6 +607,7 @@
           }
         });
       }
+      document.addEventListener('keydown', (e) => SubAI._onEscape(e));
     },
   };
 
