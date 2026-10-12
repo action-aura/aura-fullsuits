@@ -7712,3 +7712,63 @@ list (review finding F7; confirmed inside the built APK).
   OWED: a native Arabic reader must review the five new strings in `locales/ar.json` (auto-print option, "Receipt did not
   print", "Drawer didn't open?", "Drawer opened", "Drawer did not open") and the receipt labels in
   `receipt_model.AR_LABELS` (inherited from the existing catalogue, not re-reviewed).
+
+* **2026-10-12 -- UI-1 (cash pad, till fits 1024/1366, Arabic finishing, first run) -- no schema claim** (branch `feat/ui-1`;
+  frontend + tests only, no `RETAIL_SCHEMA_VERSION` bump, no backend change). Review `A-ui-ux.md` Part 1 #1, #2, #4, #9 + the
+  honourable mentions.
+  BUILT: (1) Arabic finishing -- `dir="auto"` on every product/customer/supplier name (tile, cart line, picker rows, held sales,
+  tables) and FSI/PDI isolates in `<option>` text with the phone forced LTR; ~45 literals in Add/Edit Product, Add/Edit Customer and
+  Process Return wrapped in `t()`; the F12 key-card line; every `showErr()` message and the activation-failure sentences on the
+  setup / sign-in / join / activate screens. (2) First run -- EN|ع keeps what was typed on the create-account form (memory only);
+  Today shows ONE calm line instead of a "Tax reporting: needs attention" card while e-invoicing was never switched on
+  (`tax_regime` none => reason `switched_off`; every enabled-but-unhealthy reason keeps its card); "1 transaction"; the product is
+  "Aura Retail" on the setup heading, licence page and plan rows. (3) Till fit -- 900-1100px wide is a real till (two columns,
+  pinned height, the cart list is the only scroller), tenders in two rows of three there, key legend folded to "F12 All keys" and the
+  drawer bar to one line on 768px-tall tills, Large cart-row floor 74 -> 68px. (4) Cash panel -- overlay opened by the Cash tile / F1 /
+  Enter-to-pay: 3x4 pad (7-8-9 / 4-5-6 / 1-2-3 / . 0 00) + backspace, chips Exact + the JOD notes above the total (max 5, never
+  rounded), figure Amount due / Still to pay / Change due at 30px, `#pos-tendered` is now type=text (no spinner); Sale Complete leads
+  with Change due at 40px green and its body scrolls while Print / New Sale / WhatsApp stay put. (5) AI panel closes on Escape and
+  returns focus; the AI sidebar button is hidden while the server says no assistant is configured (401 / offline never hide it);
+  Help shows and links the company number +962 78 006 9485 (support WhatsApp constant set; SALES stays null).
+  MEASURED (6 cart lines, headless Chromium, `retail_p1c_size_e2e.py`): Charge button bottom edge vs viewport height --
+  Large: 1024x768 741/768 (was 1150, AR 1092), 1366x768 741/768, 1920x1080 1049/1080; Normal: 1024x768 743/768 (was 1426),
+  1366x768 743/768, 1920x1080 1043/1080. Shell overflow 0px everywhere; cart list scrolls; 1366x768 Large shows 4 full rows (was 3).
+  NOT BUILT: the `Compact` density preset (Settings > Display); the currency / tax-rate / receipt-language setup step the review
+  proposed for first run (still 4 of 10 checklist steps on day one); a dedicated sales WhatsApp number; chips/notes for non-JOD
+  currencies are a generic 1..100 ladder, not per-currency note sets (KWD/BHD/OMR have different notes); no press-and-hold or
+  auto-charge on a chip (a chip only sets the amount); the pad has no thousands separators.
+  NOT PROVEN: no real touch screen was used -- 44px keys and the pad were driven by mouse in headless Chromium; the phone
+  (<=640px) bottom-sheet layout of the cash panel was not screenshotted.
+  OWED: a native Arabic reader must review these new `locales/ar.json` strings (en -> ar):
+    Edit Product -> تعديل منتج | Product Name * -> اسم المنتج * | SKU * -> رمز الصنف * | Barcode -> الباركود | Scan -> مسح |
+    Cost Price -> سعر التكلفة | Sell Price * -> سعر البيع * | Unit -> الوحدة | Reorder Level -> حد إعادة الطلب |
+    Initial Stock -> المخزون الابتدائي | Product added -> تمت إضافة المنتج | Edit Customer -> تعديل عميل |
+    Full Name * -> الاسم الكامل * | Sale / Receipt Number * -> رقم البيع / الإيصال * | Lookup -> بحث |
+    Return Reason -> سبب الإرجاع | Items from -> أصناف من | Sold Qty -> الكمية المباعة | Return Qty -> الكمية المرتجعة |
+    Choose how the customer pays -> اختيار طريقة دفع العميل | e.g. SKU-001 -> مثال: SKU-001 |
+    Full name is required. -> الاسم الكامل مطلوب. | A license key is required. -> مفتاح الترخيص مطلوب. |
+    Password is required. -> كلمة المرور مطلوبة. | Password must be at least 6 characters. -> يجب ألا تقل كلمة المرور عن 6 أحرف. |
+    Passwords do not match. -> كلمتا المرور غير متطابقتين. | Invalid email or password. -> البريد الإلكتروني أو كلمة المرور غير صحيحة. |
+    Could not create account. Please try again. -> تعذّر إنشاء الحساب. يرجى المحاولة مرة أخرى. |
+    Network error. Make sure the server is running. -> خطأ في الاتصال. تأكد من أن الخادم يعمل. |
+    Could not reach the licensing service. Will keep trying. -> تعذّر الوصول إلى خدمة الترخيص. سنواصل المحاولة. |
+    That license key was not accepted. -> لم يتم قبول مفتاح الترخيص هذا. |
+    An account already exists on this installation. Please sign in. -> يوجد حساب بالفعل على هذا التثبيت. يرجى تسجيل الدخول. |
+    (activation, offline) Could not reach the licensing service, so this key has not been checked yet. Your account is saved --
+    check the connection and try again. -> تعذّر الوصول إلى خدمة الترخيص، لذا لم يتم التحقق من هذا المفتاح بعد. حسابك محفوظ — تحقق من الاتصال وحاول مرة أخرى. |
+    (activation, service down) The licensing service is temporarily unavailable, so this key has not been checked yet. Your account is
+    saved -- please try again shortly. -> خدمة الترخيص غير متاحة مؤقتًا، لذا لم يتم التحقق من هذا المفتاح بعد. حسابك محفوظ — يرجى المحاولة بعد قليل. |
+    (activation, verification failed, with {code}) Action Aura approved this activation ... quote this code: {code}. ->
+    وافقت Action Aura على هذا التفعيل، لكن هذا الجهاز لم يستطع التحقق من الترخيص الموقّع الذي استلمه، ولذلك لم يُطبَّق بعد. مفتاح الترخيص ليس سبب المشكلة — لا تستبدله، وإعادة إدخاله لن تفيد. يرجى التواصل مع الدعم وذكر هذا الرمز: {code}. |
+    transaction -> معاملة | E-invoicing is off, which is optional for now -> الفاتورة الإلكترونية متوقفة، وهي اختيارية حاليًا |
+    This computer will stop being licensed. To use Aura Retail on it again ... -> سيتوقف ترخيص هذا الجهاز. لاستخدام Aura Retail عليه مرة أخرى ستحتاج إلى إدخال مفتاح ترخيص. مبيعاتك وسجلاتك لا تُحذف. |
+    Aura Retail -> Aura للتجزئة | Cash payment -> دفعة نقدية | Amount due -> المبلغ المستحق | Still to pay -> المتبقي للدفع |
+    Exact -> بالضبط | Delete last digit -> حذف آخر رقم | Phone and WhatsApp -> الهاتف وواتساب
+  (The pre-existing "Action Aura approved ... Check that this computer's date and time are correct" sentence already had an Arabic
+  form and was kept as it was.)
+  KNOWN-RED e2e files, red on the integrated main line BEFORE this wave (same failing checks, by name, on a clean `git archive` of
+  29cb8daf and on this branch; not touched here): retail_p1b_help_e2e (7/14), retail_p1b_palette_e2e (24/26), retail_p1b_hub_e2e
+  (72/74), retail_p1a_shell_polish_e2e (12/17), retail_p1a_till_e2e (2 red), retail_p0_till_e2e (11 red). They look stale against the
+  integrated line (short receipt numbers, SUPPLIER_REQUIRED_FOR_CREDIT_PO, sidebar rows below the 768px fold) and want their own pass.
+  Green here: retail_p1c_size_e2e 14/14 (extended), retail_ui1_cash_e2e 14/14 (new), retail_p2_today_e2e 10/10, retail_p1a_shell_e2e
+  46/46, retail_p1c_keyboard_e2e 11/11, retail_p1b_palette_fix_e2e, retail_p1a_display_e2e, retail_smoke_e2e, retail_p0_modals_e2e.
