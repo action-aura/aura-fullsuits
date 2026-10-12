@@ -2383,6 +2383,22 @@ const RetailSystem = {
     return `<bdi dir="${dir || 'ltr'}"${title}>${shown}</bdi>`;
   },
 
+  // UI-1 (Arabic finishing): a product/customer/supplier NAME is typed by the
+  // shop in whatever script it likes -- "حليب المراعي 1L" is Arabic with a
+  // Latin tail. Dropped bare into an English-direction line, the bidi
+  // algorithm pushed the trailing "1L" to the far left of the Arabic word
+  // (seen on the tile, the cart line and the receipt). An element that shows a
+  // name carries dir="auto" so the name picks its OWN direction from its first
+  // strong character; this is the same thing for the places that cannot carry
+  // an attribute (a native <option>'s text): FSI ... PDI isolates the name so
+  // the phone number placed after it cannot be dragged around by it either.
+  _isoName(text) { return '\u2068' + String(text == null ? '' : text) + '\u2069'; },
+  // "Name (0790000001)" for a <select> option: name isolated by its own
+  // first-strong rule, phone forced left-to-right inside its own isolate.
+  _namePhoneLabel(name, phone) {
+    return this._isoName(name) + (phone ? ' (\u2066' + phone + '\u2069)' : '');
+  },
+
   // ── Short document numbers on screen (Phase 0 #16) ──────────────────────
   // The legacy format is SALE-000016-<company8>-<device8> -- both suffixes
   // exist ONLY to keep numbers unique across synced tills (AUDIT-032B, see
@@ -5409,7 +5425,7 @@ const RetailSystem = {
         this._customers.forEach(cu => {
           const opt = document.createElement('option');
           opt.value = cu.id;
-          opt.textContent = `${cu.name}${cu.phone ? ' ('+cu.phone+')' : ''}`;
+          opt.textContent = this._namePhoneLabel(cu.name, cu.phone);
           sel.appendChild(opt);
         });
         // The customer picked before the cashier left this screen, for a sale
@@ -5732,7 +5748,7 @@ const RetailSystem = {
           style="border-inline-start:3px solid ${toneInk}"
           onclick="${clickAction}">
         <span class="pos-card-monogram" aria-hidden="true" style="background:${toneSurface};color:${toneInk}">${monogram}</span>
-        <span class="pos-card-name" title="${this._esc(p.name)}">${this._esc(p.name)}</span>
+        <span class="pos-card-name" dir="auto" title="${this._esc(p.name)}">${this._esc(p.name)}</span>
         <span class="pos-card-price">${this._money(p.sell_price)}</span>
         ${variantCount ? `<span class="pos-card-stock" style="color:var(--text-muted)">${variantCount} ${t('options')}</span>` : `<span class="pos-card-stock${stockCls}">
           ${outOfStock ? t('Out of stock') : (stale ? this._staleStockLabel(p) : `${t('Stock')}: ${p.total_stock} ${this._esc(this._unitLabel(p.unit))}`)}
@@ -6564,7 +6580,7 @@ const RetailSystem = {
         // YYYY-MM-DD HH:MM:SS the audit log uses, and for the same reason: a
         // held sale is compared against other held sales, not read as prose.
         const when = this._bdi(this._auditTimestamp(r.created_at));
-        const noteHtml = r.label ? ` — ${this._esc(r.label)}` : '';
+        const noteHtml = r.label ? ` — <span dir="auto">${this._esc(r.label)}</span>` : '';
         // Pluralised through two whole catalog keys rather than "item" + "s":
         // Arabic does not pluralise by suffix, so a glued 's' is untranslatable
         // by construction. The count is a separate node so the sweep can see
@@ -6574,7 +6590,7 @@ const RetailSystem = {
         <div class="pk-held-row" data-hid="${r.id}" style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-bottom:1px solid var(--border-hairline)">
           <div>
             <div style="color:var(--text-primary);font-weight:600;font-size:13px">${this._bdi(r.hold_number||'')}${noteHtml}</div>
-            <div style="color:var(--text-muted);font-size:11px">${this._bdi(String(r.item_count))} <span>${itemsLabel}</span> · ${this._esc(r.customer_name)} · ${when}</div>
+            <div style="color:var(--text-muted);font-size:11px">${this._bdi(String(r.item_count))} <span>${itemsLabel}</span> · <span dir="auto">${this._esc(r.customer_name)}</span> · ${when}</div>
           </div>
           <div style="display:flex;align-items:center;gap:10px">
             <span style="color:var(--text-money);font-weight:700">${this._fmt(r.total)}</span>
@@ -6753,7 +6769,7 @@ const RetailSystem = {
       return `
       <div class="pos-cart-row${item.product_id === newId ? ' pos-row-new' : ''}${i === this._selLine ? ' pos-cart-row-sel' : ''}" data-idx="${i}"${i === this._selLine ? ' aria-current="true"' : ''}>
         <div class="pos-line-main">
-          <div class="pos-item-name" title="${this._esc(item.name)}">${this._esc(item.name)}</div>
+          <div class="pos-item-name" dir="auto" title="${this._esc(item.name)}">${this._esc(item.name)}</div>
           <div class="pos-item-meta">${metaHTML}</div>
           ${modifiersHTML}
           ${promoTagHTML}
@@ -8689,7 +8705,7 @@ const RetailSystem = {
       box.innerHTML = st.results.map((p, i) => {
         const stock = p.total_stock <= 0 ? this._esc(t('Out of stock')) : `${this._esc(t('Stock'))}: ${this._esc(String(p.total_stock))} ${this._esc(this._unitLabel(p.unit))}`;
         return `<div class="pk-row pk-row-static${i === st.sel ? ' pk-row-sel' : ''}" role="option" aria-selected="${i === st.sel}">
-          <span class="pk-row-main">${this._esc(p.name)}</span>
+          <span class="pk-row-main" dir="auto">${this._esc(p.name)}</span>
           <span class="pk-row-price">${this._money(p.sell_price)}</span>
           <span class="pk-row-sub">${stock}</span></div>`;
       }).join('');
@@ -10180,7 +10196,7 @@ const RetailSystem = {
         : '';
       return `<tr>
         <td style="font-family:monospace;color:var(--sub-accent)">${this._esc(p.sku)}</td>
-        <td style="font-weight:600">${this._esc(p.name)}${variantCountBadge}${p.barcode?`<div style="font-size:10px;color:var(--text-muted);font-family:monospace">${this._esc(p.barcode)}</div>`:''}${variantOfLine}</td>
+        <td style="font-weight:600" dir="auto">${this._esc(p.name)}${variantCountBadge}${p.barcode?`<div style="font-size:10px;color:var(--text-muted);font-family:monospace">${this._esc(p.barcode)}</div>`:''}${variantOfLine}</td>
         <td style="color:var(--text-muted)">${p.category_name?this._esc(p.category_name):'—'}</td>
         <!-- P0 item #15e, interface I-6: avg_cost (the branch/moving-
              average cost the BOOKS actually use -- general_ledger.py's COGS
@@ -10300,35 +10316,35 @@ const RetailSystem = {
     overlay.id = 'ret-prod-modal';
     overlay.innerHTML = `
       <div class="ret-modal" id="ret-product-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-product-dialog-title">
-        <h3 id="ret-product-dialog-title">${this._icon(isEdit ? 'square-pen' : 'plus', 18, isEdit ? '✏️' : '➕')} ${isEdit ? 'Edit Product' : 'Add Product'}</h3>
+        <h3 id="ret-product-dialog-title">${this._icon(isEdit ? 'square-pen' : 'plus', 18, isEdit ? '✏️' : '➕')} <span>${t(isEdit ? 'Edit Product' : 'Add Product')}</span></h3>
         <div class="ret-field-row">
-          <div class="ret-field"><label for="pm-name">Product Name *</label><input id="pm-name" value="${this._esc(p.name||'')}" data-i18n-ph="e.g. Blue T-Shirt" placeholder="${t('e.g. Blue T-Shirt')}" /></div>
-          <div class="ret-field"><label for="pm-sku">SKU *</label><input id="pm-sku" value="${this._esc(p.sku||'')}" placeholder="SKU-001" /></div>
+          <div class="ret-field"><label for="pm-name">${t('Product Name *')}</label><input id="pm-name" value="${this._esc(p.name||'')}" data-i18n-ph="e.g. Blue T-Shirt" placeholder="${t('e.g. Blue T-Shirt')}" /></div>
+          <div class="ret-field"><label for="pm-sku">${t('SKU *')}</label><input id="pm-sku" value="${this._esc(p.sku||'')}" placeholder="${t('e.g. SKU-001')}" /></div>
         </div>
         <div class="ret-field-row">
-          <div class="ret-field"><label for="pm-barcode">Barcode</label>
+          <div class="ret-field"><label for="pm-barcode">${t('Barcode')}</label>
             <div style="display:flex;gap:8px">
               <input id="pm-barcode" value="${this._esc(p.barcode||'')}" data-i18n-ph="Type or scan…" placeholder="${t('Type or scan…')}" style="flex:1" />
-              <button type="button" class="ret-btn ret-btn-ghost" id="pm-scan-btn" onclick="RetailSystem._captureBarcodeField()" title="${t('Scan barcode into this field')}">${this._icon('camera', 16, '📷')} Scan</button>
+              <button type="button" class="ret-btn ret-btn-ghost" id="pm-scan-btn" onclick="RetailSystem._captureBarcodeField()" title="${t('Scan barcode into this field')}">${this._icon('camera', 16, '📷')} <span>${t('Scan')}</span></button>
             </div>
           </div>
           <div class="ret-field"><label for="pm-cat">${t('Category')}</label><select id="pm-cat"><option value="">${t('None')}</option>${catOpts}</select></div>
         </div>
         <div class="ret-field-row3">
-          <div class="ret-field"><label for="pm-cost">Cost Price</label><input type="number" id="pm-cost" value="${p.cost_price||0}" step="0.01" min="0" /></div>
-          <div class="ret-field"><label for="pm-sell">Sell Price *</label><input type="number" id="pm-sell" value="${p.sell_price||0}" step="0.01" min="0" /></div>
+          <div class="ret-field"><label for="pm-cost">${t('Cost Price')}</label><input type="number" id="pm-cost" value="${p.cost_price||0}" step="0.01" min="0" /></div>
+          <div class="ret-field"><label for="pm-sell">${t('Sell Price *')}</label><input type="number" id="pm-sell" value="${p.sell_price||0}" step="0.01" min="0" /></div>
           <div class="ret-field"><label for="pm-tax">${t('Tax Rate %')}</label><input type="number" id="pm-tax" value="${p.tax_rate||0}" step="0.1" min="0" /></div>
         </div>
         <div class="ret-field-row3">
           <div class="ret-field"><label for="pm-sup">${t('Supplier')}</label><select id="pm-sup"><option value="">${t('None')}</option>${supOpts}</select></div>
-          <div class="ret-field"><label for="pm-unit">Unit</label>
+          <div class="ret-field"><label for="pm-unit">${t('Unit')}</label>
             <select id="pm-unit">
-              ${['pcs','kg','g','l','ml','box','pack','pair','m','cm'].map(u=>`<option ${p.unit===u?'selected':''}>${u}</option>`).join('')}
+              ${['pcs','kg','g','l','ml','box','pack','pair','m','cm'].map(u=>`<option value="${u}" ${p.unit===u?'selected':''}>${this._esc(this._unitLabel(u))}</option>`).join('')}
             </select>
           </div>
-          <div class="ret-field"><label for="pm-reorder">Reorder Level</label><input type="number" id="pm-reorder" value="${p.reorder_level||5}" min="0" /></div>
+          <div class="ret-field"><label for="pm-reorder">${t('Reorder Level')}</label><input type="number" id="pm-reorder" value="${p.reorder_level||5}" min="0" /></div>
         </div>
-        ${!isEdit ? `<div class="ret-field"><label for="pm-stock">Initial Stock</label><input type="number" id="pm-stock" value="0" min="0" /></div>` : ''}
+        ${!isEdit ? `<div class="ret-field"><label for="pm-stock">${t('Initial Stock')}</label><input type="number" id="pm-stock" value="0" min="0" /></div>` : ''}
         <!-- launch-readiness "product variants, wave 1" (design section 3.1):
              a variant is created by reusing THIS SAME form -- pick a parent,
              give it a label ("Red / L"), everything else (SKU, barcode,
@@ -10344,8 +10360,8 @@ const RetailSystem = {
           </div>
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
-          <button class="ret-btn ret-btn-primary" id="pm-save-btn" onclick="RetailSystem._saveProduct(${isEdit ? `'${this._esc(p.id)}'` : 'null'})">${isEdit?'Save Changes':'Add Product'}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-primary" id="pm-save-btn" onclick="RetailSystem._saveProduct(${isEdit ? `'${this._esc(p.id)}'` : 'null'})">${t(isEdit?'Save Changes':'Add Product')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -10403,14 +10419,14 @@ const RetailSystem = {
         ? await this._patch(`/api/sub/retail/products/${pid}`, payload)
         : await this._post('/api/sub/retail/products', payload);
       if (d.status === 'success') {
-        SubsystemApp.showToast(pid ? 'Product updated' : 'Product added', 'success');
+        SubsystemApp.showToast(t(pid ? 'Product updated' : 'Product added'), 'success');
         this._closeModalOverlay(document.getElementById('ret-prod-modal'));
         this._renderProducts(document.getElementById('sub-content'));
       } else {
         SubsystemApp.showToast(d.message||'Error','error');
-        this._restoreSaveButton(btn, pid ? 'Save Changes' : 'Add Product');
+        this._restoreSaveButton(btn, t(pid ? 'Save Changes' : 'Add Product'));
       }
-    } catch(e) { this._restoreSaveButton(btn, pid ? 'Save Changes' : 'Add Product'); }
+    } catch(e) { this._restoreSaveButton(btn, t(pid ? 'Save Changes' : 'Add Product')); }
   },
 
   _openStockAdjust(pid, name, currentStock) {
@@ -10743,16 +10759,16 @@ const RetailSystem = {
     overlay.id = 'ret-cust-modal';
     overlay.innerHTML = `
       <div class="ret-modal" style="width:440px" id="ret-customeredit-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-customeredit-dialog-title">
-        <h3 id="ret-customeredit-dialog-title">${this._icon(isEdit ? 'square-pen' : 'user', 18, isEdit ? '✏️' : '👤')} ${isEdit ? 'Edit Customer' : 'Add Customer'}</h3>
-        <div class="ret-field"><label for="cm-name">Full Name *</label><input id="cm-name" value="${this._esc(cu.name||'')}" /></div>
+        <h3 id="ret-customeredit-dialog-title">${this._icon(isEdit ? 'square-pen' : 'user', 18, isEdit ? '✏️' : '👤')} <span>${t(isEdit ? 'Edit Customer' : 'Add Customer')}</span></h3>
+        <div class="ret-field"><label for="cm-name">${t('Full Name *')}</label><input id="cm-name" value="${this._esc(cu.name||'')}" /></div>
         <div class="ret-field-row">
-          <div class="ret-field"><label for="cm-phone">Phone</label><input id="cm-phone" value="${this._esc(cu.phone||'')}" /></div>
-          <div class="ret-field"><label for="cm-email">Email</label><input type="email" id="cm-email" value="${this._esc(cu.email||'')}" /></div>
+          <div class="ret-field"><label for="cm-phone">${t('Phone')}</label><input id="cm-phone" value="${this._esc(cu.phone||'')}" /></div>
+          <div class="ret-field"><label for="cm-email">${t('Email')}</label><input type="email" id="cm-email" value="${this._esc(cu.email||'')}" /></div>
         </div>
-        <div class="ret-field"><label for="cm-addr">Address</label><input id="cm-addr" value="${this._esc(cu.address||'')}" /></div>
+        <div class="ret-field"><label for="cm-addr">${t('Address')}</label><input id="cm-addr" value="${this._esc(cu.address||'')}" /></div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
-          <button class="ret-btn ret-btn-primary" id="cm-btn" onclick="RetailSystem._saveCustomer(${cu.id ? `'${this._esc(cu.id)}'` : 'null'})">${isEdit?'Save':'Add Customer'}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-primary" id="cm-btn" onclick="RetailSystem._saveCustomer(${cu.id ? `'${this._esc(cu.id)}'` : 'null'})">${t(isEdit?'Save':'Add Customer')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -10822,7 +10838,7 @@ const RetailSystem = {
            into an attribute. -->
       <div class="ret-modal ret-modal-wide" id="ret-customer-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-customer-dialog-title">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-          <h3 id="ret-customer-dialog-title" style="margin:0">${this._esc(cu.name)}</h3>
+          <h3 id="ret-customer-dialog-title" style="margin:0" dir="auto">${this._esc(cu.name)}</h3>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._closeModalOverlay(this)">✕ Close</button>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:20px">
@@ -11197,7 +11213,7 @@ const RetailSystem = {
       // client-generated UUIDs (not autoincrement ints), so every id must be
       // quoted, never spliced in as a bareword.
       tbody.innerHTML = data.map(s => `<tr>
-        <td style="font-weight:600">${this._esc(s.name)}</td>
+        <td style="font-weight:600" dir="auto">${this._esc(s.name)}</td>
         <td>${s.phone?this._esc(s.phone):'—'}</td>
         <td>${s.email?this._esc(s.email):'—'}</td>
         <td style="color:var(--text-muted)">${s.address?this._esc(s.address):'—'}</td>
@@ -11613,7 +11629,7 @@ const RetailSystem = {
     // is a PREFILL only; the field stays editable, so a receipt genuinely
     // arriving at a different price still overrides it by hand.
     const prodOpts = products.map(p =>
-      `<option value="${p.id}" data-cost="${p.avg_cost || p.cost_price || 0}">${this._esc(p.name)} (${this._esc(p.sku)}) — Stock: ${p.total_stock}</option>`).join('');
+      `<option value="${p.id}" data-cost="${p.avg_cost || p.cost_price || 0}">${this._esc(this._isoName(p.name))} (${this._esc(p.sku)}) — Stock: ${p.total_stock}</option>`).join('');
 
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
@@ -12228,7 +12244,7 @@ const RetailSystem = {
     const branchOpts = branches.map(b =>
       `<option value="${this._esc(b.id)}">${this._esc(b.name)}</option>`).join('');
     const prodOpts = products.map(p =>
-      `<option value="${this._esc(p.id)}">${this._esc(p.name)} (${this._esc(p.sku)}) — ${t('Stock')}: ${this._esc(p.total_stock)}</option>`).join('');
+      `<option value="${this._esc(p.id)}">${this._esc(this._isoName(p.name))} (${this._esc(p.sku)}) — ${t('Stock')}: ${this._esc(p.total_stock)}</option>`).join('');
 
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
@@ -12772,9 +12788,9 @@ const RetailSystem = {
       this._products = (await this._get('/api/sub/retail/products').catch(() => ({ data: [] }))).data || [];
     }
     const custOpts = `<option value="">${t('Walk-in')}</option>` + customers.map((cu) =>
-      `<option value="${this._esc(cu.id)}" ${existing && existing.customer_id === cu.id ? 'selected' : ''}>${this._esc(cu.name)}</option>`).join('');
+      `<option value="${this._esc(cu.id)}" ${existing && existing.customer_id === cu.id ? 'selected' : ''}>${this._esc(this._isoName(cu.name))}</option>`).join('');
     const prodOpts = this._products.map((p) =>
-      `<option value="${this._esc(p.id)}">${this._esc(p.name)} (${this._esc(p.sku)})</option>`).join('');
+      `<option value="${this._esc(p.id)}">${this._esc(this._isoName(p.name))} (${this._esc(p.sku)})</option>`).join('');
 
     const editingId = existing ? existing.id : null;
     const overlay = document.createElement('div');
@@ -15276,12 +15292,12 @@ const RetailSystem = {
     overlay.id = 'ret-return-modal';
     overlay.innerHTML = `
       <div class="ret-modal ret-modal-wide" id="ret-return-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-return-dialog-title">
-        <h3 id="ret-return-dialog-title">${this._icon('undo-2', 18, '↩️')} Process Return</h3>
+        <h3 id="ret-return-dialog-title">${this._icon('undo-2', 18, '↩️')} <span>${t('Process Return')}</span></h3>
         <div class="ret-field-row">
-          <div class="ret-field"><label for="ret-sale-search">Sale / Receipt Number *</label>
+          <div class="ret-field"><label for="ret-sale-search">${t('Sale / Receipt Number *')}</label>
             <div style="display:flex;gap:8px">
               <input id="ret-sale-search" placeholder="${t('e.g.')} S-1234567890" style="flex:1;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary);padding:10px 14px;font-size:14px;outline:none" />
-              <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._findSaleForReturn()">Lookup</button>
+              <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._findSaleForReturn()">${t('Lookup')}</button>
             </div>
           </div>
           <div class="ret-field"><label for="ret-refund-method">${t('Refund Method')}</label>
@@ -15291,7 +15307,7 @@ const RetailSystem = {
             <div id="ret-split-note" hidden style="font-size:12px;color:var(--text-muted);margin-top:4px"></div>
           </div>
         </div>
-        <div class="ret-field"><label for="ret-reason">Return Reason</label>
+        <div class="ret-field"><label for="ret-reason">${t('Return Reason')}</label>
           <select id="ret-reason">
             <option value="Customer return">${t('Customer return')}</option><option value="Defective / damaged">${t('Defective / damaged')}</option>
             <option value="Wrong item">${t('Wrong item')}</option><option value="Not as described">${t('Not as described')}</option><option value="Changed mind">${t('Changed mind')}</option>
@@ -15300,8 +15316,8 @@ const RetailSystem = {
         <div id="ret-sale-items" style="margin-top:16px"></div>
         <div id="ret-legs" role="group" aria-labelledby="ret-legs-title" hidden style="margin-top:14px"></div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
-          <button class="ret-btn ret-btn-danger" id="ret-save-btn" onclick="RetailSystem._saveReturn()">Process Refund</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-danger" id="ret-save-btn" onclick="RetailSystem._saveReturn()">${t('Process Refund')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -15315,6 +15331,14 @@ const RetailSystem = {
     document.getElementById('ret-sale-search')?.addEventListener('keydown', e => {
       if (e.key==='Enter') RetailSystem._findSaleForReturn();
     });
+  },
+
+  // The "select all" box in the return item table. Was an inline arrow
+  // function inside the onchange attribute; a method is the same behaviour
+  // without a `=>` inside a markup attribute (which the surface test's
+  // tolerant DOM reader mistakes for the end of the tag).
+  _toggleAllReturnItems(box) {
+    document.querySelectorAll('.ret-item-cb').forEach(cb => { cb.checked = box.checked; });
   },
 
   async _findSaleForReturn() {
@@ -15502,12 +15526,12 @@ const RetailSystem = {
       const container = document.getElementById('ret-sale-items');
       if (!container) return;
       container.innerHTML = `
-        <div style="color:var(--text-primary);font-weight:600;margin-bottom:10px">Items from ${saleNum}</div>
+        <div style="color:var(--text-primary);font-weight:600;margin-bottom:10px"><span>${t('Items from')}</span> ${this._bdi(saleNum)}</div>
         <table class="ret-table">
-          <thead><tr><th><input type="checkbox" id="ret-check-all" onchange="document.querySelectorAll('.ret-item-cb').forEach(cb=>cb.checked=this.checked)" /></th><th>Product</th><th>Sold Qty</th><th>Return Qty</th><th>Unit Price</th></tr></thead>
+          <thead><tr><th><input type="checkbox" id="ret-check-all" onchange="RetailSystem._toggleAllReturnItems(this)" /></th><th>${t('Product')}</th><th>${t('Sold Qty')}</th><th>${t('Return Qty')}</th><th>${t('Unit Price')}</th></tr></thead>
           <tbody>${items.map((item,i)=>`<tr>
             <td><input type="checkbox" class="ret-item-cb" data-idx="${i}" data-pid="${item.product_id}" data-price="${item.unit_price}" data-max="${item.quantity}" /></td>
-            <td>${this._esc(item.product_name)}</td>
+            <td dir="auto">${this._esc(item.product_name)}</td>
             <td>${item.quantity}</td>
             <td><input type="number" class="ret-item-qty" data-idx="${i}" value="${item.quantity}" min="1" max="${item.quantity}" style="width:60px;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:5px;color:var(--text-primary);padding:4px 8px;text-align:center;outline:none" /></td>
             <td>${this._fmt(item.unit_price)}</td>

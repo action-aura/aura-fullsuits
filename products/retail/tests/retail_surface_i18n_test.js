@@ -302,6 +302,11 @@ const RENDERED_DATA_VALUES = new Set([
   'create',                          // audit_log.action
   'sale',                            // audit_log.entity
   'Sale S', 'created',               // audit_log.details, free text from the backend
+  // The unit codes the Add/Edit Product dropdown offers. Stored values, shown
+  // through RetailSystem._unitLabel() which translates them at runtime -- but
+  // this sandbox has no AuraI18n, so _unitLabel returns the raw code here.
+  'pcs', 'g', 'box', 'pair', 'cm', 'ml',
+  'Acme Trading',                    // suppliers.name (the product dialog's supplier dropdown)
 ]);
 
 /** A canonical uuid4, i.e. a database identifier rather than copy.
@@ -428,6 +433,11 @@ const LOCALIZED_SURFACES = new Set([
   // the instant a sale is rung -- so it belongs under the catalog requirement,
   // not in the un-localized ledger below.
   'sale complete modal',
+  // UI-1: the three dialogs a shop opens every day. Under the catalog
+  // requirement from the day they were localized -- a new English literal in
+  // any of them is now RED, not an increment of the ledger below.
+  'add product modal', 'edit product modal', 'add customer modal',
+  'edit customer modal', 'process return modal', 'process return items',
 ]);
 
 /* Offenders on the surfaces this programme never localized, at the time of
@@ -570,6 +580,44 @@ async function renderAllSurfaces() {
     const overlay = ctx.overlays[ctx.overlays.length - 1];
     fragments.push(['sale complete modal', overlay ? overlay.innerHTML : '']);
   }
+  {
+    // UI-1 (Arabic finishing): the Add/Edit Product, Add Customer and Process
+    // Return dialogs shipped with ~40 bare English literals ("PRODUCT NAME",
+    // "SKU", "Initial Stock", "Full Name", "Lookup", "Sold Qty" ...) that
+    // sat in neither catalog, so an Arabic shop met an English form. They were
+    // in no fragment here, which is why the suite was green the whole time.
+    // Each dialog is rendered through the SAME entry point the buttons call.
+    const modal = async (build) => {
+      const ctx = loadRetailSystem();
+      await build(ctx);
+      await settle();
+      const overlay = ctx.overlays[ctx.overlays.length - 1];
+      return { ctx, html: overlay ? overlay.innerHTML : '' };
+    };
+    fragments.push(['add product modal', (await modal(async (c) => {
+      await c.RetailSystem._renderProducts(makeElementStub()); await settle();
+      await c.RetailSystem._openAddProduct();
+    })).html]);
+    fragments.push(['edit product modal', (await modal(async (c) => {
+      await c.RetailSystem._renderProducts(makeElementStub()); await settle();
+      c.RetailSystem._openEditProduct('p1');
+    })).html]);
+    fragments.push(['add customer modal', (await modal((c) => c.RetailSystem._showCustomerModal({}))).html]);
+    fragments.push(['edit customer modal', (await modal((c) => c.RetailSystem._showCustomerModal(LIST_DATA.customers[0]))).html]);
+    const ret = await modal((c) => c.RetailSystem._openCreateReturn());
+    fragments.push(['process return modal', ret.html]);
+    {
+      // The lookup result (its table headers and "Items from ..." line) is
+      // written into #ret-sale-items after the fetch, so it is in no overlay
+      // markup either -- the same textContent/outerHTML gap as above.
+      ret.ctx.els['ret-sale-search'].value = 'S-1041';
+      ret.ctx.els['ret-refund-method'] = makeElementStub({ id: 'ret-refund-method', options: [] });
+      await ret.ctx.RetailSystem._findSaleForReturn();
+      await settle();
+      const box = ret.ctx.els['ret-sale-items'];
+      fragments.push(['process return items', box ? box.innerHTML : '']);
+    }
+  }
 
   return fragments;
 }
@@ -588,6 +636,8 @@ const DECLARED_SURFACES = [
   'audit log', 'audit log rows',
   'customer modal', 'customer purchase history', 'sale detail modal',
   'held sales modal', 'held sales list', 'sale complete modal',
+  'add product modal', 'edit product modal', 'add customer modal',
+  'edit customer modal', 'process return modal', 'process return items',
 ];
 
 function testTheCorpusIsTheCorpusItDeclares(fragments) {
@@ -999,6 +1049,74 @@ function testNeutralNumberRunsAreDirectionIsolated(fragments) {
   });
 }
 
+/* UI-1 (Arabic finishing): every element that shows a product / customer /
+   supplier NAME carries dir="auto". The name is typed by the shop in any
+   script ("حليب المراعي 1L" is Arabic with a Latin tail); without its own
+   direction the Latin tail jumped to the far left of the Arabic word on the
+   tile, the cart line and the receipt. Counted per class with a floor so
+   an empty corpus cannot pass. Mutation: drop dir="auto" from
+   .pos-card-name -> RED. */
+function testNamesCarryTheirOwnDirection(fragments) {
+  const NAME_CLASSES = [
+    ['product grid', 'pos-card-name'],
+    ['cart lines', 'pos-item-name'],
+    ['held sales list', 'pk-held-row'],
+  ];
+  const bad = [];
+  for (const [surface, cls] of NAME_CLASSES) {
+    const html = (fragments.find(([n]) => n === surface) || [])[1] || '';
+    const root = dom.parseFragment(html);
+    const hits = dom.allElements(root).filter((el) => ((el.attrs && el.attrs.class) || '').split(/\s+/).includes(cls));
+    assert.ok(hits.length >= 1, `no .${cls} rendered on "${surface}" -- the sweep would prove nothing`);
+    if (cls === 'pk-held-row') {
+      // the held row carries the customer name and the note: both in dir=auto spans
+      const autos = dom.allElements(hits[0]).filter((el) => el.attrs && el.attrs.dir === 'auto');
+      if (autos.length < 2) bad.push(`${surface}: customer name / note not in dir="auto" spans (${autos.length} found)`);
+      continue;
+    }
+    for (const el of hits) if (!(el.attrs && el.attrs.dir === 'auto')) bad.push(`${surface}: .${cls} has no dir="auto"`);
+  }
+  // <option> text cannot carry an attribute: the customer picker isolates the
+  // name (FSI..PDI) and forces the phone left-to-right (LRI..PDI).
+  const rs = loadRetailSystem().RetailSystem;
+  const label = rs._namePhoneLabel('حليب المراعي', '0790000001');
+  if (!(label.startsWith('\u2068') && label.includes('\u2069 (\u2066') && label.endsWith('\u2069)'))) {
+    bad.push('customer option label is not isolated: ' + JSON.stringify(label));
+  }
+  assert.deepStrictEqual(bad, [], 'Names rendered without their own direction:\n  ' + bad.join('\n  '));
+  console.log('PASS: product / customer names carry their own text direction (dir="auto" / bidi isolates)');
+}
+
+/* UI-1: two English-only places the render sweep above cannot reach.
+   (a) The F12 key card: its rows are built from RetailSystem.POS_KEY_HELP and
+       one description ("Choose how the customer pays") was in neither catalog,
+       so an Arabic list carried one English line.
+   (b) The setup / sign-in / join / activate / set-password forms report
+       validation and activation failures through a local showErr('...') whose
+       arguments are bare literals. showErr() now runs its message through t(),
+       so what has to hold is that every LITERAL handed to it is a catalog key
+       in both languages. Counted, with a floor, so a renamed helper cannot
+       turn the scan into a vacuous pass. */
+function testKeyCardAndAuthSentencesAreInBothCatalogs() {
+  const missing = [];
+  const rs = loadRetailSystem().RetailSystem;
+  assert.ok(Array.isArray(rs.POS_KEY_HELP) && rs.POS_KEY_HELP.length >= 20, 'POS_KEY_HELP is missing or shrank');
+  for (const [, desc] of rs.POS_KEY_HELP) {
+    if (!(desc in EN)) missing.push(`en: key-card line "${desc}"`);
+    if (!(desc in AR)) missing.push(`ar: key-card line "${desc}"`);
+  }
+  const shell = fs.readFileSync(path.join(FRONTEND_DIR, 'app-shell.js'), 'utf8');
+  const lits = [...shell.matchAll(/showErr\('((?:[^'\\]|\\.)*)'\)/g)].map((m) => m[1].replace(/\\'/g, "'"));
+  assert.ok(lits.length >= 8, `only ${lits.length} showErr('...') literals found in app-shell.js; the scan is broken or the helper was renamed`);
+  assert.ok(/errEl\.textContent\s*=\s*t\(msg\)/.test(shell), 'showErr() no longer runs its message through t()');
+  for (const l of new Set(lits)) {
+    if (!(l in EN)) missing.push(`en: auth sentence "${l}"`);
+    if (!(l in AR)) missing.push(`ar: auth sentence "${l}"`);
+  }
+  assert.deepStrictEqual(missing, [], 'English-only sentences:\n  ' + missing.join('\n  '));
+  console.log(`PASS: ${rs.POS_KEY_HELP.length} key-card lines and ${new Set(lits).size} auth sentences are in both catalogs`);
+}
+
 function testDatesFollowTheActiveLanguage() {
   const src = fs.readFileSync(FRONTEND_FILE, 'utf8');
 
@@ -1102,7 +1220,7 @@ async function runAll(checks) {
    runAll() loops over nothing, reports no failures, and the file exits 0 having
    verified nothing at all. That is the exact vacuity every other guard in this
    file is written against, so the runner gets one too. */
-const EXPECTED_CHECKS = 7;
+const EXPECTED_CHECKS = 9;
 
 async function main() {
   const checks = [
@@ -1131,6 +1249,8 @@ async function main() {
       ['no untranslated literal reaches the operator', () => testNoUntranslatedLiteralReachesTheOperator(fragments)],
       ['no translatable string shares a node with an emoji', () => testNoTranslatableStringSharesANodeWithAnEmoji(fragments)],
       ['neutral number runs are direction-isolated', () => testNeutralNumberRunsAreDirectionIsolated(fragments)],
+      ['names carry their own direction', () => testNamesCarryTheirOwnDirection(fragments)],
+      ['key card and auth sentences are in both catalogs', testKeyCardAndAuthSentencesAreInBothCatalogs],
     );
   }
 

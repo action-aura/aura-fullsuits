@@ -2313,7 +2313,7 @@ const SubsystemApp = {
     const errEl   = document.getElementById('su-error');
     const btn     = document.getElementById('su-btn');
 
-    const showErr = (msg) => { if(errEl){errEl.textContent=msg;errEl.style.display='block';} if(btn){btn.textContent=t('Create Account & Launch');btn.disabled=false;} };
+    const showErr = (msg) => { if(errEl){errEl.textContent=t(msg);errEl.style.display='block';} if(btn){btn.textContent=t('Create Account & Launch');btn.disabled=false;} };
 
     if (!name)                   return showErr('Full name is required.');
     if (!email || !email.includes('@')) return showErr('A valid email address is required.');
@@ -2344,7 +2344,7 @@ const SubsystemApp = {
         // exactly which screen this user actually needs; hand them to it.
         if (res.status === 409) {
           this._authModalOpen = false;
-          return this.showReloginModal(data.error || 'An account already exists on this installation. Please sign in.');
+          return this.showReloginModal(t(data.error || 'An account already exists on this installation. Please sign in.'));
         }
         return showErr(data.error || 'Could not create account. Please try again.');
       }
@@ -2672,7 +2672,7 @@ const SubsystemApp = {
     const key   = document.getElementById('su-key')?.value.trim().toUpperCase();
     const errEl = document.getElementById('su-error');
     const btn   = document.getElementById('su-btn');
-    const showErr = (msg) => { if(errEl){errEl.textContent=msg;errEl.style.display='block';} if(btn){btn.textContent=t('Join shop');btn.disabled=false;} };
+    const showErr = (msg) => { if(errEl){errEl.textContent=t(msg);errEl.style.display='block';} if(btn){btn.textContent=t('Join shop');btn.disabled=false;} };
 
     if (!key) return showErr('A license key is required.');
 
@@ -2866,12 +2866,12 @@ const SubsystemApp = {
   _activationFailureMessage(activation) {
     const a = activation || {};
     if (a.result === 'NETWORK_ERROR') {
-      return 'Could not reach the licensing service, so this key has not been checked yet. '
-        + 'Your account is saved — check the connection and try again.';
+      // Whole sentences through t(), never glued fragments: Arabic word order
+      // differs, so a concatenated sentence is untranslatable by construction.
+      return t('Could not reach the licensing service, so this key has not been checked yet. Your account is saved — check the connection and try again.');
     }
     if (this.ACTIVATION_TRANSIENT_REASONS[a.reason_code]) {
-      return 'The licensing service is temporarily unavailable, so this key has not been '
-        + 'checked yet. Your account is saved — please try again shortly.';
+      return t('The licensing service is temporarily unavailable, so this key has not been checked yet. Your account is saved — please try again shortly.');
     }
     // Deliberately ahead of the `a.detail` fallback, and deliberately says
     // nothing about the key: Owner said yes, so a new key cannot help and
@@ -2885,18 +2885,15 @@ const SubsystemApp = {
     // else gets the reason code to quote to support -- the fastest route to
     // the cause. Keep in step with licensing.js and LicensingMessages.kt.
     if (this.ACTIVATION_LOCAL_VERIFICATION_REASONS[a.reason_code]) {
-      const opening = 'Action Aura approved this activation, but this computer could not verify the signed '
-        + 'licence it received, so it has not been applied yet. Your license key is not the problem — ';
       if (this.ACTIVATION_CLOCK_FIXABLE_REASONS[a.reason_code]) {
-        return opening
-          + 'do not replace it. Check that this computer’s date and time are correct; if they are, contact support.';
+        return t('Action Aura approved this activation, but this computer could not verify the signed licence it received, so it has not been applied yet. Your license key is not the problem — do not replace it. Check that this computer’s date and time are correct; if they are, contact support.');
       }
-      return opening + 'do not replace it, and re-entering it cannot help. Please contact support and quote '
-        + 'this code: ' + (a.reason_code || 'UNKNOWN') + '.';
+      return t('Action Aura approved this activation, but this computer could not verify the signed licence it received, so it has not been applied yet. Your license key is not the problem — do not replace it, and re-entering it cannot help. Please contact support and quote this code: {code}.')
+        .replace('{code}', a.reason_code || 'UNKNOWN');
     }
     // A real verdict from Owner. `detail` is Owner-supplied text; every caller
     // renders it through _esc().
-    return a.detail || 'That license key was not accepted.';
+    return a.detail || t('That license key was not accepted.');
   },
 
   // ── Awaiting-approval screen (registration flow) ──────────────────────────
@@ -2959,7 +2956,7 @@ const SubsystemApp = {
     }
     const statusEl = document.getElementById('su-await-status');
     const errEl    = document.getElementById('su-await-error');
-    const showErr  = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } };
+    const showErr  = (msg) => { if (errEl) { errEl.textContent = t(msg); errEl.style.display = 'block'; } };
 
     let data = null;
     try {
@@ -3068,7 +3065,7 @@ const SubsystemApp = {
     const key   = document.getElementById('su-key-2')?.value.trim().toUpperCase();
     const errEl = document.getElementById('su-key-2-error');
     const btn   = document.getElementById('su-key-2-btn');
-    const showErr = (msg) => { if(errEl){errEl.textContent=msg;errEl.style.display='block';} if(btn){btn.textContent=t('Activate');btn.disabled=false;} };
+    const showErr = (msg) => { if(errEl){errEl.textContent=t(msg);errEl.style.display='block';} if(btn){btn.textContent=t('Activate');btn.disabled=false;} };
     if (!key) return showErr('A license key is required.');
     if (btn) { btn.textContent = t('Activating…'); btn.disabled = true; }
     try {
@@ -3228,7 +3225,7 @@ const SubsystemApp = {
           SubsystemApp.init();
         }
       } else {
-        if (errEl) { errEl.textContent = data.error || 'Invalid email or password.'; errEl.style.display='block'; }
+        if (errEl) { errEl.textContent = t(data.error || 'Invalid email or password.'); errEl.style.display='block'; }
         if (btn) { btn.textContent=t('Log In'); btn.disabled=false; }
       }
     } catch(e) {
@@ -3374,7 +3371,7 @@ const SubsystemApp = {
     const pass2 = document.getElementById('rp-pass2')?.value;
     const errEl = document.getElementById('rp-error');
     const btn   = document.getElementById('rp-btn');
-    const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } if (btn) { btn.textContent = t('Set password'); btn.disabled = false; } };
+    const showErr = (msg) => { if (errEl) { errEl.textContent = t(msg); errEl.style.display = 'block'; } if (btn) { btn.textContent = t('Set password'); btn.disabled = false; } };
     if (!pass || pass.length < 6) return showErr('Password must be at least 6 characters.');
     if (pass !== pass2) return showErr('Passwords do not match.');
 
@@ -3450,7 +3447,7 @@ const SubsystemApp = {
     const pass2 = document.getElementById('es-pass2')?.value;
     const errEl = document.getElementById('es-error');
     const btn   = document.getElementById('es-btn');
-    const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } if (btn) { btn.textContent = t('Set password'); btn.disabled = false; } };
+    const showErr = (msg) => { if (errEl) { errEl.textContent = t(msg); errEl.style.display = 'block'; } if (btn) { btn.textContent = t('Set password'); btn.disabled = false; } };
     if (!pass || pass.length < 6) return showErr('Password must be at least 6 characters.');
     if (pass !== pass2) return showErr('Passwords do not match.');
 
