@@ -362,7 +362,7 @@ def _open_app_window(url):
     exe = next((c for c in candidates if c and os.path.isfile(c)), None)
     if not exe:
         return None
-    profile = str(Path(_app_data) / 'app_window')
+    profile = _fallback_profile_dir()
     # Item W2 (Phase 0 review round 3): mirrors D1/W1's REMEMBER_LOGIN_ENV
     # opt-out on the native path -- the same explicit escape hatch for a
     # shop that wants this fallback to stay signed in too.
@@ -388,9 +388,10 @@ def _open_app_window(url):
         return None
 
 
-def _wait_for_app_window(proc, server_alive, poll_seconds=1.0, sleep=time.sleep) -> str:
+def _wait_for_app_window(proc, server_alive, poll_seconds=1.0, sleep=time.sleep,
+                         profile_open=None) -> str:
     """Block while the fallback window is open; return when the person closes
-    it (INSTALL-1, review #8 item 5).
+    it (INSTALL-1, review #8 item 5; verifier M1).
 
     This loop used to be `while server_thread.is_alive(): sleep(1)` -- the
     server thread never ends by itself, so closing the Edge/Chrome window left
@@ -398,22 +399,38 @@ def _wait_for_app_window(proc, server_alive, poll_seconds=1.0, sleep=time.sleep)
     the next double-click then said "already running" and showed nothing.
 
     `proc` is the browser we started with OUR OWN --user-data-dir (see
-    _open_app_window): a profile directory nothing else uses means the browser
-    does not hand the window to an already-running instance and exit, so this
-    process lives exactly as long as the window and is waitable. (If a stray
-    Edge ever does own that profile the launch returns at once and we would
-    quit with the window still open -- a known limit, mitigated by
-    --disable-background-mode so a closed window leaves no resident owner.)
+    _open_app_window). While it runs, the window is open. But "proc ended" is
+    NOT "window closed": a second launch on a profile whose window is already
+    open (a restart after a restore leaves the old window up) hands off to the
+    running browser and exits after ~0.35 s. So once proc is gone (or was never
+    started because the old window was reused), `profile_open()` -- "is any
+    browser process still using OUR profile?" -- decides. Without that callable
+    the old rule applies (proc ended = closed).
 
-    `proc is None` is the default-browser path: there is no process to watch,
-    so it keeps the old behaviour of running until the server stops.
+    `proc is None` and no `profile_open` is the default-browser path: there is
+    nothing to watch, so it runs until the server stops.
     Returns 'window_closed' | 'server_stopped'."""
     while True:
         if not server_alive():
             return 'server_stopped'
-        if proc is not None and proc.poll() is not None:
+        if proc is not None and proc.poll() is None:
+            sleep(poll_seconds)
+            continue
+        if profile_open is None:
+            if proc is not None:
+                return 'window_closed'
+        elif not profile_open():
             return 'window_closed'
         sleep(poll_seconds)
+
+
+def _fallback_profile_dir() -> str:
+    return str(Path(_app_data) / 'app_window')
+
+
+def _fallback_window_already_open() -> bool:
+    from commercial_runtime.install_support.browser_profile import profile_in_use
+    return profile_in_use(_fallback_profile_dir())
 
 
 def _window_prefs_path() -> Path:
@@ -1090,15 +1107,26 @@ def main():
     if _run_native_window(f'http://{HOST}:{port}'):
         log.info('Application closed.')
     else:
-        proc = _open_app_window(f'http://{HOST}:{port}')
-        if proc is not None:
-            log.info('Opened dedicated app window (Edge/Chrome --app mode).')
+        profile_open = None
+        if _fallback_window_already_open():
+            # A restart after a restore: the old child died but its window did
+            # not. A second Edge launch on this profile would hand off and exit
+            # at once (reading as "window closed"), so launch nothing: the open
+            # page polls /api/health and reloads itself when this server is up.
+            log.info('Edge/Chrome app window from before the restart is still open; reusing it.')
+            proc = None
+            profile_open = _fallback_window_already_open
         else:
-            log.warning('No Chromium browser found -- falling back to default browser.')
-            webbrowser.open(f'http://{HOST}:{port}')
+            proc = _open_app_window(f'http://{HOST}:{port}')
+            if proc is not None:
+                log.info('Opened dedicated app window (Edge/Chrome --app mode).')
+                profile_open = _fallback_window_already_open
+            else:
+                log.warning('No Chromium browser found -- falling back to default browser.')
+                webbrowser.open(f'http://{HOST}:{port}')
 
         try:
-            outcome = _wait_for_app_window(proc, server_thread.is_alive)
+            outcome = _wait_for_app_window(proc, server_thread.is_alive, profile_open=profile_open)
             log.info(f'Edge/Chrome fallback wait ended: {outcome}')
         except KeyboardInterrupt:
             pass
