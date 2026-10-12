@@ -302,8 +302,17 @@ def test_arabic_bidi_guards_are_in_the_model_strings():
     assert f"{receipt_model.LRI}+962 78 006 9485{receipt_model.PDI}" in texts
     assert any(t.endswith(f"{receipt_model.LRI}#SALE-9{receipt_model.PDI}") for t in texts)
     assert any(t.startswith(receipt_model.LRI + receipt_model.AR_LABELS['JD'] + receipt_model.PDI) for t in texts)
-    # quantity is flanked by LRMs so "x2" keeps its order beside Arabic text
-    assert any(f"{lrm}×2{lrm}" in t for t in texts)
+    # the quantity is its OWN field, identical for every name script and either
+    # receipt language; the name carries no quantity text (the renderer places both).
+    for name in ("x", "قهوة عربية", "Mint Tea"):
+        for lang in ("ar", "en"):
+            mm = receipt_model.build_receipt_model(
+                sale={'sale_number': 'S', 'subtotal': 7, 'total': 7, 'amount_paid': 7},
+                items=[{'name': name, 'quantity': 2, 'unit_price': 3.5, 'applied_promotion': None}],
+                branding={'business_name': 'S'}, currency='JOD', requested_lang=lang)
+            row = [ln for ln in mm['lines'] if ln['kind'] == 'row'][0]
+            assert row['qty'] == "2\u00d7", row
+            assert row['start'] == name, row
 
 
 def test_model_other_company_sale_is_404(shop, other_company_admin):

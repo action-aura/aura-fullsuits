@@ -83,6 +83,8 @@ _METHOD_LABELS = {
 #: Unicode bidi isolates: keep a number / amount a self-contained LTR island
 #: inside an RTL line instead of letting neighbours reorder its digits.
 LRI, PDI = "\u2066", "\u2069"
+#: First-strong isolate: lets a product name pick its own direction.
+FSI = "\u2068"
 #: Left-to-right mark: a strong-LTR character with no glyph. Measured on the
 #: real artefact (Chromium canvas, 2026-10-12): an isolate alone did NOT keep
 #: "x2" in order beside Arabic text -- it printed "2x". Flanking the quantity
@@ -132,8 +134,10 @@ def _text(text, *, align="center", bold=False, size="normal") -> dict:
     return {"kind": "text", "text": str(text), "align": align, "bold": bold, "size": size}
 
 
-def _row(start, end, *, bold=False, strike=None) -> dict:
+def _row(start, end, *, bold=False, strike=None, qty=None) -> dict:
     row = {"kind": "row", "start": str(start), "end": str(end), "bold": bold}
+    if qty:
+        row["qty"] = str(qty)
     if strike:
         row["strike"] = str(strike)
     return row
@@ -219,11 +223,17 @@ def build_receipt_model(
         if isinstance(promo, dict):
             promotions += discount
         label = item.get("name") or tr("Item")
-        label = f"{label} {LRI}{LRM}\u00d7{_qty_text(qty)}{LRM}{PDI}"
+        # The quantity is its OWN field (`qty`), not text inside the label.
+        # Isolates were tried first and the real canvas still put the "2\u00d7" token on
+        # the other side, and flipped its glyphs, when the name was Arabic
+        # (measured 2026-10-12, receipt-576-ar.png). The renderer draws `qty` as its own
+        # LTR run at the line start and the name beside it, so every item line has
+        # the quantity in the same place whatever the name script.
+        qty_text = f"{_qty_text(qty)}\u00d7"
         if discount > half:
-            lines.append(_row(label, money(gross - discount), strike=money(gross)))
+            lines.append(_row(label, money(gross - discount), strike=money(gross), qty=qty_text))
         else:
-            lines.append(_row(label, money(gross)))
+            lines.append(_row(label, money(gross), qty=qty_text))
         extras = [m.get("name") for m in (item.get("modifiers") or []) if m and m.get("name")]
         if extras:
             lines.append(_text(" · ".join(extras), align="start", size="small"))

@@ -153,15 +153,23 @@
         var amountDir = 'ltr';
         var endW = measure(ln.end, f, amountDir);
         var strikeW = ln.strike ? measure(ln.strike, f, amountDir) + GAP : 0;
-        var labelW = maxW - endW - strikeW - GAP;
+        var qtyW = ln.qty ? measure(ln.qty, f, 'ltr') + GAP : 0;
+        var labelW = maxW - endW - strikeW - GAP - qtyW;
         if (labelW < size * 4) labelW = Math.max(size * 4, maxW / 2);
-        var labelDir = dirOf(ln.start);
+        // Row base direction follows the RECEIPT, never the name's script, so the
+        // quantity token lands on the same side on every item line.
+        var labelDir = rtl ? 'rtl' : 'ltr';
         var pieces = wrapWords(ln.start, labelW, function (s) { return measure(s, f, labelDir); });
         var labelSide = rtl ? 'right' : 'left';
         var endSide = rtl ? 'left' : 'right';
         pieces.forEach(function (piece, idx) {
           var base = y + lh - Math.round(size * 0.3);
-          ops.push({ t: 'text', text: piece, font: f, dir: labelDir, align: labelSide, y: base });
+          if (idx === 0 && ln.qty) {
+            // Quantity: its own LTR run at the line start, drawn apart from the name so
+            // its side and glyph order never depend on the name's script.
+            ops.push({ t: 'text', text: ln.qty, font: f, dir: 'ltr', align: labelSide, y: base });
+          }
+          ops.push({ t: 'text', text: piece, font: f, dir: labelDir, align: labelSide, inset: qtyW, y: base });
           if (idx === 0) {
             ops.push({ t: 'text', text: ln.end, font: f, dir: amountDir, align: endSide, y: base });
             if (ln.strike) {
@@ -200,8 +208,9 @@
         return;
       }
       ctx.textAlign = op.align;
+      var inset = op.inset || 0;
       x = op.align === 'center' ? widthDots / 2
-        : (op.align === 'right' ? widthDots - plan.pad : plan.pad);
+        : (op.align === 'right' ? widthDots - plan.pad - inset : plan.pad + inset);
       ctx.fillText(op.text, x, op.y);
     });
   }
