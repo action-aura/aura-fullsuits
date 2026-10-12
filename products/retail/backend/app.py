@@ -704,6 +704,8 @@ def _on_licence_activated():
 
 from commercial_runtime.identity.device_context import peek_local_device_uuid as _peek_registry_device_id  # noqa: E402
 
+from commercial_runtime.install_support.firewall import (
+    with_firewall_ask_after_activation as _with_firewall_ask_after_activation)
 app.register_blueprint(make_licensing_blueprint(
     product_code='AURA_RETAIL',
     platform=LICENSING_PLATFORM,
@@ -726,7 +728,12 @@ app.register_blueprint(make_licensing_blueprint(
     # so the common install migrates long before it ever activates, and a
     # rebind that only ran at migration time would silently never happen.
     # See _on_licence_activated above.
-    on_activation_success=_on_licence_activated,
+    # INSTALL-1 (verifier M3): after the product's own bookkeeping, ask ONCE for
+    # the Windows Firewall rule (a no-op off an installed Windows build) -- the
+    # last deliberate moment before the hub first binds the LAN port on the
+    # next boot and Windows shows its own prompt at the till.
+    on_activation_success=_with_firewall_ask_after_activation(
+        _on_licence_activated, str(Path(DATABASE_DIR).parent)),
     # AUDIT-033 fix round (verifier V finding #1): tell Owner which registry
     # device id this computer claims, at activation and every check-in, so
     # Owner can pin it and sign it into the lease (receivers trust a signer's

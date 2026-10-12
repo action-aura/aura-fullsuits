@@ -71,3 +71,12 @@ def test_the_header_no_longer_claims_a_program_files_only_install():
     header = ISS.split('[Setup]')[0]
     assert 'writes into {app} (Program Files)' not in header
     assert 'per-user' in header
+
+
+def test_the_licence_activation_hook_is_wrapped_to_ask_for_the_firewall_rule():
+    # M3a: wiring only a source read can pin cheaply -- a refactor of app.py that
+    # passes the bare hook again compiles and runs, and the till is back to
+    # Windows' own prompt appearing at first hub start.
+    app_py = (Path(__file__).resolve().parents[1] / 'backend' / 'app.py').read_text(encoding='utf-8')
+    assert re.search(r'^\s+on_activation_success=_with_firewall_ask_after_activation\(\s*_on_licence_activated,',
+                     app_py, re.M)
