@@ -15277,6 +15277,9 @@ def _retail_setting_entity_id(skey):
 # per point is already "never earns"; the cap just stops a typo from storing a
 # value no one meant. Server and client use the same number.
 _LOYALTY_EARN_SPEND_MAX = Decimal('1000000')
+# UI-2: most products the owner may pin to the till's Favourites pill. Mirrored
+# by RetailSystem.POS_FAVOURITES_MAX in the frontend (a test pins both = 40).
+POS_FAVOURITES_MAX = 40
 _LOYALTY_EARN_SPEND_DEFAULT = Decimal('10')
 _loyalty_earn_spend_warned = set()
 
@@ -15851,8 +15854,37 @@ def credit_settings_set():
                             'message': 'Spend per point must be a number from 0 to 1,000,000 (0 turns earning off).'}), 400
         _es_txt = format(_es.normalize(), 'f')
         data['loyalty_earn_spend'] = _es_txt if _es_txt != '-0' else '0'
+    # UI-2 item 1 (till favourites): the ids the owner pinned to the till's first
+    # category pill, stored as ONE retail_settings row (a JSON list of product
+    # ids, pin order). It rides this route for the same reason loyalty_point_value
+    # does (see the note above): a dedicated write route would fail the frozen
+    # route-capability matrix, and the owner-only guard at the top of this
+    # function is exactly the "owner-curated" rule the feature wants. NO schema
+    # change -- retail_settings is key/value. Validated BEFORE any write
+    # (all-or-nothing). The cap lives HERE as well as in the client so a stale
+    # or hand-rolled client cannot store a 41st pin; the client message and
+    # this one say the same number.
+    if 'pos_favourites' in data:
+        _favs = data['pos_favourites']
+        if isinstance(_favs, str):
+            try:
+                _favs = json.loads(_favs) if _favs.strip() else []
+            except ValueError:
+                _favs = None
+        _favs_ok = (isinstance(_favs, list)
+                    and all(isinstance(x, str) and x.strip() and len(x) <= 64 for x in _favs))
+        if not _favs_ok:
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'FAVOURITES_INVALID',
+                            'message': 'Favourites must be a list of product ids.'}), 400
+        _favs = list(dict.fromkeys(x.strip() for x in _favs))   # drop repeats, keep pin order
+        if len(_favs) > POS_FAVOURITES_MAX:
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'FAVOURITES_FULL',
+                            'message': f'The till holds at most {POS_FAVOURITES_MAX} favourites. Remove one first.'}), 400
+        data['pos_favourites'] = json.dumps(_favs, separators=(',', ':'))
     for k in ('base_currency', 'default_credit_mode', 'default_credit_limit', 'enforce_credit_limit',
-              'loyalty_point_value', 'cashier_discount_limit_pct', 'loyalty_earn_spend'):
+              'loyalty_point_value', 'cashier_discount_limit_pct', 'loyalty_earn_spend', 'pos_favourites'):
         if k in data:
             conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
                          "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",

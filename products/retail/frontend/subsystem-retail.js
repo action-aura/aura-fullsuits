@@ -3765,6 +3765,33 @@ const RetailSystem = {
         /* Selected is a solid fill; hovered is a tint. They must never look
            the same -- a cashier scanning the rail has to see what is ON. */
         .pos-cat-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);color:var(--text-on-accent, var(--text-inverse));font-weight:700; }
+        /* UI-2 item 1: the rail used to clip its fourth pill mid-word with no
+           sign anything lay beyond it (every 1366 screenshot in review A). The
+           wrapper carries a fade + chevron at the reading-end edge, shown ONLY
+           while there is more to scroll to (_updateCatOverflow toggles
+           .has-more). The chevron is decorative for assistive tech -- the rail
+           itself is a normal scroller and every pill is a real, tabbable
+           button -- so it is aria-hidden and out of the tab order. */
+        .pos-cat-wrap { position:relative;flex:1;min-inline-size:0;display:flex; }
+        .pos-cat-wrap .pos-cat-bar { flex:1; }
+        /* Solid chevron button (a gradient behind a glyph cannot be contrast-
+           checked, and the touch floor is 44px on BOTH axes) with the fade as a
+           separate decorative strip that sits against its inner edge. */
+        .pos-cat-more { position:absolute;inset-block:0;inset-inline-end:0;display:none;
+          min-inline-size:var(--touch-target-min, 44px);min-block-size:var(--touch-target-min, 44px);
+          align-items:center;justify-content:center;border:0;cursor:pointer;
+          color:var(--text-dim);font:inherit;font-size:20px;line-height:1;background:var(--surface-card); }
+        .pos-cat-fade { position:absolute;inset-block:0;inset-inline-end:var(--touch-target-min, 44px);inline-size:32px;
+          display:none;pointer-events:none;background:linear-gradient(to right, transparent, var(--surface-card)); }
+        html[dir="rtl"] .pos-cat-fade { background:linear-gradient(to left, transparent, var(--surface-card)); }
+        .pos-cat-wrap.has-more .pos-cat-more { display:flex; }
+        .pos-cat-wrap.has-more .pos-cat-fade { display:block; }
+        .pos-cat-more:hover, .pos-cat-more:focus-visible { color:var(--text); }
+        html[dir="rtl"] .pos-cat-more-glyph { transform:scaleX(-1); }
+        /* The Favourites pill leads the rail; the star keeps it recognisable
+           when the rail is cramped, and "active" is still the same solid fill
+           every pill uses (never a second selected-state language). */
+        .pos-cat-btn.pos-cat-fav { display:inline-flex;align-items:center;gap:6px; }
 
         /* ── Product grid ────────────────────────────────────────────────── */
         /* AUDIT (Phase 0 #7a): with no grid-auto-rows declared (the browser
@@ -3898,6 +3925,29 @@ const RetailSystem = {
            the past", not a fact about right now. See _isStockStale() /
            _staleStockLabel() below. */
         .pos-card-stock.is-stale { color:var(--text-tertiary, var(--text-dim));font-style:italic;font-weight:400; }
+        /* UI-2 item 1. A product photo, when the product has one, is a 48px
+           square in the monogram's place (the monogram stays the fallback --
+           no product carries image_url yet, the backend field is a later wave,
+           so this is the rendering half only). */
+        .pos-card-thumb { inline-size:48px;block-size:48px;border-radius:8px;object-fit:cover;align-self:center;
+          background:var(--surface-sunken);flex-shrink:0; }
+        /* The pin star. OWNER ONLY (the markup is not emitted for anyone else):
+           curating the till is the owner's act. Pinned tiles always show a
+           filled star so the owner can see what is on the Favourites page from
+           the All view; an UNpinned tile shows a ghost star only where there
+           is a pointer to hover with. A touch till gets the long-press instead
+           (see _wireFavouriteGestures). Decorative: the star sits INSIDE the
+           tile button, so it cannot itself be a second control for assistive
+           tech -- the keyboard route is the context-menu key on the focused
+           tile, and the product dialog has a real checkbox. */
+        .pos-card { position:relative; }
+        .pos-card-star { position:absolute;inset-block-start:4px;inset-inline-end:4px;inline-size:28px;block-size:28px;
+          display:none;align-items:center;justify-content:center;border-radius:50%;font-size:16px;line-height:1;
+          color:var(--text-tertiary, var(--text-dim)); }
+        .pos-card-star.is-pinned { display:flex;color:var(--state-warning-text, var(--sub-accent)); }
+        @media (hover:hover) {
+          .pos-card:hover .pos-card-star, .pos-card:focus-visible .pos-card-star { display:flex; }
+        }
 
         /* ── Cart lines ──────────────────────────────────────────────────── */
         /* AUDIT (Phase 0 #7b): measured 0 of 4 cart rows fully visible at
@@ -5006,8 +5056,13 @@ const RetailSystem = {
                anchor, hide it, cost nothing. -->
           <div class="pos-pane-hdr" style="display:none" aria-hidden="true"></div>
           <div class="pos-cat-row" onmousedown="RetailSystem._keepScanFocus(event)">
-            <div class="pos-cat-bar" id="pos-cats">
-              <button class="pos-cat-btn active" onclick="RetailSystem._setCat(null,this)">${t('All')}</button>
+            <div class="pos-cat-wrap" id="pos-cat-wrap">
+              <div class="pos-cat-bar" id="pos-cats" onscroll="RetailSystem._updateCatOverflow()">
+                <button class="pos-cat-btn active" onclick="RetailSystem._setCat(null,this)">${t('All')}</button>
+              </div>
+              <span class="pos-cat-fade" aria-hidden="true"></span>
+              <button type="button" class="pos-cat-more" id="pos-cat-more" tabindex="-1" aria-hidden="true"
+                onclick="RetailSystem._scrollCats()"><span class="pos-cat-more-glyph">›</span></button>
             </div>
             <button class="ret-btn ret-btn-ghost ret-btn-sm pos-held-btn" id="pos-held-btn" onclick="RetailSystem._openHeldSalesModal()"
               title="${this._esc(t("Browse and resume sales you've held"))}" aria-keyshortcuts="Shift+F9"><span aria-hidden="true">${this._icon('clipboard-list', 16, '📋')}</span> <span>${t('Held')}</span> (<span id="pos-held-count">0</span>) <span class="pos-pay-kbd" aria-hidden="true">Shift+F9</span></button>
@@ -5505,17 +5560,20 @@ const RetailSystem = {
       const heldCountEl = document.getElementById('pos-held-count');
       if (heldCountEl) heldCountEl.textContent = (held && held.data || []).length;
 
-      // Populate category bar
-      const catBar = document.getElementById('pos-cats');
-      if (catBar) {
-        this._categories.forEach(cat => {
-          const btn = document.createElement('button');
-          btn.className = 'pos-cat-btn';
-          btn.textContent = cat.name;
-          btn.onclick = () => this._setCat(cat.id, btn);
-          catBar.appendChild(btn);
-        });
-      }
+      // UI-2 item 1: the owner's pinned products ride the SAME credit-settings
+      // response this function already fetched (retail_settings key
+      // `pos_favourites`, a JSON list of product ids) -- no extra request.
+      this._favourites = this._parseFavourites(creditSettings && creditSettings.data && creditSettings.data.pos_favourites);
+      this._favouritesLoaded = !!(creditSettings && creditSettings.data);
+      // Default page = Favourites when the owner has pinned anything (the till
+      // opens on the fast sellers); otherwise All, exactly as before. Only on
+      // the first load of a mount -- _activeCat is reset to null in _renderPOS.
+      if (this._activeCat === null && this._favourites.length) this._activeCat = this.POS_FAV_CAT;
+      // Populate category bar (Favourites pill first, then All, then categories)
+      this._renderCatBar();
+      // Pinned products that did not make the first page (a big catalogue)
+      // would otherwise vanish from the Favourites page: resolve them once.
+      this._resolveMissingFavourites();
       // Populate customer dropdown
       const sel = document.getElementById('pos-customer');
       if (sel && this._customers.length) {
@@ -5549,6 +5607,188 @@ const RetailSystem = {
     btn.classList.add('active');
     this._renderPOSGrid();
     this._refocusScan();
+  },
+
+  // ── UI-2 item 1: Favourites ───────────────────────────────────────────────
+  // The owner pins the 20-40 fastest sellers; the till opens on them. The list
+  // is ONE retail_settings row (`pos_favourites`, JSON list of product ids in
+  // PIN ORDER) written through the existing owner-only POST /settings/credit
+  // and read back from the GET this screen already makes -- no schema change,
+  // and it syncs to the shop's other devices like every other setting.
+  //
+  // ORDER INSIDE Favourites is pin order. The review asked for "recent sales
+  // count" when an existing metric gives it cheaply; none does (the product
+  // list carries no sales count, and a per-tile aggregate would be a new
+  // query on the busiest screen), so pin order it is -- and it is the order
+  // the owner chose, which is the more predictable one for muscle memory.
+  //
+  // `POS_FAV_CAT` is a sentinel placed in _activeCat. It can never collide
+  // with a category id (those are uuids), and null stays "All".
+  POS_FAV_CAT: '__favourites__',
+  // Mirrors retail_api.py POS_FAVOURITES_MAX (a test pins both to 40).
+  POS_FAVOURITES_MAX: 40,
+  POS_LONG_PRESS_MS: 550,
+  _favourites: [],
+
+  _parseFavourites(raw) {
+    let v = raw;
+    if (typeof v === 'string') {
+      try { v = v.trim() ? JSON.parse(v) : []; } catch (e) { v = []; }
+    }
+    if (!Array.isArray(v)) return [];
+    const ids = v.filter(x => typeof x === 'string' && x);
+    return Array.from(new Set(ids)).slice(0, this.POS_FAVOURITES_MAX);
+  },
+
+  _isFavourite(id) { return (this._favourites || []).indexOf(String(id)) !== -1; },
+
+  // Curating the till is the owner's act: the server refuses anyone else
+  // (_require_company_admin), so the pin controls are not even offered to a
+  // cashier. Fails CLOSED -- no shell, no pin controls.
+  _mayCurateFavourites() {
+    return !!(window.SubsystemApp && SubsystemApp.role === 'admin');
+  },
+
+  // One filled star, drawn inline (the icon registry has no star and adding
+  // one would drag its tests into this change).
+  _starSvg(filled, size) {
+    const s = size || 16;
+    return `<svg aria-hidden="true" focusable="false" width="${s}" height="${s}" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg>`;
+  },
+
+  // Rebuild the whole rail: [Favourites?] [All] [categories...]. Rebuilt (not
+  // patched) because pinning the first product or unpinning the last adds or
+  // removes the leading pill. The "active" pill is derived from _activeCat so
+  // a rebuild never loses the selection.
+  _renderCatBar() {
+    const bar = document.getElementById('pos-cats');
+    if (!bar) return;
+    bar.innerHTML = '';
+    const add = (label, catId, extraCls, withStar) => {
+      const btn = document.createElement('button');
+      btn.className = 'pos-cat-btn' + (extraCls ? ' ' + extraCls : '') + (this._activeCat === catId ? ' active' : '');
+      if (withStar) btn.innerHTML = `${this._starSvg(true, 14)}<span>${this._esc(label)}</span>`;
+      else btn.textContent = label;
+      btn.onclick = () => this._setCat(catId, btn);
+      bar.appendChild(btn);
+      return btn;
+    };
+    if ((this._favourites || []).length) add(t('Favourites'), this.POS_FAV_CAT, 'pos-cat-fav', true);
+    add(t('All'), null);
+    (this._categories || []).forEach(cat => add(cat.name, cat.id));
+    this._updateCatOverflow();
+  },
+
+  // Fade + chevron at the rail's reading-end edge, only while there is more to
+  // scroll to. scrollLeft is NEGATIVE in an RTL scroller, so distance is
+  // measured with abs() -- the same number means "scrolled this far" either way.
+  _updateCatOverflow() {
+    const bar = document.getElementById('pos-cats');
+    const wrap = document.getElementById('pos-cat-wrap');
+    if (!bar || !wrap || !wrap.classList) return;
+    const more = (bar.scrollWidth || 0) - (bar.clientWidth || 0) - Math.abs(bar.scrollLeft || 0) > 4;
+    wrap.classList.toggle('has-more', more);
+  },
+
+  _scrollCats() {
+    const bar = document.getElementById('pos-cats');
+    if (!bar || typeof bar.scrollBy !== 'function') return;
+    const rtl = !!(window.AuraI18n && AuraI18n.current === 'ar');
+    bar.scrollBy({ left: (rtl ? -1 : 1) * Math.max(120, Math.round((bar.clientWidth || 300) * 0.6)), behavior: 'smooth' });
+  },
+
+  // Pinned ids that are not in the first product page (a catalogue over the
+  // 200-tile cap) would silently drop off the Favourites page. The list route
+  // has no ids filter, so fetch the whole catalogue ONCE, only when something
+  // is genuinely missing, and only to fill the by-id cache.
+  async _resolveMissingFavourites() {
+    const missing = (this._favourites || []).filter(id => !(this._productsById && this._productsById[id]));
+    if (!missing.length) return;
+    try {
+      const res = await this._get('/api/sub/retail/products');
+      (res && Array.isArray(res.data) ? res.data : []).forEach(p => this._cacheProduct(p));
+    } catch (e) { return; }
+    if (this._activeCat === this.POS_FAV_CAT) this._renderPOSGrid();
+  },
+
+  // Pin / unpin. Optimistic (the star must answer a tap at once) with a rollback
+  // when the server refuses -- the server is the authority on the cap and on who
+  // may curate, so a stale client can never leave a phantom pin on screen.
+  async _toggleFavourite(productId) {
+    const id = String(productId);
+    if (!this._mayCurateFavourites()) {
+      SubsystemApp.showToast(t('Only the shop owner can choose the Favourites.'), 'info');
+      return false;
+    }
+    const before = (this._favourites || []).slice();
+    const pinned = before.indexOf(id) !== -1;
+    if (!pinned && before.length >= this.POS_FAVOURITES_MAX) {
+      SubsystemApp.showToast(t('The till holds at most 40 favourites. Unpin one first.'), 'error');
+      return false;
+    }
+    const next = pinned ? before.filter(x => x !== id) : before.concat([id]);
+    this._favourites = next;
+    this._afterFavouritesChanged();
+    try {
+      const res = await this._post('/api/sub/retail/settings/credit', { pos_favourites: next });
+      if (!res || res.status !== 'success') throw new Error((res && res.message) || 'refused');
+    } catch (e) {
+      this._favourites = before;
+      this._afterFavouritesChanged();
+      SubsystemApp.showToast((e && e.message && e.message !== 'refused') ? e.message : t('Could not save the Favourites.'), 'error');
+      return false;
+    }
+    SubsystemApp.showToast(pinned ? t('Removed from Favourites') : t('Added to Favourites'), 'success');
+    return true;
+  },
+
+  _afterFavouritesChanged() {
+    // The last pin gone while looking at Favourites: that page is now empty,
+    // so fall back to All rather than strand the cashier on a blank grid.
+    if (this._activeCat === this.POS_FAV_CAT && !(this._favourites || []).length) this._activeCat = null;
+    this._renderCatBar();
+    this._renderPOSGrid();
+  },
+
+  // Right-click / the context-menu key (keyboard parity) and a long press (touch)
+  // on a tile pin or unpin it. Delegated on the grid and wired ONCE per grid
+  // element (the grid node survives re-renders; only its innerHTML is replaced).
+  // The click that follows a long press is swallowed in the capture phase --
+  // otherwise releasing the finger would also add the product to the cart.
+  _wireFavouriteGestures(grid) {
+    if (!grid || grid._favWired || typeof grid.addEventListener !== 'function') return;
+    grid._favWired = true;
+    const tileOf = (e) => (e.target && e.target.closest) ? e.target.closest('.pos-card[data-pid]') : null;
+    let timer = null, startX = 0, startY = 0;
+    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    grid.addEventListener('contextmenu', (e) => {
+      const tile = tileOf(e);
+      if (!tile || !this._mayCurateFavourites()) return;
+      e.preventDefault();
+      this._toggleFavourite(tile.dataset.pid);
+    });
+    grid.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' || !this._mayCurateFavourites()) return;
+      const tile = tileOf(e);
+      if (!tile) return;
+      startX = e.clientX; startY = e.clientY;
+      cancel();
+      timer = setTimeout(() => {
+        timer = null;
+        this._favLongPressAt = Date.now();
+        this._toggleFavourite(tile.dataset.pid);
+      }, this.POS_LONG_PRESS_MS);
+    });
+    grid.addEventListener('pointermove', (e) => {
+      if (timer && (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10)) cancel();
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(n => grid.addEventListener(n, cancel));
+    grid.addEventListener('click', (e) => {
+      if (this._favLongPressAt && Date.now() - this._favLongPressAt < 800) {
+        this._favLongPressAt = 0;
+        e.preventDefault(); e.stopPropagation();
+      }
+    }, true);
   },
 
   // Stored-XSS fix: p.name (and item.name / i.name at the cart, sale-complete
@@ -5714,8 +5954,27 @@ const RetailSystem = {
     // scan path is untouched -- a variant's OWN barcode still resolves
     // straight through _posScan/_addToCart, this filter only affects the
     // browsed grid.
-    const matches = (this._products || []).filter(p =>
-      !p.parent_product_id && (!this._activeCat || p.category_id === this._activeCat));
+    //
+    // UI-2 item 1: the Favourites page is not a category filter -- it is the
+    // owner's pinned ids, in PIN ORDER. With no search it is read from the
+    // by-id cache (so a pinned product outside the loaded page still shows);
+    // while a search is active it is the search results narrowed to the pinned
+    // ones, so typing "pepsi" on Favourites does not silently search elsewhere.
+    const favMode = this._activeCat === this.POS_FAV_CAT;
+    const favIds = this._favourites || [];
+    let matches;
+    if (favMode) {
+      const pool = this._posResultsTerm
+        ? (this._products || [])
+        : favIds.map(id => (this._productsById && this._productsById[id]) || null).filter(Boolean);
+      matches = pool.filter(p => !p.parent_product_id && favIds.indexOf(String(p.id)) !== -1)
+        .sort((a, b) => favIds.indexOf(String(a.id)) - favIds.indexOf(String(b.id)));
+    } else {
+      matches = (this._products || []).filter(p =>
+        !p.parent_product_id && (!this._activeCat || p.category_id === this._activeCat));
+    }
+    this._wireFavouriteGestures(grid);
+    const mayPin = this._mayCurateFavourites();
     // How many live variants each parent in THIS batch has -- from
     // this._products (the whole loaded page/search batch), not `matches`,
     // so a variant that happens to sort outside the current category filter
@@ -5729,7 +5988,7 @@ const RetailSystem = {
     if (!matches.length) {
       this._gridVisible = [];
       this._resSel = null;
-      grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--text-dim);padding:40px">${t('No products found.')}</div>`;
+      grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--text-dim);padding:40px">${favMode && !this._posResultsTerm ? t('No favourites yet. The shop owner can pin products with the star.') : t('No products found.')}</div>`;
       return;
     }
     // The cap is enforced HERE, not merely trusted to already be true of
@@ -5840,16 +6099,39 @@ const RetailSystem = {
       const toneSurface = toneIdx ? `var(--cat-${toneIdx}-surface)` : 'var(--surface-sunken)';
       const toneInk = toneIdx ? `var(--cat-${toneIdx}-ink)` : 'var(--text-secondary)';
       const monogram = this._esc(this._productMonogram(p.name));
+      // UI-2 item 1. A photo replaces the monogram when the product has one
+      // (only an http(s)/relative/data-image URL -- anything else is ignored
+      // rather than put in a src attribute). No product carries image_url yet.
+      const imgUrl = typeof p.image_url === 'string' && /^(https?:\/\/|\/|data:image\/)/i.test(p.image_url.trim())
+        ? p.image_url.trim() : '';
+      const badge = imgUrl
+        ? `<img class="pos-card-thumb" src="${this._esc(imgUrl)}" alt="" width="48" height="48" loading="lazy" />`
+        : `<span class="pos-card-monogram" aria-hidden="true" style="background:${toneSurface};color:${toneInk}">${monogram}</span>`;
+      // The stock line is NOISE for a cashier on a healthy product (it was the
+      // loudest text after the price on every tile). It now appears only when
+      // it carries news: out of stock, low (at/under the reorder level), or a
+      // dated figure while sync is stale. A normal product's tile is name +
+      // price, and the same facts are one tap away in Products.
+      const isLow = !outOfStock && !stale && p.total_stock <= (p.reorder_level || 0);
+      const showStock = !!variantCount || outOfStock || stale || isLow;
+      const pinned = mayPin && this._isFavourite(p.id);
+      const star = mayPin
+        ? `<span class="pos-card-star${pinned ? ' is-pinned' : ''}" aria-hidden="true" data-fav-star="1"
+            title="${this._esc(pinned ? t('Remove from Favourites') : t('Add to Favourites'))}"
+            onclick="event.stopPropagation();event.preventDefault();RetailSystem._toggleFavourite('${this._esc(p.id)}')">${this._starSvg(pinned, 16)}</span>`
+        : '';
       return `<button type="button" class="pos-card${(outOfStock && !variantCount)?' pos-card-outofstock':''}"
           ${(outOfStock && !variantCount) ? 'aria-disabled="true"' : ''}
+          data-pid="${this._esc(p.id)}"
           style="border-inline-start:3px solid ${toneInk}"
           onclick="${clickAction}">
-        <span class="pos-card-monogram" aria-hidden="true" style="background:${toneSurface};color:${toneInk}">${monogram}</span>
+        ${star}
+        ${badge}
         <span class="pos-card-name" dir="auto" title="${this._esc(p.name)}">${this._esc(p.name)}</span>
         <span class="pos-card-price">${this._money(p.sell_price)}</span>
-        ${variantCount ? `<span class="pos-card-stock" style="color:var(--text-muted)">${variantCount} ${t('options')}</span>` : `<span class="pos-card-stock${stockCls}">
-          ${outOfStock ? t('Out of stock') : (stale ? this._staleStockLabel(p) : `${t('Stock')}: ${p.total_stock} ${this._esc(this._unitLabel(p.unit))}`)}
-        </span>`}
+        ${variantCount ? `<span class="pos-card-stock" style="color:var(--text-muted)">${variantCount} ${t('options')}</span>` : (showStock ? `<span class="pos-card-stock${stockCls}">
+          ${outOfStock ? t('Out of stock') : (stale ? this._staleStockLabel(p) : `${t('Low stock')}: ${p.total_stock} ${this._esc(this._unitLabel(p.unit))}`)}
+        </span>` : '')}
       </button>`;
     }).join('');
   },
@@ -10615,7 +10897,23 @@ const RetailSystem = {
     const supOpts = (this._suppliers||[]).map(s =>
       `<option value="${this._esc(s.id)}" ${s.id===p.supplier_id?'selected':''}>${this._esc(s.name)}</option>`).join('');
     const parentOpts = this._eligibleParentOpts(p.parent_product_id, p.id);
+    // UI-2 item 1: the dialog's "Favourites" checkbox needs the owner's pinned
+    // list, which is otherwise only read when the till mounts. Fetch it first
+    // (owner only, once); a cashier's dialog never carries the checkbox.
+    if (this._mayCurateFavourites() && !this._favouritesLoaded) {
+      this._loadFavourites().then(() => this._showProductModal(p, catOpts, supOpts, parentOpts));
+      return;
+    }
     this._showProductModal(p, catOpts, supOpts, parentOpts);
+  },
+
+  _favouritesLoaded: false,
+  async _loadFavourites() {
+    try {
+      const res = await this._get('/api/sub/retail/settings/credit');
+      this._favourites = this._parseFavourites(res && res.data && res.data.pos_favourites);
+      this._favouritesLoaded = true;
+    } catch (e) { /* the dialog simply opens without the checkbox */ }
   },
 
   // AUDIT (Phase 0 #5): p.name/p.sku/p.barcode used to land in these `value="..."`
@@ -10679,6 +10977,13 @@ const RetailSystem = {
             <input id="pm-variant-label" value="${this._esc(p.variant_label||'')}" placeholder="${this._esc(t('e.g. Red / L'))}" />
           </div>
         </div>
+        ${isEdit && this._favouritesLoaded && this._mayCurateFavourites() ? `
+        <div class="ret-field">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="pm-fav" ${this._isFavourite(p.id) ? 'checked' : ''} />
+            <span>${t('Show on the Favourites page of the till')}</span>
+          </label>
+        </div>` : ''}
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" id="pm-save-btn" onclick="RetailSystem._saveProduct(${isEdit ? `'${this._esc(p.id)}'` : 'null'})">${t(isEdit?'Save Changes':'Add Product')}</button>
@@ -10740,6 +11045,10 @@ const RetailSystem = {
         : await this._post('/api/sub/retail/products', payload);
       if (d.status === 'success') {
         SubsystemApp.showToast(t(pid ? 'Product updated' : 'Product added'), 'success');
+        // UI-2 item 1: the dialog's Favourites checkbox (owner only; absent for
+        // everyone else and for a new product). Only an actual change is sent.
+        const favBox = document.getElementById('pm-fav');
+        if (pid && favBox && favBox.checked !== this._isFavourite(pid)) await this._toggleFavourite(pid);
         this._closeModalOverlay(document.getElementById('ret-prod-modal'));
         this._renderProducts(document.getElementById('sub-content'));
       } else {
