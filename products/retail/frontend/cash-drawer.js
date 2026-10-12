@@ -526,18 +526,30 @@ const CashDrawer = {
   // delivery driver, a plumber, the owner taking cash home) and it now reaches the books against
   // one of these accounts. The codes are the server's PAID_OUT_ACCOUNT_CODES; the server refuses
   // any other, so this list can drift only into a refusal, never into a wrong booking. Float in /
-  // float out ask nothing (cash moving between the safe and the drawer is not a cost) and paid in
-  // is not booked yet (ROADMAP.md MONEY-4b: its income account code is an open decision).
+  // float out ask nothing (cash moving between the safe and the drawer is not a cost). Paid in asks
+  // too (PAID_IN_PURPOSES): 4800 Other income, or 3100 when the owner puts his own money back.
   PAID_OUT_PURPOSES: [
     ['6000', 'Rent'], ['6100', 'Utilities'], ['6200', 'Salaries and wages'],
     ['6300', 'Transport and delivery'], ['6400', 'Marketing'], ['6500', 'Bank and card fees'],
     ['6900', 'Other expenses'], ['3100', 'Owner took it home (drawings)'],
   ],
+  // The server's PAID_IN_ACCOUNT_CODES. 4800, NOT 4900 (that is Sales Returns and Allowances).
+  PAID_IN_PURPOSES: [
+    ['4800', 'Other income'], ['3100', 'Owner put money back (drawings)'],
+  ],
 
   _syncMovementPurpose() {
     const type = document.getElementById('cd-mv-type')?.value;
     const wrap = document.getElementById('cd-mv-for-wrap');
-    if (wrap) wrap.style.display = type === 'paid_out' ? '' : 'none';
+    const sel = document.getElementById('cd-mv-for');
+    const list = type === 'paid_out' ? this.PAID_OUT_PURPOSES
+      : (type === 'paid_in' ? this.PAID_IN_PURPOSES : null);
+    if (wrap) wrap.style.display = list ? '' : 'none';
+    if (sel && list) {
+      // The two lists share one select; rebuild it so a paid-in can never carry an expense code.
+      sel.innerHTML = `<option value="">${t('Choose what the money was for')}</option>`
+        + list.map(([code, label]) => `<option value="${code}">${t(label)}</option>`).join('');
+    }
   },
 
   // ── Movement (float in/out, paid in/out) ────────────────────────────
@@ -594,9 +606,10 @@ const CashDrawer = {
     const amount = parseFloat(document.getElementById('cd-mv-amount')?.value || 0);
     const reason = document.getElementById('cd-mv-reason')?.value || '';
     if (!amount || amount <= 0) { SubsystemApp.showToast(t('Enter a valid amount'), 'error'); return; }
-    // A paid-out must say what it was for: that choice IS the book entry (Dr <purpose> / Cr cash).
-    const purpose = type === 'paid_out' ? (document.getElementById('cd-mv-for')?.value || '') : '';
-    if (type === 'paid_out' && !purpose) {
+    // A paid-out / paid-in must say what it was for: that choice IS the book entry.
+    const needsPurpose = type === 'paid_out' || type === 'paid_in';
+    const purpose = needsPurpose ? (document.getElementById('cd-mv-for')?.value || '') : '';
+    if (needsPurpose && !purpose) {
       SubsystemApp.showToast(t('Choose what the money was for'), 'error');
       document.getElementById('cd-mv-for')?.focus();
       return;

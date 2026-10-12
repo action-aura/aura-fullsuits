@@ -13017,16 +13017,19 @@ def create_cash_movement(session_id):
         #     the till could credit Sales or debit Receivables by naming another code.
         #   * float_in / float_out post NOTHING: they move cash between the safe and the drawer,
         #     and GL 1000 is "Cash and Bank" combined, so the total is unchanged.
-        #   * paid_in is NOT booked yet: its planned income account (4900) is already taken by
-        #     Sales Returns and Allowances -- ROADMAP.md MONEY-4b. Its code is not stored either.
+        #   * paid_in IS booked: Dr 1000 / Cr <4800 Other Income | 3100 Owner Drawings> (the
+        #     owner putting his own money back). No account sent -> 4800, never refused; a code
+        #     outside PAID_IN_ACCOUNT_CODES -> 400. (Not 4900: that is Sales Returns.)
         gl_account = None
-        if mtype == 'paid_out':
-            gl_account = str(data.get('gl_account_code') or '').strip() or gl.ACCOUNT_OTHER_EXPENSES
-            if gl_account not in gl.PAID_OUT_ACCOUNT_CODES:
+        if mtype in ('paid_out', 'paid_in'):
+            allowed = gl.PAID_OUT_ACCOUNT_CODES if mtype == 'paid_out' else gl.PAID_IN_ACCOUNT_CODES
+            default = gl.ACCOUNT_OTHER_EXPENSES if mtype == 'paid_out' else gl.ACCOUNT_OTHER_INCOME
+            gl_account = str(data.get('gl_account_code') or '').strip() or default
+            if gl_account not in allowed:
                 conn.close()
                 return jsonify({'status': 'error', 'code': 'INVALID_GL_ACCOUNT',
                                 'message': 'gl_account_code must be one of '
-                                           f'{list(gl.PAID_OUT_ACCOUNT_CODES)}.'}), 400
+                                           f'{list(allowed)}.'}), 400
 
         movement_id = str(_uuid.uuid4())
         now_local = _now()
@@ -13056,6 +13059,13 @@ def create_cash_movement(session_id):
                 conn, cid, sess['branch_id'], movement_id, amount, gl_account, currency,
                 business_date=_gl_business_date(conn, cid),
                 reference=f'paid-out {movement_id[:8]}',
+                memo=(data.get('reason') or '')[:200] or None)
+        elif mtype == 'paid_in':
+            # Same shape as the paid-out above, the other direction; same key discipline.
+            gl.post_drawer_paid_in(
+                conn, cid, sess['branch_id'], movement_id, amount, gl_account, currency,
+                business_date=_gl_business_date(conn, cid),
+                reference=f'paid-in {movement_id[:8]}',
                 memo=(data.get('reason') or '')[:200] or None)
         _audit(conn, 'CASH_MOVEMENT_RECORDED', 'cash_session', session_id, f'{mtype} amount={amount}')
         conn.commit()

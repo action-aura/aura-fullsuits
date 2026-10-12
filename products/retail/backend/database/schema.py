@@ -1388,14 +1388,15 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # review defect D2): money that leaves the shop without being a sale or a supplier payment
 # reaches the books. `_migrate_add_money4b_expenses`:
 #   * `cash_movements.gl_account_code TEXT NULL` -- what a drawer paid-out was FOR (an expense
-#     account, or 3100 Owner Drawings). NULL on every legacy row and on every float/paid_in row.
+#     account, or 3100 Owner Drawings). NULL on every legacy row and on every float row.
 #   * `expenses` -- an expense NOT paid from the drawer (rent, utilities, salaries), company and
 #     branch scoped, uid UNIQUE, voided by a reversing journal (never an UPDATE of a journal).
 #   * a one-time catch-up: every EXISTING manual paid_out gets one journal, Dr 6900 Other
 #     Expenses / Cr 1000, at its own business date, keyed on the movement's id so it can never
 #     double-post. Their purpose was never captured, so 6900 is the honest bucket.
-# paid_in is NOT built here: the planned "Other income" account code (4900) is already taken by
-# Sales Returns and Allowances. See ROADMAP.md.
+#   * paid_in is booked too: Dr 1000 / Cr 4800 Other Income (or 3100 Owner Drawings when the owner
+#     puts his own money back). 4800, NOT 4900 -- 4900 is Sales Returns and Allowances. The
+#     catch-up books existing manual paid_ins to 4800 (unreleased v52 extended in place, no v53).
 # Appended LAST and shape-gated.
 RETAIL_SCHEMA_VERSION = 52
 
@@ -2609,7 +2610,12 @@ def _migrate_add_money4b_expenses(conn):
        EXCLUDED: a movement with `payment_uid` set. Those are the paid-outs a supplier payment
        made from the drawer (and their cancellation's paid_in); the payment already posted its
        own Dr Accounts Payable / Cr Cash journal, so booking the movement too would take the
-       money out of Cash TWICE. paid_in rows are not booked at all (see the v52 comment).
+       money out of Cash TWICE. The same exclusion applies to paid_in (a cancelled supplier
+       payment's refund into the drawer is booked by the payment's own reversal).
+
+       The same step also books every existing manual paid_in Dr 1000 / Cr 4800 Other Income at
+       its own business date, keyed on the movement id, and does so on EVERY run (not only on
+       the 51 -> 52 upgrade): see the comment in the body.
 
        NOT version-gated in a way that hides it from a test: the test calls this function
        directly on a connection stamped 51, as the v51 steps' tests do.
@@ -2646,22 +2652,28 @@ def _migrate_add_money4b_expenses(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_expenses_company_date "
                  "ON expenses(company_id, business_date)")
 
-    if entry_user_version >= 52:
-        return
     if not {'cash_movements', 'cash_sessions', 'gl_accounts', 'gl_journals', 'gl_journal_lines',
             'sync_outbox'} <= live:
         return
     from core.retail import general_ledger as _gl
     from core.retail import metrics as _metrics
 
+    # The paid_out catch-up is a one-time upgrade step (v51 -> v52). The paid_in catch-up is NOT
+    # gated on the version: v52 was extended with the paid_in half before any build shipped it, so
+    # a database that already ran the first v52 (lab/test copies) must still get its paid_ins
+    # booked when this step runs again. Both are idempotent by their journal key, so running
+    # either on a database that has none to do posts nothing.
+    do_paid_out = entry_user_version < 52
+
     previous_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
     try:
+        types = ("'paid_out', 'paid_in'" if do_paid_out else "'paid_in'")
         rows = conn.execute(
-            "SELECT m.id AS id, m.amount AS amount, m.created_at AS created_at, "
+            "SELECT m.id AS id, m.type AS type, m.amount AS amount, m.created_at AS created_at, "
             "       s.company_id AS company_id, s.branch_id AS branch_id "
             "FROM cash_movements m JOIN cash_sessions s ON s.id = m.session_id "
-            "WHERE m.type = 'paid_out' AND m.payment_uid IS NULL "
+            f"WHERE m.type IN ({types}) AND m.payment_uid IS NULL "
             "  AND s.company_id IS NOT NULL "
             "ORDER BY m.created_at, m.id").fetchall()
         currency_cache = {}
@@ -2675,11 +2687,20 @@ def _migrate_add_money4b_expenses(conn):
             except Exception:
                 # A minimal fixture without retail_settings: the calendar day of the movement.
                 business_date = when.strftime('%Y-%m-%d')
-            _gl.post_drawer_paid_out(
-                conn, cid, r['branch_id'], r['id'], r['amount'], _gl.ACCOUNT_OTHER_EXPENSES,
-                currency_cache[cid], business_date=business_date,
-                reference='paid-out catch-up',
-                memo='Paid out of the till before its purpose was recorded')
+            if r['type'] == 'paid_out':
+                _gl.post_drawer_paid_out(
+                    conn, cid, r['branch_id'], r['id'], r['amount'], _gl.ACCOUNT_OTHER_EXPENSES,
+                    currency_cache[cid], business_date=business_date,
+                    reference='paid-out catch-up',
+                    memo='Paid out of the till before its purpose was recorded')
+            else:
+                # Skips a movement that already has its journal (`_post_once` finds it by key),
+                # so a database that ran this step before posts nothing twice.
+                _gl.post_drawer_paid_in(
+                    conn, cid, r['branch_id'], r['id'], r['amount'], _gl.ACCOUNT_OTHER_INCOME,
+                    currency_cache[cid], business_date=business_date,
+                    reference='paid-in catch-up',
+                    memo='Paid into the till before its source was recorded')
     finally:
         conn.row_factory = previous_factory
 

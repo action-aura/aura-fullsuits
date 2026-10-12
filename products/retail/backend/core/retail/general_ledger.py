@@ -296,6 +296,9 @@ DEFAULT_CHART = (
     # MONEY-4b (D2): names frozen once released. 4900 was planned here as "Other income" and is
     # NOT seeded: 4900 already means Sales Returns and Allowances (above). See ROADMAP.
     ('3100', 'Owner Drawings', 'equity', 'debit', None),
+    # MONEY-4b (paid_in half): income that is not a sale. NOT 4900 -- that code is Sales Returns
+    # and Allowances (a contra-revenue); booking other income there would silently shrink returns.
+    ('4800', 'Other Income', 'revenue', 'credit', None),
     ('6000', 'Rent', 'expense', 'debit', None),
     ('6100', 'Utilities', 'expense', 'debit', None),
     ('6200', 'Salaries and Wages', 'expense', 'debit', None),
@@ -329,6 +332,11 @@ EXPENSE_ACCOUNT_CODES = (
     ACCOUNT_MARKETING, ACCOUNT_BANK_FEES, ACCOUNT_OTHER_EXPENSES,
 )
 PAID_OUT_ACCOUNT_CODES = EXPENSE_ACCOUNT_CODES + (ACCOUNT_OWNER_DRAWINGS,)
+#: MONEY-4b paid_in: where money put INTO the till comes from. 4800 = income that is not a sale
+#: (a refund from a supplier, a found note); 3100 = the owner putting his own money back (the
+#: opposite of a drawing: Cr 3100 reduces the debit balance). Anything else is refused.
+ACCOUNT_OTHER_INCOME = '4800'
+PAID_IN_ACCOUNT_CODES = (ACCOUNT_OTHER_INCOME, ACCOUNT_OWNER_DRAWINGS)
 
 
 class GeneralLedgerImbalanceError(Exception):
@@ -2880,6 +2888,28 @@ def post_drawer_paid_out(conn, cid, branch_id, movement_id, amount, account_code
     return _post_cash_out(conn, cid, cash_movement_journal_uid(movement_id), branch_id, amount,
                           account_code, currency, business_date, 'cash_movement', movement_id,
                           reference, memo, posted_by)
+
+
+def post_drawer_paid_in(conn, cid, branch_id, movement_id, amount, account_code, currency,
+                        business_date=None, reference=None, memo=None, posted_by=None):
+    """A drawer paid-in reaches the books: Dr 1000 / Cr `account_code`, ONCE, keyed on the
+    MOVEMENT's id (the same uid function as a paid-out: a movement is one type or the other, so
+    the key cannot collide). `account_code` must be in PAID_IN_ACCOUNT_CODES; the caller
+    validates and defaults it (an old build sends none: 4800). A supplier payment's cancellation
+    also writes a paid_in (payment_uid set) -- that one is booked by the payment's own reversal
+    and must NEVER be passed here."""
+    if account_code not in PAID_IN_ACCOUNT_CODES:
+        raise GeneralLedgerAccountError(
+            f"paid-in account {account_code!r} is not one of {PAID_IN_ACCOUNT_CODES}")
+    amt = Decimal(str(amount))
+    if amt <= _gl_epsilon(currency):
+        return None
+    jl = [{'account_code': ACCOUNT_CASH, 'debit': amt, 'memo': memo},
+          {'account_code': account_code, 'credit': amt, 'memo': memo}]
+    return _post_once(conn, cid, cash_movement_journal_uid(movement_id), branch_id,
+                      business_date or _today(), 'cash_movement', None, currency, jl,
+                      reference=reference, memo=memo, posted_by=posted_by,
+                      source_uid=str(movement_id))
 
 
 def post_expense(conn, cid, branch_id, expense_uid, amount, account_code, currency,

@@ -469,6 +469,7 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
     cogs = Decimal('0')
     opex_total = Decimal('0')
     opex_accounts = []
+    revenue_accounts = []
 
     for r in rows:
         debit = Decimal(str(r['total_debit']))
@@ -490,6 +491,13 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
                 # type's own canonical direction) -- its type-canonical net
                 # IS its own face value.
                 gross_revenue += net
+                # MONEY-4b: itemised, so income that is not a sale (4800 Other Income) is
+                # visible on its own line rather than only folded into the total.
+                revenue_accounts.append({
+                    'code': r['code'],
+                    'name': r['name'],
+                    'amount': float(net.quantize(quant, rounding=ROUND_HALF_UP)),
+                })
             else:
                 # A CONTRA-revenue line (normal_balance disagrees) -- net is
                 # already negative here (see the worked arithmetic above);
@@ -548,6 +556,7 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
         'period': {'start_date': start_date, 'end_date': end_date, 'branch_id': branch_id},
         'revenue': float(revenue_net.quantize(quant, rounding=ROUND_HALF_UP)),
         'gross_revenue': float(gross_revenue.quantize(quant, rounding=ROUND_HALF_UP)),
+        'revenue_accounts': revenue_accounts,
         'sales_returns': float(sales_returns.quantize(quant, rounding=ROUND_HALF_UP)),
         'cost_of_goods_sold': float(cogs.quantize(quant, rounding=ROUND_HALF_UP)),
         'gross_profit': float(gross_profit.quantize(quant, rounding=ROUND_HALF_UP)),

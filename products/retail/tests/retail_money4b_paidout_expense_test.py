@@ -14,7 +14,10 @@ WHAT THIS FILE PROVES, through the real routes, read back from the real database
     * a paid_out with no account (old desktop build / Android) -> 6900, never refused;
     * an account outside the allowed set (4000, 1100, 1000) -> 400, no movement row, no journal;
     * float_in / float_out -> NO journal (cash moving safe <-> drawer; 1000 is combined);
-    * paid_in -> NO journal and no stored account (its income account is NOT built: 4900 is taken);
+    * paid_in with 4800 Other Income -> Dr 1000 / Cr 4800; with 3100 (the owner putting his own
+      money back) -> Dr 1000 / Cr 3100, equity UP and profit unchanged; no account -> 4800, never
+      refused; any other code (4900 Sales Returns, 6xxx, 1100 ...) -> 400 and nothing written;
+      retried once -> one journal;
     * posting the same movement twice -> ONE journal;
     * the D2 scenario: 100.000 of cash in the books, 20.000 paid to the driver -> the balance
       sheet's Cash and Bank is 80.000, the trial balance balances, the P&L carries the 20.000.
@@ -38,6 +41,11 @@ MUTATIONS (each performed, red quoted in the hand-back):
        -> test_paid_out_with_an_account_posts_dr_account_cr_cash_on_the_business_day
   P-e  general_ledger._post_once existence check removed
        -> test_posting_the_same_movement_twice_makes_one_journal
+  I-a  post_drawer_paid_in with the sides swapped (Dr account / Cr 1000)
+       -> test_paid_in_to_other_income_posts_dr_cash_cr_4800_on_the_business_day
+  I-b  create_cash_movement: post for every type (also float) -> test_float_in_and_float_out_post_no_journal
+  I-c  the paid_in default account 4800 -> 6900 (refusal/default broken)
+       -> test_a_paid_in_with_no_account_goes_to_other_income_and_is_never_refused
   C-b  create_expense gated on retail.books.view instead of retail.books.record
        -> test_a_reader_of_the_books_can_list_expenses_but_not_record_or_void_them
        (the Accountant/manager/cashier test stayed GREEN under this mutation: none of them holds
@@ -249,23 +257,102 @@ def test_float_in_and_float_out_post_no_journal():
     assert x['expected_cash'] == 120.0, x       # 100 + 50 - 30: the drawer DID move
 
 
-def test_paid_in_posts_no_journal_yet_and_stores_no_account():
-    """THE STOPPED PART, pinned so it cannot be quietly half-built. The design booked a paid_in to
-    4900 "Other income", but 4900 is Sales Returns and Allowances (a contra-revenue, debit-normal).
-    Posting a paid_in there would silently REDUCE returns. Until the owner picks an income code, a
-    paid_in reaches no book -- exactly as before v52 -- and says so in ROADMAP.md."""
+def test_paid_in_to_other_income_posts_dr_cash_cr_4800_on_the_business_day():
+    admin, cid, _pid = H._new_shop()
+    _set_start_hour(admin, 6)
+    sid = _drawer(admin)
+    _at(1, 30)                                   # business day is still 2026-03-10
+    r = _move(admin, sid, 'paid_in', 15, reason='found in the safe', gl_account_code='4800')
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['data']['gl_account_code'] == '4800'
+    js = _journals(cid, 'cash_movement')
+    assert len(js) == 1, js                      # a count: a date over an empty list passes forever
+    assert js[0]['lines'] == {'1000': (15.0, 0.0), '4800': (0.0, 15.0)}, js[0]
+    assert js[0]['date'] == PREV, js[0]
+    mv = _movement_rows(cid, 'paid_in')
+    assert len(mv) == 1 and js[0]['source_uid'] == mv[0]['id']
+    # it shows up as revenue, and cash is up by the same amount
+    _at(12, 0)
+    pl = admin.get(f'{API}/reports/profit-and-loss?start_date={PREV}&end_date={PREV}').get_json()['data']
+    assert {a['code']: a['amount'] for a in pl['revenue_accounts']}.get('4800') == 15.0, pl['revenue_accounts']
+    assert _cash_balance(_balance_sheet(admin, SAME)) == 15.0
+    assert _trial_balance(admin)['is_balanced'] is True
+
+
+def test_paid_in_by_the_owner_is_equity_up_not_income():
     admin, cid, _pid = H._new_shop()
     sid = _drawer(admin)
-    r = _move(admin, sid, 'paid_in', 40, gl_account_code='6300')
+    _seed_cash_in_books(cid, 100.0, SAME)
+    equity_before = _balance_sheet(admin, SAME)['equity']['total']
+    r = _move(admin, sid, 'paid_in', 25, reason='owner put money back', gl_account_code='3100')
     assert r.status_code == 200, r.get_json()
-    assert r.get_json()['data']['gl_account_code'] is None
+    js = _journals(cid, 'cash_movement')
+    assert len(js) == 1 and js[0]['lines'] == {'1000': (25.0, 0.0), '3100': (0.0, 25.0)}, js
+    pl = admin.get(f'{API}/reports/profit-and-loss?start_date={SAME}&end_date={SAME}').get_json()['data']
+    assert pl['net_profit'] == 100.0, 'the owner putting money back is not income'
+    bs = _balance_sheet(admin, SAME)
+    assert bs['balance_check']['is_balanced'] is True, bs['balance_check']
+    assert _cash_balance(bs) == 125.0
+    assert round(bs['equity']['total'] - equity_before, 3) == 25.0, (equity_before, bs['equity'])
+
+
+def test_a_paid_in_with_no_account_goes_to_other_income_and_is_never_refused():
+    admin, cid, _pid = H._new_shop()
+    sid = _drawer(admin)
+    r = _move(admin, sid, 'paid_in', 40)          # an old build / the Android app: no account at all
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['data']['gl_account_code'] == '4800'
+    js = _journals(cid, 'cash_movement')
+    assert len(js) == 1 and js[0]['lines'] == {'1000': (40.0, 0.0), '4800': (0.0, 40.0)}, js
+    r = _move(admin, sid, 'paid_in', 6, gl_account_code='  ')
+    assert r.status_code == 200 and r.get_json()['data']['gl_account_code'] == '4800'
+
+
+@pytest.mark.parametrize('bad', ['4900', '4000', '1100', '1000', '6300', '6900', '9999', 'income'])
+def test_a_paid_in_account_outside_the_allowed_set_is_refused_and_nothing_is_written(bad):
+    admin, cid, _pid = H._new_shop()
+    sid = _drawer(admin)
+    r = _move(admin, sid, 'paid_in', 7, gl_account_code=bad)
+    assert r.status_code == 400, r.get_json()
+    assert r.get_json()['code'] == 'INVALID_GL_ACCOUNT'
+    assert _movement_rows(cid, 'paid_in') == [], 'a refused paid-in left a movement behind'
     assert _journals(cid, 'cash_movement') == []
 
 
-def test_4900_is_still_sales_returns_and_is_not_an_allowed_paid_out_account():
+def test_the_two_directions_do_not_share_accounts():
+    """ALLOW/DENY pair across directions: 4800 is a paid_in account only, a 6xxx expense is a
+    paid_out account only, 3100 is both (a drawing out, money back in)."""
+    admin, cid, _pid = H._new_shop()
+    sid = _drawer(admin)
+    assert _move(admin, sid, 'paid_out', 3, gl_account_code='4800').status_code == 400
+    assert _move(admin, sid, 'paid_in', 3, gl_account_code='6300').status_code == 400
+    assert _move(admin, sid, 'paid_out', 3, gl_account_code='3100').status_code == 200
+    assert _move(admin, sid, 'paid_in', 3, gl_account_code='3100').status_code == 200
+    assert len(_journals(cid, 'cash_movement')) == 2
+
+
+def test_a_paid_in_posted_twice_makes_one_journal():
+    admin, cid, _pid = H._new_shop()
+    sid = _drawer(admin)
+    assert _move(admin, sid, 'paid_in', 12, gl_account_code='4800').status_code == 200
+    mv = _movement_rows(cid, 'paid_in')[0]
+    conn = H.get_retail_conn()
+    try:
+        first = gl.post_drawer_paid_in(conn, cid, 1, mv['id'], 12, '4800', 'JOD', business_date=SAME)
+        second = gl.post_drawer_paid_in(conn, cid, 1, mv['id'], 12, '4800', 'JOD', business_date=SAME)
+        conn.commit()
+    finally:
+        conn.close()
+    assert first == second, 'the retry must hand back the journal that already exists'
+    assert len(_journals(cid, 'cash_movement')) == 1
+
+
+def test_4900_is_still_sales_returns_and_4800_is_other_income():
     codes = {c: (n, t, nb) for c, n, t, nb, _p in gl.DEFAULT_CHART}
     assert codes['4900'] == ('Sales Returns and Allowances', 'revenue', 'debit')
-    assert '4900' not in gl.PAID_OUT_ACCOUNT_CODES
+    assert codes['4800'] == ('Other Income', 'revenue', 'credit')
+    assert '4900' not in gl.PAID_OUT_ACCOUNT_CODES and '4900' not in gl.PAID_IN_ACCOUNT_CODES
+    assert gl.PAID_IN_ACCOUNT_CODES == ('4800', '3100')
     # every account the design seeds, with the right normal side
     assert codes['3100'] == ('Owner Drawings', 'equity', 'debit')
     for code in ('6000', '6100', '6200', '6300', '6400', '6500', '6900'):
