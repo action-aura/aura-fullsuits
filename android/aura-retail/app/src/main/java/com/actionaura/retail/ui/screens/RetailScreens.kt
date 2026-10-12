@@ -39,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -648,7 +649,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                         if (own != null) "−" + pctText(own) + "%  " + tr("Discount") else "+ " + tr("Discount"),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.clickable { discountLineId = id }.padding(vertical = 6.dp),
+                                        modifier = Modifier.clickable(role = Role.Button) { discountLineId = id }.padding(vertical = 6.dp),
                                     )
                                 }
                             }
