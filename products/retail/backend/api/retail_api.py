@@ -16241,6 +16241,37 @@ def printer_test():
     }})
 
 
+def _drawer_refusal(conn, cid, sale_id, payment_method):
+    """THE cash-drawer rule, in one place: `None` when this sale may open the
+    drawer, else the human-readable reason it may not.
+
+    Used by `printer_kick` (pulse only) and `printer_print_raster` (receipt +
+    pulse in one job), so "cash only" can never be true on one route and
+    forgotten on the other.
+
+    `sales.payment_method` is ONE string per sale. A single-tender sale
+    carries any cash tender exactly when it is 'cash'; a split-tender sale is
+    labelled 'split' and its real tenders are its payments rows (a cash row
+    widens it to 'cash'). A card/credit/bank sale reaching a kick route is
+    normal -- the till asks after every sale it rings, whether or not it was
+    cash -- and is refused the same non-error way as "no printer".
+    """
+    payment_method = payment_method or 'cash'
+    if payment_method == 'split':
+        # Split tender: kick only when part of it really was cash (an active
+        # 'in' cash payments row exists for the sale); a card + mobile split
+        # opens nothing, same as a pure card sale.
+        _cash_part = conn.execute(
+            "SELECT 1 FROM payments WHERE company_id=? AND sale_id=? AND direction='in' "
+            "AND related_type='sale' AND method='cash' AND COALESCE(status,'active')='active' LIMIT 1",
+            (cid, sale_id)).fetchone()
+        if _cash_part:
+            payment_method = 'cash'
+    if payment_method != 'cash':
+        return f"Sale #{sale_id} was paid by {payment_method!r}, not cash -- drawer not opened."
+    return None
+
+
 # ── Cash drawer kick (checkout, NOT settings) ──────────────────────────────────
 # THE GAP this route closes: `printer_test` above is the only caller of either
 # ESC/POS module that has ever existed -- a Settings-screen button an
@@ -16350,29 +16381,11 @@ def printer_kick():
                 'reason': 'No ESC/POS printer is configured on this device.',
             }})
 
-        # `sales.payment_method` is ONE string per sale. A single-tender sale
-        # carries any cash tender exactly when it is 'cash'; a split-tender
-        # sale is labelled 'split' and its real tenders are its payments rows
-        # (handled just below, where a cash row widens this to 'cash'). A card/credit/bank sale reaching this route is normal
-        # (the till calls it after every cash sale it rings, whether or not the
-        # shop has this setting on) and refused the same non-error way as "no
-        # printer" above.
-        payment_method = sale['payment_method'] or 'cash'
-        if payment_method == 'split':
-            # Split tender: kick only when part of it really was cash (an
-            # active 'in' cash payments row exists for the sale); a
-            # card + mobile split opens nothing, same as a pure card sale.
-            _cash_part = conn.execute(
-                "SELECT 1 FROM payments WHERE company_id=? AND sale_id=? AND direction='in' "
-                "AND related_type='sale' AND method='cash' AND COALESCE(status,'active')='active' LIMIT 1",
-                (cid, sale_id)).fetchone()
-            if _cash_part:
-                payment_method = 'cash'
-        if payment_method != 'cash':
-            return jsonify({'status': 'success', 'data': {
-                'kicked': False,
-                'reason': f"Sale #{sale_id} was paid by {payment_method!r}, not cash -- drawer not opened.",
-            }})
+        # The cash-only rule lives in `_drawer_refusal` so the receipt-with-kick
+        # route (print_raster) applies the IDENTICAL rule rather than a copy.
+        _refusal = _drawer_refusal(conn, cid, sale_id, sale['payment_method'])
+        if _refusal:
+            return jsonify({'status': 'success', 'data': {'kicked': False, 'reason': _refusal}})
 
         # SELECTION RULE (retail-hardware-viewports), implemented exactly
         # here, matching printer_test's identical rule above: a non-empty
@@ -16615,6 +16628,244 @@ def printer_receipt_payload():
         'width_chars': width_chars,
         'byte_count': len(payload),
     }})
+
+
+# ── PRINT-1: silent receipt printing with Arabic, drawer kick in the same job ──
+# THE GAP: the only receipt a real sale could print was an HTML page handed to
+# the OS spooler (a dialog per sale, and the cash drawer never opens because
+# no ESC/POS pulse is in it), while the ESC/POS text path above is ASCII-only
+# (Arabic prints as '?'). PRINT-1 draws the receipt in the browser (Chromium
+# shapes Arabic) and ships the 1-bit bitmap here:
+#
+#   GET  /printer/receipt-model  -> the receipt as layout data (core/retail/receipt_model.py)
+#   POST /printer/print-raster   -> wrap the bitmap (core/retail/escpos_raster.py) and send it,
+#                                   with the drawer pulse behind the cut in the SAME job.
+#
+# NEITHER touches the sale: a sale is committed before either is called, and
+# every printing/drawer failure is a 200 with printed/kicked false and a reason.
+#
+# NOT PROVEN ON HARDWARE: no physical printer has received these bytes yet
+# (see ROADMAP.md PRINT-1). The byte layout is pinned by tests and the
+# bitmap was decoded back to a picture and looked at; a thermal head has not
+# been asked.
+
+#: Largest print-raster request body. 576 dots x ~7000 rows of packed bits is
+#: ~500 KB (a 90 cm receipt) -> ~680 KB base64, so 1 MiB is generous and still
+#: a hard ceiling on what one request can make the server hold.
+_PRINT_RASTER_MAX_BODY = 1024 * 1024
+_QR_PAYLOAD_MAX = 1024
+
+
+def _receipt_model_inputs(conn, cid, sale_id):
+    """Everything `receipt_model.build_receipt_model` needs for one sale of
+    THIS company, or None when there is no such sale (company-scoped FIRST:
+    an unscoped lookup would let one company render another's receipt)."""
+    sale = conn.execute("""
+        SELECT s.*, COALESCE(c.name,'Walk-in') AS customer_name
+        FROM sales s LEFT JOIN customers c ON s.customer_id=c.id
+        WHERE s.id=? AND s.company_id=?
+    """, (sale_id, cid)).fetchone()
+    if not sale:
+        return None
+    sale = dict(sale)
+    items = conn.execute("""
+        SELECT si.id, si.product_id, si.quantity, si.unit_price, si.line_total, p.name AS product_name
+        FROM sale_items si LEFT JOIN products p ON si.product_id=p.id
+        WHERE si.sale_id=? ORDER BY si.id
+    """, (sale_id,)).fetchall()
+    ids = [i['id'] for i in items]
+    extras_by_item = modifier_engine.read_sale_modifiers(conn, cid, ids)
+    promo_by_item = _read_sale_promotions(conn, cid, ids)
+    lines = [{
+        'name': i['product_name'] or f"#{i['product_id']}",
+        'quantity': i['quantity'], 'unit_price': i['unit_price'], 'line_total': i['line_total'],
+        'modifiers': extras_by_item.get(i['id'], []),
+        'applied_promotion': promo_by_item.get(i['id']),
+    } for i in items]
+    tenders = _sale_tender_lines(conn, cid, sale_id) if sale['payment_method'] == 'split' else None
+
+    _ensure_credit_schema(conn)
+    s = _settings(conn, cid)
+    branding = {k: s.get(k, '') for k in _BRANDING_TEXT_KEYS}
+    branding['business_name'] = (branding.get('branding_business_name') or '').strip() or _signup_company_name()
+
+    # Same best-effort e-invoice read as printer_receipt_payload, plus the
+    # "pending" state the HTML slip prints when an outbox row exists but is
+    # not CLEARED yet (no row at all -> e-invoicing is off -> nothing printed).
+    einvoice = None
+    try:
+        from commercial_runtime.einvoicing import outbox as _einvoice_outbox
+        row = _einvoice_outbox.OutboxRepository(conn).get_by_ref(f'AURA_RETAIL:sale:{sale_id}')
+        if row:
+            einvoice = {'cleared': row['status'] == 'CLEARED', 'qr_payload': row['qr_payload']}
+    except Exception:
+        einvoice = None
+
+    actor_uid = sale.get('actor_user_uid')
+    identity = _resolve_actor_identities(cid, [actor_uid]).get(actor_uid, _UNRESOLVED_IDENTITY)
+    return {
+        'sale': sale, 'items': lines, 'tenders': tenders, 'branding': branding,
+        'currency': s.get('base_currency') or tax_engine.DEFAULT_BASE_CURRENCY,
+        'employee_name': identity['employee_name'],
+        'customer_name': sale['customer_name'], 'einvoice': einvoice,
+    }
+
+
+@retail_bp.route('/printer/receipt-model', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_SELL)
+def printer_receipt_model():
+    """One sale's receipt as layout data for the browser to draw (see
+    core/retail/receipt_model.py). CAP_SELL and no licence decorator, for the
+    same reason `printer_receipt_payload` has none: a read of a document for a
+    sale already in this company's ledger -- a shop whose licence lapsed must
+    still be able to reprint its own receipts.
+
+    `lang` ('en'|'ar') is the till's current language and only matters when the
+    shop's receipt language is 'auto'; a forced shop setting wins.
+    """
+    from core.retail import receipt_model
+    sale_id = request.args.get('sale_id', type=int)
+    if sale_id is None:
+        return jsonify({'status': 'error', 'message': 'sale_id is required'}), 400
+    width_dots = request.args.get('width_dots', default=576, type=int)
+    if width_dots not in (384, 576):
+        return jsonify({'status': 'error', 'message': 'width_dots must be 576 or 384'}), 400
+    lang = 'ar' if (request.args.get('lang') or '').strip().lower() == 'ar' else 'en'
+
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        inputs = _receipt_model_inputs(conn, cid, sale_id)
+    finally:
+        conn.close()
+    if inputs is None:
+        return jsonify({'status': 'error', 'message': 'Sale not found.'}), 404
+    model = receipt_model.build_receipt_model(
+        sale=inputs['sale'], items=inputs['items'], branding=inputs['branding'],
+        currency=inputs['currency'], requested_lang=lang, width_dots=width_dots,
+        tenders=inputs['tenders'], employee_name=inputs['employee_name'],
+        customer_name=inputs['customer_name'], einvoice=inputs['einvoice'],
+    )
+    return jsonify({'status': 'success', 'data': model})
+
+
+@retail_bp.route('/printer/print-raster', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+# "retail.records.read", not a printer-specific capability: printing a receipt
+# for a sale that exists is a records read, and that name is on the restricted
+# allowlist -- so a shop whose licence lapsed can still reprint its receipts
+# (a private "retail.printer.print" would be blocked in restricted mode).
+@require_license_capability("retail.records.read", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
+def printer_print_raster():
+    """Prints a canvas-rendered receipt bitmap, drawer pulse in the same job.
+
+    Body: {sale_id, bitmap_b64, width_dots, height, printer | host/port,
+    qr_payload?, cut (default true), kick (default false)}.
+
+    The SERVER still decides the drawer (same as `printer_kick`): `kick` is
+    only a request, honoured through `_drawer_refusal` (cash only). A card
+    sale with kick=true prints and reports kicked false with the rule's reason.
+
+    Malformed input (bad base64, wrong width/length, oversize) is a 4xx -- a
+    caller bug. Everything about the world (no printer set, spooler error,
+    platform) is a 200 with printed false: the sale is already committed and a
+    printer problem must never look like a failed sale.
+    """
+    from core.retail import escpos_raster
+    import base64
+    import binascii
+
+    # Cap BEFORE parsing: Content-Length when the client sent one, the real
+    # byte count otherwise (chunked uploads carry no length).
+    if request.content_length is not None and request.content_length > _PRINT_RASTER_MAX_BODY:
+        return jsonify({'status': 'error', 'message': 'Request body too large.'}), 413
+    raw = request.get_data(cache=True)
+    if len(raw) > _PRINT_RASTER_MAX_BODY:
+        return jsonify({'status': 'error', 'message': 'Request body too large.'}), 413
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'status': 'error', 'message': 'JSON body required.'}), 400
+
+    sale_id = data.get('sale_id')
+    if not isinstance(sale_id, int) or isinstance(sale_id, bool):
+        return jsonify({'status': 'error', 'message': 'sale_id is required'}), 400
+    try:
+        bitmap = base64.b64decode(str(data.get('bitmap_b64') or ''), validate=True)
+    except (binascii.Error, ValueError):
+        return jsonify({'status': 'error', 'message': 'bitmap_b64 is not valid base64.'}), 400
+    qr_payload = data.get('qr_payload')
+    if qr_payload is not None and (not isinstance(qr_payload, str) or len(qr_payload) > _QR_PAYLOAD_MAX):
+        return jsonify({'status': 'error', 'message': 'qr_payload must be a string up to 1024 characters.'}), 400
+    cut = data.get('cut', True) is not False
+    kick_requested = data.get('kick') is True
+
+    printer_name = (data.get('printer') or '').strip()
+    host = (data.get('host') or '').strip()
+    port = data.get('port')
+    if port in (None, ''):
+        port = 9100
+
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        # COMPANY-SCOPED lookup first, before any validation that could leak
+        # whether an id exists elsewhere (same discipline as printer_kick).
+        sale = conn.execute(
+            "SELECT id, payment_method FROM sales WHERE id=? AND company_id=?", (sale_id, cid),
+        ).fetchone()
+        if not sale:
+            return jsonify({'status': 'error', 'message': 'Sale not found.'}), 404
+
+        # Decide the pulse on the server. A refused kick still prints.
+        kick = False
+        reason = None
+        if kick_requested:
+            reason = _drawer_refusal(conn, cid, sale_id, sale['payment_method'])
+            kick = reason is None
+
+        try:
+            payload = escpos_raster.wrap_raster(
+                bitmap, data.get('width_dots'), data.get('height'),
+                qr_payload=qr_payload, cut=cut, kick=kick,
+            )
+        except escpos_raster.RasterError as exc:
+            return jsonify({'status': 'error', 'message': str(exc)}), 400
+
+        if not printer_name and not host:
+            return jsonify({'status': 'success', 'data': {
+                'printed': False, 'kicked': False,
+                'reason': 'No ESC/POS printer is configured on this device.',
+            }})
+
+        from core.retail import escpos_transport
+        try:
+            # SELECTION RULE, identical to printer_test / printer_kick: a
+            # non-empty `host` wins outright on every platform; otherwise the
+            # Windows spooler (send_raw refuses itself off Windows).
+            if host:
+                escpos_transport.send_to_network(host, port, payload)
+            else:
+                escpos_transport.send_raw(printer_name, payload)
+        except escpos_transport.EscPosTransportError as exc:
+            return jsonify({'status': 'success', 'data': {
+                'printed': False, 'kicked': False, 'reason': str(exc)}})
+        except Exception as exc:
+            return jsonify({'status': 'success', 'data': {
+                'printed': False, 'kicked': False, 'reason': f'Unexpected printer error: {exc}'}})
+
+        target = f'printer={printer_name!r}' if (printer_name and not host) else f'network={host}:{port}'
+        _audit(conn, 'RECEIPT_PRINTED', 'sale', sale_id, f'{target} bytes={len(payload)}')
+        if kick:
+            _audit(conn, 'CASH_DRAWER_KICKED', 'sale', sale_id, target)
+        conn.commit()
+        return jsonify({'status': 'success', 'data': {
+            'printed': True, 'kicked': kick, 'reason': reason}})
+    finally:
+        conn.close()
 
 
 # ── Settings (this device's branch pin) ────────────────────────────────────────
