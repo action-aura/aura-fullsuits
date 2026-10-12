@@ -585,11 +585,22 @@ with sync_playwright() as p:
         page.wait_for_timeout(300)
         check_dialog_semantics(page, "cd-close-dialog", "cd-close-dialog")
 
-        expected_shown = page.evaluate("() => document.getElementById('cd-close-expected')?.textContent || ''")
-        check("close-modal shows the expected cash figure", "50.005" in expected_shown, f"shown={expected_shown!r}")
+        # UI-2 item 3 (blind count): this check used to assert the expected figure
+        # is shown the moment the dialog opens -- the very behaviour the blind count
+        # removes (a short cashier just typed it). The contract is now: NOT shown
+        # before a count, shown after one to a session that may approve (this run
+        # is the owner, who holds both close and approve). Both halves are asserted
+        # so "hide it always" cannot pass; the variance check below is unchanged.
+        expected_before = page.evaluate("() => document.getElementById('cd-close-expected')?.textContent || ''")
+        check("close-modal does NOT show the expected cash figure before a count is typed",
+              "50.005" not in expected_before and "50.005" not in page.inner_text("#cd-close-dialog"),
+              f"shown={expected_before!r}")
 
         page.fill("#cd-close-counted", "50.000")
         page.wait_for_timeout(300)
+        expected_shown = page.evaluate("() => document.getElementById('cd-close-expected')?.textContent || ''")
+        check("close-modal shows the expected cash figure once a count is typed (approver)",
+              "50.005" in expected_shown, f"shown={expected_shown!r}")
         variance_html = page.evaluate("() => document.getElementById('cd-close-variance-val')?.innerHTML || ''")
         variance_text = page.evaluate(
             "() => (document.getElementById('cd-close-variance-val')?.textContent || '').trim()"

@@ -221,6 +221,9 @@ def make_cashier(email="cashier@ui2.local", password="Ui2CashierPW1!"):
     from commercial_runtime.identity.registry_db import get_conn
     from commercial_runtime.security.passwords import hash_password
     conn = get_conn()
+    if conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
+        conn.close()
+        return email, password
     row = conn.execute("SELECT company_id FROM users WHERE role='admin' LIMIT 1").fetchone()
     company_id = row[0]
     uid = str(uuid.uuid4())
@@ -245,6 +248,11 @@ def login_as(page, creds):
     page.reload(); B.dismiss_intro_overlay(page)
     page.wait_for_selector("#sub-header-section", timeout=20000)
     page.wait_for_timeout(900)
+
+
+def close_modals(page):
+    """Remove every open dialog -- a failed check must not leave one behind for the next."""
+    page.evaluate("() => document.querySelectorAll('.ret-modal-overlay').forEach(o => o.remove())")
 
 
 def short_number(n):
@@ -365,7 +373,151 @@ def item_returns(page, ids):
     B.check("returns: a cashier sees the Sales door (retail.sell), via a real login", sales_door_for_roles)
 
 
-ITEMS = {"fav": item_fav, "returns": item_returns}
+# ───────────────────────────── item 3: the blind count ─────────────────────────────
+
+def drawer_expected(page):
+    """The server's expected cash for the open drawer (what the dialog must NOT show a cashier)."""
+    _, cur = B.api(page, "GET", "/api/sub/retail/cash-sessions/current")
+    sid = cur["data"]["id"]
+    _, rep = B.api(page, "GET", f"/api/sub/retail/cash-sessions/{sid}/x-report")
+    return sid, float(rep["data"]["expected_cash"])
+
+
+def item_count(page, ids):
+    B.go_pos(page)
+    # a sale or two so expected is not just the float, and is a figure nothing else on screen shows
+    ring_cash_sale(page, [ids["thingamajig"]], qty=2)       # +24.000
+    ring_cash_sale(page, [ids["doohickey"]], qty=1)         # +3.000  -> expected = 50 + 27 + earlier sales
+    sid, expected = drawer_expected(page)
+    exp_txt = f"{expected:.3f}"
+    count_to_type = round(expected - 3.25, 3)               # 3.250 short
+    DOM_JS = "() => document.documentElement.outerHTML + '\\n' + document.body.innerText"
+
+    def owner_flow(lang="en", w=1366, h=768, shots=True):
+        close_modals(page)
+        set_size(page, w, h); set_lang(page, lang)
+        B.go_pos(page)
+        page.evaluate("() => CashDrawer.openCloseModal()")
+        page.wait_for_selector("#cd-close-counted", timeout=8000)
+        first = page.evaluate("() => { const d = document.getElementById('cd-close-dialog'); const els = [...d.querySelectorAll('input,details,#cd-close-reveal')]; return els.map(e => e.id || e.tagName); }")
+        assert first[0] == "cd-close-counted", f"the count box must be the first control: {first[:4]}"
+        before = page.evaluate(DOM_JS)
+        assert exp_txt not in before, f"the expected figure {exp_txt} is in the page BEFORE the owner counted"
+        if shots:
+            shot(page, f"count_01_owner_before_{w}x{h}_{lang}")
+        page.evaluate("() => { document.getElementById('cd-notes').open = true; }")
+        page.fill("#cd-close-counted", f"{count_to_type:.3f}")
+        page.wait_for_timeout(150)
+        after = page.inner_text("#cd-close-dialog")
+        assert exp_txt in after.replace("⁦", "").replace("⁩", "").replace(",", "") or exp_txt in page.evaluate(DOM_JS), "the owner is not shown the expected figure after counting"
+        var_txt = page.inner_text("#cd-close-variance-val")
+        assert "3.250" in var_txt, f"variance text {var_txt!r}"
+        if shots:
+            shot(page, f"count_02_owner_after_{w}x{h}_{lang}")
+        geo = page.evaluate("""() => { const d = document.getElementById('cd-close-dialog').getBoundingClientRect(); const b = document.getElementById('cd-close-btn').getBoundingClientRect();
+            return { dBottom: d.bottom, dTop: d.top, vh: innerHeight, btnBottom: b.bottom, btnTop: b.top, over: document.documentElement.scrollWidth - document.documentElement.clientWidth }; }""")
+        assert geo["over"] <= 1, f"horizontal overflow {geo}"
+        assert geo["btnBottom"] <= geo["vh"] + 1 and geo["btnTop"] >= 0, f"End Shift is off screen with the note counter open: {geo}"
+        page.evaluate("() => RetailSystem._closeModalOverlay(document.getElementById('cd-close-modal'))")
+
+    def owner_blind_until_count():
+        owner_flow("en", 1366, 768)
+    B.check("count: owner (approver) -- count box first, expected NOT in the page until a count is typed, then revealed with the variance", owner_blind_until_count)
+
+    def note_counter_in_browser():
+        close_modals(page)
+        page.evaluate("() => CashDrawer.openCloseModal()")
+        page.wait_for_selector("#cd-notes", timeout=8000)
+        page.evaluate("() => { document.getElementById('cd-notes').open = true; }")
+        page.fill("#cd-note-20000", "3"); page.fill("#cd-note-250", "3"); page.fill("#cd-note-100", "7")
+        assert page.input_value("#cd-close-counted") == "61.450", page.input_value("#cd-close-counted")
+        step = page.get_attribute("#cd-close-counted", "step")
+        assert step == "0.001", f"step {step}"
+        shot(page, "count_03_note_counter_1366_en")
+        page.evaluate("() => RetailSystem._closeModalOverlay(document.getElementById('cd-close-modal'))")
+    B.check("count: the note counter sums to the count box at 3 decimals (3x20 + 3x0.250 + 7x0.100 = 61.450), step is 0.001", note_counter_in_browser)
+
+    for (w, h) in SIZES:
+        for lang in ("en", "ar"):
+            B.check(f"count: owner dialog {w}x{h} {lang}: no overflow, End Shift on screen with the note counter open (screenshots)",
+                    lambda w=w, h=h, lang=lang: owner_flow(lang, w, h))
+    set_size(page, 1366, 768); set_lang(page, "en")
+
+    def held_warning():
+        close_modals(page)
+        B.go_pos(page)
+        # park one sale for real through the till's own Hold dialog
+        page.evaluate("() => RetailSystem._clearCart()")
+        page.evaluate("(id) => RetailSystem._addToCart(id)", ids["widget"])
+        page.wait_for_timeout(250)
+        page.evaluate("() => RetailSystem._holdSale()")
+        page.wait_for_selector("#hold-save-btn", timeout=5000)
+        page.click("#hold-save-btn")
+        page.wait_for_timeout(700)
+        _, held = B.api(page, "GET", "/api/sub/retail/held-sales")
+        if not held.get("data"):
+            raise AssertionError(f"could not park a sale for the warning check: {held}")
+        page.evaluate("() => CashDrawer.openCloseModal()")
+        page.wait_for_selector("#cd-close-counted", timeout=8000)
+        assert page.locator("#cd-close-held").count() == 1, "held sale exists but End Shift shows no warning"
+        assert page.locator("#cd-close-btn").is_enabled(), "the warning disabled End Shift"
+        shot(page, "count_04_held_warning_1366_en")
+        page.evaluate("() => RetailSystem._closeModalOverlay(document.getElementById('cd-close-modal'))")
+        for h_ in held["data"]:
+            B.api(page, "DELETE", f"/api/sub/retail/held-sales/{h_['id']}")
+    B.check("count: a parked (held) sale shows a warning on End Shift and does not block it", held_warning)
+
+    def cashier_blind():
+        close_modals(page)
+        make_cashier(*CASHIER)
+        login_as(page, CASHIER)
+        B.go_pos(page)
+        for (w, h) in SIZES:
+            for lang in ("en", "ar"):
+                set_size(page, w, h); set_lang(page, lang)
+                B.go_pos(page)
+                page.evaluate("() => CashDrawer.openCloseModal()")
+                page.wait_for_selector("#cd-close-counted", timeout=8000)
+                before = page.evaluate(DOM_JS)
+                assert exp_txt not in before, f"{w}x{h} {lang}: the cashier's page already contains the expected figure {exp_txt} before counting"
+                page.fill("#cd-close-counted", f"{count_to_type:.3f}")
+                page.wait_for_timeout(200)
+                after = page.evaluate(DOM_JS)
+                assert exp_txt not in after, f"{w}x{h} {lang}: the cashier was shown the expected figure after counting"
+                assert page.locator("#cd-close-variance, #cd-close-expected, #cd-close-reveal").count() == 0, "blind dialog carries reveal elements"
+                assert "3.250" not in page.inner_text("#cd-close-dialog"), "the variance (3.250) is visible to a cashier, which gives the expected figure away"
+                shot(page, f"count_05_cashier_blind_{w}x{h}_{lang}")
+                page.evaluate("() => RetailSystem._closeModalOverlay(document.getElementById('cd-close-modal'))")
+        set_size(page, 1366, 768); set_lang(page, "en")
+    B.check("count: a CASHIER's End Shift page never contains the expected figure or the variance, before or after counting, EN+AR, both sizes", cashier_blind)
+
+    def cashier_ends_and_float_prefills():
+        close_modals(page)
+        B.go_pos(page)
+        page.evaluate("() => CashDrawer.openCloseModal()")
+        page.wait_for_selector("#cd-close-counted", timeout=8000)
+        page.fill("#cd-close-counted", f"{count_to_type:.3f}")
+        page.click("#cd-close-btn")
+        page.wait_for_function("() => !document.getElementById('cd-close-modal')", timeout=8000)
+        page.wait_for_timeout(500)
+        _, hist = B.api(page, "GET", "/api/sub/retail/cash-sessions?limit=5")
+        top = hist["data"][0]
+        assert abs(float(top["closing_float_counted"]) - count_to_type) < 1e-6, top
+        # the next opening float is this terminal's last count
+        page.evaluate("() => CashDrawer.openOpenShiftModal()")
+        page.wait_for_selector("#cd-opening-float", timeout=8000)
+        val = page.input_value("#cd-opening-float")
+        assert abs(float(val) - count_to_type) < 1e-6, f"opening float pre-fill {val!r}, wanted {count_to_type}"
+        assert page.locator("#cd-float-from-last").count() == 1
+        shot(page, "count_06_open_shift_prefill_1366_en")
+        page.click("#cd-open-btn"); page.wait_for_timeout(700)
+        _, cur = B.api(page, "GET", "/api/sub/retail/cash-sessions/current")
+        assert cur["data"] and abs(float(cur["data"]["opening_float"]) - count_to_type) < 1e-6, cur
+    B.check("count: the cashier ends the shift (count recorded), and the next Open Shift is pre-filled with that count", cashier_ends_and_float_prefills)
+    login_as(page, OWNER)
+
+
+ITEMS = {"fav": item_fav, "returns": item_returns, "count": item_count}
 
 
 def main():
