@@ -333,8 +333,14 @@ PER_FILE_TIMEOUT_SECONDS = int(os.environ.get('AURA_TEST_RUNNER_TIMEOUT_S', '120
 # It is slow because it is honest, not because it hangs. 3600s keeps ~2x
 # headroom; a genuine hang is still caught. An explicit
 # AURA_TEST_RUNNER_TIMEOUT_S (a test of the timeout path) wins over this list.
+# retail_p1b_numbering_twodevice_test.py (ROADMAP residual D6, closed
+# 2026-10-12): two real computers numbering receipts; measured 17m18s (1038s)
+# standing alone, 8/8 passing (2026-10-05), and killed at 1200s inside a -j 6
+# run on 2026-10-12 while two other crews were also running suites -- the
+# only red of 590 files. Same reasoning as above: 2400s is ~2x its solo time.
 SLOW_FILE_TIMEOUT_SECONDS = {
     'retail_v42_till_allocation_test.py': 3600,
+    'retail_p1b_numbering_twodevice_test.py': 2400,
 }
 
 
