@@ -5,7 +5,7 @@
 # `ssh ubuntu@<vm-ip>`), clone the deploy branch to the path this script
 # deploys from, and run it FROM THAT CHECKOUT:
 #
-#   git clone --branch worktree-retail-hardware-viewports \
+#   git clone --branch feat/money-fixes \
 #     https://github.com/action-aura/aura-fullsuits.git ~/aura-fullsuits
 #   bash ~/aura-fullsuits/owner/deploy/oracle-free/bootstrap.sh
 #
@@ -55,7 +55,11 @@ REPO_URL="${REPO_URL:-https://github.com/action-aura/aura-fullsuits.git}"
 # on the VM that has no owner/deploy/oracle-free directory, and this script
 # would then fail several steps later on a missing compose file rather than
 # here, where the cause is obvious.
-REPO_BRANCH="${REPO_BRANCH:-worktree-retail-hardware-viewports}"
+# Default is a branch that exists and carries this deploy content, NOT what the live
+# server runs: the live Oracle server currently runs feat/real-email. Until a
+# release branch exists, always pass the deploy branch explicitly
+# (REPO_BRANCH=feat/... bash bootstrap.sh) rather than trusting this default.
+REPO_BRANCH="${REPO_BRANCH:-feat/money-fixes}"
 REPO_DIR="${REPO_DIR:-$HOME/aura-fullsuits}"
 COMPOSE_DIR="$REPO_DIR/owner/deploy/oracle-free"
 ENV_FILE="$COMPOSE_DIR/.env.oracle"
