@@ -148,6 +148,23 @@ class CrashReportSender:
         if not rows:
             log.info("crash reports: run skipped -- nothing pending")
             return "NOTHING_PENDING"
+        # SUPPORT-1: diagnostics snapshots travel in a request of their own,
+        # AFTER the crash reports. An Owner built before the "diagnostics" kind
+        # existed refuses a whole request that contains one (all-or-nothing
+        # validation); mixed into one request that refusal would also hold back
+        # every real crash report behind it, forever, oldest-first.
+        crashes = [r for r in rows if r["kind"] != "diagnostics"]
+        snapshots = [r for r in rows if r["kind"] == "diagnostics"]
+        outcome = "NOTHING_PENDING"
+        for group in (crashes, snapshots):
+            if not group:
+                continue
+            outcome = self._send_group(installation_id, group)
+            if outcome != "SENT":
+                return outcome
+        return outcome
+
+    def _send_group(self, installation_id: str, rows: list) -> str:
         reports = self._payload_for(rows)
         sent_rows = rows[:len(reports)]
         try:

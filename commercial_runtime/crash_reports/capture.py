@@ -22,14 +22,17 @@ contract, and the retail suite is what proves it did not move.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import threading
+import uuid
 from typing import Optional
 
-from flask import got_request_exception, request
+from flask import g, got_request_exception, request
 
 from . import scrub
+from .reference_code import reference_code
 from .store import CrashStore
 
 log = logging.getLogger("aura.crash_reports")
@@ -37,6 +40,16 @@ log = logging.getLogger("aura.crash_reports")
 KIND_SERVER = "server"
 KIND_THREAD = "thread"
 KIND_CLIENT = "client"
+# SUPPORT-1: not a crash. A support snapshot the shopkeeper chose to send
+# ("Send diagnostics to support"). It rides the crash-report outbox because that
+# is already the device-signed, queued, bounded channel to Owner -- no second
+# channel, no schema change (the kind column is a free 16-char string).
+KIND_DIAGNOSTICS = "diagnostics"
+
+# The response header that carries a report's 6-character reference code to the
+# page (SUPPORT-1 item 3). A header, not a body: the existing answers (204 for
+# a recorded client report, the app's own 500 page) keep their shape.
+REPORT_CODE_HEADER = "X-Aura-Report-Code"
 
 _SCREEN_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 _MAX_CLIENT_MESSAGE_INPUT = 2000      # bound the text the regexes ever see
@@ -92,6 +105,71 @@ def report_from_client(*, message: object, stack: object, screen: object, app_ve
     )
 
 
+def _fmt_count(value: object) -> str:
+    """A row count for the snapshot message. Four or more digits would be
+    blanked to "<n>" by the scrubber (it cannot tell a count from an amount),
+    which would make a busy shop's snapshot useless, so big numbers are
+    shortened to e.g. "12k" -- a magnitude, not an exact figure."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return "?"
+    if value < 1000:
+        return str(value)
+    return "%dk" % (value // 1000)
+
+
+_STATE_RE = re.compile(r"^[A-Za-z0-9_\-]{1,32}$")
+
+
+def _state_text(value: object) -> str:
+    return value if isinstance(value, str) and _STATE_RE.match(value) else "?"
+
+
+def build_diagnostics_report(facts: object, *, app_version: str, platform: str,
+                             nonce: Optional[str] = None) -> dict:
+    """A support snapshot as a report dict (same shape as every other kind).
+
+    `facts` is the page's copy of the existing diagnostics export
+    (GET /api/sub/retail/diagnostics/export). Only a fixed list of its fields is
+    read, each re-typed here -- an int stays an int, a state stays a short token --
+    so nothing free-text from the page (and in particular NOT the export's
+    log_tail) can reach Owner. The whole export does not fit the channel's
+    300-character message anyway; this is the part support asks for first.
+
+    The fingerprint is unique per press of the button (a random nonce), not
+    per bug: two snapshots from one shop are two things support may be asked
+    about, each with its own code, and the store's (fingerprint, version)
+    upsert must not fold them into one row.
+    """
+    facts = facts if isinstance(facts, dict) else {}
+    counts = facts.get("row_counts") if isinstance(facts.get("row_counts"), dict) else {}
+    licence = facts.get("licence") if isinstance(facts.get("licence"), dict) else {}
+    sync = facts.get("sync_health") if isinstance(facts.get("sync_health"), dict) else {}
+    schema = facts.get("retail_schema_version")
+    text = "snapshot v%s schema %s licence %s sync %s sales %s products %s customers %s users %s" % (
+        app_version, schema if isinstance(schema, int) and not isinstance(schema, bool) else "?",
+        _state_text(licence.get("state")), _state_text(sync.get("state") or sync.get("status")),
+        _fmt_count(counts.get("sales")), _fmt_count(counts.get("products")),
+        _fmt_count(counts.get("customers")), _fmt_count(counts.get("users")))
+    fingerprint = hashlib.sha256(("diagnostics|" + (nonce or uuid.uuid4().hex)).encode("utf-8")).hexdigest()[:scrub.FINGERPRINT_LENGTH]
+    report = build_report(
+        kind=KIND_DIAGNOSTICS, exception_type="DiagnosticsSnapshot", message=scrub.scrub_message(text),
+        frames=[], route=None, app_version=app_version, platform=platform)
+    report["fingerprint"] = fingerprint
+    return report
+
+
+def _remember_code_for_response(report: dict) -> None:
+    """Stash the code on the request so the after_request hook can put it on
+    the response. Outside a request (a background thread) there is nothing to
+    answer, so this quietly does nothing."""
+    try:
+        code = reference_code(report.get("fingerprint"))
+        if code:
+            g.aura_report_code = code
+    except Exception:  # noqa: BLE001 -- no app/request context
+        pass
+
+
 class CaptureHandle:
     """Returned by install(). `remove()` undoes every hook this install made
     (used by tests, and harmless in production)."""
@@ -106,6 +184,7 @@ class CaptureHandle:
         self._previous_thread_hook = None
         self._thread_hook = None
         self._signal_receiver = None
+        self._after_request = None
 
     # -- the one guard every capture path goes through -------------------
     def _swallow(self, what: str, exc: BaseException) -> None:
@@ -123,8 +202,13 @@ class CaptureHandle:
         if not self._active:
             return
         try:
-            self.record(report_from_exception(
-                exc, kind=kind, route=route, app_version=self._app_version, platform=self._platform))
+            report = report_from_exception(
+                exc, kind=kind, route=route, app_version=self._app_version, platform=self._platform)
+            self.record(report)
+            # Only after the report is really in the store: a code for a
+            # report that was not saved would send support looking for
+            # something that does not exist.
+            _remember_code_for_response(report)
         except Exception as inner:  # noqa: BLE001 -- see module docstring
             self._swallow(kind, inner)
 
@@ -175,6 +259,21 @@ def install(app, store: CrashStore, *, app_version: str, platform: str) -> Captu
     handle = CaptureHandle(app, store, app_version, platform)
     handle._signal_receiver = handle._on_request_exception
     got_request_exception.connect(handle._signal_receiver, app, weak=False)
+
+    def add_code_header(response):
+        # A 500 the user is about to see carries the code of the report just
+        # saved for it, so the page can say "a report was saved (code ...)".
+        # Header only: the body and status are exactly what the app already sent.
+        try:
+            code = getattr(g, "aura_report_code", None)
+            if handle._active and code:
+                response.headers[REPORT_CODE_HEADER] = code
+        except Exception:  # noqa: BLE001
+            pass
+        return response
+
+    handle._after_request = add_code_header
+    app.after_request(add_code_header)
     handle._install_thread_hook()
     log.info("crash reports: capture installed (server + thread); store=%s", store.path)
     return handle

@@ -2,16 +2,19 @@
 
   POST /client    any signed-in user -- the page's own JS reports a browser error
   GET  /summary   administrator -- how many reports are waiting / were sent
+  POST /diagnostics  administrator -- queue a support snapshot, answer with its reference code
 
 Why /client requires a signed-in user: the till's pages only ever run for a
 signed-in cashier, so a request with no session is not our JS; refusing it (401)
 keeps strangers on the same network from filling the local queue.
 
-Why the answer is always an empty 204: the page must learn nothing from
-reporting (and must never show anything to the user because of it). Over the
-rate limit, a malformed-but-small body, a store that failed -- all look the same
-to the page. Only the two things the page can actually act on differ: not
-signed in (401) and body too large (413).
+Why the answer to /client is an empty 204: the page learns nothing from
+reporting except ONE thing, added by SUPPORT-1: a recorded report answers with
+its 6-character reference code in the X-Aura-Report-Code header so the shop can
+quote it to support. Over the rate limit, a malformed-but-small body, a store
+that failed -- all still look the same to the page (a bare 204, no header). Only
+the things the page can actually act on differ: not signed in (401) and body too
+large (413).
 
 This blueprint is NOT behind the retail licence guard, for the same reason the
 update channel is not: an expired or restricted shop is exactly the shop whose
@@ -31,7 +34,8 @@ from flask import Blueprint, jsonify, request, session
 
 from commercial_runtime.backup.routes import _require_admin
 
-from .capture import report_from_client
+from .capture import REPORT_CODE_HEADER, build_diagnostics_report, report_from_client
+from .reference_code import reference_code
 from .store import CrashStore
 
 log = logging.getLogger("aura.crash_reports")
@@ -72,6 +76,7 @@ def make_crash_reports_blueprint(
     platform: str,
     sending_enabled: bool,
     limiter: Optional[ClientReportLimiter] = None,
+    on_diagnostics_recorded: Optional[Callable[[], None]] = None,
 ) -> Blueprint:
     """`sending_enabled` is whether a sender thread was started (an Owner URL
     is configured); it is reported by /summary so support can tell "nothing
@@ -103,12 +108,60 @@ def make_crash_reports_blueprint(
         if not isinstance(body, dict):
             return jsonify({'error': 'Malformed report', 'code': 400}), 400
         try:
-            store.record(report_from_client(
+            report = report_from_client(
                 message=body.get('message'), stack=body.get('stack'), screen=body.get('screen'),
-                app_version=app_version, platform=platform))
+                app_version=app_version, platform=platform)
+            store.record(report)
         except Exception:  # noqa: BLE001 -- the page must never see a reporting failure
             log.warning("crash reports: could not record a client report", exc_info=True)
-        return '', 204
+            return '', 204
+        # SUPPORT-1 item 3: the body stays empty; the 6-character code of the
+        # report that WAS saved rides a header so the page can tell the user
+        # "a report was saved (code ...)". Every case where nothing was saved
+        # (rate limit, no store, store failure) answers without it -- so the
+        # page can show a code only when a report really exists.
+        return '', 204, {REPORT_CODE_HEADER: reference_code(report["fingerprint"])}
+
+    @bp.route('/diagnostics', methods=['POST'])
+    def send_diagnostics():
+        """"Send diagnostics to support": queue a snapshot for Owner and hand
+        back its reference code. Administrator only -- the same tier as the
+        diagnostics export it summarises (CAP_EMPLOYEES). The page sends the
+        facts it just read from that export; only a fixed list of them is
+        used (build_diagnostics_report), never free text."""
+        denied = _require_admin()
+        if denied:
+            return denied
+        if store is None:
+            return jsonify({'error': 'Reports are unavailable on this computer', 'code': 503}), 503
+        declared = request.content_length
+        if declared is not None and declared > MAX_BODY_BYTES:
+            return jsonify({'error': 'Report too large', 'code': 413}), 413
+        raw = request.stream.read(MAX_BODY_BYTES + 1)
+        if len(raw) > MAX_BODY_BYTES:
+            return jsonify({'error': 'Report too large', 'code': 413}), 413
+        try:
+            facts = json.loads(raw.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            return jsonify({'error': 'Malformed report', 'code': 400}), 400
+        if not isinstance(facts, dict):
+            return jsonify({'error': 'Malformed report', 'code': 400}), 400
+        try:
+            report = build_diagnostics_report(facts, app_version=app_version, platform=platform)
+            store.record(report)
+        except Exception:  # noqa: BLE001
+            log.warning("crash reports: could not record a diagnostics snapshot", exc_info=True)
+            return jsonify({'error': 'Could not save the report', 'code': 500}), 500
+        if on_diagnostics_recorded is not None:
+            try:
+                on_diagnostics_recorded()
+            except Exception:  # noqa: BLE001 -- an eager send is a courtesy; the 30-minute run still sends it
+                log.warning("crash reports: eager send after a diagnostics snapshot failed", exc_info=True)
+        return jsonify({'status': 'success', 'data': {
+            'reference_code': reference_code(report["fingerprint"]),
+            # Whether anything will ever leave this till (an Owner is configured).
+            'sending_enabled': bool(sending_enabled),
+        }}), 200
 
     @bp.route('/summary', methods=['GET'])
     def summary():
