@@ -7805,3 +7805,96 @@ RETAIL_SCHEMA_VERSION until this is cashed in.
   integrated line (short receipt numbers, SUPPLIER_REQUIRED_FOR_CREDIT_PO, sidebar rows below the 768px fold) and want their own pass.
   Green here: retail_p1c_size_e2e 14/14 (extended), retail_ui1_cash_e2e 14/14 (new), retail_p2_today_e2e 10/10, retail_p1a_shell_e2e
   46/46, retail_p1c_keyboard_e2e 11/11, retail_p1b_palette_fix_e2e, retail_p1a_display_e2e, retail_smoke_e2e, retail_p0_modals_e2e.
+
+## 2026-10-12 — MONEY-4b CASHED IN (retail v52: paid-outs and expenses reach the books)
+
+Review B defect D2 (HIGH): a 20.000 paid out of the drawer to the delivery driver lowered the drawer's expected
+cash and moved NO book -- the balance sheet's Cash and Bank stayed 20.000 high, the P&L never saw the cost, and
+there was nowhere to record rent, utilities or salaries. Branch `feat/money-4b`. RETAIL_SCHEMA_VERSION 51 -> 52
+(`_migrate_add_money4b_expenses`, shape-gated, appended last); the v52 claim is released.
+
+WHAT SHIPPED
+* Chart (seeded lazily by `ensure_default_chart`, nothing renumbered): 6000 Rent, 6100 Utilities, 6200 Salaries and
+  Wages, 6300 Transport and Delivery, 6400 Marketing, 6500 Bank and Card Fees, 6900 Other Expenses (expense,
+  debit-normal) and 3100 Owner Drawings (equity, debit-normal -- reduces equity, does NOT reduce profit).
+* `cash_movements.gl_account_code`. `create_cash_movement` posts a `paid_out` once, in the same transaction:
+  Dr <account> / Cr 1000, journal uid = uuid5(movement id), dated on `_gl_business_date`. No account sent (old
+  desktop build, Android) -> 6900, never refused; an account outside {6xxx, 3100} -> 400 `INVALID_GL_ACCOUNT`.
+  float_in/float_out post NOTHING (safe <-> drawer; 1000 is one combined account).
+* Drawer dialog (cash-drawer.js): required "What for?" select for Paid Out only.
+* `expenses` table + `POST /expenses`, `GET /expenses?from=&to=&account=`, `POST /expenses/<uid>/void` (reason
+  required, reversal posted once, a second void is 409). Capability retail.books.record (create, void) and
+  retail.books.view (list); both frozen in `retail_route_capability_matrix_test.py`. Company-scoped (and
+  branch-scoped for a scoped caller); a future date, bad account, bad paid_via, zero amount are 400.
+* Expenses screen (`expenses.js`, nav row under Books, hooked in app-shell `_safeRender` because RetailSystem's
+  render switch is another crew's file this wave). EN + AR (27 new strings, listed below).
+* v52 catch-up: every EXISTING manual paid-out (no `payment_uid`) gets ONE journal Dr 6900 Other Expenses / Cr 1000
+  at its own business date, keyed on the movement id (a replay posts nothing). Historical paid-outs land in
+  "Other expenses" because their purpose was never captured; the supplier-payment paid-outs (`payment_uid` set)
+  are excluded (their payment already booked Dr AP / Cr Cash).
+* Cash-flow labels: 'cash_movement' -> "Paid Out of the Till", 'expense' -> "Expenses Paid".
+
+STOPPED, NOT BUILT -- needs an owner decision
+* **paid_in to "4900 Other income" was NOT built.** 4900 already exists and means Sales Returns and Allowances
+  (revenue type, debit-normal, the contra of 4000). Posting a paid_in there would silently reduce returns, so the
+  design's "if any code already exists with another meaning, STOP" applied. Until an income code is chosen
+  (4800? 4950? -- must not collide with 4900), a paid_in still reaches no book, exactly as before v52: no select in
+  the dialog, no account stored, no journal, no catch-up for historical paid_ins. Pinned by
+  `test_paid_in_posts_no_journal_yet_and_stores_no_account` and `test_4900_is_still_sales_returns...` so it cannot
+  be half-built by accident. The "owner puts money back" case (paid_in -> 3100) waits on the same decision.
+
+KNOWN GAPS
+* Android Aura Retail has no "What for?" select: its paid-outs book to 6900 until the app gets one.
+* The Expenses LIST is per-computer. No generic entity-sync exists for a new table (each synced entity is hand-written
+  in `sync_service.py`), so only the JOURNALS sync: a second computer's trial balance / P&L / balance sheet carry the
+  expense and its void, but its Expenses screen does not list the row. A void can only be done on the computer that
+  recorded the expense. Pinned by `retail_money4b_twodevice_test.py`.
+* `cash_movements` do not sync (device-local by design), so no receiver can post a second journal for a movement;
+  proven on two real computers.
+* A voided expense's account still lists in the P&L operating-expenses accounts at 0.000 (journals are append-only;
+  the reversal nets it to zero). Cosmetic.
+* The catch-up dates a historical paid-out by `created_at` read as the device's wall clock through `business_now`;
+  a row with an unreadable `created_at` is dated the upgrade day (visible and reversible, better than missing).
+
+ARABIC FOR A NATIVE READER (natural phrasing; please check): لأي غرض؟ / اختر الغرض من المبلغ / الإيجار /
+الكهرباء والماء والخدمات / الرواتب والأجور / النقل والتوصيل / التسويق / رسوم البنك والبطاقات / مصاريف أخرى /
+أخذه المالك لنفسه (مسحوبات المالك) / إضافة مصروف / تعذّر تحميل المصاريف. / لا توجد مصاريف في هذه الفترة. /
+طريقة الدفع / سجّله / إلغاء / الدفاتر متاحة لمالك المتجر والمحاسب فقط. / الإيجار والفواتير والرواتب التي تُدفع من
+المكتب أو من البنك... / كل الحسابات / تعذّر الحفظ. لم يُسجَّل شيء. / تم تسجيل المصروف / إلغاء المصروف / يبقى
+المصروف في القائمة مشطوبًا... / السبب مطلوب لإلغاء المصروف. / تم إلغاء المصروف / نقدًا من المكتب / تحويل بنكي
+(English keys: see products/retail/frontend/locales/en.json, last 27 entries).
+
+PROVEN (see the hand-back for quoted red/green)
+* `retail_money4b_paidout_expense_test.py` (29), `retail_money4b_migration_test.py` (6),
+  `retail_money4b_twodevice_test.py` (2); mutations: skip the journal, post floats, drop company scope on GET
+  /expenses, calendar-day instead of business-day, non-idempotent post, non-idempotent backfill, backfill without the
+  `payment_uid` exclusion, backfill dated by the upgrade day -- each turns its test RED.
+* Real artefact on port 5096: a 20.000 paid-out through the drawer dialog and a 250.000 rent expense on the Expenses
+  screen (EN + AR screenshots); balance sheet Cash and Bank 500.000 -> 230.000, trial balance and balance sheet
+  balanced, P&L operating expenses 270.000 (6300 20.000, 6000 250.000).
+* Canonical full run on the committed tree (products\run_all_tests.py retail commercial_runtime sync -j 6): 488 file(s) run, 488 passed, 0 failed. (The first full run, before the head-version tripwires, nav table, option-label source scan and DEFAULT_CHART comment placement were adjusted for v52, was 471 passed / 16 failed -- every one a direct consequence of this change, none pre-existing.)
+
+2026-10-12 (later) -- MONEY-4b paid_in half BUILT; the "STOPPED, NOT BUILT" bullet above is superseded.
+* New account **4800 Other Income** (revenue, credit-normal), seeded lazily like 3100/6xxx (4800 was unused
+  anywhere; 4900 stays Sales Returns and Allowances and is refused as a paid_in account). Drawer dialog: paid_in
+  now asks the required "What for?" -- 4800 Other income, or 3100 (the owner putting his own money back; Cr 3100
+  raises equity, not profit). `create_cash_movement` posts Dr 1000 / Cr <account> once, same transaction, keyed
+  on the movement id, dated `_gl_business_date`. No account sent (old build, Android) -> 4800, never refused; any
+  other code -> 400 `INVALID_GL_ACCOUNT`; 4800 is refused on a paid_out and 6xxx on a paid_in.
+* Catch-up (same unreleased v52 step, no v53): every existing manual paid_in (no `payment_uid`) gets one journal
+  Dr 1000 / Cr 4800 at its own business date. The paid_in half runs on EVERY run of the step, not only on the
+  51 -> 52 upgrade, and is keyed on the movement id, so a database that already ran the first shape of v52 gets
+  its paid_ins booked once. CAVEAT: `ensure_schema_version` never re-enters the chain on a database already
+  stamped 52, so a lab/test copy at 52 is only caught up by calling `_migrate_add_money4b_expenses` (or by
+  restamping 51); no released build is affected, none shipped v52.
+* P&L (`income_statement`) now also returns `revenue_accounts` (itemised gross revenue lines) so 4800 is visible
+  on its own. KNOWN GAP: the P&L screen (subsystem-retail.js, not touched here) still shows one "Gross Revenue"
+  figure, so Other Income is inside it, and gross margin counts it as revenue. Needs a line in that screen.
+* Android paid-ins still send no account -> 4800 (like its paid-outs -> 6900).
+* New Arabic for a native reader: دخل آخر / أعاد المالك مبلغاً إلى الدرج (مسحوبات المالك)
+  (EN keys: "Other income", "Owner put money back (drawings)").
+* Proven: paidout test 42 (was 29 incl. the two paid_in-not-built pins, replaced), migration test 7, two-device 2;
+  mutations RED: swapped Dr/Cr, floats post, non-idempotent post, paid_in catch-up gated on the version,
+  catch-up without the payment_uid exclusion. Real app :5098: a 15.000 "Other income" paid-in through the drawer
+  dialog (EN + AR shots) -> cash 500.000 -> 515.000, P&L revenue_accounts 4000 500.000 + 4800 15.000, trial
+  balance and balance sheet balanced. Full run: 488 files, 488 passed, 0 failed.

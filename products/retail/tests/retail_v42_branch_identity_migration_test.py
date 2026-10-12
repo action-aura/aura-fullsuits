@@ -273,7 +273,7 @@ def _assert_money_neutral(before, after):
     # DAY-1c UPDATE: the head is now v43 (payments.cash_session_id), so a v41 database boots all the way to 43 and the pre-migration backup is named v41-to-v43. This is the head-version tripwire, hard-coded on purpose; v43's own migration is proved by retail_day1_v43_migration_test.py, and what this line cannot catch is a v43 defect.
     # v44 UPDATE: the head is now v44 (party_balance tables); same tripwire, same caveat -- v44's own migration is proved by retail_v44_party_balance_migration_test.py.
     # v46 UPDATE: the head is now v46 (v45 PO sync identity, v46 PO receipts); same tripwire, same caveat -- v45/v46's own migrations are proved by their own migration tests, and what this line cannot catch is a v45/v46 defect.
-    assert after['user_version'] == 51  # v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py | prior: v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    assert after['user_version'] == 52  # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py | prior: v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     for t in MONEY_TABLES:
         assert before['money'][t] == after['money'][t], f'{t}: rows changed across the v42 boot'
     assert after['drift'] == before['drift']
@@ -285,8 +285,8 @@ def _assert_money_neutral(before, after):
 
 def _assert_backup_is_the_pre_migration_state(sch, before_branches):
     bdir = os.path.join(sch.BASE_DIR, 'migration_backups')
-    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v51' in n)  # v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
-    assert names, f'no v41-to-v51 backup in {os.listdir(bdir)}'  # v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v52' in n)  # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    assert names, f'no v41-to-v52 backup in {os.listdir(bdir)}'  # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     conn = sqlite3.connect(f'file:{os.path.join(bdir, names[-1])}?mode=ro', uri=True)
     try:
         assert conn.execute('PRAGMA user_version').fetchone()[0] == 41
@@ -418,7 +418,7 @@ def test_a_fresh_shop_with_no_branches_yet_skips_quietly(tmp_path):
     conn.close()
     sch.init_retail()
     sch.init_retail()
-    assert _rows(sch, 'PRAGMA user_version') == [(51,)]   # v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py | prior: v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    assert _rows(sch, 'PRAGMA user_version') == [(52,)]   # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py | prior: v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     assert _aliases(sch) == [] and _skip_audits(sch) == []
 
 
@@ -523,9 +523,9 @@ def test_census_copy_migrates_money_neutral(name, tmp_path):
         assert before['money'][t] == after['money'][t], f'{name}: {t} changed'
     assert after['drift'] == before['drift']
     assert after['trial_balance'] == before['trial_balance']
-    assert after['integrity'] == 'ok' and after['user_version'] == 51  # v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py | prior: v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    assert after['integrity'] == 'ok' and after['user_version'] == 52  # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py | prior: v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     assert [b[:4] for b in before['branches']] == [b[:4] for b in after['branches']]
-    assert any('v41-to-v51' in n for n in os.listdir(os.path.join(sch.BASE_DIR, 'migration_backups')))  # v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    assert any('v41-to-v52' in n for n in os.listdir(os.path.join(sch.BASE_DIR, 'migration_backups')))  # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     # At most one branch changed uid, and only to the licence-derived one.
     changed = [(b, a) for b, a in zip(before['branches'], after['branches']) if b[4] != a[4]]
     assert len(changed) <= 1

@@ -1383,7 +1383,22 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 #     must be recreated.
 #
 # Appended LAST and shape-gated.
-RETAIL_SCHEMA_VERSION = 51
+#
+# v52 (2026-10-12, MONEY-4b -- claimed in ROADMAP.md "retail schema v52 RE-CLAIMED for MONEY-4b";
+# review defect D2): money that leaves the shop without being a sale or a supplier payment
+# reaches the books. `_migrate_add_money4b_expenses`:
+#   * `cash_movements.gl_account_code TEXT NULL` -- what a drawer paid-out was FOR (an expense
+#     account, or 3100 Owner Drawings). NULL on every legacy row and on every float row.
+#   * `expenses` -- an expense NOT paid from the drawer (rent, utilities, salaries), company and
+#     branch scoped, uid UNIQUE, voided by a reversing journal (never an UPDATE of a journal).
+#   * a one-time catch-up: every EXISTING manual paid_out gets one journal, Dr 6900 Other
+#     Expenses / Cr 1000, at its own business date, keyed on the movement's id so it can never
+#     double-post. Their purpose was never captured, so 6900 is the honest bucket.
+#   * paid_in is booked too: Dr 1000 / Cr 4800 Other Income (or 3100 Owner Drawings when the owner
+#     puts his own money back). 4800, NOT 4900 -- 4900 is Sales Returns and Allowances. The
+#     catch-up books existing manual paid_ins to 4800 (unreleased v52 extended in place, no v53).
+# Appended LAST and shape-gated.
+RETAIL_SCHEMA_VERSION = 52
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2573,6 +2588,136 @@ def _migrate_retail_schema(conn):
     # M1 / D2: a return is refunded through SEVERAL methods. Nothing above derives from legs,
     # and nothing may read `return_refund_legs` before THIS step has backfilled it.
     _migrate_add_return_refund_legs(conn)
+    # v51 -> v52 (MONEY-4b): appended LAST. It posts journals (so it needs the ledger, the
+    # outbox and v13's cash_movements stamp columns, all created above) and reads
+    # `retail_settings` for the business-day clock. See the v52 comment on RETAIL_SCHEMA_VERSION.
+    _migrate_add_money4b_expenses(conn)
+
+
+def _migrate_add_money4b_expenses(conn):
+    """One-time migration (schema v51 -> v52, MONEY-4b / review D2). See the v52 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    1. `cash_movements.gl_account_code TEXT` and the `expenses` table (+ indexes): shape-gated
+       and IF NOT EXISTS, so the whole chain replaying is byte-identical.
+    2. CATCH-UP, on a genuine upgrade only (`entry_user_version < 52`): one journal for every
+       existing manual paid_out that has none -- Dr 6900 Other Expenses / Cr 1000 at the
+       movement's own BUSINESS DATE (the shop's trading-day clock, not the upgrade day), keyed
+       on `cash_movement_journal_uid(movement id)`. The key is the idempotence: `_post_once`
+       finds the journal if it exists, so running this twice, or after a partial first run, posts
+       nothing the second time.
+
+       EXCLUDED: a movement with `payment_uid` set. Those are the paid-outs a supplier payment
+       made from the drawer (and their cancellation's paid_in); the payment already posted its
+       own Dr Accounts Payable / Cr Cash journal, so booking the movement too would take the
+       money out of Cash TWICE. The same exclusion applies to paid_in (a cancelled supplier
+       payment's refund into the drawer is booked by the payment's own reversal).
+
+       The same step also books every existing manual paid_in Dr 1000 / Cr 4800 Other Income at
+       its own business date, keyed on the movement id, and does so on EVERY run (not only on
+       the 51 -> 52 upgrade): see the comment in the body.
+
+       NOT version-gated in a way that hides it from a test: the test calls this function
+       directly on a connection stamped 51, as the v51 steps' tests do.
+
+    Positional-safe: sets `sqlite3.Row` for its duration (the ledger helpers read by name) and
+    restores it."""
+    entry_user_version = conn.execute('PRAGMA user_version').fetchone()[0]
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+
+    if 'cash_movements' in live:
+        cols = {row[1] for row in conn.execute('PRAGMA table_info("cash_movements")').fetchall()}
+        if 'gl_account_code' not in cols:
+            conn.execute('ALTER TABLE cash_movements ADD COLUMN gl_account_code TEXT')
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uid TEXT NOT NULL UNIQUE,
+            company_id TEXT NOT NULL,
+            branch_id INTEGER,
+            business_date TEXT NOT NULL,
+            gl_account_code TEXT NOT NULL,
+            amount REAL NOT NULL,
+            paid_via TEXT NOT NULL DEFAULT 'cash_office',
+            memo TEXT,
+            created_by TEXT,
+            created_at TEXT,
+            voided_at TEXT,
+            voided_by TEXT,
+            void_reason TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_expenses_company_date "
+                 "ON expenses(company_id, business_date)")
+
+    if not {'cash_movements', 'cash_sessions', 'gl_accounts', 'gl_journals', 'gl_journal_lines',
+            'sync_outbox'} <= live:
+        return
+    from core.retail import general_ledger as _gl
+    from core.retail import metrics as _metrics
+
+    # The paid_out catch-up is a one-time upgrade step (v51 -> v52). The paid_in catch-up is NOT
+    # gated on the version: v52 was extended with the paid_in half before any build shipped it, so
+    # a database that already ran the first v52 (lab/test copies) must still get its paid_ins
+    # booked when this step runs again. Both are idempotent by their journal key, so running
+    # either on a database that has none to do posts nothing.
+    do_paid_out = entry_user_version < 52
+
+    previous_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        types = ("'paid_out', 'paid_in'" if do_paid_out else "'paid_in'")
+        rows = conn.execute(
+            "SELECT m.id AS id, m.type AS type, m.amount AS amount, m.created_at AS created_at, "
+            "       s.company_id AS company_id, s.branch_id AS branch_id "
+            "FROM cash_movements m JOIN cash_sessions s ON s.id = m.session_id "
+            f"WHERE m.type IN ({types}) AND m.payment_uid IS NULL "
+            "  AND s.company_id IS NOT NULL "
+            "ORDER BY m.created_at, m.id").fetchall()
+        currency_cache = {}
+        for r in rows:
+            cid = r['company_id']
+            if cid not in currency_cache:
+                currency_cache[cid] = _gl._resolve_currency(conn, cid)
+            when = _movement_moment(r['created_at'])
+            try:
+                business_date = _metrics.business_now(conn, cid, when).strftime('%Y-%m-%d')
+            except Exception:
+                # A minimal fixture without retail_settings: the calendar day of the movement.
+                business_date = when.strftime('%Y-%m-%d')
+            if r['type'] == 'paid_out':
+                _gl.post_drawer_paid_out(
+                    conn, cid, r['branch_id'], r['id'], r['amount'], _gl.ACCOUNT_OTHER_EXPENSES,
+                    currency_cache[cid], business_date=business_date,
+                    reference='paid-out catch-up',
+                    memo='Paid out of the till before its purpose was recorded')
+            else:
+                # Skips a movement that already has its journal (`_post_once` finds it by key),
+                # so a database that ran this step before posts nothing twice.
+                _gl.post_drawer_paid_in(
+                    conn, cid, r['branch_id'], r['id'], r['amount'], _gl.ACCOUNT_OTHER_INCOME,
+                    currency_cache[cid], business_date=business_date,
+                    reference='paid-in catch-up',
+                    memo='Paid into the till before its source was recorded')
+    finally:
+        conn.row_factory = previous_factory
+
+
+def _movement_moment(created_at):
+    """`cash_movements.created_at` ('YYYY-MM-DD HH:MM:SS' local wall clock, or a bare date or an
+    ISO 'T' form) as a naive datetime. An unreadable value falls back to today: the journal must
+    still post (its amount is real), and a wrong-day book entry is visible and reversible while a
+    missing one hides the money."""
+    from datetime import datetime as _dt
+    text = str(created_at or '').strip().replace('T', ' ')
+    for fmt, width in (('%Y-%m-%d %H:%M:%S', 19), ('%Y-%m-%d', 10)):
+        try:
+            return _dt.strptime(text[:width], fmt)
+        except ValueError:
+            continue
+    return _dt.now()
 
 
 def _migrate_add_supplier_cash_drawer(conn):
