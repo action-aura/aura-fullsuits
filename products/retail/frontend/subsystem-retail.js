@@ -803,6 +803,22 @@ const RetailSystem = {
       .ret-field-row { display:grid;grid-template-columns:1fr 1fr;gap:12px; }
       .ret-field-row3 { display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px; }
       .ret-modal-footer { display:flex;gap:10px;justify-content:flex-end;margin-top:22px; }
+      /* UI-2 item 2: "Recent sales" in the Returns dialog. A scroll box of real
+         buttons, one 44px+ row per sale: number / time / customer / total. It has
+         to live HERE (the global screen styles): the Returns screen never mounts
+         the till, whose own stylesheet is a different one. Hover and
+         focus-visible are paired (the retail_surface_pos_test rule). */
+      .ret-recent { max-block-size:150px;overflow-y:auto;border:1px solid var(--border-soft);border-radius:10px; }
+      .ret-recent-note { padding:12px;color:var(--text-dim);font-size:13px; }
+      .ret-recent-row { appearance:none;-webkit-appearance:none;display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1.4fr) auto;
+        gap:10px;align-items:center;inline-size:100%;min-block-size:var(--touch-target-min, 44px);padding-block:4px;padding-inline:12px;
+        background:transparent;border:0;border-block-end:1px solid var(--border-soft);color:var(--text);font:inherit;font-size:13px;
+        text-align:start;cursor:pointer; }
+      .ret-recent-row:last-child { border-block-end:0; }
+      .ret-recent-row:hover, .ret-recent-row:focus-visible { background:var(--surface-hover); }
+      .ret-recent-time { color:var(--text-dim); }
+      .ret-recent-cust { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+      .ret-recent-total { font-weight:700;text-align:end; }
       .ret-btn { padding:10px 20px;border-radius:8px;font-weight:600;font-size:14px;cursor:pointer;border:none;transition:all .2s; }
       /* Touchscreen press feedback (retail-hardware-viewports): every variant
          below is always used WITH this base class (never bare), so one rule
@@ -1930,7 +1946,7 @@ const RetailSystem = {
   // Loyalty redemption wave 1: 'pos-loyalty-redeem' joins this list for the
   // identical reason 'pos-disc' is here -- its own oninput -> _recalc() ->
   // re-render path would otherwise yank the caret away mid-number.
-  _POS_FOCUS_KEEPERS: ['pos-search', 'pos-disc', 'pos-tendered', 'pos-customer', 'pos-loyalty-redeem'],
+  _POS_FOCUS_KEEPERS: ['pos-search', 'pos-disc', 'pos-tendered', 'pos-customer', 'pos-cust-btn', 'pos-loyalty-redeem'],
 
   // True only on a device whose primary input cannot hover and is coarse --
   // a phone or tablet, where focusing an input summons an on-screen keyboard.
@@ -3765,6 +3781,33 @@ const RetailSystem = {
         /* Selected is a solid fill; hovered is a tint. They must never look
            the same -- a cashier scanning the rail has to see what is ON. */
         .pos-cat-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);color:var(--text-on-accent, var(--text-inverse));font-weight:700; }
+        /* UI-2 item 1: the rail used to clip its fourth pill mid-word with no
+           sign anything lay beyond it (every 1366 screenshot in review A). The
+           wrapper carries a fade + chevron at the reading-end edge, shown ONLY
+           while there is more to scroll to (_updateCatOverflow toggles
+           .has-more). The chevron is decorative for assistive tech -- the rail
+           itself is a normal scroller and every pill is a real, tabbable
+           button -- so it is aria-hidden and out of the tab order. */
+        .pos-cat-wrap { position:relative;flex:1;min-inline-size:0;display:flex; }
+        .pos-cat-wrap .pos-cat-bar { flex:1; }
+        /* Solid chevron button (a gradient behind a glyph cannot be contrast-
+           checked, and the touch floor is 44px on BOTH axes) with the fade as a
+           separate decorative strip that sits against its inner edge. */
+        .pos-cat-more { position:absolute;inset-block:0;inset-inline-end:0;display:none;
+          min-inline-size:var(--touch-target-min, 44px);min-block-size:var(--touch-target-min, 44px);
+          align-items:center;justify-content:center;border:0;cursor:pointer;
+          color:var(--text-dim);font:inherit;font-size:20px;line-height:1;background:var(--surface-card); }
+        .pos-cat-fade { position:absolute;inset-block:0;inset-inline-end:var(--touch-target-min, 44px);inline-size:32px;
+          display:none;pointer-events:none;background:linear-gradient(to right, transparent, var(--surface-card)); }
+        html[dir="rtl"] .pos-cat-fade { background:linear-gradient(to left, transparent, var(--surface-card)); }
+        .pos-cat-wrap.has-more .pos-cat-more { display:flex; }
+        .pos-cat-wrap.has-more .pos-cat-fade { display:block; }
+        .pos-cat-more:hover, .pos-cat-more:focus-visible { color:var(--text); }
+        html[dir="rtl"] .pos-cat-more-glyph { transform:scaleX(-1); }
+        /* The Favourites pill leads the rail; the star keeps it recognisable
+           when the rail is cramped, and "active" is still the same solid fill
+           every pill uses (never a second selected-state language). */
+        .pos-cat-btn.pos-cat-fav { display:inline-flex;align-items:center;gap:6px; }
 
         /* ── Product grid ────────────────────────────────────────────────── */
         /* AUDIT (Phase 0 #7a): with no grid-auto-rows declared (the browser
@@ -3898,6 +3941,29 @@ const RetailSystem = {
            the past", not a fact about right now. See _isStockStale() /
            _staleStockLabel() below. */
         .pos-card-stock.is-stale { color:var(--text-tertiary, var(--text-dim));font-style:italic;font-weight:400; }
+        /* UI-2 item 1. A product photo, when the product has one, is a 48px
+           square in the monogram's place (the monogram stays the fallback --
+           no product carries image_url yet, the backend field is a later wave,
+           so this is the rendering half only). */
+        .pos-card-thumb { inline-size:48px;block-size:48px;border-radius:8px;object-fit:cover;align-self:center;
+          background:var(--surface-sunken);flex-shrink:0; }
+        /* The pin star. OWNER ONLY (the markup is not emitted for anyone else):
+           curating the till is the owner's act. Pinned tiles always show a
+           filled star so the owner can see what is on the Favourites page from
+           the All view; an UNpinned tile shows a ghost star only where there
+           is a pointer to hover with. A touch till gets the long-press instead
+           (see _wireFavouriteGestures). Decorative: the star sits INSIDE the
+           tile button, so it cannot itself be a second control for assistive
+           tech -- the keyboard route is the context-menu key on the focused
+           tile, and the product dialog has a real checkbox. */
+        .pos-card { position:relative; }
+        .pos-card-star { position:absolute;inset-block-start:4px;inset-inline-end:4px;inline-size:28px;block-size:28px;
+          display:none;align-items:center;justify-content:center;border-radius:50%;font-size:16px;line-height:1;
+          color:var(--text-tertiary, var(--text-dim)); }
+        .pos-card-star.is-pinned { display:flex;color:var(--state-warning-text, var(--sub-accent)); }
+        @media (hover:hover) {
+          .pos-card:hover .pos-card-star, .pos-card:focus-visible .pos-card-star { display:flex; }
+        }
 
         /* ── Cart lines ──────────────────────────────────────────────────── */
         /* AUDIT (Phase 0 #7b): measured 0 of 4 cart rows fully visible at
@@ -4138,6 +4204,27 @@ const RetailSystem = {
              56px and the acceptance check measured "Wall▾" at 1366. */
           min-inline-size:120px;max-inline-size:190px;text-overflow:ellipsis;transition:border-color .15s ease; }
         .pos-cust-select:focus { border-color:var(--focus-ring-color, var(--sub-accent)); }
+        /* UI-2 item 4: the header customer control is a BUTTON that shows who is
+           on the sale (name, then balance chip + phone) and opens the F7 picker.
+           It keeps the .pos-cust-select class on purpose: every width / short-till
+           rule that already budgets this slot of the header applies to it, so the
+           sale pane's height does not move. Two short lines, ellipsised -- the
+           native <select> it replaces truncated to "Sara Khalil (079...". */
+        .pos-cust-btn { display:flex;flex-direction:column;justify-content:center;align-items:stretch;gap:1px;
+          padding-block:3px;text-align:start;cursor:pointer;line-height:1.2;outline:revert; }
+        .pos-cust-btn:hover, .pos-cust-btn:focus-visible { background:var(--surface-hover);border-color:var(--border-strong, var(--border-mid)); }
+        .pos-cust-name { font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-inline-size:0; }
+        .pos-cust-sub { display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);min-inline-size:0; }
+        .pos-cust-phone { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-inline-size:0; }
+        .pos-cust-owes { flex:none;font-weight:700;padding-inline:6px;border-radius:var(--radius-pill, 22px);
+          background:var(--state-warning-surface);color:var(--state-warning-text); }
+        /* The real <select> stays in the page as the model the whole till reads and
+           writes (.value, onchange, the F7 picker, held-sale resume), but is not
+           painted: a clipped box (clip-path, NOT opacity: a transparent control reads as unreadable text to the contrast sweep). Not display:none -- it must stay a
+           real, reachable form control for assistive tech and for tests that drive
+           it, and it is declared at the touch floor (a 1px control fails the
+           floor sweep even though nothing can touch it). Out of the tab order (the button is the keyboard route). */
+        .pos-cust-model { position:absolute;inline-size:var(--touch-target-min, 44px);block-size:var(--touch-target-min, 44px);padding:0;border:0;overflow:hidden;clip-path:inset(50%);pointer-events:none;z-index:-1; }
 
         /* ── Summary + the total ─────────────────────────────────────────── */
         /* SHRINKABLE AND SCROLLABLE, not flex-shrink:0. Measured at 1366x768
@@ -4751,6 +4838,12 @@ const RetailSystem = {
         .pk-row-sub { inline-size:100%;color:var(--text-dim);font-size:13px; }
         .pk-empty { padding:16px;text-align:center;color:var(--text-dim); }
         .pk-hint { margin-block-start:10px;color:var(--text-dim);font-size:12px; }
+        /* UI-2 item 4: "+ New customer" in the F7 picker and its three-field form. */
+        .pk-new { inline-size:100%;margin-block-start:10px;min-block-size:var(--touch-target-min, 44px); }
+        .pk-check { display:flex;align-items:center;gap:10px;min-block-size:var(--touch-target-min, 44px);color:var(--text);
+          font-size:15px;cursor:pointer; }
+        .pk-check input { inline-size:20px;block-size:20px; }
+        .pk-err { min-block-size:18px;margin-block-start:6px;color:var(--state-danger-text);font-size:13px; }
         .pk-keytable { inline-size:100%;border-collapse:collapse;font-size:14px; }
         .pk-keytable td { padding-block:6px;padding-inline:4px;border-block-end:1px solid var(--border-soft);vertical-align:top; }
         .pk-key { white-space:nowrap;inline-size:1%; }
@@ -5006,8 +5099,13 @@ const RetailSystem = {
                anchor, hide it, cost nothing. -->
           <div class="pos-pane-hdr" style="display:none" aria-hidden="true"></div>
           <div class="pos-cat-row" onmousedown="RetailSystem._keepScanFocus(event)">
-            <div class="pos-cat-bar" id="pos-cats">
-              <button class="pos-cat-btn active" onclick="RetailSystem._setCat(null,this)">${t('All')}</button>
+            <div class="pos-cat-wrap" id="pos-cat-wrap">
+              <div class="pos-cat-bar" id="pos-cats" onscroll="RetailSystem._updateCatOverflow()">
+                <button class="pos-cat-btn active" onclick="RetailSystem._setCat(null,this)">${t('All')}</button>
+              </div>
+              <span class="pos-cat-fade" aria-hidden="true"></span>
+              <button type="button" class="pos-cat-more" id="pos-cat-more" tabindex="-1" aria-hidden="true"
+                onclick="RetailSystem._scrollCats()"><span class="pos-cat-more-glyph">›</span></button>
             </div>
             <button class="ret-btn ret-btn-ghost ret-btn-sm pos-held-btn" id="pos-held-btn" onclick="RetailSystem._openHeldSalesModal()"
               title="${this._esc(t("Browse and resume sales you've held"))}" aria-keyshortcuts="Shift+F9"><span aria-hidden="true">${this._icon('clipboard-list', 16, '📋')}</span> <span>${t('Held')}</span> (<span id="pos-held-count">0</span>) <span class="pos-pay-kbd" aria-hidden="true">Shift+F9</span></button>
@@ -5044,7 +5142,12 @@ const RetailSystem = {
                  two are never on screen together. -->
             <h3 class="pos-pane-title" id="pos-pane-title">${this._esc(t('Current Sale'))}</h3>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <select id="pos-customer" class="pos-cust-select" onchange="RetailSystem._onCustomerChange()" aria-keyshortcuts="F7" title="${this._esc(t('Customer'))} (F7)">
+              <button type="button" id="pos-cust-btn" class="pos-cust-select pos-cust-btn" onclick="RetailSystem._openCustomerPicker()"
+                aria-keyshortcuts="F7" title="${this._esc(t('Customer'))} (F7)" aria-label="${this._esc(t('Customer'))}: ${this._esc(t('Walk-in'))}">
+                <span class="pos-cust-name" id="pos-cust-name" dir="auto">${this._esc(t('Walk-in'))}</span>
+                <span class="pos-cust-sub" id="pos-cust-sub"><span class="pos-pay-kbd" aria-hidden="true">F7</span></span>
+              </button>
+              <select id="pos-customer" class="pos-cust-model" tabindex="-1" onchange="RetailSystem._onCustomerChange()" aria-label="${this._esc(t('Customer'))}">
                 <option value="">${this._esc(t('Walk-in'))}</option>
               </select>
               <button class="pos-hold-btn" onclick="RetailSystem._holdSale()" aria-keyshortcuts="F9"
@@ -5505,17 +5608,20 @@ const RetailSystem = {
       const heldCountEl = document.getElementById('pos-held-count');
       if (heldCountEl) heldCountEl.textContent = (held && held.data || []).length;
 
-      // Populate category bar
-      const catBar = document.getElementById('pos-cats');
-      if (catBar) {
-        this._categories.forEach(cat => {
-          const btn = document.createElement('button');
-          btn.className = 'pos-cat-btn';
-          btn.textContent = cat.name;
-          btn.onclick = () => this._setCat(cat.id, btn);
-          catBar.appendChild(btn);
-        });
-      }
+      // UI-2 item 1: the owner's pinned products ride the SAME credit-settings
+      // response this function already fetched (retail_settings key
+      // `pos_favourites`, a JSON list of product ids) -- no extra request.
+      this._favourites = this._parseFavourites(creditSettings && creditSettings.data && creditSettings.data.pos_favourites);
+      this._favouritesLoaded = !!(creditSettings && creditSettings.data);
+      // Default page = Favourites when the owner has pinned anything (the till
+      // opens on the fast sellers); otherwise All, exactly as before. Only on
+      // the first load of a mount -- _activeCat is reset to null in _renderPOS.
+      if (this._activeCat === null && this._favourites.length) this._activeCat = this.POS_FAV_CAT;
+      // Populate category bar (Favourites pill first, then All, then categories)
+      this._renderCatBar();
+      // Pinned products that did not make the first page (a big catalogue)
+      // would otherwise vanish from the Favourites page: resolve them once.
+      this._resolveMissingFavourites();
       // Populate customer dropdown
       const sel = document.getElementById('pos-customer');
       if (sel && this._customers.length) {
@@ -5549,6 +5655,188 @@ const RetailSystem = {
     btn.classList.add('active');
     this._renderPOSGrid();
     this._refocusScan();
+  },
+
+  // ── UI-2 item 1: Favourites ───────────────────────────────────────────────
+  // The owner pins the 20-40 fastest sellers; the till opens on them. The list
+  // is ONE retail_settings row (`pos_favourites`, JSON list of product ids in
+  // PIN ORDER) written through the existing owner-only POST /settings/credit
+  // and read back from the GET this screen already makes -- no schema change,
+  // and it syncs to the shop's other devices like every other setting.
+  //
+  // ORDER INSIDE Favourites is pin order. The review asked for "recent sales
+  // count" when an existing metric gives it cheaply; none does (the product
+  // list carries no sales count, and a per-tile aggregate would be a new
+  // query on the busiest screen), so pin order it is -- and it is the order
+  // the owner chose, which is the more predictable one for muscle memory.
+  //
+  // `POS_FAV_CAT` is a sentinel placed in _activeCat. It can never collide
+  // with a category id (those are uuids), and null stays "All".
+  POS_FAV_CAT: '__favourites__',
+  // Mirrors retail_api.py POS_FAVOURITES_MAX (a test pins both to 40).
+  POS_FAVOURITES_MAX: 40,
+  POS_LONG_PRESS_MS: 550,
+  _favourites: [],
+
+  _parseFavourites(raw) {
+    let v = raw;
+    if (typeof v === 'string') {
+      try { v = v.trim() ? JSON.parse(v) : []; } catch (e) { v = []; }
+    }
+    if (!Array.isArray(v)) return [];
+    const ids = v.filter(x => typeof x === 'string' && x);
+    return Array.from(new Set(ids)).slice(0, this.POS_FAVOURITES_MAX);
+  },
+
+  _isFavourite(id) { return (this._favourites || []).indexOf(String(id)) !== -1; },
+
+  // Curating the till is the owner's act: the server refuses anyone else
+  // (_require_company_admin), so the pin controls are not even offered to a
+  // cashier. Fails CLOSED -- no shell, no pin controls.
+  _mayCurateFavourites() {
+    return !!(window.SubsystemApp && SubsystemApp.role === 'admin');
+  },
+
+  // One filled star, drawn inline (the icon registry has no star and adding
+  // one would drag its tests into this change).
+  _starSvg(filled, size) {
+    const s = size || 16;
+    return `<svg aria-hidden="true" focusable="false" width="${s}" height="${s}" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg>`;
+  },
+
+  // Rebuild the whole rail: [Favourites?] [All] [categories...]. Rebuilt (not
+  // patched) because pinning the first product or unpinning the last adds or
+  // removes the leading pill. The "active" pill is derived from _activeCat so
+  // a rebuild never loses the selection.
+  _renderCatBar() {
+    const bar = document.getElementById('pos-cats');
+    if (!bar) return;
+    bar.innerHTML = '';
+    const add = (label, catId, extraCls, withStar) => {
+      const btn = document.createElement('button');
+      btn.className = 'pos-cat-btn' + (extraCls ? ' ' + extraCls : '') + (this._activeCat === catId ? ' active' : '');
+      if (withStar) btn.innerHTML = `${this._starSvg(true, 14)}<span>${this._esc(label)}</span>`;
+      else btn.textContent = label;
+      btn.onclick = () => this._setCat(catId, btn);
+      bar.appendChild(btn);
+      return btn;
+    };
+    if ((this._favourites || []).length) add(t('Favourites'), this.POS_FAV_CAT, 'pos-cat-fav', true);
+    add(t('All'), null);
+    (this._categories || []).forEach(cat => add(cat.name, cat.id));
+    this._updateCatOverflow();
+  },
+
+  // Fade + chevron at the rail's reading-end edge, only while there is more to
+  // scroll to. scrollLeft is NEGATIVE in an RTL scroller, so distance is
+  // measured with abs() -- the same number means "scrolled this far" either way.
+  _updateCatOverflow() {
+    const bar = document.getElementById('pos-cats');
+    const wrap = document.getElementById('pos-cat-wrap');
+    if (!bar || !wrap || !wrap.classList) return;
+    const more = (bar.scrollWidth || 0) - (bar.clientWidth || 0) - Math.abs(bar.scrollLeft || 0) > 4;
+    wrap.classList.toggle('has-more', more);
+  },
+
+  _scrollCats() {
+    const bar = document.getElementById('pos-cats');
+    if (!bar || typeof bar.scrollBy !== 'function') return;
+    const rtl = !!(window.AuraI18n && AuraI18n.current === 'ar');
+    bar.scrollBy({ left: (rtl ? -1 : 1) * Math.max(120, Math.round((bar.clientWidth || 300) * 0.6)), behavior: 'smooth' });
+  },
+
+  // Pinned ids that are not in the first product page (a catalogue over the
+  // 200-tile cap) would silently drop off the Favourites page. The list route
+  // has no ids filter, so fetch the whole catalogue ONCE, only when something
+  // is genuinely missing, and only to fill the by-id cache.
+  async _resolveMissingFavourites() {
+    const missing = (this._favourites || []).filter(id => !(this._productsById && this._productsById[id]));
+    if (!missing.length) return;
+    try {
+      const res = await this._get('/api/sub/retail/products');
+      (res && Array.isArray(res.data) ? res.data : []).forEach(p => this._cacheProduct(p));
+    } catch (e) { return; }
+    if (this._activeCat === this.POS_FAV_CAT) this._renderPOSGrid();
+  },
+
+  // Pin / unpin. Optimistic (the star must answer a tap at once) with a rollback
+  // when the server refuses -- the server is the authority on the cap and on who
+  // may curate, so a stale client can never leave a phantom pin on screen.
+  async _toggleFavourite(productId) {
+    const id = String(productId);
+    if (!this._mayCurateFavourites()) {
+      SubsystemApp.showToast(t('Only the shop owner can choose the Favourites.'), 'info');
+      return false;
+    }
+    const before = (this._favourites || []).slice();
+    const pinned = before.indexOf(id) !== -1;
+    if (!pinned && before.length >= this.POS_FAVOURITES_MAX) {
+      SubsystemApp.showToast(t('The till holds at most 40 favourites. Unpin one first.'), 'error');
+      return false;
+    }
+    const next = pinned ? before.filter(x => x !== id) : before.concat([id]);
+    this._favourites = next;
+    this._afterFavouritesChanged();
+    try {
+      const res = await this._post('/api/sub/retail/settings/credit', { pos_favourites: next });
+      if (!res || res.status !== 'success') throw new Error((res && res.message) || 'refused');
+    } catch (e) {
+      this._favourites = before;
+      this._afterFavouritesChanged();
+      SubsystemApp.showToast((e && e.message && e.message !== 'refused') ? e.message : t('Could not save the Favourites.'), 'error');
+      return false;
+    }
+    SubsystemApp.showToast(pinned ? t('Removed from Favourites') : t('Added to Favourites'), 'success');
+    return true;
+  },
+
+  _afterFavouritesChanged() {
+    // The last pin gone while looking at Favourites: that page is now empty,
+    // so fall back to All rather than strand the cashier on a blank grid.
+    if (this._activeCat === this.POS_FAV_CAT && !(this._favourites || []).length) this._activeCat = null;
+    this._renderCatBar();
+    this._renderPOSGrid();
+  },
+
+  // Right-click / the context-menu key (keyboard parity) and a long press (touch)
+  // on a tile pin or unpin it. Delegated on the grid and wired ONCE per grid
+  // element (the grid node survives re-renders; only its innerHTML is replaced).
+  // The click that follows a long press is swallowed in the capture phase --
+  // otherwise releasing the finger would also add the product to the cart.
+  _wireFavouriteGestures(grid) {
+    if (!grid || grid._favWired || typeof grid.addEventListener !== 'function') return;
+    grid._favWired = true;
+    const tileOf = (e) => (e.target && e.target.closest) ? e.target.closest('.pos-card[data-pid]') : null;
+    let timer = null, startX = 0, startY = 0;
+    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    grid.addEventListener('contextmenu', (e) => {
+      const tile = tileOf(e);
+      if (!tile || !this._mayCurateFavourites()) return;
+      e.preventDefault();
+      this._toggleFavourite(tile.dataset.pid);
+    });
+    grid.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' || !this._mayCurateFavourites()) return;
+      const tile = tileOf(e);
+      if (!tile) return;
+      startX = e.clientX; startY = e.clientY;
+      cancel();
+      timer = setTimeout(() => {
+        timer = null;
+        this._favLongPressAt = Date.now();
+        this._toggleFavourite(tile.dataset.pid);
+      }, this.POS_LONG_PRESS_MS);
+    });
+    grid.addEventListener('pointermove', (e) => {
+      if (timer && (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10)) cancel();
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(n => grid.addEventListener(n, cancel));
+    grid.addEventListener('click', (e) => {
+      if (this._favLongPressAt && Date.now() - this._favLongPressAt < 800) {
+        this._favLongPressAt = 0;
+        e.preventDefault(); e.stopPropagation();
+      }
+    }, true);
   },
 
   // Stored-XSS fix: p.name (and item.name / i.name at the cart, sale-complete
@@ -5714,8 +6002,27 @@ const RetailSystem = {
     // scan path is untouched -- a variant's OWN barcode still resolves
     // straight through _posScan/_addToCart, this filter only affects the
     // browsed grid.
-    const matches = (this._products || []).filter(p =>
-      !p.parent_product_id && (!this._activeCat || p.category_id === this._activeCat));
+    //
+    // UI-2 item 1: the Favourites page is not a category filter -- it is the
+    // owner's pinned ids, in PIN ORDER. With no search it is read from the
+    // by-id cache (so a pinned product outside the loaded page still shows);
+    // while a search is active it is the search results narrowed to the pinned
+    // ones, so typing "pepsi" on Favourites does not silently search elsewhere.
+    const favMode = this._activeCat === this.POS_FAV_CAT;
+    const favIds = this._favourites || [];
+    let matches;
+    if (favMode) {
+      const pool = this._posResultsTerm
+        ? (this._products || [])
+        : favIds.map(id => (this._productsById && this._productsById[id]) || null).filter(Boolean);
+      matches = pool.filter(p => !p.parent_product_id && favIds.indexOf(String(p.id)) !== -1)
+        .sort((a, b) => favIds.indexOf(String(a.id)) - favIds.indexOf(String(b.id)));
+    } else {
+      matches = (this._products || []).filter(p =>
+        !p.parent_product_id && (!this._activeCat || p.category_id === this._activeCat));
+    }
+    this._wireFavouriteGestures(grid);
+    const mayPin = this._mayCurateFavourites();
     // How many live variants each parent in THIS batch has -- from
     // this._products (the whole loaded page/search batch), not `matches`,
     // so a variant that happens to sort outside the current category filter
@@ -5729,7 +6036,7 @@ const RetailSystem = {
     if (!matches.length) {
       this._gridVisible = [];
       this._resSel = null;
-      grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--text-dim);padding:40px">${t('No products found.')}</div>`;
+      grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--text-dim);padding:40px">${favMode && !this._posResultsTerm ? t('No favourites yet. The shop owner can pin products with the star.') : t('No products found.')}</div>`;
       return;
     }
     // The cap is enforced HERE, not merely trusted to already be true of
@@ -5840,16 +6147,39 @@ const RetailSystem = {
       const toneSurface = toneIdx ? `var(--cat-${toneIdx}-surface)` : 'var(--surface-sunken)';
       const toneInk = toneIdx ? `var(--cat-${toneIdx}-ink)` : 'var(--text-secondary)';
       const monogram = this._esc(this._productMonogram(p.name));
+      // UI-2 item 1. A photo replaces the monogram when the product has one
+      // (only an http(s)/relative/data-image URL -- anything else is ignored
+      // rather than put in a src attribute). No product carries image_url yet.
+      const imgUrl = typeof p.image_url === 'string' && /^(https?:\/\/|\/|data:image\/)/i.test(p.image_url.trim())
+        ? p.image_url.trim() : '';
+      const badge = imgUrl
+        ? `<img class="pos-card-thumb" src="${this._esc(imgUrl)}" alt="" width="48" height="48" loading="lazy" />`
+        : `<span class="pos-card-monogram" aria-hidden="true" style="background:${toneSurface};color:${toneInk}">${monogram}</span>`;
+      // The stock line is NOISE for a cashier on a healthy product (it was the
+      // loudest text after the price on every tile). It now appears only when
+      // it carries news: out of stock, low (at/under the reorder level), or a
+      // dated figure while sync is stale. A normal product's tile is name +
+      // price, and the same facts are one tap away in Products.
+      const isLow = !outOfStock && !stale && p.total_stock <= (p.reorder_level || 0);
+      const showStock = !!variantCount || outOfStock || stale || isLow;
+      const pinned = mayPin && this._isFavourite(p.id);
+      const star = mayPin
+        ? `<span class="pos-card-star${pinned ? ' is-pinned' : ''}" aria-hidden="true" data-fav-star="1"
+            title="${this._esc(pinned ? t('Remove from Favourites') : t('Add to Favourites'))}"
+            onclick="event.stopPropagation();event.preventDefault();RetailSystem._toggleFavourite('${this._esc(p.id)}')">${this._starSvg(pinned, 16)}</span>`
+        : '';
       return `<button type="button" class="pos-card${(outOfStock && !variantCount)?' pos-card-outofstock':''}"
           ${(outOfStock && !variantCount) ? 'aria-disabled="true"' : ''}
+          data-pid="${this._esc(p.id)}"
           style="border-inline-start:3px solid ${toneInk}"
           onclick="${clickAction}">
-        <span class="pos-card-monogram" aria-hidden="true" style="background:${toneSurface};color:${toneInk}">${monogram}</span>
+        ${star}
+        ${badge}
         <span class="pos-card-name" dir="auto" title="${this._esc(p.name)}">${this._esc(p.name)}</span>
         <span class="pos-card-price">${this._money(p.sell_price)}</span>
-        ${variantCount ? `<span class="pos-card-stock" style="color:var(--text-muted)">${variantCount} ${t('options')}</span>` : `<span class="pos-card-stock${stockCls}">
-          ${outOfStock ? t('Out of stock') : (stale ? this._staleStockLabel(p) : `${t('Stock')}: ${p.total_stock} ${this._esc(this._unitLabel(p.unit))}`)}
-        </span>`}
+        ${variantCount ? `<span class="pos-card-stock" style="color:var(--text-muted)">${variantCount} ${t('options')}</span>` : (showStock ? `<span class="pos-card-stock${stockCls}">
+          ${outOfStock ? t('Out of stock') : (stale ? this._staleStockLabel(p) : `${t('Low stock')}: ${p.total_stock} ${this._esc(this._unitLabel(p.unit))}`)}
+        </span>` : '')}
       </button>`;
     }).join('');
   },
@@ -7228,7 +7558,42 @@ const RetailSystem = {
   // Best-effort: a failed balance fetch hides the control rather than
   // showing one against an unknown/stale balance -- the till must never
   // block a sale over this fetch.
+  //
+  // UI-2 item 4: the visible customer control (#pos-cust-btn) is repainted from
+  // the same place every change already flows through, so it can never disagree
+  // with #pos-customer, the model the rest of the till reads. Shows who is on the
+  // sale, and -- when the customer owes the shop -- a balance chip, so a cashier
+  // sees "owes JD 12.500" before taking more on account. The balance is the
+  // customers-list cache (`credit_balance`, refreshed with the list), shown only
+  // above half a minor unit so a settled account carries no chip. Guarded for
+  // the minimal element stubs several test harnesses hand this screen.
+  _renderCustomerButton() {
+    const nameEl = document.getElementById('pos-cust-name');
+    const subEl = document.getElementById('pos-cust-sub');
+    if (!nameEl || !subEl) return;
+    const id = document.getElementById('pos-customer')?.value || '';
+    const cu = id ? (this._customers || []).find(c => String(c.id) === String(id)) : null;
+    const btn = document.getElementById('pos-cust-btn');
+    if (!cu) {
+      nameEl.textContent = t('Walk-in');
+      subEl.innerHTML = '<span class="pos-pay-kbd" aria-hidden="true">F7</span>';
+      if (btn && typeof btn.setAttribute === 'function') btn.setAttribute('aria-label', `${t('Customer')}: ${t('Walk-in')}`);
+      return;
+    }
+    nameEl.textContent = cu.name || '';
+    const bal = Number(cu.credit_balance) || 0;
+    const owes = bal > this._halfMinorUnit();
+    subEl.innerHTML =
+      (owes ? `<span class="pos-cust-owes">${this._esc(t('owes'))} ${this._money(bal)}</span>` : '') +
+      (cu.phone ? `<span class="pos-cust-phone" dir="ltr">${this._esc(cu.phone)}</span>` : '');
+    if (btn && typeof btn.setAttribute === 'function') {
+      btn.setAttribute('aria-label',
+        `${t('Customer')}: ${cu.name || ''}${cu.phone ? ', ' + cu.phone : ''}${owes ? ', ' + t('owes') + ' ' + this._fmt(bal) : ''}`);
+    }
+  },
+
   async _onCustomerChange() {
+    this._renderCustomerButton();
     const section = document.getElementById('pos-loyalty-section');
     const input = document.getElementById('pos-loyalty-redeem');
     if (input) input.value = '0';
@@ -7974,7 +8339,9 @@ const RetailSystem = {
       const el = document.activeElement;
       const tag = el ? el.tagName : '';
       const editable = tag === 'INPUT' || tag === 'TEXTAREA' || (el && el.isContentEditable);
-      const isSearchBox = !!el && (el.id === 'pos-search' || el.id === 'prod-search' || el.id === 'pc-search');
+      // `ret-sale-search` (UI-2 item 2): the Returns dialog's receipt-number box is
+      // where a receipt barcode is expected to land, same as the till's search box.
+      const isSearchBox = !!el && (el.id === 'pos-search' || el.id === 'prod-search' || el.id === 'pc-search' || el.id === 'ret-sale-search');
       if (editable && !isSearchBox) return;
     }
 
@@ -8065,6 +8432,11 @@ const RetailSystem = {
     if (openReceipt) { this._closeModalOverlay(openReceipt); this._refocusScan(true); }
     // F11 price check open: the scan is a lookup, not a sale line.
     if (document.getElementById('ret-pricecheck')) return this._priceCheckScan(code);
+    // UI-2 item 2: the Returns dialog is open -- a scanned receipt barcode loads
+    // that sale (see _returnScan). Before the product-modal / section routes: a
+    // receipt number must never be taken for a product barcode while a return
+    // is being processed.
+    if (document.getElementById('ret-return-modal')) return this._returnScan(code);
     if (document.getElementById('ret-prod-modal')) {  // Add/Edit Product → barcode field
       const f = document.getElementById('pm-barcode');
       if (f) { f.value = code; f.focus(); SubsystemApp.showToast(t('Barcode captured'), 'success'); }
@@ -8927,17 +9299,91 @@ const RetailSystem = {
     return { overlay, close };
   },
 
+  // Put `id` ('' = walk-in) on the current sale: write the model <select>, then
+  // run the same _onCustomerChange() every other path uses (it repaints the
+  // header button, the Credit tile, loyalty). One place, so the F7 picker, a
+  // new customer, and anything later all do the identical thing.
+  _chooseCustomerOnSale(id) {
+    const sel = document.getElementById('pos-customer');
+    if (sel) sel.value = id == null ? '' : String(id);
+    return this._onCustomerChange();
+  },
+
+  // UI-2 item 4 -- a customer created at the till. POST /customers writes name /
+  // phone only (create_customer deliberately CANNOT grant credit: that is the
+  // same authority as a discount, retail.discount, and is refused to a cashier by
+  // update_customer). So "may buy on account" is a SECOND request, a PATCH with
+  // credit_mode: 'unlimited' -- "yes" means unlimited here, the plainest reading
+  // of a yes/no box; a ceiling is set in the Edit Customer dialog. If the server
+  // refuses the PATCH (a cashier) the customer is still created and chosen, and
+  // the person is told credit needs a manager -- never a silent half-success.
+  // Resolves to the new customer row (also added to the till's caches); throws
+  // an Error with a sentence a person can read when the customer was not created.
+  async _createCustomerAtTill({ name, phone, credit }) {
+    let res;
+    try {
+      res = await this._post('/api/sub/retail/customers', { name, phone: phone || '' });
+    } catch (e) {
+      throw new Error(t('Could not save the customer.'));
+    }
+    if (!res || res.status !== 'success' || !res.data || !res.data.id) {
+      throw new Error((res && res.message) || t('Could not save the customer.'));
+    }
+    const id = String(res.data.id);
+    let mode = 'none';
+    if (credit) {
+      let ok = false;
+      try {
+        const r2 = await this._patch(`/api/sub/retail/customers/${id}`, { credit_mode: 'unlimited' });
+        ok = !!(r2 && r2.status === 'success');
+      } catch (e) { ok = false; }
+      if (ok) mode = 'unlimited';
+      else SubsystemApp.showToast(t('Customer saved, but only a manager can allow credit.'), 'info');
+    }
+    const cu = { id, name, phone: phone || '', email: '', address: '', credit_mode: mode, credit_limit: 0,
+                 credit_balance: 0, loyalty_points: 0, total_spent: 0, order_count: 0 };
+    this._customers = (this._customers || []).concat([cu]);
+    const sel = document.getElementById('pos-customer');
+    if (sel && typeof document.createElement === 'function') {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = this._namePhoneLabel(name, phone);
+      if (typeof sel.appendChild === 'function') sel.appendChild(opt);
+    }
+    return cu;
+  },
+
   // ── F7: customer picker ─────────────────────────────────────────────────
   // Type a name or phone, arrows move, Enter selects, Esc closes. "Walk-in" is
   // always the first row. The <select> in the sale header stays for the mouse;
   // picking here writes to it and goes through the same _onCustomerChange().
   _openCustomerPicker() {
     if (document.getElementById('ret-cust-pick')) return;
+    const canGrantCredit = !window.SubsystemApp || SubsystemApp.hasCapability('retail.discount');
     const { overlay, close } = this._pickerOverlay('ret-cust-pick', t('Choose a customer'), `
-        <input id="cp-search" class="pk-input" type="text" autocomplete="off"
-               aria-label="${this._esc(t('Type a name or phone'))}" placeholder="${this._esc(t('Type a name or phone'))}" />
-        <div class="pk-list" id="cp-list" role="listbox"></div>
-        <div class="pk-hint">↑ ↓ · ${this._esc(t('Enter'))} · ${this._esc(t('Esc'))}</div>`);
+        <div id="cp-pick">
+          <input id="cp-search" class="pk-input" type="text" autocomplete="off"
+                 aria-label="${this._esc(t('Type a name or phone'))}" placeholder="${this._esc(t('Type a name or phone'))}" />
+          <div class="pk-list" id="cp-list" role="listbox"></div>
+          <button type="button" id="cp-new" class="ret-btn ret-btn-ghost pk-new">+ ${this._esc(t('New customer'))}</button>
+          <div class="pk-hint">↑ ↓ · ${this._esc(t('Enter'))} · ${this._esc(t('Esc'))}</div>
+        </div>
+        <!-- UI-2 item 4: a new customer without leaving the sale -- name, phone, and
+             (for someone who may grant it) whether they may buy on account. Enter
+             saves and puts them on this sale; Esc goes back to the list. -->
+        <div id="cp-form" hidden>
+          <div class="ret-field"><label for="cp-new-name">${this._esc(t('Name'))} *</label>
+            <input id="cp-new-name" class="pk-input" type="text" autocomplete="off" dir="auto" /></div>
+          <div class="ret-field"><label for="cp-new-phone">${this._esc(t('Phone'))}</label>
+            <input id="cp-new-phone" class="pk-input" type="tel" inputmode="tel" autocomplete="off" dir="ltr" /></div>
+          ${canGrantCredit ? `<label class="pk-check" for="cp-new-credit">
+            <input type="checkbox" id="cp-new-credit" /> <span>${this._esc(t('Allow credit (pay later)'))}</span></label>` : ''}
+          <div id="cp-new-err" class="pk-err" role="alert"></div>
+          <div class="ret-modal-footer">
+            <button type="button" id="cp-new-cancel" class="ret-btn ret-btn-ghost">${this._esc(t('Back'))}</button>
+            <button type="button" id="cp-new-save" class="ret-btn ret-btn-primary">${this._esc(t('Save and choose'))}</button>
+          </div>
+        </div>`);
     const input = overlay.querySelector('#cp-search');
     const list = overlay.querySelector('#cp-list');
     const state = { rows: [], sel: 0 };
@@ -8955,6 +9401,9 @@ const RetailSystem = {
         const hay = `${cu.name || ''} ${this._asciiDigits(cu.phone || '')}`.toLowerCase();
         if (!q || hay.indexOf(q) !== -1) rows.push({ id: cu.id, label: `${cu.name}${cu.phone ? ' (' + cu.phone + ')' : ''}` });
       });
+      // Nothing matched what was typed: the natural next step is "add them", so
+      // that is offered as the row Enter lands on (the typed text pre-fills the form).
+      if (q && rows.length === 1) rows.push({ isNew: true, label: `+ ${t('New customer')}: ${input.value.trim()}` });
       state.rows = rows.slice(0, 50);
       state.sel = q && state.rows.length > 1 ? 1 : 0;   // a typed query lands on the first real match
       paint();
@@ -8962,11 +9411,58 @@ const RetailSystem = {
     const pick = (i) => {
       const r = state.rows[i];
       if (!r) return;
-      const sel = document.getElementById('pos-customer');
-      if (sel) sel.value = r.id == null ? '' : String(r.id);
+      if (r.isNew) { showForm(); return; }
+      this._chooseCustomerOnSale(r.id == null ? '' : String(r.id));
       close();
-      this._onCustomerChange();
     };
+    // ── the "+ New customer" form ──────────────────────────────────────────
+    const pickPane = overlay.querySelector('#cp-pick');
+    const form = overlay.querySelector('#cp-form');
+    const nameEl = overlay.querySelector('#cp-new-name');
+    const phoneEl = overlay.querySelector('#cp-new-phone');
+    const errEl = overlay.querySelector('#cp-new-err');
+    const titleEl = overlay.querySelector('#ret-cust-pick-title');
+    const showForm = () => {
+      const typed = input.value.trim();
+      const phoneLike = /^[+\d][\d\s-]{4,}$/.test(this._asciiDigits(typed));
+      nameEl.value = phoneLike ? '' : typed;
+      phoneEl.value = phoneLike ? this._asciiDigits(typed) : '';
+      errEl.textContent = '';
+      pickPane.hidden = true; form.hidden = false;
+      if (titleEl) titleEl.textContent = t('New customer');
+      nameEl.focus();
+    };
+    const hideForm = () => {
+      form.hidden = true; pickPane.hidden = false;
+      if (titleEl) titleEl.textContent = t('Choose a customer');
+      input.focus();
+    };
+    let saving = false;
+    const saveNew = async () => {
+      if (saving) return;
+      const name = nameEl.value.trim();
+      if (!name) { errEl.textContent = t('Name required'); nameEl.focus(); return; }
+      saving = true;
+      try {
+        const cu = await this._createCustomerAtTill({
+          name, phone: phoneEl.value.trim(),
+          credit: !!(overlay.querySelector('#cp-new-credit') || {}).checked,
+        });
+        this._chooseCustomerOnSale(String(cu.id));
+        close();
+      } catch (e) {
+        errEl.textContent = (e && e.message) || t('Could not save the customer.');
+        saving = false;
+      }
+    };
+    overlay.querySelector('#cp-new').addEventListener('click', showForm);
+    overlay.querySelector('#cp-new-cancel').addEventListener('click', hideForm);
+    overlay.querySelector('#cp-new-save').addEventListener('click', saveNew);
+    form.addEventListener('keydown', (ev) => {
+      const k = this._keyCode(ev);
+      if (k === 'Enter' || k === 'NumpadEnter') { ev.preventDefault(); ev.stopPropagation(); saveNew(); }
+      else if (k === 'Escape') { ev.preventDefault(); ev.stopPropagation(); hideForm(); }
+    });
     input.addEventListener('input', build);
     input.addEventListener('keydown', (ev) => {
       const k = this._keyCode(ev);
@@ -10190,6 +10686,23 @@ const RetailSystem = {
   // History) already resolves each line's `name` from the real
   // product_name before calling this, so it never touches the fallback
   // below at all, whatever `this._lastReceiptCartNames` happens to hold.
+  // What the receipt's Code 128 carries: the number the customer SEES (the short
+  // `SALE-000016`, not the 30-character legacy string -- see receipt_model.py's
+  // barcode_value_for for why), or '' for "print none" (empty / not encodable).
+  _receiptBarcodeValue(saleNumber) {
+    const v = this._docNo(saleNumber).main;
+    return (v && /^[\x20-\x7e]+$/.test(v)) ? v : '';
+  },
+
+  _receiptBarcodeBlock(saleNumber, widthMm) {
+    const value = this._receiptBarcodeValue(saleNumber);
+    if (!value || !window.AuraCode128) return '';
+    // ~96 CSS px per inch minus the 2mm page margins either side.
+    const usablePx = Math.floor(((widthMm || 80) - 4) * 96 / 25.4);
+    const svg = window.AuraCode128.svg(value, { maxWidth: usablePx, height: 46 });
+    return svg ? `<div class="rcpt-center rcpt-barcode-wrap" style="margin-top:6px">${svg}</div>` : '';
+  },
+
   async _printReceipt(saleData) {
     const cn = this._lastReceiptCartNames || {};
     // Phase 0 #8 (I-2 "till half"): see _saleDiscountBreakdown's own
@@ -10226,6 +10739,10 @@ const RetailSystem = {
     const brandingBlock = this._brandingReceiptBlock(branding, logoDataUri);
     const footerLine = branding.branding_receipt_footer
       ? `<div class="rcpt-center" style="font-size:11px">${this._esc(branding.branding_receipt_footer)}</div>` : '';
+    // UI-2 item 2: the sale number as a Code 128, so a scanner can load THIS sale
+    // into the Returns dialog (see _dispatchScan). Same value the raster receipt
+    // prints (receipt_model.barcode_value_for) -- two receipts, one barcode.
+    const barcodeBlock = this._receiptBarcodeBlock(saleData.sale_number, widthMm);
     // `rt` (receipt-scoped translator) -- NOT window.t -- resolved from
     // branding_receipt_language ('auto' | 'en' | 'ar'). See
     // _receiptTranslator's own comment for the full reasoning; in short,
@@ -10295,6 +10812,7 @@ const RetailSystem = {
       <div class="rcpt-hr"></div>
       <div class="rcpt-center">${rt('Thank you')}</div>
       ${footerLine}
+      ${barcodeBlock}
       ${einvoiceBlock}
       </body></html>`;
 
@@ -10615,7 +11133,23 @@ const RetailSystem = {
     const supOpts = (this._suppliers||[]).map(s =>
       `<option value="${this._esc(s.id)}" ${s.id===p.supplier_id?'selected':''}>${this._esc(s.name)}</option>`).join('');
     const parentOpts = this._eligibleParentOpts(p.parent_product_id, p.id);
+    // UI-2 item 1: the dialog's "Favourites" checkbox needs the owner's pinned
+    // list, which is otherwise only read when the till mounts. Fetch it first
+    // (owner only, once); a cashier's dialog never carries the checkbox.
+    if (this._mayCurateFavourites() && !this._favouritesLoaded) {
+      this._loadFavourites().then(() => this._showProductModal(p, catOpts, supOpts, parentOpts));
+      return;
+    }
     this._showProductModal(p, catOpts, supOpts, parentOpts);
+  },
+
+  _favouritesLoaded: false,
+  async _loadFavourites() {
+    try {
+      const res = await this._get('/api/sub/retail/settings/credit');
+      this._favourites = this._parseFavourites(res && res.data && res.data.pos_favourites);
+      this._favouritesLoaded = true;
+    } catch (e) { /* the dialog simply opens without the checkbox */ }
   },
 
   // AUDIT (Phase 0 #5): p.name/p.sku/p.barcode used to land in these `value="..."`
@@ -10679,6 +11213,13 @@ const RetailSystem = {
             <input id="pm-variant-label" value="${this._esc(p.variant_label||'')}" placeholder="${this._esc(t('e.g. Red / L'))}" />
           </div>
         </div>
+        ${isEdit && this._favouritesLoaded && this._mayCurateFavourites() ? `
+        <div class="ret-field">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="pm-fav" ${this._isFavourite(p.id) ? 'checked' : ''} />
+            <span>${t('Show on the Favourites page of the till')}</span>
+          </label>
+        </div>` : ''}
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" id="pm-save-btn" onclick="RetailSystem._saveProduct(${isEdit ? `'${this._esc(p.id)}'` : 'null'})">${t(isEdit?'Save Changes':'Add Product')}</button>
@@ -10740,6 +11281,10 @@ const RetailSystem = {
         : await this._post('/api/sub/retail/products', payload);
       if (d.status === 'success') {
         SubsystemApp.showToast(t(pid ? 'Product updated' : 'Product added'), 'success');
+        // UI-2 item 1: the dialog's Favourites checkbox (owner only; absent for
+        // everyone else and for a new product). Only an actual change is sent.
+        const favBox = document.getElementById('pm-fav');
+        if (pid && favBox && favBox.checked !== this._isFavourite(pid)) await this._toggleFavourite(pid);
         this._closeModalOverlay(document.getElementById('ret-prod-modal'));
         this._renderProducts(document.getElementById('sub-content'));
       } else {
@@ -11086,6 +11631,7 @@ const RetailSystem = {
           <div class="ret-field"><label for="cm-email">${t('Email')}</label><input type="email" id="cm-email" value="${this._esc(cu.email||'')}" /></div>
         </div>
         <div class="ret-field"><label for="cm-addr">${t('Address')}</label><input id="cm-addr" value="${this._esc(cu.address||'')}" /></div>
+        ${this._customerCreditFieldsHtml(cu)}
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" id="cm-btn" onclick="RetailSystem._saveCustomer(${cu.id ? `'${this._esc(cu.id)}'` : 'null'})">${t(isEdit?'Save':'Add Customer')}</button>
@@ -11097,6 +11643,55 @@ const RetailSystem = {
     document.getElementById('cm-name')?.focus();
   },
 
+  // UI-2 item 4: credit terms in the Add/Edit Customer dialog. The backend ALREADY
+  // accepts and returns credit_mode / credit_limit (PATCH /customers/<id>; GET
+  // /customers is `c.*`), so this is a form on existing routes. They are shown
+  // ONLY to someone the server will let write them (retail.discount -- granting
+  // credit is value handed over with no matching payment, the same authority as
+  // a discount): for anyone else a PATCH carrying them would be refused whole,
+  // taking the name/phone edit down with it, so the fields are not offered.
+  // `none` is the stored default and means "no credit"; an empty/null mode (a
+  // legacy row) shows as "No credit" and is left alone unless the person changes it.
+  _canEditCustomerCredit() { return !window.SubsystemApp || SubsystemApp.hasCapability('retail.discount'); },
+
+  _customerCreditFieldsHtml(cu) {
+    if (!this._canEditCustomerCredit()) return '';
+    const mode = cu.credit_mode === 'limited' || cu.credit_mode === 'unlimited' ? cu.credit_mode : 'none';
+    const dp = this._currencyDp();
+    const step = dp > 0 ? (1 / Math.pow(10, dp)).toFixed(dp) : '1';
+    const limit = Number(cu.credit_limit) > 0 ? Number(cu.credit_limit).toFixed(dp) : '';
+    return `
+        <div class="ret-field-row">
+          <div class="ret-field"><label for="cm-credit-mode">${t('Credit')}</label>
+            <select id="cm-credit-mode" onchange="RetailSystem._syncCustomerCreditLimit()">
+              <option value="none"${mode === 'none' ? ' selected' : ''}>${t('No credit')}</option>
+              <option value="limited"${mode === 'limited' ? ' selected' : ''}>${t('Up to a limit')}</option>
+              <option value="unlimited"${mode === 'unlimited' ? ' selected' : ''}>${t('Unlimited')}</option>
+            </select></div>
+          <div class="ret-field" id="cm-limit-wrap"${mode === 'limited' ? '' : ' hidden'}><label for="cm-credit-limit">${t('Credit limit')}</label>
+            <input type="number" id="cm-credit-limit" min="0" step="${step}" inputmode="decimal" value="${limit}" /></div>
+        </div>`;
+  },
+
+  _syncCustomerCreditLimit() {
+    const mode = document.getElementById('cm-credit-mode')?.value;
+    const wrap = document.getElementById('cm-limit-wrap');
+    if (wrap) wrap.hidden = mode !== 'limited';
+  },
+
+  // The credit part of a save, or null when the dialog has no credit fields or
+  // nothing about credit changed (so an ordinary contact edit never carries them).
+  _readCustomerCredit(original) {
+    const modeEl = document.getElementById('cm-credit-mode');
+    if (!modeEl) return null;
+    const mode = modeEl.value;
+    const limit = mode === 'limited' ? (parseFloat(document.getElementById('cm-credit-limit')?.value) || 0) : 0;
+    const wasMode = original && (original.credit_mode === 'limited' || original.credit_mode === 'unlimited') ? original.credit_mode : 'none';
+    const wasLimit = original && wasMode === 'limited' ? (Number(original.credit_limit) || 0) : 0;
+    if (mode === wasMode && Math.abs(limit - wasLimit) < this._halfMinorUnit()) return null;
+    return { credit_mode: mode, credit_limit: limit };
+  },
+
   async _saveCustomer(cid) {
     const name = document.getElementById('cm-name')?.value.trim();
     if (!name) { SubsystemApp.showToast(t('Name required'),'error'); return; }
@@ -11105,10 +11700,20 @@ const RetailSystem = {
     const payload = { name, phone:document.getElementById('cm-phone')?.value||'',
                       email:document.getElementById('cm-email')?.value||'',
                       address:document.getElementById('cm-addr')?.value||'' };
+    const original = cid ? (this._customers || []).find(x => String(x.id) === String(cid)) : null;
+    const credit = this._readCustomerCredit(original);
     try {
+      // Edit: the credit terms ride the same PATCH. Add: POST /customers cannot
+      // carry them (by design), so they follow as a second PATCH on the new id.
       const d = cid
-        ? await this._patch(`/api/sub/retail/customers/${cid}`, payload)
+        ? await this._patch(`/api/sub/retail/customers/${cid}`, Object.assign(payload, credit || {}))
         : await this._post('/api/sub/retail/customers', payload);
+      if (!cid && d.status === 'success' && credit && d.data && d.data.id) {
+        const d2 = await this._patch(`/api/sub/retail/customers/${d.data.id}`, credit);
+        if (!d2 || d2.status !== 'success') {
+          SubsystemApp.showToast((d2 && d2.message) || t('Customer saved, but the credit terms could not be set.'), 'error');
+        }
+      }
       if (d.status==='success') {
         SubsystemApp.showToast(cid?'Customer updated':'Customer added','success');
         this._closeModalOverlay(document.getElementById('ret-cust-modal'));
@@ -11140,6 +11745,35 @@ const RetailSystem = {
       console.error('Customer delete failed', e);
       SubsystemApp.showToast(t('Could not delete this customer.'), 'error');
     }
+  },
+
+  // UI-2 item 4: what this customer owes, and on what terms, on the detail view
+  // (it showed spend / orders / points / phone and nothing about the money they
+  // owe), with a door to the statement that already exists (_openPartyStatement,
+  // the Receivables screen's own). The figure is the list's `credit_balance`
+  // (the server's derived balance, refreshed with the list); a settled account
+  // reads "Nothing owed" rather than a zero that could be mistaken for unknown.
+  // The statement button is offered even at zero -- the history is still there.
+  _creditTermsText(cu) {
+    if (cu.credit_mode === 'unlimited') return t('Unlimited');
+    if (cu.credit_mode === 'limited') return `${t('Up to a limit')}: ${this._fmt(Number(cu.credit_limit) || 0)}`;
+    return t('No credit');
+  },
+
+  _customerBalanceBlockHtml(cu) {
+    const bal = Number(cu.credit_balance) || 0;
+    const owes = bal > this._halfMinorUnit();
+    return `
+        <div id="cu-balance" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+             background:var(--surface-sunken);border-radius:10px;padding:12px 14px;margin-bottom:20px">
+          <div>
+            <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:4px">${t('Open balance')}</div>
+            <div style="font-size:20px;font-weight:700">${owes ? this._money(bal) : this._esc(t('Nothing owed'))}</div>
+            <div style="color:var(--text-muted);font-size:12px;margin-top:2px">${t('Credit')}: ${this._esc(this._creditTermsText(cu))}</div>
+          </div>
+          <button type="button" class="ret-btn ret-btn-ghost" id="cu-statement-btn"
+            onclick="RetailSystem._openPartyStatement('customer','${this._esc(cu.id)}')">${t('View statement')}</button>
+        </div>`;
   },
 
   // Same escaping gap as _showCustomerModal above: cu.name/cu.phone were
@@ -11179,6 +11813,7 @@ const RetailSystem = {
             <div style="color:var(--text-primary);font-size:16px;font-weight:600">${cu.phone?this._esc(cu.phone):'—'}</div>
           </div>
         </div>
+        ${this._customerBalanceBlockHtml(cu)}
         <div class="sub-chart-title" style="margin-bottom:12px">Purchase History</div>
         <div id="cu-hist-loading" style="color:var(--text-muted);text-align:center;padding:20px">Loading…</div>
       </div>`;
@@ -15613,6 +16248,15 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal ret-modal-wide" id="ret-return-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-return-dialog-title">
         <h3 id="ret-return-dialog-title">${this._icon('undo-2', 18, '↩️')} <span>${t('Process Return')}</span></h3>
+        <!-- UI-2 item 2: the last 30 sales, newest first. A return starts from the
+             sale the customer is standing there with, not from a number someone
+             has to read off a slip and type. Filled by _loadRecentSalesForReturn. -->
+        <div class="ret-field" id="ret-recent-wrap">
+          <div class="ret-field-label" id="ret-recent-title">${t('Recent sales')}</div>
+          <div class="ret-recent" id="ret-recent" role="group" aria-labelledby="ret-recent-title">
+            <div class="ret-recent-note">${t('Loading…')}</div>
+          </div>
+        </div>
         <div class="ret-field-row">
           <div class="ret-field"><label for="ret-sale-search">${t('Sale / Receipt Number *')}</label>
             <div style="display:flex;gap:8px">
@@ -15651,6 +16295,60 @@ const RetailSystem = {
     document.getElementById('ret-sale-search')?.addEventListener('keydown', e => {
       if (e.key==='Enter') RetailSystem._findSaleForReturn();
     });
+    // Typing a different number brings the recent list back (it is hidden once
+    // a sale is loaded, to give the item table the room).
+    document.getElementById('ret-sale-search')?.addEventListener('input', () => {
+      const w = document.getElementById('ret-recent-wrap'); if (w) w.hidden = false;
+    });
+    this._loadRecentSalesForReturn();
+  },
+
+  // UI-2 item 2 -- "Recent sales" in the Returns dialog. The route is the SAME
+  // /sales/recent the number lookup uses, so a cashier gets exactly what that
+  // route already allows them (limit <= the till cap, identity columns dropped);
+  // no new route and nothing loosened. Voided / cancelled sales are not offered
+  // (there is nothing to return against them). Rows are real <button>s: the list
+  // is reachable by Tab and operable by Enter/Space like every other control.
+  async _loadRecentSalesForReturn() {
+    const box = document.getElementById('ret-recent');
+    if (!box) return;
+    let rows = null;
+    try {
+      const res = await this._get('/api/sub/retail/sales/recent?limit=30');
+      rows = (res && res.status === 'success' && Array.isArray(res.data)) ? res.data : null;
+    } catch (e) { rows = null; }
+    if (!document.getElementById('ret-recent')) return;      // dialog closed meanwhile
+    if (rows === null) { box.innerHTML = `<div class="ret-recent-note">${t('Could not load recent sales. Type the receipt number instead.')}</div>`; return; }
+    const open = rows.filter(s => !s.status || s.status === 'completed').slice(0, 30);
+    if (!open.length) { box.innerHTML = `<div class="ret-recent-note">${t('No sales yet.')}</div>`; return; }
+    box.innerHTML = open.map(s => `
+      <button type="button" class="ret-recent-row" data-sn="${this._esc(s.sale_number)}"
+        onclick="RetailSystem._pickRecentReturnSale(this.dataset.sn)">
+        <span class="ret-recent-no">${this._docNoHtml(s.sale_number)}</span>
+        <span class="ret-recent-time">${this._bdi((s.created_at || '').slice(0, 16))}</span>
+        <span class="ret-recent-cust" dir="auto">${this._esc(s.customer_name) || t('Walk-in')}</span>
+        <span class="ret-recent-total">${this._money(s.total)}</span>
+      </button>`).join('');
+  },
+
+  // A tap on a recent sale loads it exactly as typing its number and pressing
+  // Lookup would -- the same function, so the exact-match / ambiguity rules
+  // are not duplicated.
+  _pickRecentReturnSale(saleNumber) {
+    const input = document.getElementById('ret-sale-search');
+    if (!input) return;
+    input.value = saleNumber || '';
+    return this._findSaleForReturn();
+  },
+
+  // A receipt barcode scanned while the Returns dialog is open: put the number
+  // in the box and look it up (called by _dispatchScan). Returns the lookup's
+  // promise so a test can await the outcome.
+  _returnScan(code) {
+    const input = document.getElementById('ret-sale-search');
+    if (!input) return;
+    input.value = code;
+    return this._findSaleForReturn();
   },
 
   // The "select all" box in the return item table. Was an inline arrow
@@ -15735,6 +16433,10 @@ const RetailSystem = {
       if (!sale) { SubsystemApp.showToast(t('Sale not found'),'error'); return; }
       const full = (await this._get(`/api/sub/retail/sales/${sale.id}`)).data || {};
       this._returnSaleId = sale.id;
+      // UI-2 item 2: a sale is loaded -- fold the recent list away so the item
+      // table gets the room (typing a new number in the box brings it back).
+      const recentWrap = document.getElementById('ret-recent-wrap');
+      if (recentWrap) recentWrap.hidden = true;
       // DEFECT 1 fix: pre-select the ORIGINAL sale's own payment method
       // instead of leaving 'cash' picked by nothing more than being first
       // in the <option> list. 'credit' -> 'cash' coercion mirrors

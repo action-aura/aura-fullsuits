@@ -46,6 +46,15 @@
 
   function hasArabic(s) { return ARABIC_RE.test(s || ''); }
 
+  // The Code 128 encoder (code128.js): a global in the browser (loaded before this
+  // file), a require() in the node test. null if neither exists -- a barcode line is
+  // then skipped, which loses a convenience, never the receipt.
+  function code128() {
+    if (root.AuraCode128) return root.AuraCode128;
+    try { return (typeof module !== 'undefined' && typeof require === 'function') ? require('./code128.js') : null; }
+    catch (e) { return null; }
+  }
+
   // MSB-first row packing: the leftmost dot of a row is bit 7 of its first
   // byte, 1 = black -- exactly what GS v 0 wants. `rgba` is canvas ImageData.data.
   function packBits(rgba, width, height, threshold) {
@@ -129,6 +138,18 @@
     (model.lines || []).forEach(function (ln) {
       if (ln.kind === 'blank') { y += sz.normal; return; }
       if (ln.kind === 'qr') { return; }           // the printer draws the QR itself
+      if (ln.kind === 'barcode') {
+        // UI-2 item 2: Code 128 of the sale number (code128.js). The module width is
+        // the widest whole number of dots that still fits the paper WITH a 10-module
+        // quiet zone each side, capped at 3 (a wider barcode only wastes paper) and
+        // floored at 1. Whole dots only: a fractional module would blur on a 1-bit
+        // bitmap and the scanner would read a different ratio than was encoded.
+        var enc = code128() && code128().encode(ln.value);
+        if (!enc) { return; }                     // unencodable: print nothing, never a wrong code
+        var mw = Math.max(1, Math.min(3, Math.floor((widthDots - 2 * PAD) / (enc.modules + 20))));
+        ops.push({ t: 'barcode', enc: enc, mw: mw, y: y + 6, h: 64 });
+        y += 64 + 14; return;
+      }
       if (ln.kind === 'rule') {
         ops.push({ t: 'rule', y: y + 6 }); y += 14; return;
       }
@@ -194,6 +215,14 @@
     plan.ops.forEach(function (op) {
       if (op.t === 'rule') {
         ctx.fillRect(plan.pad, op.y, widthDots - 2 * plan.pad, 2);
+        return;
+      }
+      if (op.t === 'barcode') {
+        // Centred; integer dot coordinates throughout (see layout()).
+        var left = Math.floor((widthDots - op.enc.modules * op.mw) / 2);
+        code128().bars(op.enc).forEach(function (b) {
+          ctx.fillRect(left + b[0] * op.mw, op.y, b[1] * op.mw, op.h);
+        });
         return;
       }
       ctx.font = op.font;

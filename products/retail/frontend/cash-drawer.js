@@ -445,7 +445,17 @@ const CashDrawer = {
   // were invisible to retail_modal_a11y_coverage_test.js because that ratchet
   // only ever read subsystem-retail.js, so "31 of 31 wired" was true of that
   // one file and false of this one. See that test's now-widened file list.
-  openOpenShiftModal() {
+  //
+  // UI-2 item 3 (review A #6): the opening float used to default to 0 with no
+  // memory of the last close -- the cashier retyped the same float every
+  // morning. It is now pre-filled with THIS terminal's last closing count
+  // (_lastClosingCount) and says so, and the box steps by the currency's
+  // smallest unit (a fil, not a piastre).
+  async openOpenShiftModal() {
+    this._injectCountStyles();
+    const last = await this._lastClosingCount();
+    const dp = RetailSystem._currencyDp();
+    const start = last == null ? '0' : last.toFixed(dp);
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'cd-open-modal';
@@ -454,8 +464,9 @@ const CashDrawer = {
         <h3 id="cd-open-dialog-title">${t('Open Cash Shift')}</h3>
         <p class="cd-note">${t('This drawer belongs to')} <span class="cd-terminal">${this._thisTerminalLabel()}</span></p>
         <div class="ret-field">
-          <label>${t('Opening Float')}</label>
-          <input type="number" id="cd-opening-float" min="0" step="0.01" value="0" />
+          <label for="cd-opening-float">${t('Opening Float')}</label>
+          <input type="number" id="cd-opening-float" min="0" step="${this._step()}" inputmode="decimal" value="${start}" />
+          ${last == null ? '' : `<p class="cd-note" id="cd-float-from-last">${t('Filled in from the last count on this terminal. Change it if the drawer has changed since.')}</p>`}
         </div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
@@ -489,6 +500,110 @@ const CashDrawer = {
       SubsystemApp.showToast(t('Could not load the cash drawer. Its state is unknown.'), 'error');
       if (btn) { btn.disabled = false; btn.textContent = t('Open Shift'); }
     }
+  },
+
+  // ── Counting helpers (UI-2 item 3) ───────────────────────────────────────
+  //
+  // `step` of a money box is ONE MINOR UNIT of the shop currency: 0.001 for a
+  // dinar, 0.01 for a dollar, 1 for a yen. These boxes used to say step="0.01",
+  // so a JOD drawer's spinner moved by a piastre and the browser flagged a
+  // legitimate 50.005 count as invalid.
+  _step() {
+    const dp = RetailSystem._currencyDp();
+    return dp > 0 ? (1 / Math.pow(10, dp)).toFixed(dp) : '1';
+  },
+
+  // This terminal's LAST closing count, or null. Read from the drawer history the
+  // server already serves (GET /cash-sessions: a cashier gets exactly their own
+  // terminal's drawers). Only the most recent ENDED drawer counts: if the last
+  // one was force-closed and never counted there is no honest number to carry,
+  // and falling back to an older count would pre-fill a float that is out of
+  // date by a whole shift. Any failure is null -- the box simply starts at 0.
+  async _lastClosingCount() {
+    try {
+      const res = await this._get('/api/sub/retail/cash-sessions?limit=20');
+      if (!res || res.status !== 'success' || !Array.isArray(res.data)) return null;
+      const last = res.data.find((s) => s && s.is_this_terminal && s.variance_status && s.variance_status !== 'pending');
+      if (!last || last.closing_float_counted == null) return null;
+      const n = Number(last.closing_float_counted);
+      return Number.isFinite(n) && n >= 0 ? n : null;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  // Whether THIS session holds retail.cash.approve, asked of the SERVER (the list
+  // route returns `may_approve`, computed from the real capability). Fails CLOSED:
+  // an unanswered question is "no", so a cashier whose request failed is counted
+  // blind, never shown the expected figure by accident. (The shell's
+  // hasCapability() is not used: it fails OPEN when the capability list has not
+  // loaded, which is the wrong default for hiding a number.)
+  async _mayApproveCash() {
+    try {
+      const res = await this._get('/api/sub/retail/cash-sessions?limit=1');
+      return !!(res && res.status === 'success' && res.may_approve === true);
+    } catch (e) {
+      return false;
+    }
+  },
+
+  // Sales parked on hold. Best effort: null when unknown (no warning shown).
+  async _heldSalesCount() {
+    try {
+      const res = await this._get('/api/sub/retail/held-sales');
+      return (res && res.status === 'success' && Array.isArray(res.data)) ? res.data.length : null;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  // Jordanian dinar notes and coins, in MILS (1/1000 dinar) so the sum is exact
+  // integer arithmetic: 3 x 0.250 + 7 x 0.100 in floating point is
+  // 1.4500000000000002. Offered only for a dinar shop (the 3-decimal symbol
+  // below); for any other currency the count box stands alone rather than
+  // showing the wrong money.
+  NOTE_MILS: [50000, 20000, 10000, 5000, 1000, 500, 250, 100, 50],
+  _noteDenominations() {
+    const sym = String(RetailSystem._currencySymbol || '');
+    return /^(JD|JOD|د\.أ)$/.test(sym) && RetailSystem._currencyDp() === 3 ? this.NOTE_MILS.slice() : null;
+  },
+
+  // Sum of `counts` ({mils: quantity}) as a number of dinars, exact to the fil.
+  // A quantity that is not a whole non-negative number counts as 0.
+  _noteSum(counts) {
+    let mils = 0;
+    Object.keys(counts || {}).forEach((k) => {
+      const q = Number(counts[k]);
+      if (Number.isInteger(q) && q > 0) mils += Number(k) * q;
+    });
+    return mils / 1000;
+  },
+
+  // Token-only, like _injectStyles. Own style element so this file's other
+  // dialogs (and other work in this file) are untouched.
+  _injectCountStyles() {
+    if (document.getElementById('cd-count-styles')) return;
+    const s = document.createElement('style');
+    s.id = 'cd-count-styles';
+    s.textContent = `
+      .cd-count-input { font-size:var(--text-size-body-lg);font-weight:var(--text-weight-semibold);
+        min-block-size:var(--touch-target-min, 44px);text-align:end; }
+      .cd-notes { margin:var(--space-snug) 0; }
+      .cd-notes > summary { cursor:pointer;min-block-size:var(--touch-target-min, 44px);display:flex;align-items:center;
+        color:var(--text-secondary);font-size:var(--text-size-meta); }
+      /* Two columns of cells (notes then coins fill down the first, then the
+         second) and a height cap with its own scroll: with the counter open the
+         dialog used to grow past a 768px till and push End Shift off screen
+         (measured: the button sat 230px below the viewport). */
+      .cd-note-grid { display:grid;grid-template-columns:1fr 1fr;gap:var(--space-snug) var(--space-base);align-items:center;
+        padding:var(--space-snug) 0;max-block-size:min(236px, 28vh);overflow-y:auto; }
+      .cd-note-cell { display:flex;align-items:center;gap:var(--space-snug);min-inline-size:0; }
+      .cd-note-den { color:var(--text-secondary);font-size:var(--text-size-body);min-inline-size:56px; }
+      .cd-note-qty { min-block-size:var(--touch-target-min, 44px);inline-size:68px;flex:0 0 68px;text-align:center; }
+      .cd-note-line { flex:1;min-inline-size:0;text-align:end;color:var(--text-secondary);font-size:var(--text-size-meta); }
+      .cd-reveal { margin:var(--space-snug) 0; }
+    `;
+    document.head.appendChild(s);
   },
 
   // ── Keyboard (till keys Shift+F1..F4) ────────────────────────────────────
@@ -771,6 +886,32 @@ const CashDrawer = {
       SubsystemApp.showToast(t('Could not load the cash drawer. Its state is unknown.'), 'error');
       return;
     }
+    // UI-2 item 3 (review A #6) -- THE BLIND COUNT. The dialog used to print
+    // "Expected cash JD 50.000" ABOVE the empty count box, so a cashier who was
+    // short simply typed the expected figure. Now the order is: count FIRST (3-dp
+    // box, optional note counter), and only THEN is the expected figure revealed
+    // -- and only to someone who holds retail.cash.approve. Everyone else (a
+    // cashier, a manager: approve is withheld from every role that can end a
+    // shift) is never shown the expected figure or the variance derived from it;
+    // the server records the variance either way and the approver reviews it.
+    //
+    // Hiding means ABSENT, not styled away: for a blind session the expected
+    // number is not in the markup, not in an attribute and not in a hidden node.
+    // The old template also baked it into two inline handlers
+    // (`_previewVariance(${expected})`, `_submitClose(${expected})`), which put
+    // the number in the page source even if the row had been hidden; it now lives
+    // only in this._closeCtx.
+    //
+    // Honest limit: the x-report ROUTE still returns expected_cash to a closer
+    // (server contract unchanged by this wave), so someone reading the network
+    // tab could find it. The screen does not show it; the server would have to
+    // stop sending it to make that airtight.
+    const mayApprove = await this._mayApproveCash();
+    const held = await this._heldSalesCount();
+    this._closeCtx = { expected: Number(expected) || 0, mayApprove };
+    this._injectCountStyles();
+    const denoms = this._noteDenominations();
+    const dp = RetailSystem._currencyDp();
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'cd-close-modal';
@@ -780,19 +921,39 @@ const CashDrawer = {
         <p class="cd-note">
           <span class="cd-terminal cd-terminal-mine">${this._terminalLabel(report)}</span>
         </p>
-        <div class="cd-report-row"><span>${t('Expected cash')}</span><b id="cd-close-expected">${this._money(expected)}</b></div>
+        ${held ? `<p class="cd-warn-note" id="cd-close-held">${t('{n} held sale(s) are still parked. Ending the shift keeps them, but check them before you leave.').replace('{n}', this._bdi(String(held)))}</p>` : ''}
         <div class="ret-field">
-          <label>${t('Counted Cash (physical count)')}</label>
-          <input type="number" id="cd-close-counted" min="0" step="0.01" oninput="CashDrawer._previewVariance(${expected})" />
+          <label for="cd-close-counted">${t('Counted Cash (physical count)')}</label>
+          <input type="number" class="cd-count-input" id="cd-close-counted" min="0" step="${this._step()}" inputmode="decimal"
+            placeholder="${(0).toFixed(dp)}" oninput="CashDrawer._previewVariance()" />
         </div>
-        <div id="cd-close-variance" class="cd-report-row" style="display:none">
-          <span>${t('Variance (counted − expected)')}</span><b id="cd-close-variance-val"></b>
-        </div>
+        ${denoms ? `
+        <details class="cd-notes" id="cd-notes">
+          <summary>${t('Count notes and coins')}</summary>
+          <div class="cd-note-grid">
+            ${denoms.map((mils) => `
+            <div class="cd-note-cell">
+              <label class="cd-note-den" for="cd-note-${mils}">${this._bdi((mils / 1000).toFixed(3))}</label>
+              <input type="number" class="cd-note-qty" id="cd-note-${mils}" data-mils="${mils}" min="0" step="1" inputmode="numeric"
+                placeholder="0" oninput="CashDrawer._noteInput()" />
+              <span class="cd-note-line" id="cd-note-line-${mils}"></span>
+            </div>`).join('')}
+          </div>
+        </details>` : ''}
+        ${mayApprove ? `
+        <div class="cd-reveal" id="cd-close-reveal">
+          <div id="cd-close-expected-row" class="cd-report-row" style="display:none">
+            <span>${t('Expected cash')}</span><b id="cd-close-expected"></b>
+          </div>
+          <div id="cd-close-variance" class="cd-report-row" style="display:none">
+            <span>${t('Variance (counted − expected)')}</span><b id="cd-close-variance-val"></b>
+          </div>
+        </div>` : ''}
         ${this._contaminationNote(report)}
         <p class="cd-note">${t('Ending locks this count. A short drawer never blocks you from ending your shift -- the variance is recorded and someone with approval authority reviews it.')}</p>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
-          <button class="ret-btn ret-btn-danger" id="cd-close-btn" onclick="CashDrawer._submitClose(${expected})">${t('End Shift')}</button>
+          <button class="ret-btn ret-btn-danger" id="cd-close-btn" onclick="CashDrawer._submitClose()">${t('End Shift')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -826,15 +987,32 @@ const CashDrawer = {
   // _submitClose below) is the one that is actually recorded; this is only
   // ever a client-side preview of what that will say once Server-side
   // rounding is applied.
+  //
+  // UI-2 item 3: `expected` is now optional -- the End Shift dialog no longer
+  // puts it in an inline handler (see openCloseModal), so it is read from
+  // this._closeCtx. The reveal rows only EXIST for a session that may approve
+  // (a blind session's dialog has no #cd-close-variance at all), so the
+  // `!row || !val` early return below is also what keeps a cashier blind: there
+  // is nothing here to write into. Typing a count reveals the expected figure
+  // and the variance; clearing the box hides them again.
   _previewVariance(expected) {
+    if (expected === undefined) expected = this._closeCtx ? this._closeCtx.expected : undefined;
     const counted = parseFloat(document.getElementById('cd-close-counted')?.value);
     const row = document.getElementById('cd-close-variance');
     const val = document.getElementById('cd-close-variance-val');
-    if (!row || !val) return;
-    if (isNaN(counted)) { row.style.display = 'none'; return; }
+    const expRow = document.getElementById('cd-close-expected-row');
+    const expVal = document.getElementById('cd-close-expected');
+    if (!row || !val || typeof expected !== 'number' || !isFinite(expected)) return;
+    if (isNaN(counted)) {
+      row.style.display = 'none';
+      if (expRow) expRow.style.display = 'none';
+      if (expVal) expVal.innerHTML = '';
+      return;
+    }
     const q = Math.pow(10, RetailSystem._currencyDp());
     const variance = Math.round((counted - expected) * q) / q;
     row.style.display = 'flex';
+    if (expRow && expVal) { expVal.innerHTML = this._money(expected); expRow.style.display = 'flex'; }
     // innerHTML, not textContent: the value has to arrive wrapped in
     // `.money` or it loses tabular figures, the typographic minus, the
     // accounting parentheses AND rtl.css's direction isolation -- the exact
@@ -844,7 +1022,28 @@ const CashDrawer = {
     val.innerHTML = this._varianceCell({ variance, variance_status: 'unverified' });
   },
 
+  // The note counter feeds the count box: every change re-sums the rows (exact,
+  // in mils -- see _noteSum) into #cd-close-counted and refreshes the preview.
+  // Typing straight into the box afterwards is still allowed and wins until the
+  // next note changes.
+  _noteInput() {
+    const counts = {};
+    let any = false;
+    (this.NOTE_MILS || []).forEach((mils) => {
+      const box = document.getElementById('cd-note-' + mils);
+      const line = document.getElementById('cd-note-line-' + mils);
+      const q = box ? Number(box.value) : 0;
+      if (box && box.value !== '') any = true;
+      counts[mils] = q;
+      if (line) line.textContent = (Number.isInteger(q) && q > 0) ? (mils * q / 1000).toFixed(3) : '';
+    });
+    const target = document.getElementById('cd-close-counted');
+    if (target) target.value = any ? this._noteSum(counts).toFixed(3) : '';
+    this._previewVariance();
+  },
+
   async _submitClose(expected) {
+    if (expected === undefined) expected = this._closeCtx ? this._closeCtx.expected : 0;
     if (!this._session) return;
     const btn = document.getElementById('cd-close-btn');
     const counted = parseFloat(document.getElementById('cd-close-counted')?.value);

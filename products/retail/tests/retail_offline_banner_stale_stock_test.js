@@ -151,6 +151,21 @@ const CANDIDATE_PRODUCT = {
 
 const FRESH_STOCK_TEXT = `Stock: ${CANDIDATE_PRODUCT.total_stock} ${CANDIDATE_PRODUCT.unit}`;
 
+// UI-2 item 1 changed the tile contract: a HEALTHY product's tile no longer
+// carries a stock line at all (it was noise -- the loudest text after the
+// price); the figure appears only when it is news (out, LOW, or dated because
+// sync is stale). So the "an undated, ordinary figure is shown when sync is
+// fine" half of these tests is now proved with a LOW-stock product, whose
+// figure still has to show, undated, on an unconfigured / never-synced / fresh
+// install. What that gives up, stated: these tests can no longer catch "a
+// healthy product's tile lost its stock number" -- that is the intended
+// change, pinned instead by retail_pos_favourites_ui_test.js (hidden when normal,
+// shown when low, shown when out). What they STILL catch: the dated form
+// wrongly applied (is-stale / a clock) on installs that must stay silent, and
+// the figure vanishing for a product where it matters.
+const LOW_PRODUCT = Object.assign({}, CANDIDATE_PRODUCT, { total_stock: 3 });
+const LOW_STOCK_TEXT = `Low stock: ${LOW_PRODUCT.total_stock} ${LOW_PRODUCT.unit}`;
+
 function renderTile(ctx, health, product) {
   ctx.RetailSystem._syncHealth = health;
   ctx.RetailSystem._products = [product || CANDIDATE_PRODUCT];
@@ -199,10 +214,15 @@ async function testUnconfiguredInstallIsCompletelySilent() {
   // could be suppressing staleness here), an unconfigured install's own
   // local balance is not a stale copy of anything -- it is the only ledger
   // there is.
-  const html = renderTile(ctx, { configured: false, never_synced: false, seconds_since_last_success: 999999 });
+  const silent = { configured: false, never_synced: false, seconds_since_last_success: 999999 };
+  const html = renderTile(ctx, silent, LOW_PRODUCT);
   assert.ok(
-    html.includes(FRESH_STOCK_TEXT),
-    'The POS tile did not show the ordinary stock figure on an unconfigured install. Got: ' + html
+    html.includes(LOW_STOCK_TEXT),
+    'The POS tile did not show the ordinary (undated) low-stock figure on an unconfigured install. Got: ' + html
+  );
+  assert.ok(
+    !renderTile(ctx, silent).includes('Stock'),
+    'A healthy product\'s tile carries a stock line again (UI-2: hidden unless low/out/stale).'
   );
   assert.ok(
     !html.includes('is-stale'),
@@ -234,9 +254,9 @@ function testNeverSyncedGetsOwnWordingAndNoStaleness() {
     'sync"). Got: ' + bannerHtml
   );
 
-  const html = renderTile(ctx, data);
+  const html = renderTile(ctx, data, LOW_PRODUCT);
   assert.ok(
-    html.includes(FRESH_STOCK_TEXT),
+    html.includes(LOW_STOCK_TEXT),
     'The POS tile applied the dated form on a never-synced install, which has no basis ' +
     'for claiming the figure has drifted -- there is nothing to have drifted FROM yet. Got: ' + html
   );
@@ -320,9 +340,9 @@ function testFreshAndHealthyShowsOrdinaryNumberAndNoBanner() {
     'A fresh, healthy install lost its existing calm-state indicator. Got: ' + bannerHtml
   );
 
-  const html = renderTile(ctx, data);
+  const html = renderTile(ctx, data, LOW_PRODUCT);
   assert.ok(
-    html.includes(FRESH_STOCK_TEXT),
+    html.includes(LOW_STOCK_TEXT),
     'A fresh sync lost the ordinary stock number. Got: ' + html
   );
   assert.ok(!html.includes('is-stale'), 'A fresh sync incorrectly applied the stale treatment. Got: ' + html);

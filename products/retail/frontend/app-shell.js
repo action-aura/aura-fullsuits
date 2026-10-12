@@ -995,6 +995,18 @@ const SubsystemApp = {
         // Accountant -- books + reports, no refund -- was invited into a
         // screen whose one action always 403s. Same rule as every sibling.
         { id: 'returns',    label: 'Returns',           icon: '↩️', capability: 'retail.refund' },
+        // UI-2 item 2: the Sales History screen (_renderSalesHistory, search by
+        // receipt number or customer, reprint, detail) existed but had NO door in
+        // any nav group, the gear menu or the palette -- the owner's first question
+        // on day two ("show me today's receipts") had no click path. `retail.sell`
+        // is the till's own capability: whoever can ring a sale may look one up.
+        // The ROUTE has no capability of its own (login + subsystem only) and is
+        // not loosened here -- it already splits by retail.reports itself: without
+        // it the screen shows the till's redacted lookup (no date range, capped
+        // page, identity columns dropped), with it the full sales book. So an
+        // Accountant (books + reports, no sell) is not invited into a till screen,
+        // and a cashier is invited only into the part the server will answer.
+        { id: 'sales',      label: 'Sales',             icon: '🧾', capability: 'retail.sell' },
         // `capability` is a THIRD axis, alongside `adminOnly` (this device)
         // and `ownerOnly` (this user's role) -- see the note on `employees`
         // below for why conflating those two breaks a feature in both
@@ -1390,7 +1402,7 @@ const SubsystemApp = {
       // render NO header at all -- see _renderShell's groupsHTML below. An
       // empty section header is worse than the flat list this replaces.
       navGroups: [
-        { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'quotations'] },
+        { label: 'Sell',    items: ['pos', 'sales', 'returns', 'scanner', 'customers', 'quotations'] },
         // Grow holds ONLY 'promotions' (capability: 'retail.discount', which
         // a cashier does not hold by default) -- 'quotations' stays in Sell
         // above rather than joining it here, because quotations carries
