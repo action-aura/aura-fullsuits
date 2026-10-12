@@ -49,7 +49,17 @@ fun apiErrorMessage(e: Throwable): String = when (e) {
             // a cashier refused a manager-only action was told to check their
             // subscription, which is exactly the wrong thing to go and fix.
             403 ->
-                if (body.reasonCode != null) {
+                // ANDROID-2a: the shop's cashier discount limit. create_sale answers an over-limit
+                // discount with 403 + a STRING code DISCOUNT_OVER_LIMIT + data.limit_pct, and no
+                // reason_code -- so without this branch it fell into the generic "You don't have
+                // permission" below and the cashier never learned the limit. The sentence is built
+                // from the numeric limit (not the server's English text) so the catalogue can
+                // translate it; an absent limit falls back to the server's own message.
+                if (body.code == "DISCOUNT_OVER_LIMIT") {
+                    body.limitPct?.let { tr("You can give at most %s%% discount. Ask a manager for more.").format(pctText(it)) }
+                        ?: body.message?.let { tr(it) }
+                        ?: tr("You don't have permission to do this.")
+                } else if (body.reasonCode != null) {
                     // Licensing/subscription guard. Prefix makes unmistakably
                     // clear the block is the subscription, not the network; the
                     // server's own message is appended so the user sees exactly
@@ -133,7 +143,15 @@ fun loginErrorMessage(e: Throwable): String =
  * so this is the same parser RetailExtraScreens.kt's pairing code already
  * uses for the same reason.
  */
-private data class ErrorBody(val message: String?, val reasonCode: String?, val code: String? = null)
+private data class ErrorBody(
+    val message: String?, val reasonCode: String?, val code: String? = null,
+    /** `data.limit_pct` of a DISCOUNT_OVER_LIMIT refusal; null for every other body. */
+    val limitPct: Double? = null,
+)
+
+/** "10", not "10.0"; "7.5" stays -- the percentage as a person would say it. */
+internal fun pctText(v: Double): String =
+    java.math.BigDecimal(v.toString()).stripTrailingZeros().toPlainString()
 
 private val NO_ERROR_BODY = ErrorBody(message = null, reasonCode = null)
 
@@ -175,6 +193,8 @@ private fun parseErrorBody(e: HttpException): ErrorBody = try {
             code = body.get("code")
                 ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
                 ?.asString?.takeIf { it.isNotBlank() },
+            limitPct = body.get("data")?.takeIf { it.isJsonObject }?.asJsonObject
+                ?.get("limit_pct")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asDouble,
         )
     }
 } catch (_: Exception) { NO_ERROR_BODY }

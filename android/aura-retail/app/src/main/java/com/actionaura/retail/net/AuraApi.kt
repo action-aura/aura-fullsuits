@@ -150,6 +150,20 @@ interface AuraApi {
     @POST("api/sub/retail/sales")
     suspend fun createSale(@Body body: CreateSaleRequest): SaleResponse
 
+    // ANDROID-2a: held (parked) sales - the desktop's own routes (see HeldSales.kt).
+    @GET("api/sub/retail/held-sales")
+    suspend fun heldSales(): HeldSalesResponse
+
+    @POST("api/sub/retail/held-sales")
+    suspend fun holdSale(@Body body: HoldSaleRequest): HoldSaleResponse
+
+    // The server DELETES the held row in the same transaction as it returns the cart.
+    @POST("api/sub/retail/held-sales/{id}/resume")
+    suspend fun resumeHeldSale(@Path("id") id: Int): ResumeHeldResponse
+
+    @DELETE("api/sub/retail/held-sales/{id}")
+    suspend fun discardHeldSale(@Path("id") id: Int): SimpleStatusResponse
+
     // Customers + credit (AR)
     @GET("api/sub/retail/customers")
     suspend fun customers(@Query("q") q: String? = null): CustomersResponse
@@ -279,6 +293,29 @@ interface AuraApi {
     @GET("api/sub/retail/cash-sessions/current")
     suspend fun currentCashSession(): CurrentCashSessionResponse
 
+    // ANDROID-2a: the whole drawer, the desktop's own routes (see CashSessions.kt). The same
+    // "current" URL as above, typed - the untyped one stays for the supplier-payment default.
+    @GET("api/sub/retail/cash-sessions/current")
+    suspend fun currentCashSessionFull(): CurrentCashSessionFull
+
+    @POST("api/sub/retail/cash-sessions/open")
+    suspend fun openCashSession(@Body body: OpenCashSessionRequest): CashSessionResponse
+
+    @GET("api/sub/retail/cash-sessions")
+    suspend fun cashSessions(@Query("limit") limit: Int = 20): CashSessionListResponse
+
+    @POST("api/sub/retail/cash-sessions/{id}/movements")
+    suspend fun cashMovement(@Path("id") id: String, @Body body: CashMovementRequest): CashMovementResponse
+
+    @GET("api/sub/retail/cash-sessions/{id}/x-report")
+    suspend fun xReport(@Path("id") id: String): XReportResponse
+
+    @POST("api/sub/retail/cash-sessions/{id}/close")
+    suspend fun closeCashSession(@Path("id") id: String, @Body body: CloseCashSessionRequest): CloseCashSessionResponse
+
+    @POST("api/sub/retail/cash-sessions/{id}/approve")
+    suspend fun approveCashSession(@Path("id") id: String, @Body body: ApproveCashSessionRequest): ApproveCashSessionResponse
+
     // Daily cash + settings + payment methods
     @GET("api/sub/retail/reports/daily-cash")
     suspend fun dailyCash(@Query("date") date: String? = null): DailyCashResponse
@@ -288,6 +325,11 @@ interface AuraApi {
 
     @GET("api/sub/retail/settings/credit")
     suspend fun creditSettingsGet(): CreditSettingsResponse
+
+    // ANDROID-2a: the shop's cashier discount limit, read through its own read-only class
+    // (see CashierLimit.kt for why it is not a field of CreditSettings).
+    @GET("api/sub/retail/settings/credit")
+    suspend fun cashierDiscountLimit(): CashierLimitResponse
 
     @POST("api/sub/retail/settings/credit")
     suspend fun creditSettingsSet(@Body body: CreditSettings): CreditSettingsResponse

@@ -177,6 +177,21 @@ fun holdsAnyCapability(capabilities: List<String>?, codes: List<String>): Boolea
 val CAPS_CREATE_RETURN: List<String> = listOf(CAP_REFUND)
 
 /**
+ * Hold, resume and discard a parked sale -- `POST /held-sales`,
+ * `POST /held-sales/<id>/resume`, `DELETE /held-sales/<id>`: all
+ * `@mt_require_capability(CAP_SELL)` (a held sale is a paused sale).
+ */
+val CAPS_HOLD_SALE: List<String> = listOf(CAP_SELL)
+
+/**
+ * The whole drawer on the phone -- open a shift, current, movements, X report, end
+ * shift -- all `@mt_require_capability(CAP_CASH_CLOSE)` ("retail.cash.close covers the
+ * WHOLE drawer", the route comments say). Accepting a variance is a separate authority
+ * (retail.cash.approve) and is offered only when the server says `may_approve`.
+ */
+val CAPS_CASH_DRAWER: List<String> = listOf(CAP_CASH_CLOSE)
+
+/**
  * Categories create/update/delete, `POST /suppliers`, `POST /purchase-orders`
  * and `POST /purchase-orders/<id>/receive` -- all
  * `@mt_require_capability(CAP_STOCK_ADJUST)`.

@@ -514,6 +514,7 @@ private fun MainShell(onLogout: () -> Unit) {
         "payables" -> "Payables"
         "stock_transfers" -> "Stock Transfers"
         "cash_summary" -> "Cash Summary"
+        "cash_drawer" -> "Cash Drawer"
         "aging" -> "Aging"
         "trial_balance" -> "Trial Balance"
         "profit_and_loss" -> "Profit and Loss"
@@ -798,6 +799,8 @@ private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavControll
     // reached from MoreScreen's Purchasing section.
     b.composable("stock_transfers") { StockTransfersScreen(snackbar) }
     b.composable("cash_summary") { DailyCashScreen(snackbar) }
+    // ANDROID-2a: shifts - open, cash in/out, X report, end shift with a blind count.
+    b.composable("cash_drawer") { CashSessionScreen(snackbar) }
     b.composable("aging") { AgingScreen(snackbar) }
     // retail-hardware-viewports: schema v38/v39's general ledger, read-only
     // (see ui/screens/TrialBalanceScreen.kt's header comment). Reached from

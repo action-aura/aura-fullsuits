@@ -144,6 +144,11 @@ fun MoreScreen(onNavigate: (String) -> Unit, onLogout: () -> Unit = {}) {
         MoreItem(tr("Stock Transfers"), tr("Move stock between branches"), Icons.Default.SwapHoriz) { onNavigate("stock_transfers") }
         SectionHeader(tr("Finance"))
         MoreItem(tr("Cash Summary"), tr("Daily cash in / out / net"), Icons.Default.AccountBalanceWallet) { onNavigate("cash_summary") }
+        // ANDROID-2a: the drawer is for people who work one (retail.cash.close) -- a books-only
+        // account never sees it. Hidden rather than disabled; the server re-gates every call.
+        if (com.actionaura.retail.ui.RetailSession.hasAnyCapability(com.actionaura.retail.ui.CAPS_CASH_DRAWER)) {
+            MoreItem(tr("Cash Drawer"), tr("Open a shift, cash in and out, end the shift"), Icons.Default.Payments) { onNavigate("cash_drawer") }
+        }
         MoreItem(tr("Aging"), tr("Receivables & payables by age"), Icons.Default.Schedule) { onNavigate("aging") }
         MoreItem(tr("Settings"), tr("Credit, currency & payment methods"), Icons.Default.Settings) { onNavigate("retail_settings") }
         // Owner-only entry (design §3: employee management is the admin's

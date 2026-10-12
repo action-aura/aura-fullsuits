@@ -349,7 +349,14 @@ data class CreateSaleRequest(
     // never redeem -- the server already treats a missing/zero value the
     // same way.
     val points_redeemed: Int = 0,
+    // ANDROID-2a split tender, the desktop's shape: payment_method "split" plus the parts, and NO
+    // amount_paid (the server derives paid / change / balance from the parts). Null for every
+    // ordinary sale, so Gson omits the key and a single-method request is unchanged byte for byte.
+    val tenders: List<TenderPart>? = null,
 )
+
+/** One part of a split payment. For cash, `amount` is the money HANDED OVER (change comes back). */
+data class TenderPart(val method: String, val amount: Double)
 
 // Mirrors the authoritative response contract in
 // docs/architecture/financial-authority-contracts.md -- every financial

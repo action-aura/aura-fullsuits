@@ -39,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -62,6 +63,25 @@ import com.actionaura.retail.ui.i18n.money
 import com.actionaura.retail.ui.i18n.parseIntFlexible
 import com.actionaura.retail.ui.i18n.parseNum
 import com.actionaura.retail.ui.i18n.tr
+import com.actionaura.retail.ui.pos.DiscountAccess
+import com.actionaura.retail.ui.pos.buildSaleItems
+import com.actionaura.retail.ui.pos.clampDiscountPct
+import com.actionaura.retail.ui.pos.discountAccess
+import com.actionaura.retail.ui.pos.buildHoldRequest
+import com.actionaura.retail.ui.pos.EstimateLine
+import com.actionaura.retail.ui.pos.TenderPartMinor
+import com.actionaura.retail.ui.pos.addTenderPart
+import com.actionaura.retail.ui.pos.buildCreateSaleRequest
+import com.actionaura.retail.ui.pos.effectiveLinePct
+import com.actionaura.retail.ui.pos.estimateDueMinor
+import com.actionaura.retail.ui.pos.fromMinor
+import com.actionaura.retail.ui.pos.parseAmountMinor
+import com.actionaura.retail.ui.pos.removeTenderPart
+import com.actionaura.retail.ui.pos.summarizeSplit
+import com.actionaura.retail.ui.pos.toMinor
+import com.actionaura.retail.ui.pos.overLimit
+import com.actionaura.retail.ui.CAPS_HOLD_SALE
+import com.actionaura.retail.ui.i18n.Currency
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -96,11 +116,6 @@ private fun catColor(key: String?): Color {
     return catPalette[(k.hashCode().let { if (it < 0) -it else it }) % catPalette.size]
 }
 
-// A parked POS cart (Hold / Resume). Held in a process-wide singleton so parked
-// sales survive navigating away from POS while the app is running.
-data class HeldSale(val id: Long, val items: Map<String, Double>, val total: Double, val count: Int)
-object HeldSales { val list = androidx.compose.runtime.mutableStateListOf<HeldSale>() }
-
 @Composable
 fun PosScreen(snackbar: SnackbarHostState) {
     var products by remember { mutableStateOf<List<Product>>(emptyList()) }
@@ -118,6 +133,15 @@ fun PosScreen(snackbar: SnackbarHostState) {
     var lastScanned by remember { mutableStateOf<String?>(null) }
     var paymentMethod by remember { mutableStateOf("cash") }
     var showHeld by remember { mutableStateOf(false) }
+    // -- Hold / resume (ANDROID-2a). The parked carts live on the SHOP SERVER (the desktop's own
+    // /held-sales routes), not in this process: the old in-memory list died with the app and
+    // was invisible to every other till. `heldRows == null` = not loaded yet / load failed.
+    var heldCount by remember { mutableStateOf(0) }
+    var heldRows by remember { mutableStateOf<List<HeldSaleRow>?>(null) }
+    var showHoldDialog by remember { mutableStateOf(false) }
+    var holdBusy by remember { mutableStateOf(false) }
+    var pendingResume by remember { mutableStateOf<HeldSaleRow?>(null) }
+    var pendingDiscard by remember { mutableStateOf<HeldSaleRow?>(null) }
     var customers by remember { mutableStateOf<List<Customer>>(emptyList()) }
     var customer by remember { mutableStateOf<Customer?>(null) }   // null = walk-in
     var customerMenu by remember { mutableStateOf(false) }
@@ -139,6 +163,19 @@ fun PosScreen(snackbar: SnackbarHostState) {
     // below on every change of `customer`, including back to Walk-in.
     var loyaltyBalance by remember { mutableStateOf(0) }
     var loyaltyRedeemInput by remember { mutableStateOf("") }
+    // -- Discount (ANDROID-2a; ui/pos/DiscountRules.kt is the rulebook). The whole-sale
+    // percentage is typed as TEXT so a half-typed "7." survives recomposition; each line may
+    // also carry its own percentage, which wins for that line. `cashierLimitPct` is the
+    // owner's limit for a cashier who does not hold retail.discount (0 = none).
+    var cashierLimitPct by remember { mutableStateOf(0.0) }
+    var salePctText by remember { mutableStateOf("") }
+    val lineDiscounts = remember { mutableStateMapOf<String, Double>() }
+    var discountLineId by remember { mutableStateOf<String?>(null) }
+    // -- Split tender (ANDROID-2a; ui/pos/SplitTender.kt is the rulebook). `splitParts` are exact
+    // minor units; the amount box is text. The payment chips choose the method of the NEXT part.
+    var splitMode by remember { mutableStateOf(false) }
+    var splitParts by remember { mutableStateOf<List<TenderPartMinor>>(emptyList()) }
+    var splitAmountText by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     // Needed here (not just inside PaymentSuccess below) for auto-print:
     // PrinterPrefs is a per-device Context read, and the fire-and-forget
@@ -159,7 +196,10 @@ fun PosScreen(snackbar: SnackbarHostState) {
             parseNum(ApiClient.get().creditSettingsGet().data?.loyalty_point_value) ?: 0.0
         } catch (e: Exception) { 0.0 }
     }
-    LaunchedEffect(Unit) { loading = true; load(); loadCustomers(); loadMethods(); loadLoyaltySetting(); loading = false }
+    suspend fun loadCashierLimit() {
+        cashierLimitPct = try { ApiClient.get().cashierDiscountLimit().data.limitPct() } catch (e: Exception) { 0.0 }
+    }
+    LaunchedEffect(Unit) { loading = true; load(); loadCustomers(); loadMethods(); loadLoyaltySetting(); loadCashierLimit(); loading = false }
 
     // Loyalty balance is CUSTOMER-scoped (a different customer has a
     // different ledger), so it resets and refetches on every change of
@@ -177,6 +217,11 @@ fun PosScreen(snackbar: SnackbarHostState) {
     }
 
     val byId = products.associateBy { it.id }
+    // Reads RetailSession.capabilities (Compose state), so the control appears or vanishes the
+    // moment the session resolves. Fails OPEN while capabilities are unknown, like every other
+    // rendering gate here; the server re-gates the sale itself.
+    val access = discountAccess(RetailSession.capabilities, cashierLimitPct)
+    val salePct = clampDiscountPct(parseNum(salePctText))
     val total = cart.entries.sumOf { (id, qty) -> (byId[id]?.sell_price ?: 0.0) * qty }
     val count = cart.values.sumOf { it }.toInt()
 
@@ -237,19 +282,60 @@ fun PosScreen(snackbar: SnackbarHostState) {
         }
     }
 
-    // Park the current cart so another sale can be rung up, then resumed later.
-    fun holdCurrent() {
-        if (cart.isEmpty()) return
-        val t = cart.entries.sumOf { (id, q) -> (byId[id]?.sell_price ?: 0.0) * q }
-        val c = cart.values.sumOf { it }.toInt()
-        HeldSales.list.add(HeldSale(System.currentTimeMillis(), cart.toMap(), t, c))
-        cart.clear()
+    // Hold / resume against the server's /held-sales routes (the desktop's own).
+    suspend fun refreshHeld() {
+        val rows = try { ApiClient.get().heldSales().data } catch (e: Exception) { null }
+        heldRows = rows
+        if (rows != null) heldCount = rows.size
     }
-    fun resumeHeld(h: HeldSale) {
-        if (cart.isNotEmpty()) holdCurrent()   // park whatever is in the cart first
-        cart.clear(); cart.putAll(h.items)
-        HeldSales.list.remove(h)
-        showHeld = false
+    fun clearSaleState() {
+        cart.clear(); lineDiscounts.clear(); salePctText = ""
+        downPayment = ""; loyaltyRedeemInput = ""; customer = null; paymentMethod = "cash"
+    }
+    LaunchedEffect(Unit) { refreshHeld() }
+
+    // Park the cart. The hold body is built in ui/pos/HoldRequestBuilder.kt (the desktop's
+    // `_saveHold` shape); subtotal/total in it are display-only, the server re-prices at checkout.
+    suspend fun holdCurrent(label: String) {
+        if (cart.isEmpty()) return
+        holdBusy = true
+        try {
+            val r = ApiClient.get().holdSale(buildHoldRequest(
+                cart = cart.toMap(), products = byId, lineDiscounts = lineDiscounts.toMap(), salePct = salePct,
+                access = access, customerId = customer?.id, label = label, singleMethod = paymentMethod,
+                displayTotal = total, dp = Currency.decimals))
+            if (r.status == "success") {
+                clearSaleState(); showHoldDialog = false; showCart = false
+                snackbar.showSnackbar(tr("Sale held") + " \u2014 " + (r.data?.hold_number ?: ""))
+                refreshHeld()
+            } else snackbar.showSnackbar(r.message ?: tr("Could not hold sale"))
+        } catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)) }
+        finally { holdBusy = false }
+    }
+    // The server DELETES the held row when it hands the cart back, so the cart is rebuilt from
+    // the response at once. A non-empty current cart is replaced only after the cashier agreed.
+    suspend fun resumeHeld(h: HeldSaleRow) {
+        try {
+            val r = ApiClient.get().resumeHeldSale(h.id)
+            if (r.status != "success") { snackbar.showSnackbar(r.message ?: tr("Could not resume sale")); return }
+            val c = parseResumedCart(r.data)
+            clearSaleState()
+            cart.putAll(c.quantities); lineDiscounts.putAll(c.lineDiscounts)
+            salePctText = if (c.salePct > 0.0) pctText(c.salePct) else ""
+            paymentMethod = c.paymentMethod.takeIf { it != "split" } ?: "cash"
+            customer = customers.firstOrNull { it.id == c.customerId }
+            showHeld = false
+            if (cart.isNotEmpty()) showCart = true
+            snackbar.showSnackbar(tr("Resumed") + " " + (c.holdNumber ?: ""))
+            refreshHeld()
+        } catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)) }
+    }
+    suspend fun discardHeld(h: HeldSaleRow) {
+        try {
+            val r = ApiClient.get().discardHeldSale(h.id)
+            snackbar.showSnackbar(if (r.status == "success") tr("Held sale discarded") else (r.message ?: tr("Server error")))
+            refreshHeld()
+        } catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)) }
     }
 
     val categories = remember(products) {
@@ -283,6 +369,18 @@ fun PosScreen(snackbar: SnackbarHostState) {
     val loyaltyPointsToSend = kotlin.math.min(loyaltyRequestedPoints, loyaltyMaxRedeemable)
     val loyaltyValue = if (loyaltyPointsToSend > 0) kotlin.math.min(loyaltyPointsToSend * loyaltyPointValue, total) else 0.0
 
+    // DISPLAY-ONLY estimate of the amount due, for the split screen's Remaining (see
+    // SaleEstimate.kt for its limits). The server prices the sale and settles the parts against ITS
+    // figure; nothing sent is derived from this.
+    val dpPlaces = Currency.decimals
+    val estimateMinor = estimateDueMinor(cart.entries.map { (id, q) ->
+        val pr = byId[id]
+        EstimateLine(pr?.sell_price ?: 0.0, q,
+            if (access is DiscountAccess.None) 0.0 else effectiveLinePct(lineDiscounts[id], salePct), pr?.tax_rate ?: 0.0)
+    }, dpPlaces)
+    val dueMinor = (estimateMinor - toMinor(loyaltyValue, dpPlaces)).coerceAtLeast(0L)
+    val splitSummary = summarizeSplit(dueMinor, splitParts, customer != null)
+
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             Row(
@@ -301,8 +399,10 @@ fun PosScreen(snackbar: SnackbarHostState) {
                 FilledTonalIconButton(
                     onClick = { showScanner = true }, modifier = Modifier.size(52.dp),
                 ) { Icon(Icons.Default.QrCodeScanner, contentDescription = tr("Scan barcode")) }
-                if (HeldSales.list.isNotEmpty()) {
-                    FilledTonalButton(onClick = { showHeld = true }) { Text(tr("Held") + " ${HeldSales.list.size}") }
+                if (heldCount > 0) {
+                    FilledTonalButton(onClick = { showHeld = true; scope.launch { refreshHeld() } }) {
+                        Text(tr("Held") + " $heldCount")
+                    }
                 }
             }
             if (categories.size > 1) {
@@ -519,6 +619,10 @@ fun PosScreen(snackbar: SnackbarHostState) {
                         )
                     }
                 }
+                if (access !is DiscountAccess.None) {
+                    Spacer(Modifier.height(12.dp))
+                    SaleDiscountField(access = access, text = salePctText, onChange = { salePctText = it })
+                }
                 Spacer(Modifier.height(12.dp))
                 LazyColumn(Modifier.heightIn(max = 340.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(cart.keys.toList()) { id ->
@@ -537,6 +641,17 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                     overflow = TextOverflow.Ellipsis)
                                 Text(money(p.sell_price), style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (access !is DiscountAccess.None) {
+                                    // Tap to give THIS line its own percentage (it wins over the
+                                    // whole-sale one for this line; the two never stack).
+                                    val own = lineDiscounts[id]
+                                    Text(
+                                        if (own != null) "−" + pctText(own) + "%  " + tr("Discount") else "+ " + tr("Discount"),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.clickable(role = Role.Button) { discountLineId = id }.padding(vertical = 6.dp),
+                                    )
+                                }
                             }
                             // No Modifier.size(34.dp) override -- 34dp sits below Material3's
                             // own ~48dp default and the 44dp accessibility floor the desktop
@@ -606,7 +721,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             label = { Text(tr(label)) })
                     }
                 }
-                if (paymentMethod == "credit") {
+                if (paymentMethod == "credit" && !splitMode) {
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(downPayment, { downPayment = it },
                         label = { Text(tr("Paid now (optional) — rest goes on credit")) }, singleLine = true,
@@ -614,16 +729,44 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth())
                 }
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { splitMode = !splitMode; splitParts = emptyList(); splitAmountText = "" }) {
+                    Text(if (splitMode) tr("Pay with one method") else tr("Split payment"))
+                }
+                if (splitMode) {
+                    val methodName = payOptions.firstOrNull { it.second == paymentMethod }?.first ?: paymentMethod
+                    SplitPaymentPanel(
+                        methodLabel = tr(methodName),
+                        estimateMinor = dueMinor,
+                        parts = splitParts,
+                        amountText = splitAmountText,
+                        summary = splitSummary,
+                        labelFor = { m -> tr(payOptions.firstOrNull { it.second == m }?.first ?: m.replaceFirstChar { it.uppercase() }) },
+                        onAmountChange = { splitAmountText = it },
+                        onFillRemaining = { splitAmountText = remainingInput(splitSummary) },
+                        onAdd = {
+                            val minor = parseAmountMinor(splitAmountText, dpPlaces)
+                            if (minor == null) scope.launch { snackbar.showSnackbar(tr("Enter a valid amount")) }
+                            else { splitParts = addTenderPart(splitParts, paymentMethod, minor); splitAmountText = "" }
+                        },
+                        onRemove = { i -> splitParts = removeTenderPart(splitParts, i) },
+                    )
+                }
                 Spacer(Modifier.height(16.dp))
-                OutlinedButton(onClick = { holdCurrent(); showCart = false },
+                OutlinedButton(onClick = { showHoldDialog = true }, enabled = RetailSession.hasAnyCapability(CAPS_HOLD_SALE),
                     modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(tr("Hold sale (park for later)")) }
                 Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = {
                         val pm = paymentMethod
                         val cust = customer
-                        if (pm == "credit" && cust == null) {
+                        val overLim = (listOf(salePct) + lineDiscounts.values).mapNotNull { overLimit(it, access) }.firstOrNull()
+                        if (!splitMode && pm == "credit" && cust == null) {
                             scope.launch { snackbar.showSnackbar(tr("Select a customer for credit sales (walk-in not allowed)")) }
+                        } else if (access !is DiscountAccess.None && overLim != null) {
+                            // Courtesy only: the server refuses an over-limit discount itself
+                            // (403 DISCOUNT_OVER_LIMIT) and its limit is shown the same way.
+                            scope.launch { snackbar.showSnackbar(tr("You can give at most %s%% discount. Ask a manager for more.").format(pctText(overLim))) }
                         } else {
                             charging = true
                             // `total` here is a local, pre-tax, pre-discount PREVIEW only
@@ -644,7 +787,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             // way). Omitting it lets the server default amount_paid to
                             // its own computed, authoritative total -- guaranteeing a
                             // "pay in full" sale is always recorded as fully paid.
-                            val paidNow: Double? = if (pm == "credit") (parseNum(downPayment)?.coerceIn(0.0, previewTotal) ?: 0.0) else null
+                            val paidNow: Double? = if (pm == "credit" && !splitMode) (parseNum(downPayment)?.coerceIn(0.0, previewTotal) ?: 0.0) else null
                             // Commercial intent only: product_id + quantity per line (no
                             // discount-entry UI exists in this source, so discount_pct
                             // stays at its default of 0). unit_price/tax_rate/subtotal/
@@ -652,19 +795,21 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             // server always resolves/computes them from the product row
                             // and ignores any client-submitted equivalent (Wave 0,
                             // AUDIT-002/003). See docs/architecture/financial-authority-contracts.md.
-                            val items = cart.entries.map { (id, qty) -> SaleItemReq(id, qty) }
+                            // ANDROID-2a: product_id + quantity + discount_pct per line, exactly the
+                            // desktop's shape (the whole-sale % goes on every line without its own).
+                            // Under DiscountAccess.None every line goes out at 0 whatever state holds.
+                            val items = buildSaleItems(cart.toMap(), lineDiscounts.toMap(), salePct, access)
                             scope.launch {
                                 try {
-                                    val r = ApiClient.get().createSale(CreateSaleRequest(
-                                        amount_paid = paidNow, payment_method = pm, customer_id = cust?.id,
-                                        items = items, idempotency_key = UUID.randomUUID().toString(),
-                                        // The locally-clamped preview, not the raw typed
-                                        // value -- see `loyaltyPointsToSend`'s own comment
-                                        // above for why it is already bounded the same
-                                        // three ways create_sale clamps server-side. The
-                                        // server still re-derives and re-clamps this from
-                                        // the ledger itself (CLIENT-SUBMITTED INTENT ONLY).
-                                        points_redeemed = loyaltyPointsToSend))
+                                    // ui/pos/SaleRequestBuilder.kt: a single-method sale is byte for byte what it
+                                    // always was; two or more parts become the desktop's split shape
+                                    // (payment_method "split" + tenders, no amount_paid). Loyalty points
+                                    // are the locally-clamped preview, the server re-clamps (see
+                                    // `loyaltyPointsToSend`).
+                                    val r = ApiClient.get().createSale(buildCreateSaleRequest(
+                                        items = items, customerId = cust?.id, idempotencyKey = UUID.randomUUID().toString(),
+                                        pointsRedeemed = loyaltyPointsToSend, singleMethod = pm, creditDownPayment = paidNow,
+                                        splitParts = if (splitMode) splitParts else emptyList(), dp = dpPlaces))
                                     if (r.status == "success") {
                                         // Authoritative result: always the backend's own
                                         // response, never the local preview above -- this is
@@ -673,6 +818,8 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                         // or a server-validated discount at all.
                                         cart.clear(); showCart = false; successSale = r.data
                                         paymentMethod = "cash"; customer = null; downPayment = ""; loyaltyRedeemInput = ""
+                                        salePctText = ""; lineDiscounts.clear()
+                                        splitMode = false; splitParts = emptyList(); splitAmountText = ""
                                         r.data?.warning?.takeIf { it.isNotBlank() }?.let { snackbar.showSnackbar(it) }
                                         // Auto-print (Settings toggle, default off): fire-and-
                                         // forget, no blocking, no error dialog -- printReceipt's
@@ -696,7 +843,8 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             }
                         }
                     },
-                    enabled = !charging, modifier = Modifier.fillMaxWidth().height(54.dp),
+                    enabled = !charging && (!splitMode || (splitParts.size >= 2 && splitSummary.chargeable)),
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
                 ) {
                     if (charging) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
                         color = MaterialTheme.colorScheme.onPrimary)
@@ -718,37 +866,50 @@ fun PosScreen(snackbar: SnackbarHostState) {
                     // contracts.md), which is exactly why this stays labelled
                     // "Charge" and never "Total". CartTotalHonestyContractTest
                     // pins that distinction.
-                    else Text(tr("Charge") + "  " + money((total - loyaltyValue).coerceAtLeast(0.0)),
+                    else Text(tr("Charge") + "  " + (if (splitMode) money(fromMinor(splitSummary.enteredMinor - splitSummary.changeMinor, dpPlaces))
+                                                        else money((total - loyaltyValue).coerceAtLeast(0.0))),
                         style = MaterialTheme.typography.labelLarge)
                 }
             }
         }
     }
 
+    discountLineId?.let { lid ->
+        LineDiscountDialog(
+            productName = byId[lid]?.name ?: "—", current = lineDiscounts[lid], access = access,
+            onSet = { v -> if (v == null) lineDiscounts.remove(lid) else lineDiscounts[lid] = v; discountLineId = null },
+            onDismiss = { discountLineId = null },
+        )
+    }
+
+    if (showHoldDialog) {
+        HoldDialog(busy = holdBusy, onHold = { note -> scope.launch { holdCurrent(note) } }, onDismiss = { showHoldDialog = false })
+    }
     if (showHeld) {
-        ModalBottomSheet(onDismissRequest = { showHeld = false }) {
-            Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
-                Text(tr("Held sales"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(4.dp))
-                Text(tr("Resuming parks the current cart first, so nothing is lost."),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(12.dp))
-                if (HeldSales.list.isEmpty())
-                    Text(tr("No held sales."), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                HeldSales.list.toList().forEach { h ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(tr("%d item(s)").format(h.count), fontWeight = FontWeight.Bold)
-                            Text(money(h.total), style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        TextButton(onClick = { HeldSales.list.remove(h) }) { Text(tr("Discard")) }
-                        Spacer(Modifier.width(4.dp))
-                        Button(onClick = { resumeHeld(h) }) { Text(tr("Resume")) }
-                    }
-                }
-            }
-        }
+        HeldSalesSheet(
+            rows = heldRows,
+            onResume = { h -> if (cart.isNotEmpty()) pendingResume = h else scope.launch { resumeHeld(h) } },
+            onDiscard = { h -> pendingDiscard = h },
+            onDismiss = { showHeld = false },
+        )
+    }
+    pendingResume?.let { h ->
+        ConfirmDialog(
+            title = tr("Resume Held Sale"),
+            message = tr("Your current cart is not empty. Resuming will replace it with the held sale. Continue?"),
+            confirmLabel = tr("Resume"),
+            onConfirm = { pendingResume = null; scope.launch { resumeHeld(h) } },
+            onDismiss = { pendingResume = null },
+        )
+    }
+    pendingDiscard?.let { h ->
+        ConfirmDialog(
+            title = tr("Discard Held Sale"),
+            message = tr("Discard this held sale? This cannot be undone."),
+            confirmLabel = tr("Discard"),
+            onConfirm = { pendingDiscard = null; scope.launch { discardHeld(h) } },
+            onDismiss = { pendingDiscard = null },
+        )
     }
 
     if (showScanner) {
