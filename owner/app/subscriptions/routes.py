@@ -7,12 +7,12 @@ from decimal import Decimal
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
 
-from app.auth.session import load_current_staff
+from app.auth.session import has_recent_auth, load_current_staff
 from app.extensions import db_session
 from app.models.customers import Customer
 from app.models.catalog import Plan
 from app.models.subscriptions import PaymentRecord, Subscription
-from app.security.rbac import require_permission
+from app.security.rbac import get_staff_permission_codes, require_permission
 from app.services.pagination import DEFAULT_PAGE_SIZE
 from app.subscriptions import list_queries
 from app.subscriptions.services import (
@@ -26,6 +26,29 @@ from app.subscriptions.services import (
 )
 
 bp = Blueprint("subscriptions", __name__, url_prefix="/subscriptions")
+
+# OWNER-SEC item 3 (review D SEC-03): subscriptions.update -- which SALES holds
+# so it can sell -- was enough to push a paying shop's subscription into a
+# state that makes its till read-only at the next check-in. Transitions INTO
+# these states now need the dedicated capability (held only by SUPER_ADMIN
+# today) AND recent MFA, the same shape as licensing.transition's
+# permission_by_target. Everything SALES needs to sell (DRAFT/PILOT -> ACTIVE,
+# PILOT -> COMPLETED, PAST_DUE/SUSPENDED -> ACTIVE, ACTIVE -> PAST_DUE) is
+# deliberately NOT listed. This is a ROUTE-layer rule: the system paths that
+# legitimately suspend/expire (expiry scan, refund, pilot lifecycle) call
+# transition_subscription() directly and are unaffected.
+RESTRICTED_TARGET_PERMISSION = {
+    "SUSPENDED": "subscriptions.suspend",
+    "CANCELLED": "subscriptions.cancel",
+    "EXPIRED": "subscriptions.cancel",
+}
+
+
+def _required_permission(from_status: str, to_status: str | None) -> str | None:
+    # Cancelling a DRAFT discards something never sold: nothing live to cut off.
+    if from_status == "DRAFT" and to_status == "CANCELLED":
+        return None
+    return RESTRICTED_TARGET_PERMISSION.get(to_status)
 
 
 @bp.route("", methods=["GET"])
@@ -76,7 +99,11 @@ def detail(subscription_id):
     subscription = db_session.get(Subscription, subscription_id)
     if subscription is None:
         return jsonify({"error": "not_found"}), 404
-    allowed_transitions = sorted(VALID_TRANSITIONS.get(subscription.status, set()))
+    codes = get_staff_permission_codes(load_current_staff())
+    allowed_transitions = sorted(
+        t for t in VALID_TRANSITIONS.get(subscription.status, set())
+        if _required_permission(subscription.status, t) in (None, *codes)
+    )
     # This page could RECORD a payment but never showed one, so
     # correct_payment_route -- complete and permission-gated -- was unreachable
     # for want of a payment id to act on (test_route_reachability.py's
@@ -100,8 +127,15 @@ def transition(subscription_id):
     subscription = db_session.get(Subscription, subscription_id)
     if subscription is None:
         return jsonify({"error": "not_found"}), 404
+    to_status = request.form.get("to_status")
+    needed = _required_permission(subscription.status, to_status)
+    if needed is not None:
+        if needed not in get_staff_permission_codes(actor):
+            return jsonify({"error": "forbidden"}), 403
+        if not has_recent_auth():
+            return redirect(url_for("auth.reauth_form", next=url_for("subscriptions.detail", subscription_id=subscription_id)))
     try:
-        transition_subscription(subscription, request.form.get("to_status"), actor.id, request.form.get("reason"))
+        transition_subscription(subscription, to_status, actor.id, request.form.get("reason"))
     except InvalidTransitionError as exc:
         return jsonify({"error": str(exc)}), 400
     return redirect(url_for("subscriptions.detail", subscription_id=subscription_id))
