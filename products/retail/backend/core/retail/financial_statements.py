@@ -895,6 +895,9 @@ _CASH_FLOW_LABELS = {
     # MONEY-3 M3 (v51): a cheque reaching the bank (customer cheque cleared = cash in, supplier
     # cheque cleared = cash out). One label for both: the sign of the line says which.
     'cheque': 'Cheques Cleared at the Bank',
+    # MONEY-4b (v52): money out that is not a purchase -- drawer paid-outs and expenses.
+    'cash_movement': 'Paid Out of the Till',
+    'expense': 'Expenses Paid',
 }
 
 

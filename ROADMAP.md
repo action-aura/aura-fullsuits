@@ -7745,3 +7745,70 @@ post GL journals against an expense/income account the cashier picks, a non-draw
 utilities, salaries) posts Dr expense / Cr cash-and-bank, and historical paid-outs that never reached the books
 get a one-time catch-up journal at their own business date. Review B defect D2 (HIGH). Nobody else bumps
 RETAIL_SCHEMA_VERSION until this is cashed in.
+
+## 2026-10-12 — MONEY-4b CASHED IN (retail v52: paid-outs and expenses reach the books)
+
+Review B defect D2 (HIGH): a 20.000 paid out of the drawer to the delivery driver lowered the drawer's expected
+cash and moved NO book -- the balance sheet's Cash and Bank stayed 20.000 high, the P&L never saw the cost, and
+there was nowhere to record rent, utilities or salaries. Branch `feat/money-4b`. RETAIL_SCHEMA_VERSION 51 -> 52
+(`_migrate_add_money4b_expenses`, shape-gated, appended last); the v52 claim is released.
+
+WHAT SHIPPED
+* Chart (seeded lazily by `ensure_default_chart`, nothing renumbered): 6000 Rent, 6100 Utilities, 6200 Salaries and
+  Wages, 6300 Transport and Delivery, 6400 Marketing, 6500 Bank and Card Fees, 6900 Other Expenses (expense,
+  debit-normal) and 3100 Owner Drawings (equity, debit-normal -- reduces equity, does NOT reduce profit).
+* `cash_movements.gl_account_code`. `create_cash_movement` posts a `paid_out` once, in the same transaction:
+  Dr <account> / Cr 1000, journal uid = uuid5(movement id), dated on `_gl_business_date`. No account sent (old
+  desktop build, Android) -> 6900, never refused; an account outside {6xxx, 3100} -> 400 `INVALID_GL_ACCOUNT`.
+  float_in/float_out post NOTHING (safe <-> drawer; 1000 is one combined account).
+* Drawer dialog (cash-drawer.js): required "What for?" select for Paid Out only.
+* `expenses` table + `POST /expenses`, `GET /expenses?from=&to=&account=`, `POST /expenses/<uid>/void` (reason
+  required, reversal posted once, a second void is 409). Capability retail.books.record (create, void) and
+  retail.books.view (list); both frozen in `retail_route_capability_matrix_test.py`. Company-scoped (and
+  branch-scoped for a scoped caller); a future date, bad account, bad paid_via, zero amount are 400.
+* Expenses screen (`expenses.js`, nav row under Books, hooked in app-shell `_safeRender` because RetailSystem's
+  render switch is another crew's file this wave). EN + AR (27 new strings, listed below).
+* v52 catch-up: every EXISTING manual paid-out (no `payment_uid`) gets ONE journal Dr 6900 Other Expenses / Cr 1000
+  at its own business date, keyed on the movement id (a replay posts nothing). Historical paid-outs land in
+  "Other expenses" because their purpose was never captured; the supplier-payment paid-outs (`payment_uid` set)
+  are excluded (their payment already booked Dr AP / Cr Cash).
+* Cash-flow labels: 'cash_movement' -> "Paid Out of the Till", 'expense' -> "Expenses Paid".
+
+STOPPED, NOT BUILT -- needs an owner decision
+* **paid_in to "4900 Other income" was NOT built.** 4900 already exists and means Sales Returns and Allowances
+  (revenue type, debit-normal, the contra of 4000). Posting a paid_in there would silently reduce returns, so the
+  design's "if any code already exists with another meaning, STOP" applied. Until an income code is chosen
+  (4800? 4950? -- must not collide with 4900), a paid_in still reaches no book, exactly as before v52: no select in
+  the dialog, no account stored, no journal, no catch-up for historical paid_ins. Pinned by
+  `test_paid_in_posts_no_journal_yet_and_stores_no_account` and `test_4900_is_still_sales_returns...` so it cannot
+  be half-built by accident. The "owner puts money back" case (paid_in -> 3100) waits on the same decision.
+
+KNOWN GAPS
+* Android Aura Retail has no "What for?" select: its paid-outs book to 6900 until the app gets one.
+* The Expenses LIST is per-computer. No generic entity-sync exists for a new table (each synced entity is hand-written
+  in `sync_service.py`), so only the JOURNALS sync: a second computer's trial balance / P&L / balance sheet carry the
+  expense and its void, but its Expenses screen does not list the row. A void can only be done on the computer that
+  recorded the expense. Pinned by `retail_money4b_twodevice_test.py`.
+* `cash_movements` do not sync (device-local by design), so no receiver can post a second journal for a movement;
+  proven on two real computers.
+* A voided expense's account still lists in the P&L operating-expenses accounts at 0.000 (journals are append-only;
+  the reversal nets it to zero). Cosmetic.
+* The catch-up dates a historical paid-out by `created_at` read as the device's wall clock through `business_now`;
+  a row with an unreadable `created_at` is dated the upgrade day (visible and reversible, better than missing).
+
+ARABIC FOR A NATIVE READER (natural phrasing; please check): لأي غرض؟ / اختر الغرض من المبلغ / الإيجار /
+الكهرباء والماء والخدمات / الرواتب والأجور / النقل والتوصيل / التسويق / رسوم البنك والبطاقات / مصاريف أخرى /
+أخذه المالك لنفسه (مسحوبات المالك) / إضافة مصروف / تعذّر تحميل المصاريف. / لا توجد مصاريف في هذه الفترة. /
+طريقة الدفع / سجّله / إلغاء / الدفاتر متاحة لمالك المتجر والمحاسب فقط. / الإيجار والفواتير والرواتب التي تُدفع من
+المكتب أو من البنك... / كل الحسابات / تعذّر الحفظ. لم يُسجَّل شيء. / تم تسجيل المصروف / إلغاء المصروف / يبقى
+المصروف في القائمة مشطوبًا... / السبب مطلوب لإلغاء المصروف. / تم إلغاء المصروف / نقدًا من المكتب / تحويل بنكي
+(English keys: see products/retail/frontend/locales/en.json, last 27 entries).
+
+PROVEN (see the hand-back for quoted red/green)
+* `retail_money4b_paidout_expense_test.py` (29), `retail_money4b_migration_test.py` (6),
+  `retail_money4b_twodevice_test.py` (2); mutations: skip the journal, post floats, drop company scope on GET
+  /expenses, calendar-day instead of business-day, non-idempotent post, non-idempotent backfill, backfill without the
+  `payment_uid` exclusion, backfill dated by the upgrade day -- each turns its test RED.
+* Real artefact on port 5096: a 20.000 paid-out through the drawer dialog and a 250.000 rent expense on the Expenses
+  screen (EN + AR screenshots); balance sheet Cash and Bank 500.000 -> 230.000, trial balance and balance sheet
+  balanced, P&L operating expenses 270.000 (6300 20.000, 6000 250.000).

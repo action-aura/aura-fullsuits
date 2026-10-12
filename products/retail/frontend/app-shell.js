@@ -1306,6 +1306,14 @@ const SubsystemApp = {
         // against a real ledger, and why opening/closing cash are read by
         // reusing `balance_sheet` rather than by a second cash derivation.
         { id: 'cash-flow', label: 'Cash Flow', icon: '💵', capability: 'retail.reports' },
+        // MONEY-4b (retail v52): rent, utilities, salaries -- money out that is neither a sale,
+        // a purchase nor a till paid-out. Rendered by expenses.js (RetailExpenses), hooked in
+        // _navigateNow's _safeRender below, NOT by a RetailSystem.render() case. The capability
+        // is the TRUE gate of GET /api/sub/retail/expenses (retail.books.view) rather than the
+        // retail.reports the older Books rows above still carry: a manager holds reports but not
+        // the books, and would otherwise be invited into a screen whose first read is a 403.
+        // Recording and voiding need retail.books.record, checked again inside the screen.
+        { id: 'expenses', label: 'Expenses', icon: '💸', capability: 'retail.books.view' },
       ],
 
       // Sidebar section grouping (launch-readiness 2026-08-29: "the left
@@ -1393,7 +1401,7 @@ const SubsystemApp = {
         { label: 'Grow',    items: ['promotions'] },
         { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
         { label: 'Money',   items: ['receivables', 'payables', 'cheques'] },
-        { label: 'Books',   items: ['trial-balance', 'profit-and-loss', 'balance-sheet', 'cash-flow'] },
+        { label: 'Books',   items: ['trial-balance', 'profit-and-loss', 'balance-sheet', 'cash-flow', 'expenses'] },
         { label: 'Reports', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
         { label: 'Connected services', key: 'connected', items: ['whatsapp', 'einvoicing', 'email-notifications', 'site-relay'] },
       ],
@@ -5101,6 +5109,13 @@ const SubsystemApp = {
           );
         }
 
+        // MONEY-4b: the Expenses screen lives in its own file (expenses.js) and is dispatched
+        // here, because RetailSystem.render()'s switch is another crew's file this wave. It is a
+        // retail screen only; tolerated ABSENT (the script not loaded) like SyncReview is.
+        if (sectionId === 'expenses' && this.active === 'retail' && window.RetailExpenses) {
+          await window.RetailExpenses.render(document.getElementById('sub-content'));
+          return;
+        }
         const rendererName = _RENDERERS[this.active];
         if (rendererName) {
           const renderer = window[rendererName];

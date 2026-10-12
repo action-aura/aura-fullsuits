@@ -250,7 +250,13 @@ def test_a_database_stamped_51_without_legs_is_not_repaired_by_the_chain(shop):
     c = shop
     _populate(c)
     db = _to_v50_shape()
-    conn = sqlite3.connect(db); conn.execute("PRAGMA user_version = 51"); conn.commit(); conn.close()
+    # v52 UPDATE (MONEY-4b): the head moved 51 -> 52, so "a database already AT the target
+    # version" is now stamped 52. A database stamped 51 is no longer at the target: the chain
+    # re-enters and (correctly) creates the legs table. What this still catches is exactly what
+    # it caught before: the chain re-running steps on a DB whose stamp equals the head. What it
+    # can no longer catch: a v51-stamped DB missing its legs being left unrepaired -- that is
+    # now an ordinary 51 -> 52 upgrade, covered by the v51 steps' own replay tests.
+    conn = sqlite3.connect(db); conn.execute("PRAGMA user_version = 52"); conn.commit(); conn.close()
     _migrate(db)
     conn = sqlite3.connect(db)
     try:

@@ -13005,6 +13005,29 @@ def create_cash_movement(session_id):
             conn.close()
             return jsonify({'status': 'error', 'message': 'Amount must be greater than zero.'}), 400
 
+        # MONEY-4b / review D2 (retail v52): WHAT A PAID-OUT WAS FOR.
+        # A paid_out is money that left the shop (the delivery driver, a plumber, the owner
+        # taking cash home). It used to lower the drawer's expected cash and reach NO book, so
+        # the balance sheet's Cash and Bank stayed 20.000 too high. Now it posts
+        # Dr <account> / Cr 1000 in this same transaction.
+        #   * A call that sends no account (an old desktop build; the Android app, which has no
+        #     select yet) is NEVER refused: it books to 6900 Other Expenses. Refusing would turn
+        #     a shipped client's paid-out button into an error.
+        #   * A call that sends an account outside PAID_OUT_ACCOUNT_CODES IS refused: otherwise
+        #     the till could credit Sales or debit Receivables by naming another code.
+        #   * float_in / float_out post NOTHING: they move cash between the safe and the drawer,
+        #     and GL 1000 is "Cash and Bank" combined, so the total is unchanged.
+        #   * paid_in is NOT booked yet: its planned income account (4900) is already taken by
+        #     Sales Returns and Allowances -- ROADMAP.md MONEY-4b. Its code is not stored either.
+        gl_account = None
+        if mtype == 'paid_out':
+            gl_account = str(data.get('gl_account_code') or '').strip() or gl.ACCOUNT_OTHER_EXPENSES
+            if gl_account not in gl.PAID_OUT_ACCOUNT_CODES:
+                conn.close()
+                return jsonify({'status': 'error', 'code': 'INVALID_GL_ACCOUNT',
+                                'message': 'gl_account_code must be one of '
+                                           f'{list(gl.PAID_OUT_ACCOUNT_CODES)}.'}), 400
+
         movement_id = str(_uuid.uuid4())
         now_local = _now()
         # v13 stamp. Actor triple only -- `id` is already a client-generated
@@ -13017,10 +13040,23 @@ def create_cash_movement(session_id):
         actor, terminal, utc_now = _stamp()
         conn.execute("""
             INSERT INTO cash_movements (id,session_id,type,amount,reason,created_by,created_at,
-                                        actor_user_uid,terminal_id,created_at_utc)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+                                        actor_user_uid,terminal_id,created_at_utc,gl_account_code)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
         """, (movement_id, session_id, mtype, amount, data.get('reason', ''), _uid(), now_local,
-              actor, terminal, utc_now))
+              actor, terminal, utc_now, gl_account))
+        if mtype == 'paid_out':
+            # Same transaction as the movement: a failed post rolls the movement back too,
+            # so a paid-out can never exist without its journal. Keyed on the movement's id
+            # (a retry cannot double-post); dated on the shop's BUSINESS day of this moment
+            # (`_gl_business_date`, MONEY-4a), the day the till's reports file it under.
+            # The journal reaches other computers as the existing `gl_journal` sync event;
+            # cash_movements themselves are device-local (a drawer belongs to one terminal), so
+            # no receiver can ever post a second journal for this movement.
+            gl.post_drawer_paid_out(
+                conn, cid, sess['branch_id'], movement_id, amount, gl_account, currency,
+                business_date=_gl_business_date(conn, cid),
+                reference=f'paid-out {movement_id[:8]}',
+                memo=(data.get('reason') or '')[:200] or None)
         _audit(conn, 'CASH_MOVEMENT_RECORDED', 'cash_session', session_id, f'{mtype} amount={amount}')
         conn.commit()
         movement = conn.execute("SELECT * FROM cash_movements WHERE id=?", (movement_id,)).fetchone()
@@ -13029,6 +13065,221 @@ def create_cash_movement(session_id):
     except Exception as e:
         conn.rollback(); conn.close()
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  EXPENSES  (MONEY-4b, retail schema v52 -- review defect D2)
+#
+#  Money the shop pays out that is NOT a sale, a purchase or a supplier payment and does NOT
+#  come out of a till drawer: rent, utilities, salaries, a bank's card fees. Before v52 there
+#  was nowhere to record them, so the profit-and-loss never saw a single one. Each expense posts
+#  Dr <expense account> / Cr 1000 Cash and Bank, once, keyed on the expense's uid; voiding it
+#  posts the reversal journal (also once -- `reverse_journal` is idempotent). A posted journal is
+#  never edited: `gl_journals` is append-only by trigger.
+#
+#  AUTHORITY: retail.books.record (the Accountant preset and the owner), the same capability
+#  that records a supplier payment. Reading is retail.books.view.
+#
+#  WHAT SYNCS: the JOURNALS do (the existing `gl_journal` event), so every computer's books carry
+#  the expense. The expense LIST (this table) is per-computer: no generic entity-sync exists for a
+#  new table (each synced entity is hand-written in sync_service.py), so a peer sees the money in
+#  its trial balance / P&L / balance sheet but not as a row on its Expenses screen. Recorded in
+#  ROADMAP.md as a known gap rather than half-built.
+# ══════════════════════════════════════════════════════════════════════════════
+EXPENSE_PAID_VIA = ('cash_office', 'bank', 'card')
+_EXPENSE_LIST_CAP = 500
+
+
+def _expense_public(row, names=None, account_names=None):
+    d = dict(row)
+    d['voided'] = bool(d.get('voided_at'))
+    d['account_name'] = (account_names or {}).get(d.get('gl_account_code'))
+    who = (names or {}).get(d.get('created_by')) or {}
+    d['created_by_name'] = who.get('employee_name')
+    return d
+
+
+def _valid_ymd(text):
+    try:
+        datetime.strptime(str(text), '%Y-%m-%d')
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+@retail_bp.route('/expenses', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.expense.record", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_BOOKS_RECORD)
+def create_expense():
+    data = request.json or {}
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        account = str(data.get('gl_account_code') or '').strip()
+        if account not in gl.EXPENSE_ACCOUNT_CODES:
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'INVALID_GL_ACCOUNT',
+                            'message': 'gl_account_code must be one of '
+                                       f'{list(gl.EXPENSE_ACCOUNT_CODES)}.'}), 400
+        paid_via = str(data.get('paid_via') or 'cash_office').strip()
+        if paid_via not in EXPENSE_PAID_VIA:
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'INVALID_PAID_VIA',
+                            'message': f'paid_via must be one of {list(EXPENSE_PAID_VIA)}.'}), 400
+        currency = _company_currency(conn, cid)
+        try:
+            amount = _money(data.get('amount'), currency)
+        except Exception:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Invalid amount.'}), 400
+        if amount <= _money_epsilon(currency):
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Amount must be greater than zero.'}), 400
+        today = _gl_business_date(conn, cid)
+        business_date = str(data.get('business_date') or today).strip()
+        if not _valid_ymd(business_date):
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'INVALID_DATE',
+                            'message': 'business_date must be YYYY-MM-DD.'}), 400
+        if business_date > today:
+            # A future date is a typo (2027 for 2026), and a book entry dated ahead would sit
+            # outside every report until that day arrives.
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'FUTURE_DATE',
+                            'message': 'An expense cannot be dated in the future.'}), 400
+        bid, branch_err = _resolve_working_branch(conn, cid, data.get('branch_id'))
+        if branch_err:
+            conn.close()
+            return branch_err
+        memo = str(data.get('memo') or '').strip()[:200]
+        actor, _terminal, _utc = _stamp()
+        euid = _new_uid()
+        conn.execute(
+            "INSERT INTO expenses (uid, company_id, branch_id, business_date, gl_account_code, "
+            "amount, paid_via, memo, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (euid, cid, bid, business_date, account, amount, paid_via, memo,
+             actor or str(_uid()), _now()))
+        gl.post_expense(conn, cid, bid, euid, amount, account, currency,
+                        business_date=business_date, reference=f'expense {euid[:8]}',
+                        memo=memo or None)
+        _audit(conn, 'EXPENSE_RECORDED', 'expense', euid, f'{account} amount={amount} via={paid_via}')
+        conn.commit()
+        row = conn.execute("SELECT * FROM expenses WHERE uid=? AND company_id=?", (euid, cid)).fetchone()
+        out = _expense_public(row)
+        conn.close()
+        return jsonify({'status': 'success', 'data': out})
+    except Exception as e:
+        conn.rollback(); conn.close()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@retail_bp.route('/expenses', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_BOOKS_VIEW)
+def list_expenses():
+    """`?from=` / `?to=` (YYYY-MM-DD, inclusive), optional `?account=`, optional `?branch_id=`.
+    COMPANY-SCOPED on every query (another company's expense is not visible, not even by uid),
+    and a branch-scoped caller gets their own branch whatever the query string says."""
+    cid = _cid()
+    d_from = (request.args.get('from') or '').strip()
+    d_to = (request.args.get('to') or '').strip()
+    for label, value in (('from', d_from), ('to', d_to)):
+        if value and not _valid_ymd(value):
+            return jsonify({'status': 'error', 'message': f'{label} must be YYYY-MM-DD.'}), 400
+    account = (request.args.get('account') or '').strip()
+    raw_branch = (request.args.get('branch_id') or '').strip()
+    branch_id = None
+    if raw_branch:
+        try:
+            branch_id = int(raw_branch)
+        except ValueError:
+            return jsonify({'status': 'error',
+                            'message': f'Invalid branch_id {raw_branch!r} -- must be an integer.'}), 400
+    conn = get_retail_conn()
+    branch_id, scope_err = _coerce_branch_id_for_scope(conn, cid, branch_id)
+    if scope_err:
+        conn.close()
+        return scope_err
+    sql = "SELECT * FROM expenses WHERE company_id=?"
+    params = [cid]
+    if d_from:
+        sql += " AND business_date >= ?"; params.append(d_from)
+    if d_to:
+        sql += " AND business_date <= ?"; params.append(d_to)
+    if account:
+        sql += " AND gl_account_code = ?"; params.append(account)
+    if branch_id is not None:
+        sql += " AND branch_id = ?"; params.append(branch_id)
+    sql += " ORDER BY business_date DESC, id DESC LIMIT ?"
+    params.append(_EXPENSE_LIST_CAP)
+    rows = conn.execute(sql, params).fetchall()
+    account_names = {r['code']: r['name'] for r in conn.execute(
+        "SELECT code, name FROM gl_accounts WHERE company_id=?", (cid,)).fetchall()}
+    today = _gl_business_date(conn, cid)
+    conn.close()
+    names = _resolve_actor_identities(cid, [r['created_by'] for r in rows])
+    items = [_expense_public(r, names, account_names) for r in rows]
+    live_total = sum(i['amount'] for i in items if not i['voided'])
+    return jsonify({'status': 'success', 'data': {
+        # `today` is the shop's BUSINESS day: the screen's "Add expense" date defaults to it, so
+        # a shop whose trading day starts at 06:00 does not file a 01:30 rent payment a day late.
+        'today': today,
+        'expenses': items, 'total': live_total,
+        'accounts': [{'code': c, 'name': account_names.get(c)} for c in gl.EXPENSE_ACCOUNT_CODES],
+    }})
+
+
+@retail_bp.route('/expenses/<expense_uid>/void', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.expense.record", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_BOOKS_RECORD)
+def void_expense(expense_uid):
+    """Cancel an expense: marks the row voided and posts the REVERSAL journal, once. The reason
+    is required (a book entry that disappears needs a stated why). The reversal is dated on the
+    day it is voided, not on the expense's own day -- a month already reported does not change
+    after the fact."""
+    data = request.json or {}
+    cid = _cid()
+    reason = str(data.get('reason') or '').strip()
+    if not reason:
+        return jsonify({'status': 'error', 'code': 'REASON_REQUIRED',
+                        'message': 'A reason is required to void an expense.'}), 400
+    conn = get_retail_conn()
+    try:
+        row = conn.execute("SELECT * FROM expenses WHERE uid=? AND company_id=?",
+                           (expense_uid, cid)).fetchone()
+        if not row:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Expense not found.'}), 404
+        if row['voided_at']:
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'ALREADY_VOIDED',
+                            'message': 'This expense is already voided.'}), 409
+        journal = conn.execute(
+            "SELECT id FROM gl_journals WHERE company_id=? AND uid=?",
+            (cid, gl.expense_journal_uid(expense_uid))).fetchone()
+        if journal:
+            gl.reverse_journal(conn, cid, journal['id'], memo=f'Expense voided: {reason}'[:200],
+                               business_date=_gl_business_date(conn, cid))
+        actor, _terminal, _utc = _stamp()
+        conn.execute(
+            "UPDATE expenses SET voided_at=?, voided_by=?, void_reason=? "
+            "WHERE uid=? AND company_id=? AND voided_at IS NULL",
+            (_now(), actor or str(_uid()), reason[:200], expense_uid, cid))
+        _audit(conn, 'EXPENSE_VOIDED', 'expense', expense_uid, reason[:200])
+        conn.commit()
+        row = conn.execute("SELECT * FROM expenses WHERE uid=? AND company_id=?",
+                           (expense_uid, cid)).fetchone()
+        out = _expense_public(row)
+        conn.close()
+        return jsonify({'status': 'success', 'data': out})
+    except Exception as e:
+        conn.rollback(); conn.close()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 @retail_bp.route('/cash-sessions/<session_id>/x-report', methods=['GET'])
 @mt_login_required

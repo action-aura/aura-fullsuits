@@ -293,7 +293,42 @@ DEFAULT_CHART = (
     ('2050', 'Cheques Payable', 'liability', 'credit', None),
     # MONEY-4a (D3): name frozen once released, like every row above.
     ('2300', 'Vouchers Outstanding', 'liability', 'credit', None),
+    # MONEY-4b (D2): names frozen once released. 4900 was planned here as "Other income" and is
+    # NOT seeded: 4900 already means Sales Returns and Allowances (above). See ROADMAP.
+    ('3100', 'Owner Drawings', 'equity', 'debit', None),
+    ('6000', 'Rent', 'expense', 'debit', None),
+    ('6100', 'Utilities', 'expense', 'debit', None),
+    ('6200', 'Salaries and Wages', 'expense', 'debit', None),
+    ('6300', 'Transport and Delivery', 'expense', 'debit', None),
+    ('6400', 'Marketing', 'expense', 'debit', None),
+    ('6500', 'Bank and Card Fees', 'expense', 'debit', None),
+    ('6900', 'Other Expenses', 'expense', 'debit', None),
 )
+
+# MONEY-4b / review defect D2 (retail v52): money that leaves the shop WITHOUT being a sale, a
+# purchase or a supplier payment used to reach no book at all -- a 20.000 paid out of the drawer
+# to the delivery driver lowered the drawer's expected cash and left the balance sheet's Cash
+# and Bank untouched. Drawer paid-outs and the new Expenses screen now post
+# Dr <one of these> / Cr 1000. Codes are the planned chart's (docs/launch-readiness/
+# target-chart-of-accounts.md); names are frozen once released, like every row of DEFAULT_CHART above.
+ACCOUNT_RENT = '6000'
+ACCOUNT_UTILITIES = '6100'
+ACCOUNT_SALARIES = '6200'
+ACCOUNT_TRANSPORT = '6300'
+ACCOUNT_MARKETING = '6400'
+ACCOUNT_BANK_FEES = '6500'
+ACCOUNT_OTHER_EXPENSES = '6900'
+#: Money the owner takes out for himself is NOT an expense (it must not reduce profit); it is
+#: equity going down. Debit-normal on purpose: a balance here reads "taken out", and the
+#: balance sheet (type-canonical credit for equity) shows it as a REDUCTION of equity.
+ACCOUNT_OWNER_DRAWINGS = '3100'
+#: What a paid-out or an expense may be booked against. Anything else is refused: a till must
+#: not be able to credit Sales or debit Receivables by sending a different code.
+EXPENSE_ACCOUNT_CODES = (
+    ACCOUNT_RENT, ACCOUNT_UTILITIES, ACCOUNT_SALARIES, ACCOUNT_TRANSPORT,
+    ACCOUNT_MARKETING, ACCOUNT_BANK_FEES, ACCOUNT_OTHER_EXPENSES,
+)
+PAID_OUT_ACCOUNT_CODES = EXPENSE_ACCOUNT_CODES + (ACCOUNT_OWNER_DRAWINGS,)
 
 
 class GeneralLedgerImbalanceError(Exception):
@@ -2799,6 +2834,62 @@ def post_opening_entry(conn, cid, branch_id, movement_uid, qty, unit_cost,
                                   reference, currency, 'opening_entry',
                                   'opening_entry', ACCOUNT_OPENING_EQUITY,
                                   business_date=business_date)
+
+
+#: Deterministic uuid5 NAMESPACE for MONEY-4b journals (drawer paid-outs, expenses). Same idea
+#: as `_GL_STOCK_NAMESPACE`: the uid is a pure function of WHAT the journal books, so a retry,
+#: a double click, or the v52 catch-up meeting a live post mints the SAME uid and posts once.
+#: Fixed literal, never regenerated.
+_GL_MONEY4B_NAMESPACE = uuid.UUID('b4d1e7a2-5c38-5f90-a6e4-0d7c9b2f1a63')
+
+
+def cash_movement_journal_uid(movement_id):
+    """uid of the journal for the drawer movement `movement_id` (cash_movements.id, a uuid)."""
+    return str(uuid.uuid5(_GL_MONEY4B_NAMESPACE, f"{movement_id}:cash_movement"))
+
+
+def expense_journal_uid(expense_uid):
+    return str(uuid.uuid5(_GL_MONEY4B_NAMESPACE, f"{expense_uid}:expense"))
+
+
+def _post_cash_out(conn, cid, uid, branch_id, amount, account_code, currency, business_date,
+                   source_type, source_uid, reference, memo, posted_by):
+    if account_code not in PAID_OUT_ACCOUNT_CODES:
+        raise GeneralLedgerAccountError(
+            f"{source_type} account {account_code!r} is not one of {PAID_OUT_ACCOUNT_CODES}")
+    amt = Decimal(str(amount))
+    if amt <= _gl_epsilon(currency):
+        return None
+    jl = [{'account_code': account_code, 'debit': amt, 'memo': memo},
+          {'account_code': ACCOUNT_CASH, 'credit': amt, 'memo': memo}]
+    return _post_once(conn, cid, uid, branch_id, business_date or _today(), source_type, None,
+                      currency, jl, reference=reference, memo=memo, posted_by=posted_by,
+                      source_uid=str(source_uid))
+
+
+def post_drawer_paid_out(conn, cid, branch_id, movement_id, amount, account_code, currency,
+                         business_date=None, reference=None, memo=None, posted_by=None):
+    """A drawer paid-out reaches the books: Dr `account_code` / Cr 1000, ONCE.
+
+    Keyed on the MOVEMENT's id (cash_movements.id), so a retried request, the v52 catch-up and
+    the live path can never book the same movement twice. `account_code` MUST be in
+    PAID_OUT_ACCOUNT_CODES -- the caller validates and defaults it (an old desktop build and the
+    Android app send none: they get 6900); this refuses anything else rather than post it.
+    Cash moving between the safe and the drawer (float_in/float_out) is NEVER posted: GL 1000 is
+    "Cash and Bank" combined, so the total does not change."""
+    return _post_cash_out(conn, cid, cash_movement_journal_uid(movement_id), branch_id, amount,
+                          account_code, currency, business_date, 'cash_movement', movement_id,
+                          reference, memo, posted_by)
+
+
+def post_expense(conn, cid, branch_id, expense_uid, amount, account_code, currency,
+                 business_date=None, reference=None, memo=None, posted_by=None):
+    """An expense not paid from the drawer: Dr `account_code` / Cr 1000, once, keyed on the
+    expense's uid. `paid_via` (office cash, bank, card) does not change the entry: this chart has
+    ONE "Cash and Bank" account (see ACCOUNT_CASH)."""
+    return _post_cash_out(conn, cid, expense_journal_uid(expense_uid), branch_id, amount,
+                          account_code, currency, business_date, 'expense', expense_uid,
+                          reference, memo, posted_by)
 
 
 def inventory_tie(conn, cid, tb):

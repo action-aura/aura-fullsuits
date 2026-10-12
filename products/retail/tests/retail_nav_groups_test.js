@@ -59,7 +59,9 @@ const GROUPS = [
   { label: 'Grow',    items: ['promotions'] },
   { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
   { label: 'Money',   items: ['receivables', 'payables', 'cheques'] },
-  { label: 'Books',   items: ['trial-balance', 'profit-and-loss', 'balance-sheet', 'cash-flow'] },
+  // MONEY-4b: 'expenses' joined Books (rent/utilities/salaries; retail.books.view). This table is the
+  // expected NAV ORDER, so it must name the new row; it can still catch a row dropped or reordered.
+  { label: 'Books',   items: ['trial-balance', 'profit-and-loss', 'balance-sheet', 'cash-flow', 'expenses'] },
   { label: 'Reports', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
   { label: 'Connected services', key: 'connected', items: ['whatsapp', 'einvoicing', 'email-notifications', 'site-relay'] },
 ];
@@ -399,12 +401,12 @@ function testAllDestinationsReachableForOwner() {
     'group UNLESS it is named in UNGROUPED_BY_DESIGN (employees/branches/backup-export reach ' +
     'through the gear menu instead -- tested separately, below).'
   );
-  // 28 = dashboard + admin-center (both ungrouped-by-design but reachable)
-  // + 26 grouped entries. Bumped together with this message on purpose --
+  // 29 = dashboard + admin-center (both ungrouped-by-design but reachable)
+  // + 27 grouped entries (MONEY-4b added 'expenses'). Bumped together with this message on purpose --
   // this assertion exists to catch ALL_DESTINATIONS drifting from the
   // product, so a count that disagrees with its own prose is the exact
   // failure it is supposed to make loud.
-  assert.strictEqual(ALL_DESTINATIONS.length, 28, "sanity: this file's own expectation list drifted from 28 reachable destinations");
+  assert.strictEqual(ALL_DESTINATIONS.length, 29, "sanity: this file's own expectation list drifted from 29 reachable destinations");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

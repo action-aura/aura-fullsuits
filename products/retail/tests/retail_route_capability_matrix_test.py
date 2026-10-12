@@ -366,6 +366,10 @@ EXPECTED_MUTATION_CAPABILITIES = {
     # the Accountant a capability of its own. A manager holds neither
     # books.record nor employees, so that separation of duties is unchanged.
     # See create_cheque's own comment in retail_api.py.
+    # MONEY-4b (retail v52): expenses not paid from the drawer. The same books authority that
+    # records a supplier payment (Accountant preset + owner); a manager holds neither books code.
+    'create_expense': CAP_BOOKS_RECORD,
+    'void_expense': CAP_BOOKS_RECORD,
     'create_cheque': CAP_BOOKS_RECORD,
     'deposit_cheque': CAP_BOOKS_RECORD,
     'clear_cheque': CAP_BOOKS_RECORD,
@@ -656,6 +660,8 @@ EXPECTED_READ_CAPABILITIES = {
     # subledger tie-back -- the same disclosure tier as every other report
     # route in this table (report_summary, daily_cash, aging_report), not a
     # till operation.
+    # MONEY-4b: the expense list is books-read, like the statements it feeds.
+    'list_expenses': CAP_BOOKS_VIEW,
     'report_trial_balance': CAP_BOOKS_VIEW,   # REHEARSAL-1007 B7: books-read, not retail.reports
     # `report_profit_and_loss` (GET /reports/profit-and-loss) -- the income
     # statement derived from the SAME general ledger `report_trial_balance`

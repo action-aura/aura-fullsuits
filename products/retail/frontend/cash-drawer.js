@@ -522,6 +522,24 @@ const CashDrawer = {
     }
   },
 
+  // MONEY-4b (retail v52): what a PAID OUT was for. A paid-out is money that left the shop (the
+  // delivery driver, a plumber, the owner taking cash home) and it now reaches the books against
+  // one of these accounts. The codes are the server's PAID_OUT_ACCOUNT_CODES; the server refuses
+  // any other, so this list can drift only into a refusal, never into a wrong booking. Float in /
+  // float out ask nothing (cash moving between the safe and the drawer is not a cost) and paid in
+  // is not booked yet (ROADMAP.md MONEY-4b: its income account code is an open decision).
+  PAID_OUT_PURPOSES: [
+    ['6000', 'Rent'], ['6100', 'Utilities'], ['6200', 'Salaries and wages'],
+    ['6300', 'Transport and delivery'], ['6400', 'Marketing'], ['6500', 'Bank and card fees'],
+    ['6900', 'Other expenses'], ['3100', 'Owner took it home (drawings)'],
+  ],
+
+  _syncMovementPurpose() {
+    const type = document.getElementById('cd-mv-type')?.value;
+    const wrap = document.getElementById('cd-mv-for-wrap');
+    if (wrap) wrap.style.display = type === 'paid_out' ? '' : 'none';
+  },
+
   // ── Movement (float in/out, paid in/out) ────────────────────────────
   openMovementModal() {
     if (!this._session) return;
@@ -534,11 +552,18 @@ const CashDrawer = {
         <p class="cd-note">${t('This drawer belongs to')} <span class="cd-terminal cd-terminal-mine">${this._terminalLabel(this._session)}</span></p>
         <div class="ret-field">
           <label>${t('Type')}</label>
-          <select id="cd-mv-type">
+          <select id="cd-mv-type" onchange="CashDrawer._syncMovementPurpose()">
             <option value="float_in">${t('Float In (add cash to drawer)')}</option>
             <option value="float_out">${t('Float Out (remove cash from drawer)')}</option>
             <option value="paid_in">${t('Paid In (misc. cash received)')}</option>
             <option value="paid_out">${t('Paid Out (misc. cash paid)')}</option>
+          </select>
+        </div>
+        <div class="ret-field" id="cd-mv-for-wrap" style="display:none">
+          <label for="cd-mv-for">${t('What for?')}</label>
+          <select id="cd-mv-for" required>
+            <option value="">${t('Choose what the money was for')}</option>
+            ${this.PAID_OUT_PURPOSES.map(([code, label]) => `<option value="${code}">${t(label)}</option>`).join('')}
           </select>
         </div>
         <div class="ret-field">
@@ -569,11 +594,18 @@ const CashDrawer = {
     const amount = parseFloat(document.getElementById('cd-mv-amount')?.value || 0);
     const reason = document.getElementById('cd-mv-reason')?.value || '';
     if (!amount || amount <= 0) { SubsystemApp.showToast(t('Enter a valid amount'), 'error'); return; }
+    // A paid-out must say what it was for: that choice IS the book entry (Dr <purpose> / Cr cash).
+    const purpose = type === 'paid_out' ? (document.getElementById('cd-mv-for')?.value || '') : '';
+    if (type === 'paid_out' && !purpose) {
+      SubsystemApp.showToast(t('Choose what the money was for'), 'error');
+      document.getElementById('cd-mv-for')?.focus();
+      return;
+    }
     if (btn) { btn.disabled = true; btn.textContent = t('Saving…'); }
     try {
-      const res = await this._post(`/api/sub/retail/cash-sessions/${encodeURIComponent(this._session.id)}/movements`, {
-        type, amount, reason,
-      });
+      const body = { type, amount, reason };
+      if (purpose) body.gl_account_code = purpose;
+      const res = await this._post(`/api/sub/retail/cash-sessions/${encodeURIComponent(this._session.id)}/movements`, body);
       if (res.status === 'success') {
         RetailSystem._closeModalOverlay(document.getElementById('cd-mv-modal'));
         SubsystemApp.showToast(t('Cash movement recorded'), 'success');
