@@ -72,6 +72,8 @@ if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -Er
 # and still reaches a redirected stdout. Nothing inside Main may write to the
 # pipeline except its final `return <int>`; the call site at the bottom
 # fails closed if anything else ever does.
+. (Join-Path $PSScriptRoot 'webview2_bootstrapper_check.ps1')
+
 function Write-Step {
     param([string]$Message)
     Write-Host ('[build_desktop_installer] ' + $Message)
@@ -393,6 +395,42 @@ function Main {
                 Write-Fail ('Inno Setup script not found at ' + $IssPath)
                 return 20
             }
+
+            # ---- Step f0: WebView2 Evergreen bootstrapper (INSTALL-1) ----
+            # The installer bundles Microsoft's small bootstrapper and runs it
+            # only on a PC that lacks the WebView2 runtime. It is NOT committed
+            # to the repo (a third-party binary that Microsoft re-issues under
+            # the same link): it is downloaded here once into dist\redist
+            # (git-ignored), and two things are checked every build -- that it
+            # carries a VALID Authenticode signature from Microsoft, and its
+            # SHA-256 is printed so a release record names the exact file that
+            # was bundled. A pinned hash would be wrong here: the fwlink serves
+            # whatever the current bootstrapper is.
+            $WebView2Dir = Join-Path $RepoRoot 'dist\redist'
+            $WebView2Path = Join-Path $WebView2Dir 'MicrosoftEdgeWebview2Setup.exe'
+            if (-not (Test-Path $WebView2Path)) {
+                if (-not (Test-Path $WebView2Dir)) { New-Item -ItemType Directory -Path $WebView2Dir -Force | Out-Null }
+                Write-Step 'Downloading the WebView2 Evergreen bootstrapper from go.microsoft.com ...'
+                try {
+                    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+                    Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $WebView2Path -UseBasicParsing
+                } catch {
+                    Remove-Item -Path $WebView2Path -Force -ErrorAction SilentlyContinue
+                    Write-Fail ('Could not download the WebView2 bootstrapper: ' + $_.Exception.Message)
+                    return 24
+                }
+            }
+            $WebView2Problem = Test-WebView2Bootstrapper -Path $WebView2Path
+            if ($WebView2Problem) {
+                Remove-Item -Path $WebView2Path -Force -ErrorAction SilentlyContinue
+                Write-Fail ('WebView2 bootstrapper is not the genuine Microsoft one: ' + $WebView2Problem + '. Deleted it; nothing was bundled.')
+                return 24
+            }
+            $WebView2Sha = [System.Security.Cryptography.SHA256]::Create()
+            $WebView2Stream = [System.IO.File]::OpenRead($WebView2Path)
+            try { $WebView2Hash = $WebView2Sha.ComputeHash($WebView2Stream) } finally { $WebView2Stream.Dispose(); $WebView2Sha.Dispose() }
+            $WebView2HashHex = ([System.BitConverter]::ToString($WebView2Hash)).Replace('-', '').ToLower()
+            Write-Step ('WebView2 bootstrapper: signature Valid (CN=Microsoft Corporation, MicrosoftEdgeUpdateSetup.exe), SHA256 ' + $WebView2HashHex)
             $IsccLog = Join-Path $OutDirResolved 'iscc.log'
             Write-Step ('Running: ' + $Iscc + ' ' + $IssPath)
             $IsccOutputLines = & $Iscc $IssPath 2>&1
@@ -465,7 +503,8 @@ function Main {
                 trust_anchor_key_ids     = @($BundleKeyIdsSorted)
                 installer_file           = (Split-Path -Leaf $DestInstaller)
                 installer_sha256         = $InstallerSha256
-                built_at                 = $BuiltAtUtc
+                webview2_bootstrapper_sha256 = $WebView2HashHex
+                built_at                = $BuiltAtUtc
             }
             $BuildInfoPath = Join-Path $OutDirResolved 'desktop-build-info.json'
             $BuildInfoJsonText = $BuildInfo | ConvertTo-Json -Depth 5

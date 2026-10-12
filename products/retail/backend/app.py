@@ -249,6 +249,13 @@ from commercial_runtime.sync.site_relay.admin_routes import make_site_relay_admi
 app.register_blueprint(make_site_relay_admin_blueprint(
     hub_provider=lambda: _site_relay_server))
 
+# INSTALL-1: the one-time Windows Firewall rule for the shop network, asked at
+# the owner's own "Connect a device" press (see install_support/firewall.py for
+# why there, and why never on a dev run). Wiring only; the logic and its tests
+# live in commercial_runtime/install_support.
+from commercial_runtime.install_support.firewall import make_firewall_blueprint as _make_firewall_blueprint
+app.register_blueprint(_make_firewall_blueprint(str(Path(DATABASE_DIR).parent)))
+
 # docs/einvoicing/phase1/ -- Jordan JoFotara e-invoicing. Default ON for the
 # Jordan tax regime since 2026-09-08 (Jordan mandated e-invoicing from
 # 2024-05-31 -- see commercial_runtime/einvoicing/settings.py's DEFAULTS and
@@ -697,6 +704,8 @@ def _on_licence_activated():
 
 from commercial_runtime.identity.device_context import peek_local_device_uuid as _peek_registry_device_id  # noqa: E402
 
+from commercial_runtime.install_support.firewall import (
+    with_firewall_ask_after_activation as _with_firewall_ask_after_activation)
 app.register_blueprint(make_licensing_blueprint(
     product_code='AURA_RETAIL',
     platform=LICENSING_PLATFORM,
@@ -719,7 +728,12 @@ app.register_blueprint(make_licensing_blueprint(
     # so the common install migrates long before it ever activates, and a
     # rebind that only ran at migration time would silently never happen.
     # See _on_licence_activated above.
-    on_activation_success=_on_licence_activated,
+    # INSTALL-1 (verifier M3): after the product's own bookkeeping, ask ONCE for
+    # the Windows Firewall rule (a no-op off an installed Windows build) -- the
+    # last deliberate moment before the hub first binds the LAN port on the
+    # next boot and Windows shows its own prompt at the till.
+    on_activation_success=_with_firewall_ask_after_activation(
+        _on_licence_activated, str(Path(DATABASE_DIR).parent)),
     # AUDIT-033 fix round (verifier V finding #1): tell Owner which registry
     # device id this computer claims, at activation and every check-in, so
     # Owner can pin it and sign it into the lease (receivers trust a signer's

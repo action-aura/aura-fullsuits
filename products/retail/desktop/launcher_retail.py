@@ -195,13 +195,119 @@ def _bind_free_socket(start=DEFAULT_PORT, stop=DEFAULT_PORT + 20):
     return None
 
 
+# Proof-only switch (INSTALL-1): lets a real installed exe be driven through a
+# FAILED first boot after an update without having to ship a broken build.
+# Honoured ONLY when the explicit dev flag is also set, so neither variable
+# alone -- and in particular nothing a customer's environment is likely to
+# contain -- can make a till fail to start.
+TEST_HOOKS_ENV = 'AURA_DEV_TEST_HOOKS'
+FAIL_BOOT_ENV = 'AURA_TEST_FAIL_BOOT'
+
+
+def _test_fail_boot_requested(environ=None, frozen=None) -> bool:
+    # INERT in the shipped exe whatever the environment says (verifier L2): a
+    # customer's till must not be made unbootable by two environment variables.
+    # The proof that needs it (a failed first boot after an update) uses a
+    # source run, or a build that does not set sys.frozen.
+    frozen = getattr(sys, 'frozen', False) if frozen is None else frozen
+    if frozen:
+        return False
+    environ = os.environ if environ is None else environ
+    return environ.get(TEST_HOOKS_ENV) == '1' and environ.get(FAIL_BOOT_ENV) == '1'
+
+
 def _run_server(sock):
+    if _test_fail_boot_requested():
+        raise RuntimeError(f'{FAIL_BOOT_ENV}: simulated failed boot (proof hook)')
     import app as retail_app
     retail_app.init_app()
     from waitress import serve as _serve
     log.info(f'Starting server on http://{BIND_HOST}:{sock.getsockname()[1]}')
     _serve(retail_app.app, sockets=[sock], threads=12,
            channel_timeout=120, connection_limit=200, _quiet=True)
+
+
+# ── Crash trail (INSTALL-1, review #5 item 5) ──────────────────────────────
+# The frozen exe is windowed (console=False): sys.stderr is None, so a hard
+# crash (native fault in WebView2/pythonnet/sqlite) and an exception that
+# escapes main() both vanished without a trace -- startup.log only holds what
+# was logged on purpose. Two sinks, both under the shop's own data folder:
+#   * logs/faulthandler.log -- C-level tracebacks (access violations, aborts)
+#     that no Python hook can catch;
+#   * the crash-report store (commercial_runtime/crash_reports) -- uncaught
+#     Python exceptions on the main thread / on a thread that died before
+#     app.py installed its own hook, so a boot failure is a queued, scrubbed
+#     report rather than a line in a log nobody reads.
+_faulthandler_file = None        # kept open for the life of the process
+_crash_trail_state = {}
+
+
+def _install_crash_trail(*, app_data=None, store_factory=None, version_fn=None) -> dict:
+    """Install faulthandler + sys.excepthook + threading.excepthook. Never
+    raises: a crash reporter that stops the till starting is worse than none.
+    Returns what it installed (used by tests)."""
+    global _faulthandler_file
+    import faulthandler
+    app_data = app_data or _app_data
+    installed = {'faulthandler_path': None, 'store': None}
+    try:
+        path = Path(app_data, 'logs', 'faulthandler.log')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _faulthandler_file = open(path, 'a', encoding='utf-8')
+        faulthandler.enable(file=_faulthandler_file, all_threads=True)
+        installed['faulthandler_path'] = str(path)
+    except Exception as exc:
+        log.warning(f'faulthandler not enabled: {exc}')
+    try:
+        if store_factory is None:
+            from commercial_runtime.crash_reports.store import open_default_store as store_factory
+        store = store_factory(app_data)
+    except Exception as exc:
+        log.warning(f'crash store unavailable; uncaught errors will only reach the log: {exc}')
+        store = None
+    installed['store'] = store
+    version_fn = version_fn or _running_version
+
+    def _record(exc, kind):
+        if store is None or exc is None:
+            return
+        try:
+            from commercial_runtime.crash_reports import capture
+            store.record(capture.report_from_exception(
+                exc, kind=kind, route=None, app_version=version_fn() or 'unknown', platform='WINDOWS'))
+        except Exception as inner:
+            log.warning(f'could not record a crash: {inner}')
+
+    previous_sys_hook = sys.excepthook
+
+    def _sys_hook(exc_type, exc, tb):
+        if not issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
+            log.error('Uncaught exception in the launcher', exc_info=(exc_type, exc, tb))
+            _record(exc, 'launcher')
+        previous_sys_hook(exc_type, exc, tb)
+
+    previous_thread_hook = threading.excepthook
+
+    def _thread_hook(args):
+        # If something was chained ON TOP of this hook after we installed it
+        # (app.py's crash capture does exactly that when it is imported), it
+        # has already recorded this crash before calling us: recording here too
+        # would count one crash twice. We only record when we are the outermost
+        # hook -- i.e. the thread died before the app's own capture existed
+        # (an import-time failure, the one the rollback offer exists for).
+        try:
+            if threading.excepthook is _thread_hook and args.exc_type is not SystemExit \
+                    and args.exc_value is not None:
+                _record(args.exc_value, 'thread')
+        finally:
+            previous_thread_hook(args)
+
+    sys.excepthook = _sys_hook
+    threading.excepthook = _thread_hook
+    installed['sys_hook'] = _sys_hook
+    installed['thread_hook'] = _thread_hook
+    _crash_trail_state.update(installed)
+    return installed
 
 
 def _acquire_single_instance():
@@ -263,7 +369,7 @@ def _open_app_window(url):
     exe = next((c for c in candidates if c and os.path.isfile(c)), None)
     if not exe:
         return None
-    profile = str(Path(_app_data) / 'app_window')
+    profile = _fallback_profile_dir()
     # Item W2 (Phase 0 review round 3): mirrors D1/W1's REMEMBER_LOGIN_ENV
     # opt-out on the native path -- the same explicit escape hatch for a
     # shop that wants this fallback to stay signed in too.
@@ -279,10 +385,59 @@ def _open_app_window(url):
             # browser Fullscreen API, which Esc/the button can always leave.
             '--window-size=1400,900', '--start-maximized',
             '--no-first-run', '--no-default-browser-check',
+            # No resident background owner of this profile after the window
+            # closes: _wait_for_app_window relies on the browser process
+            # ending with the window.
+            '--disable-background-mode',
         ])
     except Exception as exc:
         log.warning(f'Could not open app window via {exe}: {exc}')
         return None
+
+
+def _wait_for_app_window(proc, server_alive, poll_seconds=1.0, sleep=time.sleep,
+                         profile_open=None) -> str:
+    """Block while the fallback window is open; return when the person closes
+    it (INSTALL-1, review #8 item 5; verifier M1).
+
+    This loop used to be `while server_thread.is_alive(): sleep(1)` -- the
+    server thread never ends by itself, so closing the Edge/Chrome window left
+    AuraRetail.exe running with no window, holding the single-instance mutex;
+    the next double-click then said "already running" and showed nothing.
+
+    `proc` is the browser we started with OUR OWN --user-data-dir (see
+    _open_app_window). While it runs, the window is open. But "proc ended" is
+    NOT "window closed": a second launch on a profile whose window is already
+    open (a restart after a restore leaves the old window up) hands off to the
+    running browser and exits after ~0.35 s. So once proc is gone (or was never
+    started because the old window was reused), `profile_open()` -- "is any
+    browser process still using OUR profile?" -- decides. Without that callable
+    the old rule applies (proc ended = closed).
+
+    `proc is None` and no `profile_open` is the default-browser path: there is
+    nothing to watch, so it runs until the server stops.
+    Returns 'window_closed' | 'server_stopped'."""
+    while True:
+        if not server_alive():
+            return 'server_stopped'
+        if proc is not None and proc.poll() is None:
+            sleep(poll_seconds)
+            continue
+        if profile_open is None:
+            if proc is not None:
+                return 'window_closed'
+        elif not profile_open():
+            return 'window_closed'
+        sleep(poll_seconds)
+
+
+def _fallback_profile_dir() -> str:
+    return str(Path(_app_data) / 'app_window')
+
+
+def _fallback_window_already_open() -> bool:
+    from commercial_runtime.install_support.browser_profile import profile_in_use
+    return profile_in_use(_fallback_profile_dir())
 
 
 def _window_prefs_path() -> Path:
@@ -321,6 +476,90 @@ def _save_fullscreen_pref(value: bool) -> None:
 def _message_box(title, message):
     import ctypes
     ctypes.windll.user32.MessageBoxW(0, message, title, 0x10)
+
+
+def _ask_yes_no(title, message) -> bool:
+    """Native Yes/No box (MB_YESNO | MB_ICONWARNING | MB_TOPMOST). Unlike
+    _fatal's bounded dialog this WAITS for the person: it is only ever shown
+    when a human is at an installed till whose app just failed to start, and
+    the answer decides what happens to their shop's data."""
+    import ctypes
+    IDYES = 6
+    return ctypes.windll.user32.MessageBoxW(0, message, title, 0x04 | 0x30 | 0x1000) == IDYES
+
+
+def _running_version():
+    try:
+        import config as _config
+        return _config.APP_VERSION
+    except Exception as exc:
+        log.warning(f'Could not read the app version for the rollback check: {exc}')
+        return None
+
+
+def _backup_dir() -> str:
+    return os.environ.get('AURA_BACKUP_DIR') or str(Path(_app_data) / 'backups')
+
+
+def _offer_rollback(*, installable=None, version=None, ask=None, restore=None, launch=None,
+                    show_error=None) -> str:
+    """The first boot after an update failed: offer the way back (INSTALL-1).
+
+    Returns 'not_offered' | 'declined' | 'rolled_back' | 'failed'. It is only
+    ever offered when (a) this is an installed build (a dev run must never
+    start an installer), (b) the failed boot is the first one after an update
+    -- a healthy post-update boot writes boot_ok and never reaches here -- and
+    (c) everything needed to go back is on disk (rollback.plan_rollback). Each
+    outcome is logged: 'never offered' and 'offered and declined' must not look
+    the same in startup.log."""
+    from commercial_runtime.updates import rollback
+    installable = getattr(sys, 'frozen', False) if installable is None else installable
+    if not installable:
+        log.info('Rollback not offered: not an installed build.')
+        return 'not_offered'
+    version = version or _running_version()
+    if not version:
+        return 'not_offered'
+    plan = rollback.plan_rollback(_app_data, version, _backup_dir())
+    if plan is None:
+        log.info('Rollback not offered: this boot is not a failed first boot after an update, '
+                 'or the way back is not on disk.')
+        return 'not_offered'
+    ask = ask or _ask_yes_no
+    show_error = show_error or (lambda title, msg: _message_box(title, msg))
+    log.warning(f'Rollback OFFERED: {plan.to_version} failed to start; could go back to {plan.from_version}.')
+    answer = ask(
+        APP_NAME,
+        f'{APP_NAME} could not start after its last update (to version {plan.to_version}).\n\n'
+        f'Do you want to go back to the previous version ({plan.from_version})?\n\n'
+        'Your shop data from just before the update will be put back. '
+        'Anything entered since the update is set aside, not deleted.')
+    if not answer:
+        log.info('Rollback declined by the person at the till.')
+        return 'declined'
+    if restore is None:
+        from commercial_runtime.backup.service import restore_backup as restore
+    if launch is None:
+        from commercial_runtime.updates.service import default_installer_launcher as launch
+    try:
+        rollback.execute_rollback(plan, app_data_dir=_app_data, backup_dir=_backup_dir(),
+                                  product_code='retail', launch=launch, restore=restore)
+    except Exception as exc:
+        log.error(f'Rollback FAILED: {exc}', exc_info=True)
+        show_error(APP_NAME, 'Going back to the previous version did not work. '
+                             'Nothing was changed. Please contact Action Aura support.')
+        return 'failed'
+    log.info('Rollback started: the previous version installer is running.')
+    return 'rolled_back'
+
+
+def _mark_healthy_boot() -> None:
+    """The server answered and is the right product: the first boot after an
+    update (if this is one) is over, so "Go back" is never offered for it."""
+    version = _running_version()
+    if version:
+        from commercial_runtime.updates import rollback
+        rollback.mark_boot_ok(_app_data, version)
 
 
 def _fatal(message: str, reason_code: str):
@@ -794,6 +1033,7 @@ def _run_native_window(url: str) -> bool:
 
 
 def main():
+    _install_crash_trail()
     instance = _acquire_single_instance()
     if instance is None:
         log.info('Another instance is already running -- exiting this launch.')
@@ -834,6 +1074,8 @@ def main():
             'health_endpoint_error': 'HEALTH_ENDPOINT_ERROR',
             'not_ready_timeout': 'STARTUP_TIMEOUT',
         }
+        if _offer_rollback() == 'rolled_back':
+            sys.exit(0)           # the installer is closing and replacing this build
         _fatal(f'The Aura Retail server did not become ready in time ({result.detail})',
                reason_code=reason_map.get(result.reason, 'STARTUP_TIMEOUT'))
         return
@@ -853,6 +1095,8 @@ def main():
         product_code = None
         log.warning(f'Could not verify product identity at http://{HOST}:{port}/api/version: {exc}')
     if product_code != 'AURA_RETAIL':
+        if _offer_rollback() == 'rolled_back':
+            sys.exit(0)
         _fatal(f'Port {port} answered as "{product_code}", not Aura Retail -- another Aura '
                'product is using this port. Close all Aura applications and try again.',
                reason_code='WRONG_PRODUCT_ON_PORT')
@@ -863,22 +1107,34 @@ def main():
     # startup-timeout failure after this point; check_readiness() has
     # already returned, and nothing below re-invokes it.
     _set_state(LauncherState.READY)
+    _mark_healthy_boot()
     log.info(f'Server ready after {result.attempts} attempt(s), {result.elapsed:.2f}s -- launching application window.')
 
     _set_state(LauncherState.UI_RUNNING)
     if _run_native_window(f'http://{HOST}:{port}'):
         log.info('Application closed.')
     else:
-        proc = _open_app_window(f'http://{HOST}:{port}')
-        if proc is not None:
-            log.info('Opened dedicated app window (Edge/Chrome --app mode).')
+        profile_open = None
+        if _fallback_window_already_open():
+            # A restart after a restore: the old child died but its window did
+            # not. A second Edge launch on this profile would hand off and exit
+            # at once (reading as "window closed"), so launch nothing: the open
+            # page polls /api/health and reloads itself when this server is up.
+            log.info('Edge/Chrome app window from before the restart is still open; reusing it.')
+            proc = None
+            profile_open = _fallback_window_already_open
         else:
-            log.warning('No Chromium browser found -- falling back to default browser.')
-            webbrowser.open(f'http://{HOST}:{port}')
+            proc = _open_app_window(f'http://{HOST}:{port}')
+            if proc is not None:
+                log.info('Opened dedicated app window (Edge/Chrome --app mode).')
+                profile_open = _fallback_window_already_open
+            else:
+                log.warning('No Chromium browser found -- falling back to default browser.')
+                webbrowser.open(f'http://{HOST}:{port}')
 
         try:
-            while server_thread.is_alive():
-                time.sleep(1)
+            outcome = _wait_for_app_window(proc, server_thread.is_alive, profile_open=profile_open)
+            log.info(f'Edge/Chrome fallback wait ended: {outcome}')
         except KeyboardInterrupt:
             pass
 
@@ -887,5 +1143,156 @@ def main():
     _set_state(LauncherState.STOPPED)
 
 
+# ── Restart supervisor (INSTALL-1, review F16) ─────────────────────────────
+# WHY A SECOND PROCESS: the Flask server runs on a thread INSIDE this process,
+# so "the backend exits with code 75" can only be acted on by something that
+# outlives it. The frozen exe therefore runs itself twice: the outer copy is a
+# tiny supervisor (no window, no server, no mutex) that runs the real launcher
+# as a child and looks at the child's exit code; the child is the app exactly as
+# before. A restore ends with the child exiting 75 (commercial_runtime/
+# install_support/restart.py), and the supervisor starts a fresh child -- new
+# server process, new window -- instead of quitting.
+#
+#   0  -> the person closed the app: quit.
+#   75 -> restart requested after a restore: relaunch.
+#   anything else -> the child crashed/failed: pass its code through and quit,
+#   exactly what the single-process launcher did (no crash loops, ever).
+#
+# Not supervised: a plain `python launcher_retail.py` (dev run) -- the child
+# env marker and the frozen check below keep the old single-process behaviour.
+SUPERVISE_ENV = 'AURA_LAUNCHER_SUPERVISE'   # "1" forces supervision from source (tests/proof)
+CHILD_ENV = 'AURA_LAUNCHER_CHILD'           # = the supervisor's pid; set on the child so it never supervises itself
+RESTART_ENV = 'AURA_RESTART_ON_RESTORE'     # == install_support.restart.RESTART_ENV
+RESTART_EXIT_CODE = 75                      # == install_support.restart.RESTART_EXIT_CODE
+# A child that keeps asking for a restart (a bug, not a restore) must not spin
+# forever: more than this many relaunches inside the window and we stop.
+MAX_RELAUNCHES = 3
+RELAUNCH_WINDOW_SECONDS = 120.0
+
+
+def exit_action(code: int) -> str:
+    """What the supervisor does with a child's exit code. 'relaunch' | 'quit'
+    | 'crash' (quit, passing the failing code through)."""
+    if code == RESTART_EXIT_CODE:
+        return 'relaunch'
+    if code == 0:
+        return 'quit'
+    return 'crash'
+
+
+def _parent_pids(frozen: bool) -> tuple:
+    """The pids a genuine supervised child may have as its parent. The frozen
+    exe is launched directly by the supervisor, so only os.getppid() counts --
+    deliberately strict. From source on Windows a venv's python.exe is a
+    redirector that starts the real interpreter as ITS child, so one more
+    generation is accepted there (otherwise a forced-supervision proof run would
+    re-supervise itself forever)."""
+    pids = [os.getppid()]
+    if not frozen and sys.platform == 'win32':
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class PROCESSENTRY32(ctypes.Structure):
+                _fields_ = [
+                    ('dwSize', wintypes.DWORD), ('cntUsage', wintypes.DWORD),
+                    ('th32ProcessID', wintypes.DWORD), ('th32DefaultHeapID', ctypes.c_size_t),
+                    ('th32ModuleID', wintypes.DWORD), ('cntThreads', wintypes.DWORD),
+                    ('th32ParentProcessID', wintypes.DWORD), ('pcPriClassBase', ctypes.c_long),
+                    ('dwFlags', wintypes.DWORD), ('szExeFile', ctypes.c_wchar * 260)]
+            k32 = ctypes.windll.kernel32
+            k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+            snap = k32.CreateToolhelp32Snapshot(0x2, 0)       # TH32CS_SNAPPROCESS
+            parents = {}
+            entry = PROCESSENTRY32()
+            entry.dwSize = ctypes.sizeof(entry)
+            ok = k32.Process32FirstW(snap, ctypes.byref(entry))
+            while ok:
+                parents[entry.th32ProcessID] = entry.th32ParentProcessID
+                ok = k32.Process32NextW(snap, ctypes.byref(entry))
+            k32.CloseHandle(snap)
+            grandparent = parents.get(pids[0])
+            if grandparent:
+                pids.append(grandparent)
+        except Exception as exc:
+            log.warning(f'Could not read the process tree for the supervisor check: {exc}')
+    return tuple(pids)
+
+
+def child_marker_is_ours(environ=None, parent_pids=None, frozen=None) -> bool:
+    """True only when AURA_LAUNCHER_CHILD names the process that actually
+    started us. The supervisor sets it to ITS OWN pid, so the marker cannot be
+    satisfied by inheritance: a copy of this exe started by anything else (the
+    installer's relaunch after an update, a rollback, a shortcut run from a
+    supervised app) has a different parent and is not a child (verifier H1)."""
+    environ = os.environ if environ is None else environ
+    marker = environ.get(CHILD_ENV)
+    if not marker:
+        return False
+    frozen = getattr(sys, 'frozen', False) if frozen is None else frozen
+    parent_pids = _parent_pids(bool(frozen)) if parent_pids is None else parent_pids
+    return marker in {str(p) for p in parent_pids}
+
+
+def discard_stale_supervisor_env(environ=None, parent_pids=None, frozen=None) -> bool:
+    """If the supervisor markers are present but not ours, remove BOTH
+    (AURA_LAUNCHER_CHILD and AURA_RESTART_ON_RESTORE): the second one would
+    otherwise arm the 75-exit in a process nobody is supervising. Returns True
+    when it removed something (logged: this is the H1 signature)."""
+    environ = os.environ if environ is None else environ
+    present = [n for n in (CHILD_ENV, RESTART_ENV) if n in environ]
+    if not present or child_marker_is_ours(environ, parent_pids, frozen):
+        return False
+    for name in present:
+        environ.pop(name, None)
+    log.warning(f'Ignoring inherited supervisor markers {present}: they do not name our '
+                'parent process, so this copy runs as a top-level app.')
+    return True
+
+
+def should_supervise(environ=None, frozen=None, parent_pids=None) -> bool:
+    environ = os.environ if environ is None else environ
+    frozen = getattr(sys, 'frozen', False) if frozen is None else frozen
+    if child_marker_is_ours(environ, parent_pids, frozen):
+        return False
+    return bool(frozen) or environ.get(SUPERVISE_ENV) == '1'
+
+
+def supervise(run_child, clock=time.monotonic) -> int:
+    """Runs `run_child()` (returns the child's exit code) until it says quit.
+    Returns the code this process should exit with."""
+    relaunches = []
+    while True:
+        code = run_child()
+        action = exit_action(code)
+        log.info(f'[supervisor] child exited with {code} -> {action}')
+        if action != 'relaunch':
+            return code
+        now = clock()
+        relaunches = [t for t in relaunches if now - t < RELAUNCH_WINDOW_SECONDS]
+        if len(relaunches) >= MAX_RELAUNCHES:
+            log.error('[supervisor] too many restarts in a row; giving up.')
+            return code
+        relaunches.append(now)
+
+
+def _run_child_process() -> int:
+    import subprocess
+    env = dict(os.environ)
+    # The marker is OUR pid, not "1": a child accepts it only if it equals its
+    # parent's pid (child_marker_is_ours), so a copy of the marker that leaks
+    # into some other process's environment cannot make that process a child.
+    env[CHILD_ENV] = str(os.getpid())
+    env[RESTART_ENV] = '1'
+    if getattr(sys, 'frozen', False):
+        cmd = [sys.executable, *sys.argv[1:]]
+    else:
+        cmd = [sys.executable, os.path.abspath(__file__), *sys.argv[1:]]
+    return subprocess.call(cmd, env=env)
+
+
 if __name__ == '__main__':
+    discard_stale_supervisor_env()
+    if should_supervise():
+        sys.exit(supervise(_run_child_process))
     main()

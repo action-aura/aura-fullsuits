@@ -7964,3 +7964,51 @@ Owner catalog (owner/translations ar): Kind = النوع | Crashes = الأعط�
   TESTS CHANGED ON PURPOSE (each states what it can no longer catch in its own header/commit): retail_offline_banner_stale_stock_test (healthy tile no longer shows stock; same checks now with a LOW product), retail_nav_groups_test (Sell membership, 29 destinations), retail_design_render_test (+ 'return-modal' screen), retail_p0_modals_e2e group 6 (expected hidden before the count, shown after, for the owner).
   PROVED: new retail_pos_favourites_test.py 6 / retail_receipt_barcode_test.py 11 (py), retail_pos_favourites_ui_test 7, retail_ui2_returns_test 7, retail_ui2_count_test 8, retail_ui2_customer_test 8 (JS, every guard mutation-proved red/green, allow and deny halves), retail_ui2_e2e.py 11 + 9 + 9 + 9 real-browser checks (EN + AR, 1366x768 and 1024x768, a REAL cashier login; both receipts' barcodes read back by an independent decoder, ZXing-cpp, run outside the repo/CI). retail_p1c_size_e2e 14/14 and retail_ui1_cash_e2e 14/14 still green; the six KNOWN-RED e2e files fail with IDENTICAL check names on a clean `git archive` of b5809bdb and on this branch.
   ARABIC STRINGS OWED TO A NATIVE READER (English -> as written): Favourites -> المفضلة | Add to Favourites -> إضافة إلى المفضلة | Remove from Favourites -> إزالة من المفضلة | Added to Favourites -> أُضيف إلى المفضلة | Removed from Favourites -> أُزيل من المفضلة | Only the shop owner can choose the Favourites. -> صاحب المحل فقط يمكنه اختيار المفضلة. | The till holds at most 40 favourites. Unpin one first. -> تتسع نقطة البيع لـ 40 منتجًا مفضلًا كحد أقصى. أزل منتجًا أولًا. | Could not save the Favourites. -> تعذّر حفظ المفضلة. | No favourites yet. The shop owner can pin products with the star. -> لا توجد منتجات مفضلة بعد. يمكن لصاحب المحل تثبيت المنتجات بالنجمة. | Show on the Favourites page of the till -> إظهار في صفحة المفضلة في نقطة البيع | Low stock -> مخزون منخفض | Recent sales -> المبيعات الأخيرة | Could not load recent sales. Type the receipt number instead. -> تعذّر تحميل المبيعات الأخيرة. اكتب رقم الإيصال بدلًا من ذلك. | No sales yet. -> لا توجد مبيعات بعد. | Filled in from the last count on this terminal. Change it if the drawer has changed since. -> تم تعبئته من آخر عدّ لهذا الجهاز. غيّره إذا تغيّر محتوى الدرج منذ ذلك الحين. | {n} held sale(s) are still parked. Ending the shift keeps them, but check them before you leave. -> {n} فاتورة معلّقة ما زالت محفوظة. إنهاء الوردية يُبقيها، لكن راجعها قبل أن تغادر. | Count notes and coins -> عدّ الأوراق النقدية والعملات المعدنية | New customer -> عميل جديد | owes -> عليه | Allow credit (pay later) -> السماح بالدين (الدفع لاحقًا) | Save and choose -> حفظ واختيار | Customer saved, but only a manager can allow credit. -> تم حفظ العميل، لكن المدير فقط يمكنه السماح بالدين. | Could not save the customer. -> تعذّر حفظ العميل. | Customer saved, but the credit terms could not be set. -> تم حفظ العميل، لكن تعذّر ضبط شروط الدين. | No credit -> بدون دين | Up to a limit -> حتى حد معيّن | Unlimited -> غير محدود | Credit limit -> حد الدين | Open balance -> الرصيد المستحق | Nothing owed -> لا يوجد مستحق | Back -> رجوع.
+
+## 2026-10-12 — INSTALL-1 (restart after restore, update rollback, installer icon/WebView2, firewall at the owner's moment, crash trail) — no schema claim
+
+Branch `feat/install-1`. No schema change.
+
+**Built.** (1) Restore ends with the backend exiting 75; the frozen exe now runs itself as a tiny supervisor around the
+real launcher (the Flask server is a thread inside the launcher, so only a second process can act on the exit): 75 ->
+relaunch, 0 -> quit, other -> pass through (never retried; >3 restarts in 120 s stops). Opt-in via
+`AURA_RESTART_ON_RESTORE=1`, set only by the supervisor, so dev runs and tests keep the manual-restart message and can
+never `os._exit` themselves. (2) `updates/previous/` keeps exactly one installer (the version being replaced; source =
+`{app}\installer-cache`, a copy the installer now drops of itself, else an earlier download), `state.json.last_update`
+= {from,to,backup}; `updates/rollback.py` + launcher: a failed first boot after an update offers "Go back" (restore the
+pre-update backup first, re-hash, run the kept installer /VERYSILENT /RELAUNCH=1). The downgrade guard in `install()` is
+untouched (remote older version still refused; tested both ways). (3) `aura_retail.ico` (brand mark, 7 sizes, from
+`scripts/release/make_app_icon.py`), `MinVersion=10.0.17763`, WebView2 Evergreen bootstrapper run only when the runtime
+key is absent (downloaded + Microsoft-signature-checked + SHA-256 printed/recorded by `build_desktop_installer.ps1`, not
+committed), `.iss` header corrected. (4) `install_support/firewall.py`: one inbound rule, private+domain, via one UAC
+prompt; idempotent; decline recorded (`GET /api/site-relay/firewall`, `POST .../retry`). (5) Fallback Edge window now ends
+the launcher when it closes; faulthandler log + `sys`/`threading` excepthooks into the crash-report store.
+
+**Deviations from the brief, on purpose.** There is NO "Shop network" switch in the product (the hub starts by itself
+once the licence is ACTIVE), so the firewall prompt is tied to the owner's "Connect a device" press
+(`POST /api/site-relay/pair-code`). The backend exit is opt-in rather than unconditional (above).
+
+**Proven on the real artefact** (full `build_desktop_installer.ps1` build with a fake owner URL, silent per-user install
+to a temp dir under a throw-away AppId, installed exe with AURA_* stripped): exe icon extracted = the Aura mark; `/`
+served; a restore through the API took the server down at 3.7 s and back at 7.8 s with a new child process and the same
+supervisor; a simulated failed post-update boot (`AURA_TEST_FAIL_BOOT`, honoured only with `AURA_DEV_TEST_HOOKS=1`)
+showed the real native Yes/No box, "Yes" restored the data (a `pre-restore-*` folder appeared), ran the installer and
+relaunched, "No" fell through to the normal failure dialog; the crash store got the boot failure as a `thread` row.
+
+**NOT proven / left.** No clean Windows VM: the WebView2 bootstrapper never ran (this PC already has the runtime) and
+`MinVersion` was not exercised on an old Windows. No real UAC click and no real `netsh` call (all stubbed). The
+rollback "Yes" chain re-ran the SAME build's installer renamed as the previous version, because only one build existed;
+a genuine old-to-new-to-old cycle has not been run. An install made with an installer that predates this one has no
+`installer-cache`, so its first update keeps nothing and "Go back" is not offered for that one update. The Edge-fallback
+exit was proven with a fake process, not by closing a real Edge window (hand-off to a stray Edge owning that profile is a
+known limit). The proof build used a different AppId than production (a stale registered test install shares the real
+one on this PC); every other byte is the production script. Settings has no UI for the firewall status yet (frontend was
+off limits), and the restore-success page poll is a few lines in `subsystem-retail.js` (another crew edits that file:
+expect a trivial merge).
+
+**INSTALL-1 verifier fix round (2026-10-12).** An independent verifier rated the branch SHIP-AFTER-FIXES; fixed on `feat/install-1`, one commit per finding:
+- **H1 fixed** (`e9ec1be5`): the relaunched till after an in-app update (or rollback) was unsupervised because the installer inherited the supervisor's child markers. The updater/rollback now start the installer with those variables removed, AND the child marker is the supervisor's pid, accepted only when it equals the process's parent pid (stale markers are dropped together, logged). Re-proved on a real build: relaunch = 2 processes, a restore then comes back under the same supervisor, both with the markers inherited (guard b alone) and through the real `default_installer_launcher` (guard a).
+- **M1 fixed** (`85e64f09`): Edge fallback waits for "no browser process uses our `--user-data-dir`", not for its own launch to exit, and reuses a still-open window after a restart instead of launching a second Edge. Proved from source with real Edge: restore -> server back, supervisor alive. Process listing is PowerShell `Get-CimInstance` (psutil is not a dependency; none added).
+- **M3 fixed** (`0f243f96`): firewall ask also fires on licence activation success; rule looked up by program path (rule name carries an exe-path hash); inbound Block rules (a Cancel on Windows' own prompt) record `blocked_by_windows_prompt` and are never deleted; one prompt in flight across triggers.
+- **M2 + LOW fixed** (`4302f83f`): the five surviving mutants now have killing tests; the fail-boot proof hook is inert when `sys.frozen`; the WebView2 bootstrapper check needs `CN=Microsoft Corporation` + its own OriginalFilename/product name; wait-loop tests are bounded (the 7-minute hang is now seconds).
+- **Open, recorded, not fixed:** (1) a kept installer's SHA is self-attested in user-writable `%LOCALAPPDATA%` (re-hash catches corruption, not same-user substitution); (2) rollback can be offered for a failure that is not the update's fault (slow migration, wrong product on port) and nothing remembers the bad version afterwards; (3) `POST /api/site-relay/pair-code` on a non-hub till still triggers the UAC ask (API-only, the UI hides the button); (4) a till already activated before this version only gets the firewall ask at "Connect a device", and Windows' own prompt can still appear at its first hub bind; (5) Settings has no line yet for `blocked_by_windows_prompt` / `declined`; (6) because the fail-boot hook is now inert in a frozen exe, a real-exe rollback proof needs a build whose second boot genuinely fails; (7) the Inno `WebView2Missing` logic is pinned as text, never executed by a test.

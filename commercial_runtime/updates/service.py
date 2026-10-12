@@ -36,6 +36,7 @@ from typing import Callable, Optional, Sequence
 from commercial_runtime.licensing_contracts.client import LicensingClientError
 
 from .descriptor import ReleaseOffer, UpdateError, verify_owner_release_response
+from . import rollback
 from .versioning import is_newer, parse_semver
 
 log = logging.getLogger("aura.updates")
@@ -90,10 +91,19 @@ def default_is_installable_build() -> bool:
 def default_installer_launcher(path: str, args: Sequence[str]) -> None:
     """Starts the installer detached from this process, so it survives the
     app closing itself (the installer's whole job is to close it). A list, never
-    shell=True: the path is ours but the habit is the guard."""
+    shell=True: the path is ours but the habit is the guard.
+
+    The environment is passed EXPLICITLY, minus the supervisor's private
+    markers (verifier H1): the installer relaunches the new AuraRetail.exe with
+    whatever environment it was started with, and an exe that inherits "I am the
+    supervised child" runs unsupervised, so the first restore after the update
+    kills the till for good. This function is also the rollback's launcher."""
+    from commercial_runtime.install_support.supervisor_env import scrubbed_env
+
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     subprocess.Popen(
         [str(path), *args],
+        env=scrubbed_env(),
         creationflags=flags,
         close_fds=True,
         stdin=subprocess.DEVNULL,
@@ -124,6 +134,10 @@ def _fresh_state() -> dict:
         # launch (BACKUP-1). Recorded so a later "go back" flow knows which
         # backup matches the version that was replaced.
         "pre_update_backup": None,
+        # {from, to, backup} of the update launched last (INSTALL-1). The
+        # rollback module reads it straight from the file when the app cannot
+        # boot; "to" == the running version + no boot_ok marker = on probation.
+        "last_update": None,
     }
 
 
@@ -234,6 +248,7 @@ class UpdateService:
             self._dir.mkdir(parents=True, exist_ok=True)
             for part in self._dir.glob("*.part"):
                 self._delete_quietly(part)
+            self._tidy_rollback_files()
             for exe in self._dir.glob("AuraRetail-Setup-*.exe"):
                 version = exe.name[len("AuraRetail-Setup-"):-len(".exe")]
                 try:
@@ -264,6 +279,37 @@ class UpdateService:
             else:
                 self._state.update(phase="idle", progress=None, installing_since=None)
             self._persist()
+
+    # ── rollback support (INSTALL-1) ───────────────────────────────────────
+    def _cache_dir(self) -> Path:
+        # Where the Inno installer drops a copy of ITSELF ({srcexe}) on every
+        # install, so the version now running always has its own installer to
+        # keep when the next update replaces it.
+        return Path(self._install_dir or os.path.dirname(sys.executable)) / rollback.INSTALLER_CACHE_DIRNAME
+
+    def _current_installer_source(self) -> Optional[Path]:
+        """The installer of the version that is RUNNING, if we still have one:
+        the one the installer cached beside the program, else one this app
+        downloaded earlier."""
+        name = installer_filename(self._app_version)
+        for candidate in (self._cache_dir() / name, self._dir / name):
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _tidy_rollback_files(self) -> None:
+        """previous/ keeps exactly one installer; the install-dir cache keeps
+        only the running version's (older ones were copied into previous/ at
+        install time, or were never needed)."""
+        previous = rollback.read_previous(self._dir.parent)
+        rollback.prune_previous(self._dir.parent, previous.version if previous else None)
+        keep = installer_filename(self._app_version)
+        try:
+            for stale in self._cache_dir().glob(rollback.INSTALLER_PREFIX + "*.exe"):
+                if stale.name != keep:
+                    self._delete_quietly(stale)
+        except OSError:
+            log.warning("updates: could not tidy the installer cache", exc_info=True)
 
     # ── reading status ─────────────────────────────────────────────────────
     def disabled_reason(self) -> Optional[str]:
@@ -538,8 +584,19 @@ class UpdateService:
                     log.exception("updates: pre-update backup failed; installer NOT launched")
                     raise UpdateError("PRE_UPDATE_BACKUP_FAILED", "Could not back up the shop before updating.")
                 log.info("updates: pre-update backup %s taken", backup_name)
+            # The way back (INSTALL-1): keep the installer of the build that is
+            # about to be replaced. Best effort BY DESIGN -- unlike the backup
+            # above, a missing copy must not block an update; it only means
+            # "Go back" will not be offered if this one goes wrong.
+            source = self._current_installer_source()
+            if source is not None:
+                rollback.preserve_previous(self._dir.parent, self._app_version, source)
+            else:
+                log.info("updates: no installer of %s on disk; rollback will not be offered", self._app_version)
             self._state.update(phase="installing", installing_since=self._clock(), error_code=None,
-                               pre_update_backup=backup_name)
+                               pre_update_backup=backup_name,
+                               last_update={"from": self._app_version, "to": offer["version"],
+                                            "backup": backup_name})
             self._persist()
             try:
                 self._launch(str(path), args)

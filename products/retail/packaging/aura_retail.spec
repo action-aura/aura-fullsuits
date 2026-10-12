@@ -203,6 +203,12 @@ a = Analysis(
         'commercial_runtime.backup.service',
         'commercial_runtime.backup.routes',
         'commercial_runtime.launcher_support',
+        # INSTALL-1: imported lazily inside launcher functions / routes, so
+        # named here rather than trusted to static analysis (same precedent as
+        # the einvoicing list below).
+        'commercial_runtime.install_support.restart',
+        'commercial_runtime.install_support.firewall',
+        'commercial_runtime.updates.rollback',
         'api.retail_api',
         'api.import_api',
         'database.schema',
@@ -255,6 +261,10 @@ exe = EXE(
     upx=(os.environ.get('AURA_SPEC_UPX', '1') == '1'),
     console=False,
     version=os.path.join(os.path.dirname(os.path.abspath(SPEC)), 'version_info.txt'),
+    # INSTALL-1: the exe used to carry PyInstaller's default icon, so the
+    # taskbar, Explorer and every shortcut showed a generic one. Same file the
+    # installer's SetupIconFile uses (scripts/release/make_app_icon.py).
+    icon=os.path.join(os.path.dirname(os.path.abspath(SPEC)), 'aura_retail.ico'),
 )
 
 coll = COLLECT(

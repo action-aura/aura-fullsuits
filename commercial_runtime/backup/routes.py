@@ -29,6 +29,7 @@ from commercial_runtime.backup.service import (
 from commercial_runtime.backup.schedule import (
     BackupSettings, BackupStatus, build_status,
 )
+from commercial_runtime.install_support.restart import schedule_restart
 
 log = logging.getLogger('aura.backup')
 
@@ -48,7 +49,8 @@ def _require_admin():
     return None
 
 
-def make_backup_blueprint(product_code, database_dir, app_version, default_backup_dir=None):
+def make_backup_blueprint(product_code, database_dir, app_version, default_backup_dir=None,
+                          restart_after_restore=schedule_restart):
     """
     `database_dir` is the product's own `<app_data>/database` path (the
     parent of `registry.db` and `subsystems/`) -- callers pass their own
@@ -187,11 +189,23 @@ def make_backup_blueprint(product_code, database_dir, app_version, default_backu
             if cleanup_path and os.path.exists(cleanup_path):
                 os.remove(cleanup_path)
 
+        # INSTALL-1 (F16): ask for a self-restart ONLY here, after restore_backup
+        # returned -- every failure path above has already returned an error, so
+        # a refused or failed restore can never take the app down. The hook
+        # returns False when this process did not opt in (dev run / tests), and
+        # then the old manual-restart wording stays true.
+        restarting = False
+        try:
+            restarting = bool(restart_after_restore())
+        except Exception:
+            log.exception('Could not schedule the restart after restore')
         return jsonify({
             'status': 'ok',
             'restored': result['restored'],
             'rollback_dir': result['rollback_dir'],
-            'message': 'Restore complete. Restart the application before continuing.',
+            'restarting': restarting,
+            'message': ('Restored. Aura Retail is restarting…' if restarting
+                        else 'Restore complete. Restart the application before continuing.'),
         })
 
     return bp
