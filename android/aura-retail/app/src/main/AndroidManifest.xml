@@ -45,6 +45,19 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Aura">
 
+        <!-- BACKUP-1: lets the share sheet read ONE backup file we copy into
+             cache/backup_share/ (see res/xml/backup_share_paths.xml). Not exported;
+             access is granted per share through FLAG_GRANT_READ_URI_PERMISSION. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.backupshare"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/backup_share_paths" />
+        </provider>
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

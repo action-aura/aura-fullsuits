@@ -1,5 +1,6 @@
 package com.actionaura.retail.net
 
+import okhttp3.ResponseBody
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
@@ -8,6 +9,7 @@ import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
+import retrofit2.http.Streaming
 
 interface AuraApi {
     @GET("api/onboarding/status")
@@ -390,6 +392,14 @@ interface AuraApi {
 
     @GET("api/backup/list")
     suspend fun listBackups(): ListBackupsResponse
+
+    // BACKUP-1: the file itself, so it can leave the phone (Save a copy / Share).
+    // @Streaming: a backup is tens of MB; without it Retrofit buffers the whole
+    // body in memory before handing it over. The server answers only names that
+    // /list shows (commercial_runtime/backup/routes.py), anything else is 404.
+    @Streaming
+    @GET("api/backup/download/{name}")
+    suspend fun downloadBackup(@Path("name") name: String): ResponseBody
 
     @POST("api/backup/restore")
     suspend fun restoreBackup(@Body body: RestoreBackupRequest): RestoreBackupResponse

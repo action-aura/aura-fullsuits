@@ -7581,3 +7581,32 @@ Closes crew A's three written-down gaps and one defect found while planning (pla
   this one is cashed in. This revision runs against the LIVE Neon database on the next deploy.
 * **Retail schema v52** is reserved for the TIDY-RETAIL crew (branch `feat/tidy-retail`) IF the refund-tax
   re-check needs a schema change. If it does not, the claim is released in the cash-in note.
+
+## 2026-10-12 — BACKUP-1 (backups that leave the device) — no schema claim
+
+Branch `feat/backup-1`. No retail or Owner schema change: the two settings (`backup_schedule`,
+`backup_dir_secondary`) and the last-run status live in `<app_data>/backup_state/*.json`, install-wide on purpose
+(a backup copies registry.db + the product db, i.e. every company of the install).
+
+**Built.** Desktop automatic backup, default `daily` ON (also for existing installs and for missing/corrupt
+settings), once per business day via retail's `business_now`, 1 h wait after a failure; retention 7 daily + 4
+weekly that deletes ONLY `-auto` files (manual and `-pre-update` are never auto-deleted); second copy to
+`backup_dir_secondary` (unplugged folder = "copy skipped", never fatal, never created); `GET /api/backup/status`
+and `/settings`; Settings → Data & backup shows last backup, last copy outcome and a 48 h warning pill;
+download/restore-by-name resolve only listed names; pre-update backup before the installer (no copy, no
+install; name recorded in updates `state.json`); Android: Save a copy… (system picker) + Share (FileProvider
+scoped to `cache/backup_share/`) over `GET /api/backup/download/<name>`; `segno==1.6.6` added to the Chaquopy
+list (review finding F7; confirmed inside the built APK).
+
+**Not built (decided or blocked).**
+* Encryption — decided NOT in this wave: a forgotten passphrase destroys the backup's value. Future opt-in only.
+* Cloud upload to Owner (R2), "move to a new PC" wizard, update rollback ("go back for 7 days").
+* Auto-restart after restore — STOPPED: no safe restart mechanism exists (`launcher_retail.py` has no watchdog/
+  relaunch loop and is outside this wave's file set). Needs a launcher change: backend exits with a code the
+  launcher turns into a relaunch. Restore still says "Restart the application".
+* Today-home warning card — its cards are built server-side in `retail_api.py` (outside this wave's file set);
+  the warning shows on Settings → Data & backup only.
+* Automatic schedule on Android (the folder is the app sandbox; Save/Share is the phone's answer) and on Clinic.
+* Pruning of the secondary folder only touches our own `-auto` files there; a full USB stick is reported as
+  "copy failed", not retried sooner than the next business day.
+* No Android device was available: Save/Share UI is proven by compile + source-contract tests, not on hardware.

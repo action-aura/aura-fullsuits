@@ -305,6 +305,14 @@ android {
                 // needs no pre-built ABI wheel and cannot hit the Rust
                 // cross-compiler problem described above.
                 install "tzdata==2026.1"
+                // segno: the e-invoice QR image and the WhatsApp QR are drawn by
+                // commercial_runtime/einvoicing/qr.py, which claims "safe under
+                // Chaquopy -- see requirements/base.txt". It was in base.txt but not
+                // here, so rendering either QR on the phone raised
+                // ModuleNotFoundError (review finding F7). Pure Python, no compiled
+                // extension -> no pre-built ABI wheel needed. MUST stay on the same
+                // version as requirements/base.txt.
+                install "segno==1.6.6"
             }
         }
     }
