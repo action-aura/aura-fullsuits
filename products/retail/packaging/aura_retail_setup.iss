@@ -8,8 +8,12 @@
 ; change it for this product; a future release with a different AppId would
 ; install side-by-side instead of upgrading in place.
 ;
-; Data safety: this installer only ever writes into {app} (Program Files)
-; and Start Menu/Desktop shortcuts + registry uninstall entries. It never
+; Data safety: this installer only ever writes into {app} (by default
+; %LOCALAPPDATA%\Programs\Action Aura\Aura Retail -- PrivilegesRequired=lowest
+; makes {autopf} resolve per-user; an admin who picks "all users" at the dialog
+; gets Program Files instead) and Start Menu/Desktop shortcuts + registry
+; uninstall entries. (INSTALL-1: this header used to say Program Files only,
+; which is not where a normal install goes.) It never
 ; touches %LOCALAPPDATA%\AuraRetail (the database/config/backups directory
 ; -- see products/retail/desktop/launcher_retail.py's AURA_APP_DATA
 ; resolution), so a default uninstall preserves all business data by
@@ -21,8 +25,28 @@
 #define AppId "{{A039EDA8-410E-4400-B3A5-A7CD4AF7F437}"
 #define DistDir "..\..\..\dist\AuraRetail"
 
+; Microsoft's WebView2 Evergreen bootstrapper (the small redistributable that
+; downloads the runtime). NOT committed: scripts/release/build_desktop_installer.ps1
+; fetches it from https://go.microsoft.com/fwlink/p/?LinkId=2124703, checks its
+; Authenticode signature is a valid Microsoft one and prints its SHA-256. A
+; manual `iscc` run needs that file first, so fail with a sentence, not a
+; "source file not found" three screens down.
+#define WebView2Setup "..\..\..\dist\redist\MicrosoftEdgeWebview2Setup.exe"
+#if !FileExists(WebView2Setup)
+  #error "dist\redist\MicrosoftEdgeWebview2Setup.exe is missing -- run scripts\release\build_desktop_installer.ps1 (it downloads and verifies it), or download it from https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+#endif
+
 [Setup]
 AppId={#AppId}
+; Windows 10 1809 (build 17763) is the oldest build WebView2 and Python 3.12
+; both support; an older Windows would install fine and then never open a
+; window, which looks like a broken product rather than an unsupported PC.
+MinVersion=10.0.17763
+; The Aura mark (products/retail/frontend/brand/aura-app-icon.svg), rendered by
+; scripts/release/make_app_icon.py. The exe carries the same icon (spec icon=),
+; so the taskbar, Start menu, Explorer and this wizard all match.
+SetupIconFile=aura_retail.ico
+UninstallDisplayIcon={app}\AuraRetail.exe
 AppName=Aura Retail
 AppVersion={#AppVersion}
 AppVerName=Aura Retail {#AppVersion}
@@ -61,6 +85,16 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 
 [Files]
 Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; A copy of THIS installer, kept beside the program. When the in-app updater
+; later replaces this version with a newer one, it files this copy under
+; updates\previous\ so "Go back to the previous version" has something to run
+; (commercial_runtime/updates/rollback.py). {srcexe} + external = the running
+; setup file itself, whatever it is called on the customer's disk. The running
+; app prunes older copies on startup, so only the current version's stays.
+Source: "{srcexe}"; DestDir: "{app}\installer-cache"; DestName: "AuraRetail-Setup-{#AppVersion}.exe"; Flags: external ignoreversion
+; WebView2 bootstrapper: unpacked to {tmp} only when the runtime is missing,
+; and deleted when setup ends.
+Source: "{#WebView2Setup}"; DestDir: "{tmp}"; DestName: "MicrosoftEdgeWebview2Setup.exe"; Flags: deleteafterinstall; Check: WebView2Missing
 
 [Icons]
 Name: "{group}\Aura Retail"; Filename: "{app}\AuraRetail.exe"
@@ -68,6 +102,13 @@ Name: "{group}\Uninstall Aura Retail"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Aura Retail"; Filename: "{app}\AuraRetail.exe"; Tasks: desktopicon
 
 [Run]
+; WebView2 runtime, only when absent (Windows 10 PCs that never got it). Listed
+; FIRST so it finishes before any launch entry below. /silent /install runs
+; unelevated here (PrivilegesRequired=lowest) and installs per-user; it needs
+; the internet to fetch the runtime. If it cannot (offline shop), setup still
+; succeeds and the launcher falls back to an Edge/Chrome app window
+; (launcher_retail.py), so a failure here degrades the window, never the install.
+Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; StatusMsg: "Installing the Microsoft WebView2 runtime..."; Flags: waituntilterminated; Check: WebView2Missing
 Filename: "{app}\AuraRetail.exe"; Description: "Launch Aura Retail now"; Flags: postinstall nowait skipifsilent
 ; Update channel: a silent install skips the postinstall entry above
 ; (skipifsilent), so the updater passes /RELAUNCH=1 and THIS entry starts the
@@ -89,6 +130,33 @@ Filename: "{app}\AuraRetail.exe"; Flags: nowait runasoriginaluser; Check: Should
 Filename: "{cmd}"; Parameters: "/C taskkill /IM AuraRetail.exe /F"; Flags: runhidden skipifdoesntexist; RunOnceId: "KillAuraRetail"
 
 [Code]
+// WebView2 Evergreen runtime detection, per Microsoft's documented check: the
+// client GUID's "pv" (product version) value exists and is not 0.0.0.0 under
+// HKLM (64-bit view, 32-bit view = WOW6432Node) or HKCU (a per-user install).
+const
+  WebView2ClientKey = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+
+function WebView2VersionOk(Root: Integer; const View32: Boolean): Boolean;
+var
+  Version: String;
+  Found: Boolean;
+begin
+  if Root = HKEY_CURRENT_USER then
+    Found := RegQueryStringValue(HKCU, WebView2ClientKey, 'pv', Version)
+  else if View32 then
+    Found := RegQueryStringValue(HKLM32, WebView2ClientKey, 'pv', Version)
+  else
+    Found := RegQueryStringValue(HKLM64, WebView2ClientKey, 'pv', Version);
+  Result := Found and (Version <> '') and (Version <> '0.0.0.0');
+end;
+
+function WebView2Missing(): Boolean;
+begin
+  Result := not (WebView2VersionOk(HKEY_LOCAL_MACHINE, False)
+              or WebView2VersionOk(HKEY_LOCAL_MACHINE, True)
+              or WebView2VersionOk(HKEY_CURRENT_USER, False));
+end;
+
 // True only when the in-app updater started this installer (/RELAUNCH=1).
 function ShouldRelaunch(): Boolean;
 begin
