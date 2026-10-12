@@ -83,6 +83,7 @@ from commercial_runtime.identity.registry_db import get_conn as registry_conn  #
 from commercial_runtime.security.passwords import hash_password  # noqa: E402
 from database.schema import get_retail_conn  # noqa: E402
 from core.retail import general_ledger as gl  # noqa: E402
+from api import retail_api as _ra  # noqa: E402  (MONEY-4a: the live-journal date seam)
 import api.retail_api as retail_api_module  # noqa: E402
 
 API = '/api/sub/retail'
@@ -1080,6 +1081,9 @@ def test_trial_balance_as_of_excludes_a_future_dated_sale_and_closings_are_equal
 
     for business_date in (the_day_before, as_of, the_day_after):
         monkeypatch.setattr(gl, '_today', lambda d=business_date: d)
+        # MONEY-4a: routes now date live journals with `_ra._gl_business_date` (the shop's business day), not the
+        # bare `gl._today()` fallback this test used to control. Pin the SAME date at the new seam; the assertions are unchanged.
+        monkeypatch.setattr(_ra, '_gl_business_date', lambda conn, cid, moment=None: gl._today())
         r = _sell(client, pid, amount_paid=50.0)
         assert r
 
@@ -1144,9 +1148,15 @@ def test_trial_balance_non_padded_as_of_matches_the_padded_one(client, monkeypat
     pid = _seed_product(client, sell_price=30.0, tax_rate=0, cost_price=0)
 
     monkeypatch.setattr(gl, '_today', lambda d='2026-09-01': d)
+    # MONEY-4a: routes now date live journals with `_ra._gl_business_date` (the shop's business day), not the
+    # bare `gl._today()` fallback this test used to control. Pin the SAME date at the new seam; the assertions are unchanged.
+    monkeypatch.setattr(_ra, '_gl_business_date', lambda conn, cid, moment=None: gl._today())
     assert _sell(client, pid, amount_paid=30.0)
 
     monkeypatch.setattr(gl, '_today', lambda d='2026-10-15': d)
+    # MONEY-4a: routes now date live journals with `_ra._gl_business_date` (the shop's business day), not the
+    # bare `gl._today()` fallback this test used to control. Pin the SAME date at the new seam; the assertions are unchanged.
+    monkeypatch.setattr(_ra, '_gl_business_date', lambda conn, cid, moment=None: gl._today())
     assert _sell(client, pid, amount_paid=30.0)
 
     padded = client.get(f'{API}/reports/trial-balance?as_of=2026-09-01')
@@ -1237,6 +1247,9 @@ def test_trial_balance_as_of_never_falsely_reports_does_not_tie(client, monkeypa
     today = '2026-04-10'
     yesterday = '2026-04-09'
     monkeypatch.setattr(gl, '_today', lambda: today)
+    # MONEY-4a: routes now date live journals with `_ra._gl_business_date` (the shop's business day), not the
+    # bare `gl._today()` fallback this test used to control. Pin the SAME date at the new seam; the assertions are unchanged.
+    monkeypatch.setattr(_ra, '_gl_business_date', lambda conn, cid, moment=None: gl._today())
 
     pid = _seed_product(client, sell_price=10.0, cost_price=5.0, initial_stock=0)
     sr = client.post(f'{API}/suppliers', json={'name': f'P0 Supplier {uuid.uuid4().hex[:6]}'})
@@ -1295,6 +1308,9 @@ def test_trial_balance_as_of_not_applicable_when_a_journal_is_dated_after_it(cli
     today = '2026-05-10'
     tomorrow = '2026-05-11'
     monkeypatch.setattr(gl, '_today', lambda: today)
+    # MONEY-4a: routes now date live journals with `_ra._gl_business_date` (the shop's business day), not the
+    # bare `gl._today()` fallback this test used to control. Pin the SAME date at the new seam; the assertions are unchanged.
+    monkeypatch.setattr(_ra, '_gl_business_date', lambda conn, cid, moment=None: gl._today())
 
     pid = _seed_product(client, sell_price=10.0, cost_price=5.0, initial_stock=5)
     cr = client.post(f'{API}/customers', json={'name': f'P0 Customer {uuid.uuid4().hex[:6]}'})

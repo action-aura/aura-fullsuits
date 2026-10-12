@@ -105,6 +105,7 @@ from commercial_runtime.identity.registry_db import get_conn as registry_conn  #
 from commercial_runtime.security.passwords import hash_password  # noqa: E402
 from database.schema import get_retail_conn  # noqa: E402
 from core.retail import general_ledger as gl  # noqa: E402
+from api import retail_api as _ra  # noqa: E402  (MONEY-4a: the live-journal date seam)
 from core.retail import financial_statements as fin  # noqa: E402
 
 API = '/api/sub/retail'
@@ -481,6 +482,9 @@ def test_period_boundaries_are_both_ends_inclusive(client, monkeypatch):
     ]
     for amount, business_date in amounts_and_dates:
         monkeypatch.setattr(gl, '_today', lambda d=business_date: d)
+        # MONEY-4a: routes now date live journals with `_ra._gl_business_date` (the shop's business day), not the
+        # bare `gl._today()` fallback this test used to control. Pin the SAME date at the new seam; the assertions are unchanged.
+        monkeypatch.setattr(_ra, '_gl_business_date', lambda conn, cid, moment=None: gl._today())
         r = client.post(f'{API}/sales', json={
             'items': [{'product_id': pid, 'quantity': amount}],  # sell_price 1.0 -> total==amount
             'payment_method': 'cash', 'amount_paid': amount,
@@ -517,6 +521,9 @@ def test_non_padded_period_dates_still_find_a_sale_on_a_single_digit_day(client,
     pid = _seed_product(client, sell_price=25.0, tax_rate=0, initial_stock=10)
 
     monkeypatch.setattr(gl, '_today', lambda: '2026-09-05')  # a REAL, padded business_date
+    # MONEY-4a: routes now date live journals with `_ra._gl_business_date` (the shop's business day), not the
+    # bare `gl._today()` fallback this test used to control. Pin the SAME date at the new seam; the assertions are unchanged.
+    monkeypatch.setattr(_ra, '_gl_business_date', lambda conn, cid, moment=None: gl._today())
     r = client.post(f'{API}/sales', json={
         'items': [{'product_id': pid, 'quantity': 1}],
         'payment_method': 'cash', 'amount_paid': 25.0,
