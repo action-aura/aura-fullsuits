@@ -227,6 +227,15 @@ const CashDrawer = {
       .cd-bar b, .cd-bar strong { color:var(--text-primary);
         font-weight:var(--text-weight-semibold); }
       .cd-bar-actions { display:flex;gap:var(--space-snug);flex-shrink:0; }
+      /* UI-1 (review A #2b): on a 768px-tall till the bar wrapped to three
+         lines and ate the product grid. One line, ellipsis on the sentence; the
+         buttons (the part you press) never shrink. */
+      @media (min-width:900px) and (max-width:1100px) {
+        .cd-bar-actions .ret-btn { padding-inline:8px;font-size:12px; }
+      }
+      @media (max-height: 800px) {
+        .cd-bar > span:first-child { flex:1 1 0;min-inline-size:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+      }
 
       /* WHICH TILL. A pill rather than a run of body text because it is the
          one fact on this bar that answers "is this mine?", and it is read at

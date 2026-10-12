@@ -1210,6 +1210,13 @@ def main() -> int:
                         pg.wait_for_timeout(120)
                     assert_reachable(pg, "#sub-settings-gear-btn", f"[coarse {lang}] settings gear")
                     if pg.locator("#sub-ai-sidebar-btn").count():
+                        # UI-1: the button is hidden while the server says no assistant is
+                        # configured (this harness has none). That is the designed state, so
+                        # assert it IS hidden, then show it the way a configured shop would
+                        # (SubAI learns configured:true) and require it to be reachable.
+                        assert pg.evaluate("() => document.getElementById('sub-ai-sidebar-btn').hidden") is True, \
+                            "the AI button is offered although no assistant is configured on this harness"
+                        pg.evaluate("() => { SubAI._configured = true; SubAI._syncAvailability(); }")
                         assert_reachable(pg, "#sub-ai-sidebar-btn", f"[coarse {lang}] AI button")
                     pg.screenshot(path=str(shots / f"12_coarse_sidebar_{lang}.png"), full_page=False)
 

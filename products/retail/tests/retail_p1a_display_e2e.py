@@ -986,7 +986,7 @@ def _scenario_licensing_page_plain_words(results: Results, browser, shots: Path)
             assert product_code not in outside, f"product code {product_code!r} leaks outside Technical details"
             if installation_id:
                 assert installation_id not in outside, "installation id leaks outside Technical details"
-            assert "Aura Shop" in outside and "This computer" in outside, (
+            assert "Aura Retail" in outside and "This computer" in outside, (
                 f"the plain labels are missing (a page that shows nothing would pass the checks above): {outside!r}"
             )
 
@@ -1045,7 +1045,7 @@ def _scenario_licensing_page_plain_words(results: Results, browser, shots: Path)
         def check_title_and_wording():
             # One name for the page: the h1 and the tab title both say
             # "License & devices" (the gear entry's own label), not
-            # "Aura Retail Licensing" beside a row that says "Aura Shop".
+            # "Aura Retail Licensing" beside a row that says "Aura Shop" (the row now says "Aura Retail" too).
             got = lp.evaluate("() => ({h1: document.querySelector('h1').textContent.trim(), title: document.title})")
             assert got["h1"] == "License & devices", f"h1 must match the gear entry: {got}"
             assert got["title"] == "License & devices", f"tab title must match the h1: {got}"

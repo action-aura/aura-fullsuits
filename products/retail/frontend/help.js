@@ -8,13 +8,17 @@
 // installation id and version, which support asks for first. Before this, none
 // of the three existed in the product.
 //
-// THE TWO NUMBERS. The WhatsApp numbers for Action Aura support and sales are
-// NOT known yet, and a wrong number in a shipped build is worse than none (a
-// shopkeeper would send a customer's licence id to a stranger). So both are
-// null, in this ONE place, and every surface built on them hides itself while
-// they are null: supportUrl() returns null, the dialog omits the chat link, and
-// the palette omits its row. Filling in a number here is the only change
-// needed to switch all of it on -- nothing else in the product mentions them.
+// THE TWO NUMBERS. A wrong number in a shipped build is worse than none (a
+// shopkeeper would send a customer's licence id to a stranger), so each lives
+// in this ONE place and every surface built on it hides itself while it is
+// null: supportUrl() returns null, the dialog omits the chat link, and the
+// palette omits its row.
+//   * SUPPORT: the company number, +962 78 006 9485 (owner, 2026-10-04: the
+//     phone AND WhatsApp line). Set 2026-10-12 (UI-1) -- Help used to show no
+//     way to reach anyone at all because this was null.
+//   * SALES: still null. The owner has not given a separate sales number and
+//     the support line is not assumed to be one.
+// Filling in a number here is the only change needed to switch a surface on.
 //
 // THE F-KEY CARD is generated from RetailSystem.POS_PAYMENT_METHODS at print
 // time, never typed by hand: that list is what actually drives the F1-F6
@@ -25,8 +29,11 @@
 
 const AuraHelp = {
   // Digits with country code, no plus sign or spaces, e.g. '9627XXXXXXXX'.
-  ACTION_AURA_SUPPORT_WHATSAPP: null,
+  ACTION_AURA_SUPPORT_WHATSAPP: '962780069485',
   ACTION_AURA_SALES_WHATSAPP: null,
+  // How the same number reads on screen. Shown (left-to-right) under the chat
+  // link so a shop without WhatsApp on this computer can simply phone it.
+  ACTION_AURA_SUPPORT_PHONE_DISPLAY: '+962 78 006 9485',
 
   _ctx: { installationId: null, appVersion: null },
   _loading: null,
@@ -238,6 +245,8 @@ const AuraHelp = {
           ${support ? `<a class="aura-help-action" data-help="support" href="${this._esc(support)}" target="_blank" rel="noopener">
             <span class="aura-help-action-title">${this._esc(t('Chat with Action Aura support'))}</span>
             <span class="aura-help-action-sub">${this._esc(t('Opens WhatsApp with your shop details filled in'))}</span></a>` : ''}
+          ${support ? `<p class="aura-help-contact" id="aura-help-phone" style="margin:0;padding-inline:4px;font-size:14px;color:var(--text-muted)">
+            ${this._esc(t('Phone and WhatsApp'))}: <a href="tel:+${this._esc(this._digits(this.ACTION_AURA_SUPPORT_WHATSAPP))}" dir="ltr" style="font-weight:700;color:var(--text)">${this._esc(this.ACTION_AURA_SUPPORT_PHONE_DISPLAY)}</a></p>` : ''}
           <button type="button" class="aura-help-action" data-help="fkeys">
             <span class="aura-help-action-title">${this._esc(t('Print the till key card'))}</span>
             <span class="aura-help-action-sub">${this._esc(t('A card with the till keys to stick next to the screen'))}</span></button>

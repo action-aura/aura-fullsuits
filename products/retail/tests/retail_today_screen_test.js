@@ -296,6 +296,46 @@ async function testResolvedIsALineAndOpenIsACard() {
   pass('resolved => "All clear" line and no card; open => card and no clear line (both directions)');
 }
 
+// UI-1 (review A #9): on day one the server opens a "Tax reporting" card with
+// reason 'switched_off' -- e-invoicing was simply never enabled. The setup
+// checklist calls the very same step "Optional for now", so the owner's first
+// Today screen contradicted itself. Only that reason is quieted; every reason
+// that means the owner DID enable it keeps its card (the allow-half), and the
+// quiet line must not claim sales ARE being reported (that would be false).
+async function testSwitchedOffEinvoicingIsAQuietLineNotACard() {
+  const off = fixture();
+  off.cards.find((c) => c.kind === 'tax').extra = { reason: 'switched_off' };
+  const h = await renderOwner({ answer: off });
+  const kinds = cardsOf(h.body).map((x) => x.kind);
+  assert.ok(!kinds.includes('tax'), 'a switched-off e-invoicing is still drawn as a "needs attention" card');
+  const clear = cardsOf(h.body).find((x) => x.kind === 'all_clear');
+  assert.ok(clear && /E-invoicing is off, which is optional for now/.test(clear.html), 'no calm "optional for now" line replaced the card');
+  assert.ok(!/Sales are being reported to JoFotara/.test(h.body), 'the quiet line claims sales are being reported, which is false when e-invoicing is off');
+  const shown = /class="td-count"><bdi dir="ltr">(\d+)<\/bdi>/.exec(h.body);
+  assert.ok(shown && Number(shown[1]) === off.needs_count - 1, 'the "Needs you" count still includes the quieted card: ' + (shown && shown[1]));
+
+  // allow-half: every reason that means "the owner switched it on" keeps its card.
+  for (const reason of ['not_connected', 'paused', 'backlog', 'rejected']) {
+    const on = fixture();
+    on.cards.find((c) => c.kind === 'tax').extra = { reason };
+    const r = await renderOwner({ answer: on });
+    assert.ok(cardsOf(r.body).some((x) => x.kind === 'tax'), `reason ${reason} lost its card`);
+    assert.ok(!/optional for now/.test(r.body), `reason ${reason} also got the optional line`);
+  }
+  pass('switched-off e-invoicing => one calm line, no card, count drops; every enabled-but-unhealthy reason keeps its card');
+}
+
+async function testOneTransactionIsSingular() {
+  for (const [n, word] of [[1, 'transaction'], [2, 'transactions'], [0, 'transactions']]) {
+    const d = fixture();
+    d.hero = Object.assign({}, d.hero, { transactions: n });
+    const h = await renderOwner({ answer: d });
+    const re = new RegExp('<bdi dir="ltr">' + n + '</bdi></b> ' + word + '<');
+    assert.ok(re.test(h.html), `${n} should read "${n} ${word}"`);
+  }
+  pass('"1 transaction", "2 transactions", "0 transactions"');
+}
+
 async function testEmptyShopSaysSoAndDrawsNoInventedFigures() {
   const data = fixture();
   data.cards = []; data.needs_count = 0;
@@ -368,6 +408,7 @@ async function testEveryKeyIsInBothCatalogues() {
   }
   // Variants the fixture does not draw: singular forms and the other reasons.
   const extra = ['Good morning', 'Good evening', 'Good morning, {name}', 'Good evening, {name}', 'Today so far · {branch}',
+    'transaction', 'E-invoicing is off, which is optional for now',
     'E-invoicing is switched off', 'E-invoice sending is paused', 'E-invoices are waiting to be sent', 'Some e-invoices were rejected by the tax office',
     '{count} customer owes {amount} for more than 30 days', '{count} drawer needs a check', 'From {count} supplier', '{n} sale', 'Emails sent: {count}',
     'WhatsApp messages sent: {count}', 'E-invoices prepared for the tax office: {count}', 'Could not load Today. Check the connection and try again.'];
@@ -488,6 +529,8 @@ async function testFailureIsShownNotHidden() {
     await testManagerMakesExactlyOneRequest();
     await testCardsOrderPrimaryAndRows();
     await testResolvedIsALineAndOpenIsACard();
+    await testSwitchedOffEinvoicingIsAQuietLineNotACard();
+    await testOneTransactionIsSingular();
     await testEmptyShopSaysSoAndDrawsNoInventedFigures();
     await testThisComputerLabelOnExactlyDrawersAndTax();
     await testButtonsFollowWhatThePersonMayDo();

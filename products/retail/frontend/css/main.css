@@ -2832,7 +2832,12 @@ button.sub-nav-group-label .sub-nav-group-label-stack .sub-nav-status { margin-i
    22.5px tall and 10+10+22.5 made this row 44px -- 4px over every other row. */
 .sub-sidebar-bottom .sub-ai-btn { flex: 1 1 auto; min-inline-size: 0; padding-block: 8px; min-block-size: 40px; }
 .sub-sidebar-bottom .sub-settings-menu-wrap { order: -1; flex: 0 0 auto; }
-.sub-sidebar-bottom button.sub-nav-item.sub-settings-gear { inline-size: auto; min-block-size: 100%; padding-inline: 12px; }
+/* min-block-size 40px, not 100%: with the AI button beside it the row stretched the
+   gear to the button's 40px; UI-1 hides that button while no assistant is set up, and
+   the gear alone fell to its natural 33px -- a shorter bottom row than every other
+   nav row (retail_p1a_shell_e2e.py "ordinary row heights differ"). 40px is the same
+   height the AI button gave it, so the bar no longer changes size with the button. */
+.sub-sidebar-bottom button.sub-nav-item.sub-settings-gear { inline-size: auto; min-block-size: 40px; padding-inline: 12px; }
 .sub-sidebar-bottom .sub-settings-gear .sub-nav-label { display: none; }
 .sub-sidebar.sub-sidebar-rail .sub-sidebar-bottom { flex-direction: column; }
 .sub-sidebar.sub-sidebar-rail .sub-sidebar-bottom .sub-settings-menu-wrap { order: 0; }
@@ -2852,6 +2857,7 @@ button.sub-nav-group-label .sub-nav-group-label-stack .sub-nav-status { margin-i
   border-radius: 9px; color: var(--sub-accent); font-size: 13px; font-weight: 600;
   cursor: pointer; transition: all 0.2s; position: relative;
 }
+.sub-ai-btn[hidden], .sub-more-row[hidden] { display: none; }
 .sub-ai-btn:hover { background: rgba(var(--sub-accent-rgb),0.12); }
 .sub-ai-btn:active { transform: scale(0.97); }
 .sub-exit-btn {

@@ -2233,7 +2233,7 @@ const SubsystemApp = {
     overlay.className = 'auth-overlay';
     overlay.innerHTML = `
       <div class="auth-card">
-        <button onclick="AuraI18n.toggle()" title="Language / اللغة" class="auth-lang-btn">EN | ع</button>
+        <button onclick="SubsystemApp._toggleSetupLang()" title="Language / اللغة" class="auth-lang-btn">EN | ع</button>
         <div class="auth-head">
           <!-- Guarded on the METHOD, not on the module: window.AuraIcons
                alone is truthy for a partially-loaded or older icons.js, and
@@ -2246,7 +2246,11 @@ const SubsystemApp = {
                template literal -- it ends the literal, which is how this
                very comment first broke the whole file. -->
           <div class="auth-icon">${window.AuraIcons && AuraIcons.mark ? AuraIcons.mark(40) : ''}</div>
-          <h2 class="auth-title" id="su-title">${t('Welcome to Action Aura')}</h2>
+          <!-- One product name for the shop owner: "Aura Retail" (the owner's own
+               decision). This heading said "Action Aura" -- the COMPANY name --
+               while the sign-in screen said "Aura Retail" and the licence page
+               "Aura Shop", so the first three screens named three products. -->
+          <h2 class="auth-title" id="su-title">${t('Welcome to Aura Retail')}</h2>
           <p class="auth-sub" id="su-sub">${t('Create your administrator account to get started.')}</p>
           <!-- Translated. This is the FIRST screen a fresh install shows, and
                it was the only auth surface still hard-coded to English while
@@ -2300,7 +2304,51 @@ const SubsystemApp = {
         <p class="auth-foot">${t('Your data is stored locally on this device. No cloud required.')}</p>
       </div>`;
     document.body.appendChild(overlay);
-    setTimeout(() => document.getElementById('su-name')?.focus(), 150);
+    // Put back what the owner had typed before pressing EN | ع (see
+    // _toggleSetupLang). Consumed exactly once, and only if it is fresh, so a
+    // stale snapshot can never leak into a later, unrelated first run.
+    const carry = this._setupCarry;
+    this._setupCarry = null;
+    let restored = false;
+    if (carry && Date.now() - carry.at < this.SETUP_CARRY_MAX_AGE_MS) {
+      Object.keys(carry.values).forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) { el.value = carry.values[id]; restored = true; }
+      });
+    }
+    // Focus the first EMPTY field when we restored something, so the owner
+    // carries on typing where they stopped instead of at "Full name" again.
+    setTimeout(() => {
+      const order = ['su-name', 'su-company', 'su-email', 'su-key', 'su-pass', 'su-pass2'];
+      const target = restored
+        ? order.map((id) => document.getElementById(id)).find((el) => el && !el.value)
+        : document.getElementById('su-name');
+      (target || document.getElementById('su-name'))?.focus();
+    }, 150);
+  },
+
+  // EN | ع on the create-account form. Switching language re-runs init() ->
+  // showSetupModal(), which rebuilds the form from scratch: everything the
+  // owner had typed (name, company, email, key, BOTH passwords) was silently
+  // discarded -- on the very first screen of the product, where the owner is
+  // least able to tell why it happened. Snapshot the fields, let the language
+  // switch run its normal rebuild, and showSetupModal() puts the values back.
+  // The same "carry across a re-render" idea settings-hub.js uses for its
+  // sections. Held in memory only (never localStorage): passwords are in it.
+  SETUP_CARRY_MAX_AGE_MS: 15000,
+  SETUP_CARRY_FIELDS: ['su-name', 'su-company', 'su-email', 'su-key', 'su-pass', 'su-pass2'],
+  _setupCarry: null,
+  _snapshotSetupFields() {
+    const values = {};
+    this.SETUP_CARRY_FIELDS.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && el.value) values[id] = el.value;
+    });
+    return Object.keys(values).length ? { at: Date.now(), values } : null;
+  },
+  _toggleSetupLang() {
+    this._setupCarry = this._snapshotSetupFields();
+    AuraI18n.toggle();
   },
 
   async _setupSubmit() {
@@ -2313,7 +2361,7 @@ const SubsystemApp = {
     const errEl   = document.getElementById('su-error');
     const btn     = document.getElementById('su-btn');
 
-    const showErr = (msg) => { if(errEl){errEl.textContent=msg;errEl.style.display='block';} if(btn){btn.textContent=t('Create Account & Launch');btn.disabled=false;} };
+    const showErr = (msg) => { if(errEl){errEl.textContent=t(msg);errEl.style.display='block';} if(btn){btn.textContent=t('Create Account & Launch');btn.disabled=false;} };
 
     if (!name)                   return showErr('Full name is required.');
     if (!email || !email.includes('@')) return showErr('A valid email address is required.');
@@ -2344,7 +2392,7 @@ const SubsystemApp = {
         // exactly which screen this user actually needs; hand them to it.
         if (res.status === 409) {
           this._authModalOpen = false;
-          return this.showReloginModal(data.error || 'An account already exists on this installation. Please sign in.');
+          return this.showReloginModal(t(data.error || 'An account already exists on this installation. Please sign in.'));
         }
         return showErr(data.error || 'Could not create account. Please try again.');
       }
@@ -2672,7 +2720,7 @@ const SubsystemApp = {
     const key   = document.getElementById('su-key')?.value.trim().toUpperCase();
     const errEl = document.getElementById('su-error');
     const btn   = document.getElementById('su-btn');
-    const showErr = (msg) => { if(errEl){errEl.textContent=msg;errEl.style.display='block';} if(btn){btn.textContent=t('Join shop');btn.disabled=false;} };
+    const showErr = (msg) => { if(errEl){errEl.textContent=t(msg);errEl.style.display='block';} if(btn){btn.textContent=t('Join shop');btn.disabled=false;} };
 
     if (!key) return showErr('A license key is required.');
 
@@ -2866,12 +2914,12 @@ const SubsystemApp = {
   _activationFailureMessage(activation) {
     const a = activation || {};
     if (a.result === 'NETWORK_ERROR') {
-      return 'Could not reach the licensing service, so this key has not been checked yet. '
-        + 'Your account is saved — check the connection and try again.';
+      // Whole sentences through t(), never glued fragments: Arabic word order
+      // differs, so a concatenated sentence is untranslatable by construction.
+      return t('Could not reach the licensing service, so this key has not been checked yet. Your account is saved — check the connection and try again.');
     }
     if (this.ACTIVATION_TRANSIENT_REASONS[a.reason_code]) {
-      return 'The licensing service is temporarily unavailable, so this key has not been '
-        + 'checked yet. Your account is saved — please try again shortly.';
+      return t('The licensing service is temporarily unavailable, so this key has not been checked yet. Your account is saved — please try again shortly.');
     }
     // Deliberately ahead of the `a.detail` fallback, and deliberately says
     // nothing about the key: Owner said yes, so a new key cannot help and
@@ -2885,18 +2933,15 @@ const SubsystemApp = {
     // else gets the reason code to quote to support -- the fastest route to
     // the cause. Keep in step with licensing.js and LicensingMessages.kt.
     if (this.ACTIVATION_LOCAL_VERIFICATION_REASONS[a.reason_code]) {
-      const opening = 'Action Aura approved this activation, but this computer could not verify the signed '
-        + 'licence it received, so it has not been applied yet. Your license key is not the problem — ';
       if (this.ACTIVATION_CLOCK_FIXABLE_REASONS[a.reason_code]) {
-        return opening
-          + 'do not replace it. Check that this computer’s date and time are correct; if they are, contact support.';
+        return t('Action Aura approved this activation, but this computer could not verify the signed licence it received, so it has not been applied yet. Your license key is not the problem — do not replace it. Check that this computer’s date and time are correct; if they are, contact support.');
       }
-      return opening + 'do not replace it, and re-entering it cannot help. Please contact support and quote '
-        + 'this code: ' + (a.reason_code || 'UNKNOWN') + '.';
+      return t('Action Aura approved this activation, but this computer could not verify the signed licence it received, so it has not been applied yet. Your license key is not the problem — do not replace it, and re-entering it cannot help. Please contact support and quote this code: {code}.')
+        .replace('{code}', a.reason_code || 'UNKNOWN');
     }
     // A real verdict from Owner. `detail` is Owner-supplied text; every caller
     // renders it through _esc().
-    return a.detail || 'That license key was not accepted.';
+    return a.detail || t('That license key was not accepted.');
   },
 
   // ── Awaiting-approval screen (registration flow) ──────────────────────────
@@ -2959,7 +3004,7 @@ const SubsystemApp = {
     }
     const statusEl = document.getElementById('su-await-status');
     const errEl    = document.getElementById('su-await-error');
-    const showErr  = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } };
+    const showErr  = (msg) => { if (errEl) { errEl.textContent = t(msg); errEl.style.display = 'block'; } };
 
     let data = null;
     try {
@@ -3068,7 +3113,7 @@ const SubsystemApp = {
     const key   = document.getElementById('su-key-2')?.value.trim().toUpperCase();
     const errEl = document.getElementById('su-key-2-error');
     const btn   = document.getElementById('su-key-2-btn');
-    const showErr = (msg) => { if(errEl){errEl.textContent=msg;errEl.style.display='block';} if(btn){btn.textContent=t('Activate');btn.disabled=false;} };
+    const showErr = (msg) => { if(errEl){errEl.textContent=t(msg);errEl.style.display='block';} if(btn){btn.textContent=t('Activate');btn.disabled=false;} };
     if (!key) return showErr('A license key is required.');
     if (btn) { btn.textContent = t('Activating…'); btn.disabled = true; }
     try {
@@ -3228,7 +3273,7 @@ const SubsystemApp = {
           SubsystemApp.init();
         }
       } else {
-        if (errEl) { errEl.textContent = data.error || 'Invalid email or password.'; errEl.style.display='block'; }
+        if (errEl) { errEl.textContent = t(data.error || 'Invalid email or password.'); errEl.style.display='block'; }
         if (btn) { btn.textContent=t('Log In'); btn.disabled=false; }
       }
     } catch(e) {
@@ -3374,7 +3419,7 @@ const SubsystemApp = {
     const pass2 = document.getElementById('rp-pass2')?.value;
     const errEl = document.getElementById('rp-error');
     const btn   = document.getElementById('rp-btn');
-    const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } if (btn) { btn.textContent = t('Set password'); btn.disabled = false; } };
+    const showErr = (msg) => { if (errEl) { errEl.textContent = t(msg); errEl.style.display = 'block'; } if (btn) { btn.textContent = t('Set password'); btn.disabled = false; } };
     if (!pass || pass.length < 6) return showErr('Password must be at least 6 characters.');
     if (pass !== pass2) return showErr('Passwords do not match.');
 
@@ -3450,7 +3495,7 @@ const SubsystemApp = {
     const pass2 = document.getElementById('es-pass2')?.value;
     const errEl = document.getElementById('es-error');
     const btn   = document.getElementById('es-btn');
-    const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } if (btn) { btn.textContent = t('Set password'); btn.disabled = false; } };
+    const showErr = (msg) => { if (errEl) { errEl.textContent = t(msg); errEl.style.display = 'block'; } if (btn) { btn.textContent = t('Set password'); btn.disabled = false; } };
     if (!pass || pass.length < 6) return showErr('Password must be at least 6 characters.');
     if (pass !== pass2) return showErr('Passwords do not match.');
 
@@ -3913,7 +3958,7 @@ const SubsystemApp = {
 
         <div class="sub-sidebar-bottom">
           ${hasAI ? `
-          <button class="sub-ai-btn" id="sub-ai-sidebar-btn" onclick="SubAI.open('${systemId}')">
+          <button class="sub-ai-btn" id="sub-ai-sidebar-btn"${window.SubAI && window.SubAI._configured === false ? ' hidden' : ''} onclick="SubAI.open('${systemId}')">
             <span>${window.AuraIcons ? AuraIcons.render('sparkles', 18) : '🤖'}</span> <span>${t('AI Assistant')}</span>
             <!-- P0 review-fix (2026-09-27) -- this dot used to render
                  unconditionally, an always-on "the assistant is live" claim
@@ -4026,6 +4071,13 @@ const SubsystemApp = {
     // operate -- which is arguably worse than being skipped, because it looks
     // like it should work.
     this._wireNavKeyboardActivation(shell);
+    // UI-1: learn whether an assistant is configured, so the AI button is not
+    // offered on a shop where it can only say "Not set up". Quiet and
+    // authoritative-answers-only (see SubAI.refreshAvailability). Only when the
+    // button exists at all (hasAI): a cashier has no retail.reports, the status
+    // route answers them 403, and retail_p2_today_e2e.py counts that refusal as
+    // an error on the cashier's screen -- caught the first time it ran.
+    if (hasAI && window.SubAI && typeof window.SubAI.refreshAvailability === 'function') window.SubAI.refreshAvailability(systemId);
   },
 
   // ── Identity chip helpers (P1a item 2) ──────────────────────────────────
@@ -5300,7 +5352,7 @@ const SubsystemApp = {
               <span>${t('Backup & Export')}</span>
             </button>` : '',
       hasAI ? `
-            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubAI.open('${this.active}')">
+            <button class="sub-more-row sub-more-ai"${window.SubAI && window.SubAI._configured === false ? ' hidden' : ''} onclick="SubsystemApp._closeMoreSheet();SubAI.open('${this.active}')">
               <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('sparkles', 20) : '🤖'}</span>
               <span>${t('AI Assistant')}</span>
             </button>` : '',

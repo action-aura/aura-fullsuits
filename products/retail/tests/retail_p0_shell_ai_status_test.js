@@ -275,6 +275,8 @@ function loadSubAI(opts) {
     body: { insertAdjacentHTML() { /* never reached -- panel is pre-seeded, see comment above */ } },
     getElementById: (id) => findAllNodes(root, (n) => n.id === id)[0] || null,
     createElement: (tag) => makeNode(tag),
+    querySelectorAll: () => [],     // UI-1: SubAI._syncAvailability() also hides the phone More-sheet row
+    activeElement: null,
   };
 
   const fetchFn = makeFetch(o.routes || {});
@@ -296,7 +298,7 @@ function loadSubAI(opts) {
   vm.runInContext(scriptSrc, sandbox, { filename: SUB_AI_FILE });
   assert.ok(sandbox.SubAI, 'sub-ai.js did not expose window.SubAI');
 
-  return { SubAI: sandbox.SubAI, statusLog, inputNode: input, panelNode: panel, sidebarBtnNode: sidebarBtn, findAllNodes: (pred) => findAllNodes(root, pred) };
+  return { SubAI: sandbox.SubAI, doc, statusLog, inputNode: input, panelNode: panel, sidebarBtnNode: sidebarBtn, findAllNodes: (pred) => findAllNodes(root, pred) };
 }
 
 // One status route (configured/not-configured/network-error) + optionally a
@@ -596,6 +598,106 @@ async function testMutationProvedPulseDotSync() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// PART 1c (UI-1) -- the AI panel closes on Escape, and the sidebar button is not
+//          offered while no assistant is set up. [MUTATION-PROVED]
+//
+// The panel sits over the till's right pane and its only way out was the small
+// x. And the sidebar button opened a panel whose whole content was "Not set up"
+// -- a dead door on every screen of every shop with no assistant.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const isOpen = (panelNode) => !panelNode.classList.contains('hidden');
+const escEvent = (target, extra) => Object.assign({ key: 'Escape', target, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }, extra);
+
+async function escapeScenario(scriptSrc) {
+  const routes = { 'GET /api/sub/retail/ai/status': () => okJson({ configured: true }) };
+  const { SubAI, doc, panelNode, inputNode } = loadSubAI({ routes, scriptSrc });
+  // focus inside the panel
+  panelNode.contains = (n) => n === inputNode || n === panelNode;
+  SubAI.open('retail'); await settle();
+  assert.ok(isOpen(panelNode), 'harness: the panel did not open');
+  SubAI._onEscape(escEvent(inputNode));
+  assert.ok(!isOpen(panelNode), 'Escape with focus inside the panel did not close it');
+  // focus on the bare page
+  SubAI.open('retail'); await settle();
+  SubAI._onEscape(escEvent(doc.body));
+  assert.ok(!isOpen(panelNode), 'Escape on the page body did not close the open panel');
+  // deny halves: somebody else's key is left alone
+  SubAI.open('retail'); await settle();
+  const elsewhere = makeNode('input');
+  SubAI._onEscape(escEvent(elsewhere));
+  assert.ok(isOpen(panelNode), 'Escape in a field OUTSIDE the panel closed it (it must belong to that field/dialog)');
+  SubAI._onEscape(escEvent(inputNode, { defaultPrevented: true }));
+  assert.ok(isOpen(panelNode), 'an already-handled Escape (defaultPrevented) closed the panel as well -- one Esc closing two things');
+  SubAI._onEscape(escEvent(inputNode, { key: 'a' }));
+  assert.ok(isOpen(panelNode), 'a non-Escape key closed the panel');
+  // closed panel: Escape is a no-op and does not throw
+  SubAI.close();
+  assert.doesNotThrow(() => SubAI._onEscape(escEvent(doc.body)));
+  // focus goes back to where it was
+  let refocused = 0;
+  const opener = makeNode('input'); opener.isConnected = true; opener.focus = () => { refocused += 1; };
+  doc.activeElement = opener;
+  SubAI.open('retail'); await settle();
+  SubAI._onEscape(escEvent(inputNode));
+  assert.strictEqual(refocused, 1, 'closing the panel did not hand focus back to the element that opened it');
+}
+
+async function testEscapeClosesThePanel() {
+  await escapeScenario();
+  console.log('PASS: Escape closes the AI panel (own focus or bare page), leaves other fields/dialogs and handled keys alone, and returns focus');
+}
+
+async function testMutationProvedEscape() {
+  const noEsc = mutate(SUB_AI_SRC, [[`      if (e.key !== 'Escape' || e.defaultPrevented) return;`, `      return;`]]);
+  const m1 = await provesMutation('Escape-to-close survived a mutant whose handler never acts', () => escapeScenario(noEsc));
+  const stealsKeys = mutate(SUB_AI_SRC, [[`      if (!own && !bare) return;`, ``]]);
+  const m2 = await provesMutation('"leave other fields alone" survived a mutant that closes on any Escape', () => escapeScenario(stealsKeys));
+  await escapeScenario();
+  console.log('PASS: ' + m1); console.log('PASS: ' + m2);
+}
+
+async function availabilityScenario(scriptSrc) {
+  const run = async (answer) => {
+    const routes = { 'GET /api/sub/retail/ai/status': answer };
+    const { SubAI, sidebarBtnNode } = loadSubAI({ routes, scriptSrc });
+    sidebarBtnNode.hidden = false;
+    await SubAI.refreshAvailability('retail');
+    await settle();
+    return { SubAI, hidden: sidebarBtnNode.hidden };
+  };
+  assert.strictEqual((await run(() => okJson({ configured: false }))).hidden, true, 'a shop with no assistant still shows the AI button');
+  assert.strictEqual((await run(() => okJson({ configured: true }))).hidden, false, 'a shop WITH an assistant lost its AI button');
+  // Only an authoritative answer counts: a 401 (not signed in yet) or a network blip must not hide it for the session.
+  const unauth = await run(() => ({ ok: false, status: 401, json: () => Promise.resolve({ configured: false }) }));
+  assert.strictEqual(unauth.hidden, false, 'a 401 hid the AI button');
+  assert.strictEqual(unauth.SubAI._configured, null, 'a 401 was recorded as "not configured"');
+  const blip = await run(() => { throw new Error('offline'); });
+  assert.strictEqual(blip.hidden, false, 'a network error hid the AI button');
+  assert.strictEqual(blip.SubAI._configured, null, 'a network error was recorded as "not configured"');
+}
+
+async function testSidebarButtonHiddenWhileNotSetUp() {
+  await availabilityScenario();
+  console.log('PASS: the AI sidebar button is hidden once the server says no assistant is configured -- and only then (401 / offline leave it)');
+}
+
+async function testMutationProvedAvailability() {
+  const alwaysShown = mutate(SUB_AI_SRC, [[`      const hide = this._configured === false;`, `      const hide = false;`]]);
+  const m1 = await provesMutation('hiding the AI button survived a mutant that never hides it', () => availabilityScenario(alwaysShown));
+  const trustsFailures = mutate(SUB_AI_SRC, [[`        if (!res.ok) return;
+        const data = await res.json().catch(() => null);
+        if (!data || typeof data.configured !== 'boolean') return;
+        this._configured = data.configured === true;
+      } catch (e) { return; }`, `        const data = await res.json().catch(() => null);
+        this._configured = !!(res.ok && data && data.configured === true);
+      } catch (e) { this._configured = false; }`]]);
+  const m2 = await provesMutation('"only an authoritative answer counts" survived a mutant that treats 401 / offline as not-configured', () => availabilityScenario(trustsFailures));
+  await availabilityScenario();
+  console.log('PASS: ' + m1); console.log('PASS: ' + m2);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // PART 2 — app-shell.js's `retail.reports` capability gate on the AI button,
 //          in BOTH places it applies (_renderShell sidebar, _openMoreSheet
 //          phone row). [MUTATION-PROVED, both sites]
@@ -716,6 +818,39 @@ function renderMoreSheetHTML(shellSrc, capabilities) {
   const sheet = appended.find((el) => el.id === 'sub-more-sheet');
   assert.ok(sheet, '_openMoreSheet() never appended a #sub-more-sheet element.');
   return sheet.innerHTML;
+}
+
+function testShellHidesAIButtonWhenKnownNotConfigured(shellSrc) {
+  const hiddenOn = (html) => /id="sub-ai-sidebar-btn" hidden/.test(html);
+  assert.ok(hiddenOn(renderShellHTML(shellSrc, ['retail.reports'], { _configured: false })), 'the sidebar AI button is not hidden although no assistant is configured');
+  assert.ok(!hiddenOn(renderShellHTML(shellSrc, ['retail.reports'], { _configured: true })), 'the sidebar AI button is hidden although an assistant IS configured');
+  assert.ok(!hiddenOn(renderShellHTML(shellSrc, ['retail.reports'], { _configured: null })), 'the sidebar AI button is hidden before the answer is known');
+  assert.ok(!hiddenOn(renderShellHTML(shellSrc, ['retail.reports'], null)), 'the shell broke or hid the button with no window.SubAI at all');
+  // each render asks again (quietly), so a shop that sets the assistant up sees the button come back
+  const asked = [];
+  renderShellHTML(shellSrc, ['retail.reports'], { _configured: null, refreshAvailability(id) { asked.push(id); } });
+  assert.deepStrictEqual(asked, ['retail'], 'the shell did not ask SubAI whether an assistant is configured');
+  // deny-half: no AI button for this person => the shell must not even ask the
+  // status route (it answers a cashier 403, which shows up as an error on their screen)
+  const askedByCashier = [];
+  renderShellHTML(shellSrc, ['retail.pos'], { _configured: null, refreshAvailability(id) { askedByCashier.push(id); } });
+  assert.deepStrictEqual(askedByCashier, [], 'the shell asked the AI status route for a person with no AI button');
+}
+
+function testShellAIAvailability() {
+  testShellHidesAIButtonWhenKnownNotConfigured();
+  console.log('PASS: the sidebar AI button renders hidden only when SubAI knows no assistant is configured, and each render asks SubAI to re-check');
+}
+
+async function testMutationProvedShellAIAvailability() {
+  const noAttr = mutate(SHELL_SRC, [[`id="sub-ai-sidebar-btn"\${window.SubAI && window.SubAI._configured === false ? ' hidden' : ''} onclick`, `id="sub-ai-sidebar-btn" onclick`]]);
+  const m1 = await provesMutation('the render-time hidden attribute survived a mutant without it', async () => testShellHidesAIButtonWhenKnownNotConfigured(noAttr));
+  const asksEveryone = mutate(SHELL_SRC, [[`if (hasAI && window.SubAI && typeof window.SubAI.refreshAvailability`, `if (window.SubAI && typeof window.SubAI.refreshAvailability`]]);
+  const m3 = await provesMutation('the hasAI guard survived a mutant that asks the status route for everyone', async () => testShellHidesAIButtonWhenKnownNotConfigured(asksEveryone));
+  const noAsk = mutate(SHELL_SRC, [[`window.SubAI.refreshAvailability(systemId);`, `void 0;`]]);
+  const m2 = await provesMutation('the availability re-check survived a mutant that never asks', async () => testShellHidesAIButtonWhenKnownNotConfigured(noAsk));
+  testShellHidesAIButtonWhenKnownNotConfigured();
+  console.log('PASS: ' + m1); console.log('PASS: ' + m2); console.log('PASS: ' + m3);
 }
 
 function testShellAIButtonShownWithReportsCapability() {
@@ -923,6 +1058,12 @@ const CHECKS = [
   ['AI pulse dot: removed again once a later check answers false', testPulseDotIsRemovedWhenALaterCheckAnswersFalse],
   ['AI pulse dot: sync never throws with no sidebar button rendered', testPulseDotSyncNeverThrowsWithoutASidebarButton],
   ['AI pulse dot: live sync (sub-ai.js) is mutation-proved', testMutationProvedPulseDotSync],
+  ['AI panel: Escape closes it, leaves other keys alone, returns focus', testEscapeClosesThePanel],
+  ['AI panel: Escape handling is mutation-proved', testMutationProvedEscape],
+  ['AI button: hidden once no assistant is configured, authoritative answers only', testSidebarButtonHiddenWhileNotSetUp],
+  ['AI button: availability handling is mutation-proved', testMutationProvedAvailability],
+  ['shell: AI button renders hidden when known not-configured and re-checks each render', async () => testShellAIAvailability()],
+  ['shell: AI availability gating is mutation-proved', testMutationProvedShellAIAvailability],
   ['shell: sidebar AI button shown with retail.reports', testShellAIButtonShownWithReportsCapability],
   ['shell: sidebar AI button hidden without retail.reports', testShellAIButtonHiddenWithoutReportsCapability],
   ['shell: More-sheet AI row shown with retail.reports', testMoreSheetAIRowShownWithReportsCapability],

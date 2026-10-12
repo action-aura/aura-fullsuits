@@ -419,9 +419,9 @@ async function main() {
     const broken = mutate(SRC, [[
       "      } else {\n" +
       "        SubsystemApp.showToast(d.message||'Error','error');\n" +
-      "        this._restoreSaveButton(btn, pid ? 'Save Changes' : 'Add Product');\n" +
+      "        this._restoreSaveButton(btn, t(pid ? 'Save Changes' : 'Add Product'));\n" +
       "      }\n" +
-      "    } catch(e) { this._restoreSaveButton(btn, pid ? 'Save Changes' : 'Add Product'); }",
+      "    } catch(e) { this._restoreSaveButton(btn, t(pid ? 'Save Changes' : 'Add Product')); }",
       "      } else {\n" +
       "        SubsystemApp.showToast(d.message||'Error','error');\n" +
       "        // MUTATED: restore removed -- button stays on its busy label\n" +
@@ -443,8 +443,8 @@ async function main() {
   // not enough, and test (3) is load-bearing.
   await run('M2: _saveProduct never completes a save => test (3) FAILS', async () => {
     const broken = mutate(SRC, [[
-      "if (d.status === 'success') {\n        SubsystemApp.showToast(pid ? 'Product updated' : 'Product added', 'success');",
-      "if (false) { // MUTATED: never takes the success branch, even on a real success\n        SubsystemApp.showToast(pid ? 'Product updated' : 'Product added', 'success');",
+      "if (d.status === 'success') {\n        SubsystemApp.showToast(t(pid ? 'Product updated' : 'Product added'), 'success');",
+      "if (false) { // MUTATED: never takes the success branch, even on a real success\n        SubsystemApp.showToast(t(pid ? 'Product updated' : 'Product added'), 'success');",
     ]]);
     return provesMutation(
       'M2 _saveProduct never completes a save',

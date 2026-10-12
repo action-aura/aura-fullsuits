@@ -345,7 +345,7 @@
     return '<div class="td-nums">' +
       '<div class="td-eyebrow">' + eyebrow + '</div>' +
       '<div class="td-bigrow"><div class="td-big">' + money(h.revenue) + '</div>' +
-      '<div class="td-mini"><div><b>' + num(h.transactions == null ? '—' : h.transactions) + '</b> ' + esc(tr('transactions')) + '</div>' +
+      '<div class="td-mini"><div><b>' + num(h.transactions == null ? '—' : h.transactions) + '</b> ' + esc(tr(Number(h.transactions) === 1 ? 'transaction' : 'transactions')) + '</div>' +
       '<div>' + esc(tr('avg ticket')) + ' <b>' + money(h.avg_ticket) + '</b></div></div></div>' +
       (delta ? '<div class="td-sub">' + delta + '</div>' : '') + gp + tendersHtml(h.tenders) + '</div>';
   }
@@ -585,18 +585,40 @@
       case 'restock': return esc(tr('Nothing is below its reorder level'));
       case 'drawers': return esc(tr('No drawer on this computer needs a check'));
       case 'tax': return esc(tr('Sales are being reported to JoFotara'));
+      // Not a measurement: the owner never switched e-invoicing on (see
+      // needsHtml). Said calmly, and in the checklist's own words ("optional
+      // for now"), so the two surfaces stop disagreeing on day one.
+      case 'tax_optional_off': return esc(tr('E-invoicing is off, which is optional for now'));
       case 'branches':
         return isFiniteNum(x.trading) ? S('All {count} branches have sold today', { count: num(x.trading) }) : esc(tr('Every branch has sold today'));
       default: return '';
     }
   }
 
+  // UI-1 (review A #9): on a brand-new install the server opens a "Tax
+  // reporting -- Needs attention" card with reason 'switched_off', because
+  // e-invoicing is simply not enabled. The product's own rule is "invisible
+  // unless opted in", and the setup checklist already calls the same step
+  // "Optional for now" -- so the owner's very first Today screen contradicted
+  // itself, with a red-ish card for something nobody asked for. That card is
+  // only true once the owner HAS enabled e-invoicing: 'not_connected' (switched
+  // on, no connection), 'paused', 'backlog' and 'rejected' all stay cards.
+  // Only 'switched_off' becomes one calm line. It is NOT turned into
+  // "Sales are being reported to JoFotara": that would be a false claim.
+  function isOptionalOffTaxCard(c) {
+    return !!c && c.kind === 'tax' && ((c.extra && c.extra.reason) || c.reason) === 'switched_off';
+  }
+
   function needsHtml(d) {
-    const cards = d.cards || [];
-    const clear = (d.all_clear || []).map(clearLine).filter(Boolean);
+    const allCards = d.cards || [];
+    const quiet = allCards.filter(isOptionalOffTaxCard);
+    const cards = allCards.filter((c) => !isOptionalOffTaxCard(c));
+    const needs = isFiniteNum(d.needs_count) ? Math.max(0, d.needs_count - quiet.length) : cards.length;
+    const clearRows = (d.all_clear || []).concat(quiet.length ? [{ kind: 'tax_optional_off' }] : []);
+    const clear = clearRows.map(clearLine).filter(Boolean);
     let h = '';
     if (cards.length) {
-      h += '<div class="td-needs-h"><h2>' + esc(tr('Needs you')) + '</h2><span class="td-count">' + num(isFiniteNum(d.needs_count) ? d.needs_count : cards.length) +
+      h += '<div class="td-needs-h"><h2>' + esc(tr('Needs you')) + '</h2><span class="td-count">' + num(needs) +
         '</span><p>' + esc(tr('Ordered by money at stake')) + '</p></div>';
     }
     h += '<div class="td-cards">' + cards.map(cardHtml).join('');

@@ -903,7 +903,7 @@
   // a plain date; the raw values that support may ask for live in a collapsed
   // "Technical details" block instead of being deleted.
   const PRODUCT_NAMES = {
-    AURA_RETAIL: 'Aura Shop',
+    AURA_RETAIL: 'Aura Retail',   // was 'Aura Shop': the owner's name for the product is Aura Retail
     AURA_CLINIC: 'Aura Clinic',
   };
 
@@ -1013,7 +1013,7 @@
   async function onDeactivateClicked() {
     const ok = await confirmDialog({
       title: t('Deactivate this computer?'),
-      message: t('This computer will stop being licensed. To use Aura Shop on it again you will need to enter a license key. Your sales and records are not deleted.'),
+      message: t('This computer will stop being licensed. To use Aura Retail on it again you will need to enter a license key. Your sales and records are not deleted.'),
       confirmLabel: t('Deactivate'),
       danger: true,
     });

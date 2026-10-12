@@ -195,10 +195,30 @@ def main() -> int:
             }""")
             assert truth["version"] and truth["install"], f"fixture problem: server did not give version/install id: {truth}"
 
+            # ================= SHIPPED NUMBER (UI-1) =================
+            def shipped_number():
+                assert pg.evaluate("() => AuraHelp.ACTION_AURA_SUPPORT_WHATSAPP") == "962780069485", "the shipped support number is not the company number"
+                open_help_by_clicks(pg)
+                link = pg.locator('#aura-help-dialog a[data-help="support"]')
+                assert link.count() == 1, "Help offers no way to reach support although the company number is configured"
+                assert link.get_attribute("href").startswith("https://wa.me/962780069485?text="), link.get_attribute("href")
+                phone = pg.locator("#aura-help-phone").inner_text().replace("\u00a0", " ")
+                assert "+962 78 006 9485" in phone, f"the number is not shown on screen: {phone!r}"
+                assert pg.locator('#aura-help-phone a[href="tel:+962780069485"]').count() == 1, "the phone number is not a tel: link"
+                assert_reachable(pg, '#aura-help-dialog a[data-help="support"]', "support link")
+                close_help(pg)
+                keys = pg.evaluate("() => AuraPalette.entries().map(e => e.key)")
+                assert "help:support" in keys, "the palette has no support row although the number is configured"
+
+            check("shipped", "the shipped support number (+962 78 006 9485): chat link, visible phone, tel: link and palette row are all there", shipped_number)
+
             # ================= NULL STATE =================
             def null_state():
-                assert pg.evaluate("() => AuraHelp.ACTION_AURA_SUPPORT_WHATSAPP === null && AuraHelp.ACTION_AURA_SALES_WHATSAPP === null"), \
-                    "the shipped constants are not both null"
+                # UI-1: the support number is now the company number (shown + linked, see
+                # the "shipped" check below); sales is still null. The NULL GUARD is what
+                # this check proves, so null it explicitly -- the surfaces must still hide.
+                assert pg.evaluate("() => AuraHelp.ACTION_AURA_SALES_WHATSAPP === null"), "the sales number is no longer null"
+                pg.evaluate("() => { AuraHelp.ACTION_AURA_SUPPORT_WHATSAPP = null; }")
                 assert pg.evaluate("() => AuraHelp.supportUrl() === null && AuraHelp.salesUrl() === null")
                 open_help_by_clicks(pg)
                 assert pg.locator('#aura-help-dialog [data-help="support"]').count() == 0, "a support link exists while the number is null"

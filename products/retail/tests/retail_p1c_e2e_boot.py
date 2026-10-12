@@ -32,9 +32,10 @@ for _p in (str(REPO), str(BACKEND_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-SCRATCH = Path(r"C:\Users\MSI\.claude\jobs\255fb8da\tmp\till\e2e_scratch")
+SCRATCH = Path(os.environ.get("AURA_E2E_SCRATCH", r"C:\Users\MSI\.claude\jobs\255fb8da\tmp\till\e2e_scratch"))
 SCRATCH.mkdir(parents=True, exist_ok=True)
-SHOTS = Path(r"C:\Users\MSI\.claude\jobs\255fb8da\tmp\till")
+SHOTS = Path(os.environ.get("AURA_E2E_SHOTS", r"C:\Users\MSI\.claude\jobs\255fb8da\tmp\till"))
+SHOTS.mkdir(parents=True, exist_ok=True)
 
 DATA = Path(tempfile.mkdtemp(prefix="aura_p1c_", dir=str(SCRATCH)))
 (DATA / "database" / "subsystems").mkdir(parents=True, exist_ok=True)

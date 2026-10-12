@@ -198,7 +198,7 @@
       var u = w.toUpperCase();
       return w && u !== 'AURA' && u !== 'RETAIL';
     });
-    if (!words.length) return t('Aura Shop');
+    if (!words.length) return t('Aura Retail');
     return words.map(function (w) {
       return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
     }).join(' ');
@@ -275,7 +275,7 @@
 
     var row = el('div', 'pd-row');
     var name = planName(lic.plan_code);
-    row.appendChild(el('span', 'pd-plan', name || t('Aura Shop')));
+    row.appendChild(el('span', 'pd-plan', name || t('Aura Retail')));
     var pair = stateLabel(lic.current_state);
     var badge = el('span', 'pd-badge ' + pair[1], t(pair[0]));
     badge.setAttribute('data-pd', 'state');
