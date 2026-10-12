@@ -3,6 +3,7 @@ invitation accept (Part E/F/H)."""
 from __future__ import annotations
 
 from datetime import timedelta
+from urllib.parse import unquote, urlsplit
 
 from flask import Blueprint, current_app, make_response, redirect, render_template, request, session, url_for
 from flask_babel import gettext as _
@@ -53,10 +54,23 @@ _PENDING_MFA_TTL_SECONDS = 300
 
 
 def _safe_next(value: str | None) -> str | None:
-    """Only ever redirect to a same-site relative path -- rejects absolute
-    URLs and protocol-relative '//host' values to prevent open redirect."""
-    if not value or not value.startswith("/") or value.startswith("//"):
+    """Only ever redirect to a same-site relative path. Rejects absolute
+    URLs, protocol-relative '//host', and the backslash forms browsers
+    (WHATWG URL parsing) fold into '/' -- a leading slash plus a backslash,
+    or its percent-encoded form, both land on https://evil.com/ even though they start with a single '/'
+    (review D SEC-06). Percent-decoded and re-checked so an encoded
+    backslash or control character cannot slip through."""
+    if not value or not value.startswith("/"):
         return None
+    candidates = (value, unquote(value), unquote(unquote(value)))
+    for cand in candidates:
+        if "\\" in cand or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in cand):
+            return None
+        if not cand.startswith("/") or cand.startswith("//"):
+            return None
+        parts = urlsplit(cand)
+        if parts.scheme or parts.netloc:
+            return None
     return value
 
 
