@@ -120,6 +120,10 @@ def _fresh_state() -> dict:
         "progress": None,
         "error_code": None,
         "installing_since": None,
+        # File name of the safety copy taken just before the last installer
+        # launch (BACKUP-1). Recorded so a later "go back" flow knows which
+        # backup matches the version that was replaced.
+        "pre_update_backup": None,
     }
 
 
@@ -138,6 +142,7 @@ class UpdateService:
         is_installable_build: Optional[Callable[[], bool]] = None,
         install_dir: Optional[str] = None,
         clock: Callable[[], float] = time.time,
+        pre_install_backup: Optional[Callable[[], str]] = None,
     ):
         parse_semver(app_version)  # fail at construction, not on the first poll
         self._dir = Path(app_data_dir) / "updates"
@@ -152,6 +157,10 @@ class UpdateService:
         self._is_installable = is_installable_build or default_is_installable_build
         self._install_dir = install_dir
         self._clock = clock
+        # BACKUP-1: called right before an installer is launched. Returns the
+        # backup's file name; ANY exception means "no safety copy" and the
+        # install is refused. None only in tests/dev that wire no backup.
+        self._pre_install_backup = pre_install_backup
         self._lock = threading.RLock()
         self._worker: Optional[threading.Thread] = None
         self._last_persist = 0.0
@@ -515,7 +524,22 @@ class UpdateService:
             if not _directory_is_writable(install_dir):
                 # A per-machine install (Program Files) needs the elevated path.
                 args.append("/ALLUSERS")
-            self._state.update(phase="installing", installing_since=self._clock(), error_code=None)
+            # An installer replaces the program, and a new build may migrate the
+            # shop's database. If the migration goes wrong the only way back is
+            # a copy taken BEFORE it ran -- so no copy, no install. This is
+            # deliberately the last gate before the launch: a refused install
+            # leaves phase 'ready' and the downloaded file in place, so the
+            # person can fix the cause (disk full) and press Install again.
+            backup_name = None
+            if self._pre_install_backup is not None:
+                try:
+                    backup_name = self._pre_install_backup()
+                except Exception:
+                    log.exception("updates: pre-update backup failed; installer NOT launched")
+                    raise UpdateError("PRE_UPDATE_BACKUP_FAILED", "Could not back up the shop before updating.")
+                log.info("updates: pre-update backup %s taken", backup_name)
+            self._state.update(phase="installing", installing_since=self._clock(), error_code=None,
+                               pre_update_backup=backup_name)
             self._persist()
             try:
                 self._launch(str(path), args)

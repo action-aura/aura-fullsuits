@@ -34,7 +34,8 @@ CURRENT = "1.0.0-rc.8"
 class Rig:
     """One service wired to fakes, with every collaborator countable."""
 
-    def __init__(self, tmp_path, *, activated=True, installable=True, launcher=None, clock=None, **client_kw):
+    def __init__(self, tmp_path, *, activated=True, installable=True, launcher=None, clock=None,
+                 pre_install_backup=None, **client_kw):
         self.key = OwnerKey()
         self.owner = FakeOwnerClient(self.key, **client_kw)
         self.client_factory_calls = 0
@@ -52,6 +53,8 @@ class Rig:
         kwargs = {}
         if clock is not None:
             kwargs["clock"] = clock
+        if pre_install_backup is not None:
+            kwargs["pre_install_backup"] = pre_install_backup
         self.service = UpdateService(
             app_data_dir=self.app_data,
             client_factory=client_factory,

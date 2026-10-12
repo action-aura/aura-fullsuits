@@ -1982,6 +1982,7 @@
       case 'DOWNLOAD_TOO_LARGE':
       case 'DOWNLOAD_CORRUPT': return t('The downloaded file was damaged, so it was deleted. Try again.');
       case 'INSTALLER_TAMPERED': return t('The downloaded file changed after it was checked, so it was deleted and not installed. Download it again.');
+      case 'PRE_UPDATE_BACKUP_FAILED': return t('We could not back up your shop before updating, so nothing was installed. Free some disk space and try again.');
       case 'INSTALL_LAUNCH_FAILED': return t('Could not start the installer. Try again, or ask for help.');
       case 'UNSUPPORTED_PLATFORM': return t('This copy of Aura Retail cannot update itself.');
       case 'NOT_READY': return t('The update is not ready yet.');

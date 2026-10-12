@@ -2673,5 +2673,22 @@
   "Hide until next time": "Hide until next time",
   "We are sending a confirmation email to your address.": "We are sending a confirmation email to your address.",
   "A confirmation email was sent a moment ago.": "A confirmation email was sent a moment ago.",
-  "Email is not set up on this computer yet, so no confirmation email was sent. You can confirm your address later.": "Email is not set up on this computer yet, so no confirmation email was sent. You can confirm your address later."
+  "Email is not set up on this computer yet, so no confirmation email was sent. You can confirm your address later.": "Email is not set up on this computer yet, so no confirmation email was sent. You can confirm your address later.",
+  "Automatic backups": "Automatic backups",
+  "Could not load backup status.": "Could not load backup status.",
+  "the folder was not found (is the USB drive plugged in?)": "the folder was not found (is the USB drive plugged in?)",
+  "that folder cannot be used": "that folder cannot be used",
+  "the copy failed": "the copy failed",
+  "not copied yet": "not copied yet",
+  "skipped": "skipped",
+  "Last copy to": "Last copy to",
+  "No backup in the last 48 hours": "No backup in the last 48 hours",
+  "failed": "failed",
+  "Last backup": "Last backup",
+  "never": "never",
+  "Last automatic backup": "Last automatic backup",
+  "Every day": "Every day",
+  "Automatic backup": "Automatic backup",
+  "Also copy each backup to this folder (USB drive, OneDrive or Google Drive folder)": "Also copy each backup to this folder (USB drive, OneDrive or Google Drive folder)",
+  "We could not back up your shop before updating, so nothing was installed. Free some disk space and try again.": "We could not back up your shop before updating, so nothing was installed. Free some disk space and try again."
 }

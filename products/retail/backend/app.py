@@ -737,6 +737,49 @@ app.register_blueprint(make_licensing_blueprint(
 # scheduler is built and no network call can ever be made. Android is excluded
 # on purpose: its device key lives in Kotlin and its installer path differs,
 # so it is a later wave, not a half-working one here.
+# BACKUP-1 (scheduler wiring only; the logic lives in commercial_runtime/backup).
+# Same folder the /api/backup blueprint above defaults to, so the automatic
+# backups appear in the same list the Settings screen shows.
+from commercial_runtime.backup import schedule as _backup_schedule
+
+_BACKUP_APP_DATA_DIR = str(Path(DATABASE_DIR).parent)
+_BACKUP_DIR = os.environ.get('AURA_BACKUP_DIR') or os.path.join(_BACKUP_APP_DATA_DIR, 'backups')
+
+
+def _backup_day_key(now_utc):
+    """The shop's BUSINESS day for `now_utc`, so 'once per day' means the
+    trading day the owner reports on (a shop that closes at 01:30 is not backed
+    up twice in one night). Uses retail's own business_now() on the first
+    company that has declared a clock; with none declared it is the device's
+    calendar date. Any failure falls back to that date -- a wrong day key can
+    only cost a duplicate backup, never a missed one (the 24 h rule backs it)."""
+    try:
+        from database.schema import get_retail_conn
+        from core.retail import metrics as _metrics
+        conn = get_retail_conn()
+        try:
+            row = conn.execute("SELECT company_id FROM retail_settings LIMIT 1").fetchone()
+            if row:
+                return _metrics.business_now(conn, row[0], now_utc.astimezone()).date().isoformat()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return now_utc.astimezone().date().isoformat()
+
+
+_backup_scheduler = (
+    _backup_schedule.BackupScheduler(
+        'retail', _BACKUP_APP_DATA_DIR, _BACKUP_DIR, APP_VERSION,
+        settings=_backup_schedule.BackupSettings(_BACKUP_APP_DATA_DIR),
+        status=_backup_schedule.BackupStatus(_BACKUP_APP_DATA_DIR),
+        day_key_fn=_backup_day_key)
+    # Desktop only: on Android the backup folder is the app sandbox, so an
+    # "automatic" copy there would die with the phone (that half is the
+    # Save/Share buttons in BackupRestoreScreen).
+    if LICENSING_PLATFORM != 'ANDROID' else None
+)
+
 _update_service = build_update_service(
     app_data_dir=str(Path(DATABASE_DIR).parent),
     owner_base_url=OWNER_LICENSING_BASE_URL if LICENSING_PLATFORM != 'ANDROID' else '',
@@ -745,6 +788,9 @@ _update_service = build_update_service(
     device_identity_factory=_licensing_device_identity_factory,
     release_channel='rc',
     app_version=APP_VERSION,
+    # No safety copy, no install (see UpdateService.install).
+    pre_install_backup=_backup_schedule.make_pre_update_backup(
+        'retail', _BACKUP_APP_DATA_DIR, _BACKUP_DIR, APP_VERSION),
 )
 _update_scheduler = UpdateScheduler(_update_service) if _update_service is not None else None
 app.register_blueprint(make_updates_blueprint(_update_service, current_version=APP_VERSION))
@@ -824,6 +870,18 @@ def _start_update_polling():
     except Exception:
         logging.getLogger(__name__).warning(
             'Update channel failed to start; this till keeps booting.', exc_info=True)
+
+
+def _start_backup_scheduler():
+    """Boot seam (init_app): arm the automatic backup. Never raises -- a broken
+    scheduler must not stop a till booting. No-op on Android."""
+    if _backup_scheduler is None:
+        return
+    try:
+        _backup_scheduler.start()
+    except Exception:
+        logging.getLogger(__name__).warning(
+            'Backup scheduler failed to start; this till keeps booting.', exc_info=True)
 
 
 # Multi-device sync foundation (2026-08-06), Task 5: the background push/pull
@@ -3222,6 +3280,7 @@ def init_app():
     _resume_whatsapp_workers()
     _start_update_polling()
     _start_crash_report_sender()
+    _start_backup_scheduler()
     global _INIT_APP_HAS_RUN
     _INIT_APP_HAS_RUN = True
     return app

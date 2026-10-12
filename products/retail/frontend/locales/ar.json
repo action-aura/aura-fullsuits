@@ -2673,5 +2673,22 @@
   "Hide until next time": "أخفِ حتى المرة القادمة",
   "We are sending a confirmation email to your address.": "نرسل رسالة تأكيد إلى بريدك الإلكتروني.",
   "A confirmation email was sent a moment ago.": "تم إرسال رسالة تأكيد قبل لحظات.",
-  "Email is not set up on this computer yet, so no confirmation email was sent. You can confirm your address later.": "البريد الإلكتروني غير مُعدّ على هذا الجهاز بعد، لذلك لم تُرسل رسالة تأكيد. يمكنك تأكيد بريدك لاحقًا."
+  "Email is not set up on this computer yet, so no confirmation email was sent. You can confirm your address later.": "البريد الإلكتروني غير مُعدّ على هذا الجهاز بعد، لذلك لم تُرسل رسالة تأكيد. يمكنك تأكيد بريدك لاحقًا.",
+  "Automatic backups": "النسخ الاحتياطي التلقائي",
+  "Could not load backup status.": "تعذّر تحميل حالة النسخ الاحتياطي.",
+  "the folder was not found (is the USB drive plugged in?)": "لم يتم العثور على المجلد (هل فلاش USB موصول؟)",
+  "that folder cannot be used": "لا يمكن استخدام هذا المجلد",
+  "the copy failed": "فشل النسخ",
+  "not copied yet": "لم يتم النسخ بعد",
+  "skipped": "تم التخطي",
+  "Last copy to": "آخر نسخة إلى",
+  "No backup in the last 48 hours": "لا توجد نسخة احتياطية خلال آخر 48 ساعة",
+  "failed": "فشل",
+  "Last backup": "آخر نسخة احتياطية",
+  "never": "أبدًا",
+  "Last automatic backup": "آخر نسخة احتياطية تلقائية",
+  "Every day": "كل يوم",
+  "Automatic backup": "النسخ الاحتياطي التلقائي",
+  "Also copy each backup to this folder (USB drive, OneDrive or Google Drive folder)": "انسخ كل نسخة احتياطية أيضًا إلى هذا المجلد (فلاش USB أو مجلد OneDrive أو Google Drive)",
+  "We could not back up your shop before updating, so nothing was installed. Free some disk space and try again.": "تعذّر أخذ نسخة احتياطية من متجرك قبل التحديث، لذلك لم يتم تثبيت شيء. وفّر مساحة على القرص وحاول مرة أخرى."
 }
