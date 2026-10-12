@@ -9418,9 +9418,20 @@ def create_sale():
             (Decimal(str(subtotal)) - Decimal(str(discount))).quantize(_quant, rounding=ROUND_HALF_UP))
         # MONEY-4a / D1: ONE business date for the sale AND its COGS journal below.
         gl_business_date = _gl_business_date(conn, cid)
+        # MONEY-4a / D3: the part of what was retained that arrived as a VOUCHER is not cash.
+        # Split tender: the `voucher` rows of the very settlement the payments rows were just
+        # written from; single tender: the whole retained amount when the method is 'voucher'.
+        if split_settlement:
+            voucher_for_gl = sum(
+                (float(_t_retained) for _t_method, _t_retained in split_settlement['rows']
+                 if _t_method == gl.TENDER_VOUCHER and float(_t_retained) > _eps), 0.0)
+        else:
+            voucher_for_gl = (net_received if (str(pm).strip().lower() == gl.TENDER_VOUCHER
+                                               and net_received > _eps) else 0.0)
         gl.post_sale(conn, cid, bid, sale_id, sale_number, currency,
                      net_received, ar_amount_for_gl, points_redeemed_amount,
-                     tax, revenue_amount, business_date=gl_business_date)
+                     tax, revenue_amount, business_date=gl_business_date,
+                     voucher_amount=voucher_for_gl)
 
         # Schema v39 (cost basis for COGS): Dr Cost of Goods Sold / Cr
         # Inventory for the cost basis of what actually left the shelf on

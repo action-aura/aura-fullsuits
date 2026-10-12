@@ -219,6 +219,20 @@ ACCOUNT_SHRINKAGE = '5910'
 # it is split), so a cheque clearing is a move between 1150/2050 and 1000.
 ACCOUNT_CHEQUES_ON_HAND = '1150'
 ACCOUNT_CHEQUES_PAYABLE = '2050'
+# MONEY-4a / review D3: the till's `voucher` tender. A voucher is NOT cash -- no money arrives
+# when a customer pays with one -- and it is a liability the shop owes the holder until it is
+# redeemed. Redeeming one therefore DEBITS this account (the liability falls) instead of
+# debiting 1000 (which booked cash that never existed). Aura cannot SELL a voucher yet, so until
+# it can, this account will honestly show a DEBIT balance equal to the vouchers redeemed but
+# never sold here -- visible, not hidden inside the cash balance. Flat, no parent, seeded like
+# the STOCK-BOOKS and cheque accounts above (DEFAULT_CHART, lazily, no schema claim).
+ACCOUNT_VOUCHERS_OUTSTANDING = '2300'
+#: The payment method string the till sends for a voucher tender.
+TENDER_VOUCHER = 'voucher'
+
+
+def _is_voucher(method):
+    return str(method or '').strip().lower() == TENDER_VOUCHER
 
 #: (code, name, account_type, normal_balance, parent_code). Parents are
 #: listed before children -- `ensure_default_chart` inserts in this order
@@ -277,6 +291,8 @@ DEFAULT_CHART = (
     # MONEY-3 M3 (v51): names frozen once released, like every row above.
     ('1150', 'Cheques Under Collection', 'asset', 'debit', None),
     ('2050', 'Cheques Payable', 'liability', 'credit', None),
+    # MONEY-4a (D3): name frozen once released, like every row above.
+    ('2300', 'Vouchers Outstanding', 'liability', 'credit', None),
 )
 
 
@@ -1800,7 +1816,8 @@ def subledger_tie(conn, cid, tb):
 
 def post_sale(conn, cid, branch_id, sale_id, sale_number, currency,
               cash_amount, ar_amount, loyalty_redeemed_amount,
-              tax_amount, revenue_amount, business_date=None, posted_by=None):
+              tax_amount, revenue_amount, business_date=None, posted_by=None,
+              voucher_amount=0):
     """Dr Cash (tender retained) + Dr Accounts Receivable (credit extended,
     ONLY when the caller's own `is_credit and balance_due > _eps and
     customer_id` gate already fired -- `ar_amount` must be exactly the
@@ -1824,11 +1841,26 @@ def post_sale(conn, cid, branch_id, sale_id, sale_number, currency,
     from `total - ar_amount - loyalty_redeemed_amount` by up to that same
     half-fil, which is exactly what the tolerance exists to absorb rather
     than reject a real, already-shipped sale.
+
+    MONEY-4a / D3 -- A VOUCHER IS NOT CASH. `cash_amount` is the whole tender retained, in
+    every method. `voucher_amount` is the part of it that arrived as the `voucher` tender
+    (the same figure the sale's `payments` row of method 'voucher' carries): that part is
+    debited to Vouchers Outstanding (2300), the rest to Cash (1000). The two debits sum to
+    `cash_amount` exactly (the voucher part is capped at it), so the journal balances exactly
+    as before and a cash-only sale (voucher_amount 0) is byte-for-byte unchanged.
     """
     lines = []
+    voucher_part = Decimal('0')
+    if voucher_amount and voucher_amount > 0 and cash_amount and cash_amount > 0:
+        voucher_part = min(Decimal(str(voucher_amount)), Decimal(str(cash_amount)))
     if cash_amount and cash_amount > 0:
-        lines.append({'account_code': ACCOUNT_CASH, 'debit': cash_amount,
-                       'memo': 'Tender retained'})
+        cash_part = Decimal(str(cash_amount)) - voucher_part
+        if cash_part > 0:
+            lines.append({'account_code': ACCOUNT_CASH, 'debit': cash_part,
+                           'memo': 'Tender retained'})
+        if voucher_part > 0:
+            lines.append({'account_code': ACCOUNT_VOUCHERS_OUTSTANDING, 'debit': voucher_part,
+                           'memo': 'Paid by voucher (not cash)'})
     if ar_amount and ar_amount > 0:
         lines.append({'account_code': ACCOUNT_AR, 'debit': ar_amount,
                        'memo': 'Credit extended to customer'})
@@ -1910,13 +1942,19 @@ def post_return(conn, cid, branch_id, return_id, return_number, currency,
     settled = Decimal('0')
     lines = []
     legs = [lg for lg in (tender_legs or ()) if lg.get('amount', 0) > 0]
-    if len(legs) > 1 and abs(sum(Decimal(str(lg['amount'])) for lg in legs)
-                              - Decimal(str(tender_refund_amount or 0))) < Decimal('0.0005'):
+    legs_cover_refund = bool(legs) and abs(
+        sum(Decimal(str(lg['amount'])) for lg in legs)
+        - Decimal(str(tender_refund_amount or 0))) < Decimal('0.0005')
+    if legs_cover_refund and (len(legs) > 1 or any(_is_voucher(lg.get('method')) for lg in legs)):
         # MONEY-3 M1: one line per refund leg. Every tender method lands in ACCOUNT_CASH -- the
         # SAME account post_sale debits for all methods (there is no per-method clearing account
         # in this chart) -- so the totals are unchanged; the memo says which method paid back.
+        # MONEY-4a / D3: EXCEPT a voucher leg, which gives the voucher's value back to the holder
+        # and so credits Vouchers Outstanding (2300), mirroring post_sale. A single non-voucher
+        # leg still takes the historic single-line path below.
         for lg in legs:
-            lines.append({'account_code': ACCOUNT_CASH, 'credit': lg['amount'],
+            code = ACCOUNT_VOUCHERS_OUTSTANDING if _is_voucher(lg.get('method')) else ACCOUNT_CASH
+            lines.append({'account_code': code, 'credit': lg['amount'],
                            'memo': f"Refunded via {lg['method']}"})
             settled += Decimal(str(lg['amount']))
     elif tender_refund_amount and tender_refund_amount > 0:
