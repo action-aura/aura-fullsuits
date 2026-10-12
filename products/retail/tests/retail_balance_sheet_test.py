@@ -155,6 +155,7 @@ from commercial_runtime.identity.registry_db import get_conn as registry_conn  #
 from commercial_runtime.security.passwords import hash_password  # noqa: E402
 from database.schema import get_retail_conn  # noqa: E402
 from core.retail import general_ledger as gl  # noqa: E402
+from api import retail_api as _ra  # noqa: E402  (MONEY-4a: the live-journal date seam)
 from core.retail import financial_statements as fin  # noqa: E402
 
 API = '/api/sub/retail'
@@ -545,6 +546,9 @@ def test_as_of_date_boundary_is_inclusive_of_that_date_and_excludes_the_day_afte
 
     for amount, business_date in ((1200.0, the_day_before), (50.0, as_of), (999.0, the_day_after)):
         monkeypatch.setattr(gl, '_today', lambda d=business_date: d)
+        # MONEY-4a: routes now date live journals with `_ra._gl_business_date` (the shop's business day), not the
+        # bare `gl._today()` fallback this test used to control. Pin the SAME date at the new seam; the assertions are unchanged.
+        monkeypatch.setattr(_ra, '_gl_business_date', lambda conn, cid, moment=None: gl._today())
         r = client.post(f'{API}/sales', json={
             'items': [{'product_id': pid, 'quantity': amount}],  # sell_price 1.0 -> total==amount
             'payment_method': 'cash', 'amount_paid': amount,
@@ -587,6 +591,9 @@ def test_non_padded_as_of_date_still_excludes_the_day_after(client, monkeypatch)
 
     for amount, business_date in ((75.0, on_the_day), (500.0, the_day_after)):
         monkeypatch.setattr(gl, '_today', lambda d=business_date: d)
+        # MONEY-4a: routes now date live journals with `_ra._gl_business_date` (the shop's business day), not the
+        # bare `gl._today()` fallback this test used to control. Pin the SAME date at the new seam; the assertions are unchanged.
+        monkeypatch.setattr(_ra, '_gl_business_date', lambda conn, cid, moment=None: gl._today())
         r = client.post(f'{API}/sales', json={
             'items': [{'product_id': pid, 'quantity': amount}],  # sell_price 1.0 -> total==amount
             'payment_method': 'cash', 'amount_paid': amount,

@@ -66,7 +66,15 @@ for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
 
 DATA = Path(tempfile.mkdtemp(prefix="aura_retail_moneysync_"))
 (DATA / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
-os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA))
+# AURA_SITE_RELAY_ENABLED="0" (ROADMAP residual D7, closed 2026-10-12): this file
+# only passed under run_all_tests.py, whose _child_test_env() defaults hub mode
+# off. Bare pytest left it on, and a LAN hub thread raced
+# test_an_unresolvable_branch_uid_falls_back_visibly_not_silently -- measured
+# 1 failed / 11 passed on one bare run, then 13/13 on the next two: a timing
+# flake, not a product defect. Nothing here exercises the LAN hub, so the file
+# turns it off itself, same as retail_cash_drawer_test.py and its siblings.
+os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA),
+                  AURA_SITE_RELAY_ENABLED="0")
 os.environ.pop("AURA_DEV", None)
 
 from commercial_runtime.licensing_contracts.test_support import seed_active_license  # noqa: E402

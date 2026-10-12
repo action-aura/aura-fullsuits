@@ -38,18 +38,26 @@ from datetime import datetime, timezone
 
 from core.retail import cheques as cheque_engine
 from core.retail import general_ledger as gl
+from core.retail import metrics
 
 
-def event_business_date(created_at_utc):
+def event_business_date(created_at_utc, conn=None, cid=None):
     """The local calendar date of an event's UTC timestamp -- the same clock `general_ledger._today()`
     reads (the device's local zone), applied to the EVENT's instant instead of to "now". A journal
     is dated by the day the bank fact happened, not by the day a computer got around to booking
     it: a cheque cleared 10 days before an upgrade, or on a peer that synced yesterday, must land
-    in the cash flow of the day it cleared. Unparseable or missing -> today (never raises)."""
+    in the cash flow of the day it cleared. Unparseable or missing -> today (never raises).
+
+    MONEY-4a / D1: with `conn` and `cid` the instant is moved onto the shop's BUSINESS-day clock
+    (`metrics.business_now`) before the date is taken, so a cheque cleared at 01:30 in a shop whose
+    trading day starts at 06:00 lands on the day the sales reports file that moment under. Without
+    them (or with start hour 0 and no declared zone) it is the plain local calendar date."""
     try:
         parsed = datetime.fromisoformat(str(created_at_utc).replace('Z', '+00:00'))
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
+        if conn is not None and cid is not None:
+            return metrics.business_now(conn, cid, parsed).strftime('%Y-%m-%d')
         return parsed.astimezone().strftime('%Y-%m-%d')
     except (TypeError, ValueError):
         return gl._today()
@@ -91,7 +99,7 @@ def reconcile_cheque_journals(conn, cid, cheque, events):
     postings = cheque_engine.desired_postings(events)
     wanted = {gl.cheque_journal_uid(cheque_id, p.kind, p.index): p for p in postings}
     latest = max((e['created_at_utc'] or '' for e in events), default='')
-    reversal_date = event_business_date(latest) if latest else gl._today()
+    reversal_date = event_business_date(latest, conn, cid) if latest else gl._today()
 
     existing = {row['uid']: row['id'] for row in conn.execute(
         "SELECT id, uid FROM gl_journals WHERE company_id=? AND source_type='cheque' AND source_uid=?",
@@ -105,7 +113,7 @@ def reconcile_cheque_journals(conn, cid, cheque, events):
                 conn, cid, cheque['branch_id'], cheque_id, number, direction, posting.kind, posting.index,
                 cheque['currency'] or 'JOD', cheque['amount'],
                 _memo_for(posting.kind, driving['event_type'] if driving else posting.kind, direction, number),
-                business_date=event_business_date(driving['created_at_utc']) if driving else None)
+                business_date=event_business_date(driving['created_at_utc'], conn, cid) if driving else None)
             changed += 1
             continue
         last, length = _chain_end(conn, cid, existing[uid])

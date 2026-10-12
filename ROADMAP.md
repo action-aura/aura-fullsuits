@@ -7581,3 +7581,28 @@ Closes crew A's three written-down gaps and one defect found while planning (pla
   this one is cashed in. This revision runs against the LIVE Neon database on the next deploy.
 * **Retail schema v52** is reserved for the TIDY-RETAIL crew (branch `feat/tidy-retail`) IF the refund-tax
   re-check needs a schema change. If it does not, the claim is released in the cash-in note.
+
+## 2026-10-12 — MONEY-4a (books on the business day; vouchers are not cash) — no schema claim
+
+Branch `feat/tidy-retail`. Fixes review defects D1 and D3. **No retail schema version, no Owner revision.**
+
+* **D1 — journals are dated on the shop's BUSINESS day.** Measured (probe): start hour 6, a 100.000 sale at
+  01:30 on the 12th was in business day the 11th in every sales report and on the 12th in the P&L, balance
+  sheet and cash flow, because the routes called `gl.post_*` with no `business_date` and the fallback
+  `general_ledger._today()` is the calendar day. Every live route now computes `retail_api._gl_business_date`
+  once and passes it to every poster (sale+COGS, return+COGS reversal, customer/supplier payment, PO
+  create/prepay/receive/close-short, transfer send/receive, product create/delete, stock adjust/exception,
+  bulk-import opening stock, payment-void reversals). The stock/PO/transfer posters gained a `business_date`
+  kwarg; cheque journals keep their event-instant date, now on the business-day clock. `_today()` is NOT
+  changed; a synced `gl_journal` keeps the SENDER's date; start hour 0 is unchanged. Test:
+  `retail_gl_business_day_test.py`. Left on the original's date on purpose: PO-cancel, transfer-recall and
+  duplicate-send reversals (they mirror their original, not a calendar fallback).
+  **Not rewritten:** journals already posted on the calendar day stay where they are. A shop with a non-zero
+  start hour has some historical journals one day later than its reports; that is a data decision, not made here.
+* **D3 — a `voucher` tender is not cash.** New account **2300 "Vouchers Outstanding"** (liability, credit
+  normal), seeded lazily from `DEFAULT_CHART` like 1250/3900/5910/1150/2050 (existing installs get it at the next
+  posting; peers receive account metadata in the `gl_journal` payload and post nothing). `post_sale` debits 2300
+  for the voucher part of the tender and 1000 for the rest; a refund leg of method `voucher` credits 2300.
+  **Until Aura can SELL a voucher, 2300 shows a DEBIT balance equal to the vouchers redeemed but never sold
+  here** — honest and visible, not hidden in cash. Test: `retail_gl_voucher_tender_test.py`. Not done: a
+  `customer_payment` with method `voucher` (on-account payment) still debits 1000; the till button is untouched.
