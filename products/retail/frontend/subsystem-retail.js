@@ -4220,10 +4220,11 @@ const RetailSystem = {
           background:var(--state-warning-surface);color:var(--state-warning-text); }
         /* The real <select> stays in the page as the model the whole till reads and
            writes (.value, onchange, the F7 picker, held-sale resume), but is not
-           painted: a 1px, fully transparent box. Not display:none -- it must stay a
+           painted: a clipped box (clip-path, NOT opacity: a transparent control reads as unreadable text to the contrast sweep). Not display:none -- it must stay a
            real, reachable form control for assistive tech and for tests that drive
-           it. Out of the tab order (the button is the keyboard route). */
-        .pos-cust-model { position:absolute;inline-size:1px;block-size:1px;margin:-1px;padding:0;border:0;overflow:hidden;opacity:0;pointer-events:none; }
+           it, and it is declared at the touch floor (a 1px control fails the
+           floor sweep even though nothing can touch it). Out of the tab order (the button is the keyboard route). */
+        .pos-cust-model { position:absolute;inline-size:var(--touch-target-min, 44px);block-size:var(--touch-target-min, 44px);padding:0;border:0;overflow:hidden;clip-path:inset(50%);pointer-events:none;z-index:-1; }
 
         /* ── Summary + the total ─────────────────────────────────────────── */
         /* SHRINKABLE AND SCROLLABLE, not flex-shrink:0. Measured at 1366x768
