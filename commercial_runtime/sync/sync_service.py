@@ -3136,8 +3136,31 @@ class SyncService:
                 delta_frag, delta_binds = self._delta_set_clause("customers", cust_cols, changed_fields)
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
-                credit_insert_cols = "".join(f", {c}" for c in credit_cols)
-                credit_insert_marks = ",?" * len(credit_cols)
+                # MONEY-4c: a customer CREATE whose payload carries no credit_mode is a new
+                # customer with no stated terms: it is stored 'inherit' (follow this shop's
+                # default). Without this the row took the column's DDL default, which on every
+                # database that already had the column is 'none' -- an explicit refusal that
+                # silently defeats the shop default (the bug v53 exists to close). This is the
+                # INSERT half only: `cust_cols` (the UPDATE half) is untouched, so an UPDATE
+                # event that omits the key still leaves the existing terms alone, per the
+                # B2 rule above. An event from a computer older than v53 always carries an
+                # explicit 'none' on create, and that is stored as sent -- not distinguishable
+                # from a deliberate choice, and never more credit than the shop default.
+                #
+                # A create/update that carries credit_mode as null means "inherit" too: that is how a
+                # v53 computer says it on the wire (the word itself would be read as UNLIMITED credit
+                # by an older computer), so null is stored as 'inherit' here, not as NULL.
+                insert_credit_cols = list(credit_cols)
+                insert_credit_vals = [
+                    ("inherit" if (c == "credit_mode" and p.get(c) in (None, "")) else p.get(c))
+                    for c in credit_cols]
+                if "credit_mode" not in p and any(
+                        r[1] == "credit_mode"
+                        for r in conn.execute('PRAGMA table_info("customers")').fetchall()):
+                    insert_credit_cols.append("credit_mode")
+                    insert_credit_vals.append("inherit")
+                credit_insert_cols = "".join(f", {c}" for c in insert_credit_cols)
+                credit_insert_marks = ",?" * len(insert_credit_cols)
                 cur = conn.execute(
                     "INSERT INTO customers (id, company_id, name, phone, email, address, status, "
                     "deleted_at_utc, row_version, updated_at_utc" + credit_insert_cols + ") "
@@ -3149,7 +3172,7 @@ class SyncService:
                     (p.get("id"), local_company_id, p.get("name"), p.get("phone", ""),
                      p.get("email", ""), p.get("address", ""), p.get("status", "active"), p.get("deleted_at_utc"),
                      insert_row_version, p.get("updated_at_utc"),
-                     *[p.get(c) for c in credit_cols],
+                     *insert_credit_vals,
                      *delta_binds,
                      raw_row_version, raw_row_version),
                 )

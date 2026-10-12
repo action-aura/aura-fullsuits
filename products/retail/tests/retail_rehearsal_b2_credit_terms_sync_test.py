@@ -197,6 +197,13 @@ def test_event_from_an_older_device_without_credit_keys_keeps_local_terms(client
 
 
 def test_new_customer_create_event_carries_default_terms(client):
+    # MONEY-4c CHANGE: a new customer now inherits the shop default, so the terms on the wire are
+    # credit_mode null (NOT 'none' -- that is an explicit refusal -- and NOT the word 'inherit',
+    # which an older computer reads as unlimited) and limit 0. The keys must still be present: the
+    # point of B2 (the terms travel) is unchanged. WHAT THIS CAN NO LONGER CATCH: a create event
+    # that sends 'none' by mistake is now caught by retail_money4c_credit_inherit_test.py
+    # (test_create_event_carries_null_*), which pins the null and the explicit-mode halves.
     cust = client.post(f'{API}/customers', json={'name': 'B2 Fresh'}).get_json()['data']['id']
     payload = _outbox(cust, 'create')
-    assert payload['credit_mode'] == 'none' and float(payload['credit_limit']) == 0.0
+    assert 'credit_mode' in payload and payload['credit_mode'] is None
+    assert float(payload['credit_limit']) == 0.0

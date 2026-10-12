@@ -2810,5 +2810,6 @@
   "Customer saved, but the credit terms could not be set.": "تم حفظ العميل، لكن تعذّر ضبط شروط الدين.",
   "Unlimited": "غير محدود",
   "Open balance": "الرصيد المستحق",
-  "Nothing owed": "لا يوجد مستحق"
+  "Nothing owed": "لا يوجد مستحق",
+  "Shop default": "الافتراضي حسب المحل"
 }

@@ -341,6 +341,10 @@ PER_FILE_TIMEOUT_SECONDS = int(os.environ.get('AURA_TEST_RUNNER_TIMEOUT_S', '120
 SLOW_FILE_TIMEOUT_SECONDS = {
     'retail_v42_till_allocation_test.py': 3600,
     'retail_p1b_numbering_twodevice_test.py': 2400,
+    # Same shape (two real computers, cheques reconciled across them):
+    # 6/6 in 850s standing alone on 2026-10-13, killed at 1200s inside a
+    # -j 6 run while other crews loaded the machine.
+    'retail_money3_cheque_reconcile_twodevice_test.py': 2400,
 }
 
 

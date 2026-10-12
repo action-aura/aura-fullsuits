@@ -3130,3 +3130,93 @@ def test_unknown_type_with_a_non_dict_payload_is_still_just_skipped(get_conn):
     service.pull_once()  # must not raise
     assert _cursor(get_conn) == 9
     assert _quarantine(get_conn) == []
+
+
+# ── MONEY-4c (schema v53): a customer CREATE that states no credit_mode is 'inherit' ──────────
+#
+# The customers table here is the lazily-created shape every real database has (credit_mode
+# `DEFAULT 'none'`, credit_limit `DEFAULT 0`) -- the column default is exactly what used to be
+# stored for a create event that omitted the key, silently defeating the shop default.
+
+def _with_credit_columns(get_conn):
+    conn = get_conn()
+    try:
+        conn.execute("ALTER TABLE customers ADD COLUMN credit_mode TEXT DEFAULT 'none'")
+        conn.execute("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _credit_of(get_conn, customer_id):
+    conn = get_conn()
+    try:
+        r = conn.execute("SELECT credit_mode, credit_limit FROM customers WHERE id=?",
+                         (customer_id,)).fetchone()
+        return (r["credit_mode"], r["credit_limit"]) if r else None
+    finally:
+        conn.close()
+
+
+def _apply_customer(get_conn, event):
+    client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 1}])
+    SyncService(lambda: client, get_conn, lambda: "receiving-company",
+                handled_entity_types={"customer"}).pull_once()
+
+
+def test_customer_create_without_credit_mode_is_stored_inherit(get_conn):
+    _with_credit_columns(get_conn)
+    cid = str(uuid.uuid4())
+    _apply_customer(get_conn, _customer_event(cid))                    # no credit keys at all
+    assert _credit_of(get_conn, cid) == ("inherit", 0), "must not take the column's 'none' default"
+
+
+def test_customer_create_with_a_null_credit_mode_is_stored_inherit(get_conn):
+    """A v53 computer sends 'inherit' as null on the wire (the word itself is read as UNLIMITED by
+    an older computer). It must land as 'inherit', not NULL and not the column's 'none'."""
+    _with_credit_columns(get_conn)
+    cid = str(uuid.uuid4())
+    _apply_customer(get_conn, _customer_event(cid, credit_mode=None, credit_limit=0))
+    assert _credit_of(get_conn, cid) == ("inherit", 0)
+
+
+def test_customer_update_back_to_inherit_arrives_as_null_and_is_stored_inherit(get_conn):
+    _with_credit_columns(get_conn)
+    cid = str(uuid.uuid4())
+    _apply_customer(get_conn, _customer_event(cid, credit_mode="none", credit_limit=0, row_version=1))
+    upd = _pull_event_of("customer", cid, "update", {
+        "id": cid, "company_id": 1, "name": "Alice", "phone": "", "email": "", "address": "",
+        "status": "active", "credit_mode": None, "credit_limit": 0, "row_version": 2,
+        "_changed_fields": ["credit_mode"]})
+    _apply_customer(get_conn, upd)
+    assert _credit_of(get_conn, cid) == ("inherit", 0)
+
+
+def test_customer_create_with_an_explicit_credit_mode_is_stored_as_sent(get_conn):
+    _with_credit_columns(get_conn)
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    _apply_customer(get_conn, _customer_event(a, credit_mode="none", credit_limit=0))
+    _apply_customer(get_conn, _customer_event(b, credit_mode="limited", credit_limit=250))
+    assert _credit_of(get_conn, a) == ("none", 0)        # an old peer's create (or a deliberate refusal)
+    assert _credit_of(get_conn, b) == ("limited", 250)
+
+
+def test_customer_update_without_credit_mode_leaves_the_terms_alone(get_conn):
+    """The allow half of 'absent means inherit': that rule is the INSERT half only. An UPDATE
+    event that omits the key (a name edit) must not reset terms the shop set here."""
+    _with_credit_columns(get_conn)
+    cid = str(uuid.uuid4())
+    _apply_customer(get_conn, _customer_event(cid, credit_mode="unlimited", credit_limit=0, row_version=1))
+    upd = _pull_event_of("customer", cid, "update", {
+        "id": cid, "company_id": 1, "name": "Alice B", "phone": "", "email": "", "address": "",
+        "status": "active", "row_version": 2, "_changed_fields": ["name"]})
+    _apply_customer(get_conn, upd)
+    assert _credit_of(get_conn, cid) == ("unlimited", 0)
+
+
+def test_customer_create_on_a_database_without_the_credit_column_still_applies(get_conn):
+    """No credit_mode column yet (the lazy ensure has not run): the 'inherit' default must be
+    skipped, not turned into `no such column` that wedges the pull page."""
+    cid = str(uuid.uuid4())
+    _apply_customer(get_conn, _customer_event(cid))
+    assert [c["id"] for c in _customers(get_conn)] == [cid]

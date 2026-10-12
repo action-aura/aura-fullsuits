@@ -296,12 +296,15 @@ def test_update_customer_credit_only_patch_bumps_and_emits(client, db_conn):
     customer event, or B never learns the terms. WHAT THIS CAN NO LONGER
     CATCH: nothing it used to catch still matters -- the loyalty-accumulator
     trap it mirrored is pinned on its own route elsewhere in this file."""
+    # MONEY-4c: 'allowed' (a stand-in word that was never a real mode, and which create_sale read as
+    # UNLIMITED by falling through) is now rejected with a 400; 'unlimited' is the real mode it meant.
+    # The row_version/outbox behaviour this test guards does not depend on which real mode is used.
     cust_id = client.post('/api/sub/retail/customers', json={'name': 'Credit Only'}).get_json()['data']['id']
     v1, u1 = _row_version(db_conn, 'customers', cust_id)
     events_before = len(_sync_events(db_conn, 'customer', cust_id))
 
     resp = client.patch(f'/api/sub/retail/customers/{cust_id}',
-                         json={'credit_mode': 'allowed', 'credit_limit': 500})
+                         json={'credit_mode': 'unlimited', 'credit_limit': 500})
     assert resp.status_code == 200, resp.get_json()
 
     v2, u2 = _row_version(db_conn, 'customers', cust_id)
@@ -481,7 +484,7 @@ def test_credit_sale_adjust_credit_does_not_bump_row_version_or_emit_a_customer_
     identical to the loyalty accumulator: device-local, never synced, must
     never bump or emit."""
     cust_id = client.post('/api/sub/retail/customers', json={'name': 'Credit Sale Customer'}).get_json()['data']['id']
-    client.patch(f'/api/sub/retail/customers/{cust_id}', json={'credit_mode': 'allowed', 'credit_limit': 1000})
+    client.patch(f'/api/sub/retail/customers/{cust_id}', json={'credit_mode': 'unlimited', 'credit_limit': 1000})
     pid = _make_product(client, initial_stock=50, sell_price=25.0)
     v1, u1 = _row_version(db_conn, 'customers', cust_id)
     events_before = len(_sync_events(db_conn, 'customer', cust_id))

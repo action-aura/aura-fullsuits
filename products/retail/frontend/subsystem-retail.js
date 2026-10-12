@@ -7968,12 +7968,42 @@ const RetailSystem = {
   _creditGateReason(customerId) {
     if (!customerId) return t('Walk-in customer');
     const cust = (this._customers || []).find(cu => String(cu.id) === String(customerId));
-    // Mirrors create_sale's own fallback chain exactly: `cust['credit_mode']
-    // or settings['default_credit_mode']` -- an empty/null credit_mode on
-    // the customer row means "use the shop's default", not "no credit".
-    const mode = (cust && cust.credit_mode) || this._defaultCreditMode || 'none';
-    if (mode === 'none') return t('Not a credit customer');
+    // MONEY-4c: mirrors the server's resolver (core/retail/credit_terms.py
+    // `effective_credit_mode`), NOT the old `credit_mode || default` -- that `||` was the
+    // bug (a stored 'none' is truthy, so the shop default never applied). The server sends
+    // the resolved `effective_credit_mode` on every customer; use it when present, and
+    // otherwise resolve the stored value here the same way (a customer the till just
+    // created locally, an older server).
+    if (this._effectiveCreditMode(cust) === 'none') return t('Not a credit customer');
     return null;
+  },
+
+  // inherit / null / '' -> the shop default; an explicit mode stands; anything else is
+  // 'none' (fail closed), exactly like credit_terms.effective_credit_mode.
+  _effectiveCreditMode(cust) {
+    const stored = cust && cust.credit_mode;
+    const d = ['none', 'limited', 'unlimited'].includes(this._defaultCreditMode) ? this._defaultCreditMode : 'none';
+    // A server-resolved value is trusted only for a row that is not inheriting: the shop
+    // default may have been changed on this screen since the list was fetched, and the
+    // inherited answer must follow it.
+    if (cust && cust.effective_credit_mode && stored && stored !== 'inherit') return cust.effective_credit_mode;
+    if (!stored || stored === 'inherit') {
+      if (cust && cust.effective_credit_mode && this._defaultCreditMode === undefined) return cust.effective_credit_mode;
+      return d;
+    }
+    return ['none', 'limited', 'unlimited'].includes(stored) ? stored : 'none';
+  },
+
+  _creditModeLabel(mode) {
+    return mode === 'unlimited' ? t('Unlimited') : mode === 'limited' ? t('Up to a limit') : t('No credit');
+  },
+
+  // "Shop default (Unlimited)" -- the first option of every credit-terms picker. The
+  // parenthesis is dropped when the shop default has not been read yet (the Customers
+  // screen opened before the till), rather than naming a default we have not seen.
+  _shopDefaultLabel() {
+    const known = ['none', 'limited', 'unlimited'].includes(this._defaultCreditMode);
+    return known ? `${t('Shop default')} (${this._creditModeLabel(this._defaultCreditMode)})` : t('Shop default');
   },
 
   // Re-evaluates the Credit tile's disabled/title state without touching
@@ -9320,6 +9350,11 @@ const RetailSystem = {
   // Resolves to the new customer row (also added to the till's caches); throws
   // an Error with a sentence a person can read when the customer was not created.
   async _createCustomerAtTill({ name, phone, credit }) {
+    // MONEY-4c: `credit` is now the chosen mode ('inherit' | 'none' | 'unlimited'), not a
+    // yes/no box. A new customer is created 'inherit' by the server (follow the shop
+    // default); only an explicit choice that differs needs the second request. A boolean
+    // `true` (older callers) still means 'unlimited'.
+    const wantMode = credit === true ? 'unlimited' : (credit || 'inherit');
     let res;
     try {
       res = await this._post('/api/sub/retail/customers', { name, phone: phone || '' });
@@ -9330,14 +9365,14 @@ const RetailSystem = {
       throw new Error((res && res.message) || t('Could not save the customer.'));
     }
     const id = String(res.data.id);
-    let mode = 'none';
-    if (credit) {
+    let mode = 'inherit';
+    if (wantMode !== 'inherit') {
       let ok = false;
       try {
-        const r2 = await this._patch(`/api/sub/retail/customers/${id}`, { credit_mode: 'unlimited' });
+        const r2 = await this._patch(`/api/sub/retail/customers/${id}`, { credit_mode: wantMode });
         ok = !!(r2 && r2.status === 'success');
       } catch (e) { ok = false; }
-      if (ok) mode = 'unlimited';
+      if (ok) mode = wantMode;
       else SubsystemApp.showToast(t('Customer saved, but only a manager can allow credit.'), 'info');
     }
     const cu = { id, name, phone: phone || '', email: '', address: '', credit_mode: mode, credit_limit: 0,
@@ -9376,8 +9411,12 @@ const RetailSystem = {
             <input id="cp-new-name" class="pk-input" type="text" autocomplete="off" dir="auto" /></div>
           <div class="ret-field"><label for="cp-new-phone">${this._esc(t('Phone'))}</label>
             <input id="cp-new-phone" class="pk-input" type="tel" inputmode="tel" autocomplete="off" dir="ltr" /></div>
-          ${canGrantCredit ? `<label class="pk-check" for="cp-new-credit">
-            <input type="checkbox" id="cp-new-credit" /> <span>${this._esc(t('Allow credit (pay later)'))}</span></label>` : ''}
+          ${canGrantCredit ? `<div class="ret-field"><label for="cp-new-credit">${this._esc(t('Credit'))}</label>
+            <select id="cp-new-credit" class="pk-input">
+              <option value="inherit" selected>${this._esc(this._shopDefaultLabel())}</option>
+              <option value="none">${this._esc(t('No credit'))}</option>
+              <option value="unlimited">${this._esc(t('Unlimited'))}</option>
+            </select></div>` : ''}
           <div id="cp-new-err" class="pk-err" role="alert"></div>
           <div class="ret-modal-footer">
             <button type="button" id="cp-new-cancel" class="ret-btn ret-btn-ghost">${this._esc(t('Back'))}</button>
@@ -9446,7 +9485,7 @@ const RetailSystem = {
       try {
         const cu = await this._createCustomerAtTill({
           name, phone: phoneEl.value.trim(),
-          credit: !!(overlay.querySelector('#cp-new-credit') || {}).checked,
+          credit: (overlay.querySelector('#cp-new-credit') || {}).value || 'inherit',
         });
         this._chooseCustomerOnSale(String(cu.id));
         close();
@@ -11656,7 +11695,7 @@ const RetailSystem = {
 
   _customerCreditFieldsHtml(cu) {
     if (!this._canEditCustomerCredit()) return '';
-    const mode = cu.credit_mode === 'limited' || cu.credit_mode === 'unlimited' ? cu.credit_mode : 'none';
+    const mode = this._storedCreditMode(cu);
     const dp = this._currencyDp();
     const step = dp > 0 ? (1 / Math.pow(10, dp)).toFixed(dp) : '1';
     const limit = Number(cu.credit_limit) > 0 ? Number(cu.credit_limit).toFixed(dp) : '';
@@ -11664,6 +11703,7 @@ const RetailSystem = {
         <div class="ret-field-row">
           <div class="ret-field"><label for="cm-credit-mode">${t('Credit')}</label>
             <select id="cm-credit-mode" onchange="RetailSystem._syncCustomerCreditLimit()">
+              <option value="inherit"${mode === 'inherit' ? ' selected' : ''}>${this._esc(this._shopDefaultLabel())}</option>
               <option value="none"${mode === 'none' ? ' selected' : ''}>${t('No credit')}</option>
               <option value="limited"${mode === 'limited' ? ' selected' : ''}>${t('Up to a limit')}</option>
               <option value="unlimited"${mode === 'unlimited' ? ' selected' : ''}>${t('Unlimited')}</option>
@@ -11671,6 +11711,14 @@ const RetailSystem = {
           <div class="ret-field" id="cm-limit-wrap"${mode === 'limited' ? '' : ' hidden'}><label for="cm-credit-limit">${t('Credit limit')}</label>
             <input type="number" id="cm-credit-limit" min="0" step="${step}" inputmode="decimal" value="${limit}" /></div>
         </div>`;
+  },
+
+  // What the dialog shows as selected: the STORED choice. null / '' / 'inherit' / anything
+  // unrecognised read as 'inherit' (follow the shop default). This dialog only writes on a
+  // change, so selecting 'inherit' for an untouched legacy row never produces a write.
+  _storedCreditMode(cu) {
+    const m = cu && cu.credit_mode;
+    return m === 'none' || m === 'limited' || m === 'unlimited' ? m : 'inherit';
   },
 
   _syncCustomerCreditLimit() {
@@ -11686,7 +11734,7 @@ const RetailSystem = {
     if (!modeEl) return null;
     const mode = modeEl.value;
     const limit = mode === 'limited' ? (parseFloat(document.getElementById('cm-credit-limit')?.value) || 0) : 0;
-    const wasMode = original && (original.credit_mode === 'limited' || original.credit_mode === 'unlimited') ? original.credit_mode : 'none';
+    const wasMode = this._storedCreditMode(original);
     const wasLimit = original && wasMode === 'limited' ? (Number(original.credit_limit) || 0) : 0;
     if (mode === wasMode && Math.abs(limit - wasLimit) < this._halfMinorUnit()) return null;
     return { credit_mode: mode, credit_limit: limit };
@@ -11755,9 +11803,14 @@ const RetailSystem = {
   // reads "Nothing owed" rather than a zero that could be mistaken for unknown.
   // The statement button is offered even at zero -- the history is still there.
   _creditTermsText(cu) {
-    if (cu.credit_mode === 'unlimited') return t('Unlimited');
-    if (cu.credit_mode === 'limited') return `${t('Up to a limit')}: ${this._fmt(Number(cu.credit_limit) || 0)}`;
-    return t('No credit');
+    // MONEY-4c: show what the till will actually apply (the resolved terms), and say when
+    // that is the shop default rather than this customer's own choice.
+    const eff = this._effectiveCreditMode(cu);
+    const lim = cu.effective_credit_limit != null ? cu.effective_credit_limit : cu.credit_limit;
+    const text = eff === 'unlimited' ? t('Unlimited')
+      : eff === 'limited' ? `${t('Up to a limit')}: ${this._fmt(Number(lim) || 0)}`
+      : t('No credit');
+    return this._storedCreditMode(cu) === 'inherit' ? `${text} (${t('Shop default')})` : text;
   },
 
   _customerBalanceBlockHtml(cu) {

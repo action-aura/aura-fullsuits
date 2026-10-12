@@ -1398,7 +1398,16 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 #     puts his own money back). 4800, NOT 4900 -- 4900 is Sales Returns and Allowances. The
 #     catch-up books existing manual paid_ins to 4800 (unreleased v52 extended in place, no v53).
 # Appended LAST and shape-gated.
-RETAIL_SCHEMA_VERSION = 52
+#
+# v53 (2026-10-12, MONEY-4c -- claimed in ROADMAP.md "retail schema v53 CLAIMED"): a customer's
+# credit terms follow the SHOP default unless the owner set them. `customers.credit_mode` gains a
+# fourth stored value, 'inherit' (follow `retail_settings.default_credit_mode`), and
+# `_migrate_credit_mode_inherit` converts every legacy 'none' to 'inherit'. 'none' keeps meaning
+# only "THIS customer may not buy on credit". Why: the column defaulted to 'none' and every way of
+# creating a customer stored it, but create_sale resolved `cust.credit_mode or shop_default` and
+# 'none' is truthy -- the shop default was dead for every normally created customer (UI-2 measured
+# it in a browser). The resolver is core/retail/credit_terms.py; every reader uses it.
+RETAIL_SCHEMA_VERSION = 53
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2592,6 +2601,47 @@ def _migrate_retail_schema(conn):
     # outbox and v13's cash_movements stamp columns, all created above) and reads
     # `retail_settings` for the business-day clock. See the v52 comment on RETAIL_SCHEMA_VERSION.
     _migrate_add_money4b_expenses(conn)
+    # v52 -> v53 (MONEY-4c): appended LAST. It only reads/writes `customers.credit_mode`; nothing a
+    # step above derives from. See the v53 comment on RETAIL_SCHEMA_VERSION.
+    _migrate_credit_mode_inherit(conn)
+
+
+def _migrate_credit_mode_inherit(conn):
+    """One-time migration (schema v52 -> v53, MONEY-4c). See the v53 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    1. Shape-gated: if `customers` has no `credit_mode` column (it is normally created lazily by
+       retail_api._ensure_credit_schema, so a database that never reached it lacks it) it is
+       added here `DEFAULT 'inherit'`, which also gives every existing row 'inherit'.
+    2. CONVERSION, on a genuine upgrade only (`entry_user_version < 53`): every row whose
+       credit_mode is exactly 'none' becomes 'inherit'. The version gate is the idempotence --
+       ensure_schema_version never runs this on a database already at 53, so a 'none' the owner
+       sets AFTERWARDS (an explicit "no credit" choice) is never converted back. Replaying the
+       step on a database stamped 53 (a test calling it directly) converts nothing, which the
+       tests pin.
+    3. 'limited' / 'unlimited' / 'inherit' rows, and NULL / '' rows (the resolver already treats
+       those as inherit), are not touched.
+
+    EVIDENCE OF AN EXPLICIT 'none': none survives to be consulted. The audit row for a customer
+    edit (`CUSTOMER_UPDATED`) names no field, and the only record of a credit_mode PATCH is its
+    sync event, which `sync_outbox` deletes once the relay acknowledges it. Before UI-2 the app
+    had no per-customer credit field at all, so a stored 'none' was in practice the column
+    default, not a decision -- converting every row is therefore the honest reading, not a
+    guess. The residual (an API caller who set 'none' on purpose) is recorded in ROADMAP.
+
+    This is a LOCAL conversion: it queues no sync event, so peers do the same on their own
+    upgrade. SQLite cannot change a column's DEFAULT, so on a database whose column already
+    existed the DDL default stays 'none'; every writer states credit_mode explicitly instead."""
+    entry_user_version = conn.execute('PRAGMA user_version').fetchone()[0]
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'customers' not in live:
+        return
+    cols = {row[1] for row in conn.execute('PRAGMA table_info("customers")').fetchall()}
+    if 'credit_mode' not in cols:
+        conn.execute("ALTER TABLE customers ADD COLUMN credit_mode TEXT DEFAULT 'inherit'")
+    if entry_user_version < 53:
+        conn.execute("UPDATE customers SET credit_mode='inherit' WHERE credit_mode='none'")
 
 
 def _migrate_add_money4b_expenses(conn):

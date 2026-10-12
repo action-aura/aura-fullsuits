@@ -169,7 +169,7 @@ def test_upgrade_posts_one_journal_per_manual_paid_out():
         assert j['uid'] == gl.cash_movement_journal_uid(j['source_uid'])
     assert {j['source_uid'] for j in got} == set(want) | set(want_in)
     # the upgraded database is at 52, balanced, and carries the new shape
-    assert _rows("PRAGMA user_version")[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 52
+    assert _rows("PRAGMA user_version")[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 53  # v53 UPDATE: head moved 52 -> 53 (MONEY-4c); (was 52)
     cols = {r['name'] for r in _rows("PRAGMA table_info(cash_movements)")}
     assert 'gl_account_code' in cols
     assert _rows("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='expenses'")[0]['n'] == 1
@@ -261,7 +261,7 @@ def test_a_database_that_already_ran_the_first_v52_gets_its_paid_ins_once():
     _migrate(db)
     first = _catchup_journals(cid)
     assert len(first) == 3 and all('6900' in j['lines'] for j in first), first
-    assert _rows("PRAGMA user_version")[0]['user_version'] == 52
+    assert _rows("PRAGMA user_version")[0]['user_version'] == 53  # v53 UPDATE: the full chain now stamps 53 (MONEY-4c); (was 52)
 
     sid = _rows("SELECT id FROM cash_sessions WHERE company_id=?", (cid,))[0]['id']
     p1 = _put_movement(sid, 'paid_in', 15.0, '2026-03-10 15:00:00')
@@ -271,7 +271,7 @@ def test_a_database_that_already_ran_the_first_v52_gets_its_paid_ins_once():
     def run_step():
         conn = sqlite3.connect(db, timeout=30)
         try:
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 52     # gate closed
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 53     # gate closed (v53 UPDATE: the stamp is now 53; the step's own gate is entry_user_version < 52, still closed)
             sch._migrate_add_money4b_expenses(conn)
             conn.commit()
         finally:

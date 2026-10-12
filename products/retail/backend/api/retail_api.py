@@ -105,6 +105,7 @@ from commercial_runtime.identity import device_registry as _device_registry
 from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
 from core.retail import po_split
+from core.retail import credit_terms  # MONEY-4c: 'inherit' credit mode + the one resolver
 # The single definition of revenue / gross sales / returns / average ticket /
 # COGS, plus the period and branch predicates. Read that module's docstring
 # before adding any new sales figure to this file -- it exists because those
@@ -2954,6 +2955,9 @@ def adjust_stock(pid):
 # so a credit limit set on till A never reached till B and B refused (or, worse, allowed)
 # the credit sale on its own stale terms. They travel under the SAME row_version/LWW rule
 # as name/phone, so a credit-only PATCH now bumps and emits like any other synced edit.
+CREDIT_MODE_INVALID_MESSAGE = ("Credit mode must be 'inherit' (follow the shop default), "
+                               "'none', 'limited' or 'unlimited', with a limit of 0 or more.")
+
 SYNCED_CUSTOMER_FIELDS = frozenset({'name', 'phone', 'email', 'address', 'status',
                                     'credit_mode', 'credit_limit'})
 
@@ -2985,8 +2989,18 @@ def list_customers():
             WHERE c.company_id=? AND c.status='active' AND c.deleted_at_utc IS NULL
             GROUP BY c.id ORDER BY c.total_spent DESC LIMIT 200
         """, (cid,)).fetchall()
+    # MONEY-4c: the till enables the Credit tile from THIS payload, so it carries both
+    # the stored value ('inherit' | 'none' | 'limited' | 'unlimited' -- what the Edit
+    # dialog must show) and the resolved terms create_sale will actually apply.
+    settings = _settings(conn, cid)
+    out = []
+    for r in rows:
+        d = dict(r)
+        d['effective_credit_mode'] = credit_terms.effective_credit_mode(r, settings)
+        d['effective_credit_limit'] = credit_terms.effective_credit_limit(r, settings)
+        out.append(d)
     conn.close()
-    return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
+    return jsonify({'status': 'success', 'data': out})
 
 @retail_bp.route('/customers', methods=['POST'])
 @mt_login_required
@@ -3003,24 +3017,56 @@ def create_customer():
     data = request.json or {}
     if not data.get('name'):
         return jsonify({'status': 'error', 'message': 'Customer name required'}), 400
+    # MONEY-4c: a customer created WITHOUT a stated credit mode follows the shop
+    # default ('inherit'). Storing 'none' here was the bug: it is a truthy explicit
+    # choice, so the shop default (Settings > Credit) never applied to anyone created
+    # normally. An EXPLICIT mode is accepted, validated, and -- exactly like the PATCH
+    # route -- needs retail.discount to be anything but 'inherit' (granting credit is
+    # value handed over with no matching payment, the same authority as a discount).
+    credit_mode = data.get('credit_mode') or credit_terms.CREDIT_MODE_INHERIT
+    if credit_mode not in credit_terms.STORED_CREDIT_MODES:
+        return jsonify({'status': 'error', 'message': CREDIT_MODE_INVALID_MESSAGE}), 400
+    try:
+        credit_limit = float(data.get('credit_limit') or 0)
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': CREDIT_MODE_INVALID_MESSAGE}), 400
+    if credit_limit < 0:
+        return jsonify({'status': 'error', 'message': CREDIT_MODE_INVALID_MESSAGE}), 400
+    explicit_terms = (credit_mode != credit_terms.CREDIT_MODE_INHERIT) or credit_limit > 0
+    if explicit_terms and not session_has_capability(CAP_DISCOUNT):
+        return jsonify({'status': 'error', 'message': CREDIT_TERMS_DENIED_MESSAGE}), 403
     cid  = _cid()
     conn = get_retail_conn()
+    # The INSERT below names credit_mode/credit_limit, lazily-created columns on a
+    # database older than v53; make sure they exist before touching them.
+    _ensure_credit_schema(conn)
     cur  = conn.cursor()
     nid = str(_uuid.uuid4())
     # launch-readiness Phase 6 stage 6a-i: stamped at creation, same
     # reasoning as create_category's identical comment above.
     now = now_utc_iso()
     cur.execute(
-        "INSERT INTO customers (id,company_id,name,phone,email,address,row_version,updated_at_utc) "
-        "VALUES (?,?,?,?,?,?,?,?)",
-        (nid, cid, data['name'], data.get('phone',''), data.get('email',''), data.get('address',''), 1, now))
+        "INSERT INTO customers (id,company_id,name,phone,email,address,credit_mode,credit_limit,"
+        "row_version,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (nid, cid, data['name'], data.get('phone',''), data.get('email',''), data.get('address',''),
+         credit_mode, credit_limit, 1, now))
     _audit(conn, 'CUSTOMER_CREATED', 'customer', nid, data['name'])
+    # REHEARSAL-1007 B2 puts credit_mode/credit_limit on the wire on every create (the
+    # payload-coverage ratchet pins that), so the keys stay. MONEY-4c changes only the VALUE
+    # for an inheriting customer: JSON null, NEVER the word 'inherit'. Why null:
+    #  (1) A computer that has not upgraded to v53 does not know the word 'inherit'. Its credit
+    #      check only refuses 'none' and caps 'limited', so it would read 'inherit' as UNLIMITED
+    #      credit -- more than the shop default may allow, even when the default is 'none'.
+    #  (2) NULL is something every version already understands: v52's
+    #      `cust.credit_mode or settings.default_credit_mode` falls through NULL to the shop
+    #      default, which is exactly what 'inherit' means. So an old computer behaves correctly
+    #      without knowing the new word.
+    #  (3) The v53 apply side turns null (and an absent key) into 'inherit' on a create.
     _queue_sync_event(cur, 'customer', nid, 'create', {
         'id': nid, 'name': data['name'], 'phone': data.get('phone', ''),
         'email': data.get('email', ''), 'address': data.get('address', ''),
-        # REHEARSAL-1007 B2: a new customer starts with no credit terms; sent
-        # explicitly so the receiver's row matches the column defaults here.
-        'credit_mode': 'none', 'credit_limit': 0,
+        'credit_mode': None if credit_mode == credit_terms.CREDIT_MODE_INHERIT else credit_mode,
+        'credit_limit': credit_limit,
         # REHEARSAL-1007 B6b (v49): a new customer has no history from a previous system.
         'total_spent_baseline': 0,
         'row_version': 1, 'updated_at_utc': now,
@@ -3065,6 +3111,11 @@ def update_customer(cust_id):
     # its OWN separate check just below, not folded into this one.
     if ('credit_mode' in fields or 'credit_limit' in fields) and not session_has_capability(CAP_DISCOUNT):
         return jsonify({'status': 'error', 'message': CREDIT_TERMS_DENIED_MESSAGE}), 403
+    # MONEY-4c: the stored value must be one the resolver understands. Before this,
+    # any string was accepted and an unrecognised one fell through create_sale's
+    # credit check as UNLIMITED credit.
+    if 'credit_mode' in fields and fields['credit_mode'] not in credit_terms.STORED_CREDIT_MODES:
+        return jsonify({'status': 'error', 'message': CREDIT_MODE_INVALID_MESSAGE}), 400
     # ── retail.stock.adjust, on `status` alone ────────────────────────────────
     # `delete_customer` (this file) is gated retail.stock.adjust -- explicitly
     # NOT retail.sell, on purpose: "master-data retirement, not selling" (see
@@ -3149,8 +3200,13 @@ def update_customer(cust_id):
         # clear a tombstone this PATCH never touched -- same rule as
         # update_supplier's identical guard.
         changed = (SYNCED_CUSTOMER_FIELDS & fields.keys()) | ({'deleted_at_utc'} if restoring else set())
-        _queue_sync_event(cur, 'customer', cust_id, 'update',
-                           dict(row) | {'id': cust_id, '_changed_fields': sorted(changed)})
+        wire = dict(row) | {'id': cust_id, '_changed_fields': sorted(changed)}
+        # MONEY-4c: never put the word 'inherit' on the wire -- a computer older than v53 reads
+        # an unknown mode as UNLIMITED credit. null is understood by every version as "use the
+        # shop default" (see create_customer's comment).
+        if wire.get('credit_mode') == credit_terms.CREDIT_MODE_INHERIT:
+            wire['credit_mode'] = None
+        _queue_sync_event(cur, 'customer', cust_id, 'update', wire)
     conn.commit(); conn.close()
     _sync_nudge()
     return jsonify({'status': 'success'})
@@ -8898,9 +8954,14 @@ def create_sale():
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'message': 'Customer not found.'}), 404
             settings = _settings(conn, cid)
-            credit_mode = cust['credit_mode'] or settings['default_credit_mode']
+            # MONEY-4c: the resolver, not `cust['credit_mode'] or default`. The old
+            # `or` never reached the shop default for a customer created normally,
+            # because the stored 'none' is truthy; 'inherit' (what a new customer
+            # stores now) and NULL/'' follow the shop default, an explicit 'none' /
+            # 'limited' / 'unlimited' stands, and an unknown value fails closed.
+            credit_mode = credit_terms.effective_credit_mode(cust, settings)
             try:
-                limit = float(cust['credit_limit'] if cust['credit_limit'] is not None else (settings['default_credit_limit'] or 0))
+                limit = credit_terms.effective_credit_limit(cust, settings)
             except Exception:
                 limit = 0.0
             # v44: DERIVED, in this same transaction. The stored column is a
@@ -15641,7 +15702,11 @@ def _ensure_credit_schema(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_payments_party ON payments(party_type, party_id)"
     )
-    addcol('customers', 'credit_mode', "TEXT DEFAULT 'none'")   # none | limited | unlimited
+    # MONEY-4c: a column added HERE (a database that never had it) now defaults to
+    # 'inherit' = follow the shop default. A column that already exists keeps its old
+    # DDL default 'none' (SQLite cannot alter a default); every writer therefore
+    # states credit_mode explicitly and the v53 step converts the old rows.
+    addcol('customers', 'credit_mode', "TEXT DEFAULT 'inherit'")   # inherit | none | limited | unlimited
     addcol('customers', 'credit_limit', "REAL DEFAULT 0")
     addcol('customers', 'credit_balance', "REAL DEFAULT 0")
     addcol('suppliers', 'payment_terms', "TEXT DEFAULT 'none'") # none | net7 | net15 | net30 | custom
