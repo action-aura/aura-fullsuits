@@ -3597,6 +3597,19 @@ const RetailSystem = {
              exact fractional value. */
           --pos-cart-row-min: 80px; }
         @media(max-width:1100px){ .pos-wrap { grid-template-columns:minmax(0,1fr);block-size:auto; } }
+        /* UI-1 (review A #2): 900-1100px wide is a REAL till -- the 1024x768
+           shop PC -- not a phone. The single-column rule above is right for a
+           portrait tablet (< 900px), but at 1024 it let the panes grow to their
+           content (block-size:auto): measured Charge button at y=1150 in a 768px
+           viewport (Large) and y=1426 (Normal), a 700px-tall cart box, and the
+           cashier scrolling the whole shell to charge. Two columns again and the
+           grid is pinned to the container, so .pos-cart-items (the only region
+           with its own overflow) is what scrolls. The html.ui-large/xlarge
+           column rules below already win by specificity, so this only has to
+           supply Normal's columns and the pinned height. */
+        @media(min-width:900px) and (max-width:1100px){
+          .pos-wrap { grid-template-columns:minmax(0,1.2fr) minmax(360px,1fr);block-size:100%; }
+        }
         .pos-left { background:var(--surface-card);border:1px solid var(--border-soft);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;min-block-size:0; }
         .pos-right { background:var(--surface);border:1px solid var(--border-mid);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;min-block-size:0; }
         .pos-pane-hdr { padding-block:12px;padding-inline:16px;border-block-end:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-shrink:0;flex-wrap:wrap; }
@@ -4770,10 +4783,26 @@ const RetailSystem = {
            from the footer's padding/margins -- never from a touch target.
            retail_p0_till_e2e.py item #7(e) is the proof. */
         @media (max-height: 800px) {
+          /* UI-1 (review A #2b): the left pane's two decoration strips cost the
+             product grid ~90px on a 768px till. The key legend folds to its last
+             chip ("F12 All keys" -- the card that lists the rest) and the drawer
+             bar to ONE line. Nothing is removed, only shortened: the F-keys all
+             still work and F12 shows the full list. */
+          .pos-kbd-hints .pos-kbd-item:not(:last-child) { display:none; }
+          .pos-kbd-hints { padding-block:2px 0; }
+
           html.ui-large .pos-sum-row { line-height:1.2; }
           html.ui-large .pos-checkout-footer { padding-block:4px 6px; }
           html.ui-large .pos-pay-btns { margin-block-end:4px; }
           html.ui-large .pos-cart-row { padding-block:6px; }
+          /* UI-1 (review A #2b): a Large cart row's REAL content is ~68px (two
+             text lines beside a 44px stepper, 6px padding) but the shared floor
+             was 74px, so every row was padded up by 6px and only THREE of the
+             six lines in a 295px list were fully visible (measured 1366x768). At
+             68px four fit. Only the floor moves; a row is still MAX(floor, its
+             own content), so nothing is squeezed -- a longer name or a promo
+             line still grows its row. retail_p1c_size_e2e.py measures it. */
+          html.ui-large .pos-wrap { --pos-cart-row-min: 68px; }
           /* The sale header (title + customer select + Hold + Void) must stay ONE
              row here: a wrapped row costs ~50px of the summary's height. At
              Large's 15-17px type it overflowed, so the select's ceiling was
@@ -4813,6 +4842,22 @@ const RetailSystem = {
           html.ui-xlarge .pos-cart-items { min-block-size:calc(2 * var(--pos-cart-row-min) + 8px); }
         }
         .pos-checkout-btn:disabled { opacity:.45;cursor:not-allowed;transform:none; }
+        /* UI-1 (review A #2): the 1024x768 till. The right pane is only ~400px
+           wide there, so six tenders in ONE row (the short-screen rule above)
+           get ~62px each: "Transfer" was clipped, "Mobile / CliQ" wrapped to
+           three lines. Two rows of three instead (the cart list gives up one
+           button-row of height; it is the region built to give), and the sale
+           header's controls take their padding in so the title is not reduced to
+           "Curren...". Scoped to 900-1100px wide, so no other size changes. */
+        @media (min-width:900px) and (max-width:1100px) {
+          .pos-pay-btns { grid-template-columns:repeat(3,1fr); }
+          .pos-right .pos-cust-select { max-inline-size:112px; }
+          .pos-right .pos-hold-btn, .pos-right .pos-clear-btn { padding-inline:6px; }
+          .pos-right .pos-pane-hdr { gap:6px;padding-inline:8px; }
+          html.ui-large .pos-right .pos-pane-title, html.ui-xlarge .pos-right .pos-pane-title { font-size:15px; min-inline-size:56px; }
+          html.ui-large .pos-right .pos-cust-select, html.ui-xlarge .pos-right .pos-cust-select { font-size:14px; }
+          html.ui-large .pos-right .pos-hold-btn, html.ui-large .pos-right .pos-clear-btn { font-size:14px; }
+        }
 
         /* ── Money typography (see rule 3) ───────────────────────────────── */
         /* The .money family (colour, bold weight, accounting parentheses,

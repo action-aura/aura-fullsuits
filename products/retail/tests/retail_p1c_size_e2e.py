@@ -259,6 +259,95 @@ with sync_playwright() as p:
     if not only:
         B.check("Large: a heavy sale (promo + discount + customer + Change Due) keeps every money row and all six tenders on screen at 1366x768, 1440x900, 1280x720, 1280x800, EN and AR", heavy_sale_fits)
 
+    # UI-1 (review A #2): THE TILL MUST FIT THE SCREENS SHOPS ACTUALLY BUY.
+    # At 1024x768 with the default Large size the till used to fall into the
+    # single-column phone layout with `block-size:auto`, so the panes grew to
+    # their content: measured Charge button at y=781..841 in a 768px viewport
+    # and a 1108px cart box -- the cashier scrolled the whole page to charge.
+    # At 1366x768 Large the cart showed 3.5 rows. The contract now, measured
+    # with SIX real cart lines, at the three shop-floor sizes, in both sizes
+    # ('Large' default and 'Normal'), in English and Arabic:
+    #   * the Charge button's bottom edge is inside the viewport;
+    #   * the document does not scroll (scrollHeight <= viewport height);
+    #   * the CART LIST is the scrolling region (overflow auto/scroll, and when
+    #     six lines do not fit it really scrolls), the page never does;
+    #   * Charge is reachable by elementFromPoint (nothing painted over it).
+    # Set FIT_PHASE=before to name the screenshots before_*.png (for a
+    # before/after pair around a layout change); results go to fit_measurements.json.
+    FIT_SIZES = [(1024, 768), (1366, 768), (1920, 1080)]
+    FIT_JS = r"""() => {
+      const q = (s) => document.querySelector(s);
+      const vh = innerHeight, vw = innerWidth;
+      const ch = q('#pos-checkout-btn'), list = q('.pos-cart-items');
+      const r = ch ? ch.getBoundingClientRect() : null;
+      let hit = false;
+      if (r) { const t = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); hit = !!t && (ch === t || ch.contains(t)); }
+      const ls = list ? getComputedStyle(list) : null;
+      const rows = [...document.querySelectorAll('.pos-cart-row')];
+      const sc = q('#sub-content'), lb = list ? list.getBoundingClientRect() : null;
+      const inside = lb ? rows.filter(x => { const b = x.getBoundingClientRect(); return b.top >= lb.top - 0.5 && b.bottom <= lb.bottom + 0.5; }).length : 0;
+      return { vw, vh, chargeBottom: r ? r.bottom : null, chargeTop: r ? r.top : null, chargeHit: hit,
+        docScrollH: document.documentElement.scrollHeight, bodyScrollH: document.body.scrollHeight,
+        listOverflowY: ls ? ls.overflowY : null, listClientH: list ? list.clientHeight : null, listScrollH: list ? list.scrollHeight : null,
+        rows: rows.length, rowsInside: inside,
+        shellOverflow: sc ? sc.scrollHeight - sc.clientHeight : null };
+    }"""
+
+    def fit_rows(page, ids):
+        _, pr = B.api(page, "POST", "/api/sub/retail/products", {"name": "Sixth Line Item", "sku": "P1C-FIT6", "sell_price": 4, "cost_price": 2, "unit": "pc"})
+        sixth = pr["data"]["id"]
+        B.api(page, "POST", f"/api/sub/retail/products/{sixth}/stock-adjust", {"quantity": 100, "reason": "fit"})
+        return [ids["widget"], ids["gadget"], ids["gizmo"], ids["doohickey"], ids["thingamajig"], sixth]
+
+    fit_results = {}
+
+    def till_fits():
+        lines = fit_rows(page, ids)
+        phase = os.environ.get("FIT_PHASE", "after")
+        bad = []
+        for scale in ("large", "normal"):
+            for (w, h) in FIT_SIZES:
+                for lang in ("en", "ar"):
+                    page.set_viewport_size({"width": w, "height": h})
+                    page.evaluate("(l) => AuraI18n.setLang(l)", lang)
+                    page.wait_for_timeout(300)
+                    set_scale(page, scale)
+                    B.go_pos(page)
+                    page.evaluate("() => RetailSystem._clearCart()")
+                    for pid in lines:
+                        page.evaluate("(id) => RetailSystem._addToCart(id)", pid)
+                    page.wait_for_timeout(400)
+                    m = page.evaluate(FIT_JS)
+                    key = f"{scale}@{w}x{h}/{lang}"
+                    fit_results[key] = m
+                    page.screenshot(path=str(B.SHOTS / f"{phase}_fit_{scale}_{w}x{h}_{lang}.png"))
+                    print(f"-- fit {key}: charge bottom {m['chargeBottom']:.0f} / viewport {m['vh']}; docScrollH {m['docScrollH']}; "
+                          f"cart list {m['listClientH']}/{m['listScrollH']} ({m['listOverflowY']}); rows {m['rows']} (fully visible {m['rowsInside']}); shell overflow {m['shellOverflow']}", flush=True)
+                    if m["rows"] != 6:
+                        bad.append(f"{key}: harness drew {m['rows']} cart rows, not 6")
+                        continue
+                    if m["chargeBottom"] is None or m["chargeBottom"] > m["vh"] + 0.5:
+                        bad.append(f"{key}: Charge bottom {m['chargeBottom']} is below the viewport {m['vh']}")
+                    if not m["chargeHit"]:
+                        bad.append(f"{key}: Charge is covered by something else")
+                    if m["shellOverflow"] is None or m["shellOverflow"] > 1:
+                        bad.append(f"{key}: the shell's main area scrolls ({m['shellOverflow']}px) -- the page, not the cart list, is scrolling")
+                    if m["rowsInside"] < (4 if (scale, w, h) == ("large", 1366, 768) else 3 if h < 900 else 4):
+                        bad.append(f"{key}: only {m['rowsInside']} of the 6 cart rows are fully visible in the cart list")
+                    if m["docScrollH"] > m["vh"] + 1:
+                        bad.append(f"{key}: the page scrolls (scrollHeight {m['docScrollH']} > {m['vh']})")
+                    if m["listOverflowY"] not in ("auto", "scroll"):
+                        bad.append(f"{key}: the cart list is not a scroll container ({m['listOverflowY']})")
+                    if (w, h) != (1920, 1080) and m["listScrollH"] <= m["listClientH"] + 1:
+                        bad.append(f"{key}: six lines should overflow the cart list at this size, but it shows all of them "
+                                   f"({m['listClientH']}/{m['listScrollH']}) -- the list is not the region that scrolls, or the fixture drew too little")
+        page.evaluate("(l) => AuraI18n.setLang(l)", "en")
+        set_scale(page, "large")
+        (B.SHOTS / "fit_measurements.json").write_text(json.dumps(fit_results, indent=1), encoding="utf-8")
+        assert not bad, "the till does not fit: " + " | ".join(bad)
+
+    B.check("the till fits 1024x768, 1366x768 and 1920x1080 (Large + Normal, EN + AR) with six cart lines: Charge on screen, page does not scroll, the cart list is the scroller", till_fits)
+
     # The control lives in Settings > Display and acts at once.
     def settings_control():
         page.set_viewport_size({"width": 1366, "height": 768})
