@@ -12,6 +12,25 @@ class ConfigError(RuntimeError):
     """Raised when required configuration is missing or invalid."""
 
 
+# The owner/ package root, resolved from __file__ rather than the process cwd
+# (ported from the August master lineage, f89948d4).
+#
+# TestingConfig's artifact directories used to default to os.getcwd()/var/*,
+# so where they landed depended on where pytest was launched from. Run from
+# owner/ they landed in owner/var/* (gitignored); run from the repo root they
+# landed in <repo>/var/*, outside every owner/var/* ignore rule, leaving
+# test-generated Ed25519 private-key PEMs and release-artifact blobs as
+# untracked repo-root clutter. Anchoring to this constant makes the location
+# independent of cwd.
+#
+# Deliberately NOT applied to BaseConfig/DevelopmentConfig: those resolve live
+# signing keys, backups and attachments. Staging sets OWNER_SIGNING_KEY_DIRECTORY
+# explicitly but leaves OWNER_BACKUP_DIR, OWNER_EXPENSE_ATTACHMENT_DIR and
+# OWNER_RELEASE_ARTIFACT_DIR on the cwd default, so moving them here would
+# repoint directories that already hold real data on a running deployment.
+_OWNER_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 REQUIRED_PRODUCTION_SECRETS = (
     "OWNER_SECRET_KEY",
     "OWNER_DATABASE_URL",
@@ -30,6 +49,7 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_DATABASE_URL",
         "OWNER_TEST_DATABASE_URL",
         "OWNER_LICENSE_PEPPER",
+        "OWNER_MFA_ENCRYPTION_KEY",
         "OWNER_DB_STATEMENT_TIMEOUT_MS",
         "OWNER_DB_LOCK_TIMEOUT_MS",
         "OWNER_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS",
@@ -111,6 +131,10 @@ class BaseConfig:
     TESTING = False
 
     SECRET_KEY = os.environ.get("OWNER_SECRET_KEY", "")
+    # Optional dedicated key for TOTP secrets at rest (app/security/mfa.py).
+    # Unset = legacy behaviour (derived from SECRET_KEY), so nothing changes
+    # until an operator opts in and runs `flask rekey-mfa`.
+    MFA_ENCRYPTION_KEY = os.environ.get("OWNER_MFA_ENCRYPTION_KEY", "")
     SQLALCHEMY_DATABASE_URI = os.environ.get("OWNER_DATABASE_URL", "")
     SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
     SQLALCHEMY_TRACK_MODIFICATIONS = False
@@ -305,6 +329,11 @@ class BaseConfig:
                 "OWNER_SECRET_KEY is missing, a known default/placeholder value, or shorter than "
                 f"{_MIN_SECRET_LENGTH} characters -- generate a real random secret for this environment"
             )
+        if cls.MFA_ENCRYPTION_KEY and not cls._looks_like_a_real_secret(cls.MFA_ENCRYPTION_KEY):
+            problems.append(
+                "OWNER_MFA_ENCRYPTION_KEY is set but is a known default/placeholder value or shorter than "
+                f"{_MIN_SECRET_LENGTH} characters (leave it unset to keep the legacy OWNER_SECRET_KEY derivation)"
+            )
         if not cls._looks_like_a_real_secret(cls.LICENSE_PEPPER):
             problems.append(
                 "OWNER_LICENSE_PEPPER is missing, a known default/placeholder value, or shorter than "
@@ -443,13 +472,13 @@ class TestingConfig(BaseConfig):
     LOGIN_MAX_ATTEMPTS = 5
     WTF_CSRF_ENABLED = True
     SIGNING_KEY_DIRECTORY = os.environ.get(
-        "OWNER_TEST_SIGNING_KEY_DIRECTORY", os.path.join(os.getcwd(), "var", "signing-keys-test")
+        "OWNER_TEST_SIGNING_KEY_DIRECTORY", os.path.join(_OWNER_ROOT, "var", "signing-keys-test")
     )
     EXPENSE_ATTACHMENT_DIRECTORY = os.environ.get(
-        "OWNER_TEST_EXPENSE_ATTACHMENT_DIR", os.path.join(os.getcwd(), "var", "expense-attachments-test")
+        "OWNER_TEST_EXPENSE_ATTACHMENT_DIR", os.path.join(_OWNER_ROOT, "var", "expense-attachments-test")
     )
     RELEASE_ARTIFACT_DIRECTORY = os.environ.get(
-        "OWNER_TEST_RELEASE_ARTIFACT_DIR", os.path.join(os.getcwd(), "var", "release-artifacts-test")
+        "OWNER_TEST_RELEASE_ARTIFACT_DIR", os.path.join(_OWNER_ROOT, "var", "release-artifacts-test")
     )
     REPLAY_PROTECTION_REQUIRED = True
     DISTRIBUTED_RATE_LIMIT_REQUIRED = True

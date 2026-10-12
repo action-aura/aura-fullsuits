@@ -15,7 +15,7 @@ from app.catalog.services import import_release_manifest, seed_canonical_catalog
 from app.extensions import db_session
 from app.licensing_service import signing as signing_service
 from app.licensing_service.offline_policy import seed_default_offline_policy
-from app.models.staff import Role, StaffUser
+from app.models.staff import MfaCredential, Role, StaffUser
 from app.security.passwords import PasswordPolicyError, hash_password
 from app.staff.services import seed_rbac as seed_rbac_service
 
@@ -103,6 +103,48 @@ def register_cli(app: Flask) -> None:
             entity_public_id=str(staff.id),
         )
         click.echo(f"Super Admin created: {staff.email} ({staff.id}). MFA enrollment is required at first login.")
+
+    @app.cli.command("rekey-mfa")
+    @click.option("--dry-run", is_flag=True, default=False, help="Report what would change; write nothing.")
+    def rekey_mfa_cmd(dry_run: bool):
+        """Re-encrypt every TOTP secret from the legacy OWNER_SECRET_KEY-derived
+        key onto OWNER_MFA_ENCRYPTION_KEY (review D SEC-02). Idempotent: rows
+        already on the dedicated key are left alone. Run this BEFORE rotating
+        OWNER_SECRET_KEY, with both keys set. Rows that open under neither key
+        are reported, never modified."""
+        from flask import current_app
+
+        from app.security.mfa import decrypt_totp_secret, reencrypt_if_legacy
+
+        mfa_key = current_app.config.get("MFA_ENCRYPTION_KEY") or None
+        if not mfa_key:
+            raise click.ClickException("OWNER_MFA_ENCRYPTION_KEY is not set -- nothing to re-encrypt onto.")
+        app_key = current_app.config["SECRET_KEY"]
+        rekeyed = already_current = unreadable = 0
+        for cred in db_session.execute(select(MfaCredential)).scalars().all():
+            upgraded = reencrypt_if_legacy(cred.totp_secret_encrypted, app_key, mfa_key)
+            if upgraded is not None:
+                rekeyed += 1
+                if not dry_run:
+                    cred.totp_secret_encrypted = upgraded
+            elif decrypt_totp_secret(cred.totp_secret_encrypted, app_key, mfa_key) is not None:
+                already_current += 1
+            else:
+                unreadable += 1
+        if not dry_run:
+            db_session.commit()
+            audit_record(
+                actor_staff_user_id=None,
+                actor_role_snapshot=None,
+                action_code="MFA_SECRETS_REKEYED",
+                entity_type="mfa_credential",
+                entity_public_id="all",
+                reason=f"rekeyed={rekeyed} already_current={already_current} unreadable={unreadable}",
+            )
+        click.echo(
+            f"{'DRY RUN: would re-encrypt' if dry_run else 'Re-encrypted'} {rekeyed}; "
+            f"already current {already_current}; unreadable under either key {unreadable}."
+        )
 
     @app.cli.command("import-release-manifest")
     @click.argument("manifest_path", type=click.Path(exists=True))

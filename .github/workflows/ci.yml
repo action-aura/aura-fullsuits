@@ -18,7 +18,10 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [master, "phase9/**"]
+    # feat/** and fix/** added 2026-10-12 (review D): the real main line of work
+    # lives on feat/* branches, so push-to-branch was running no CI at all
+    # unless a PR happened to be open.
+    branches: [master, "phase9/**", "feat/**", "fix/**"]
 
 env:
   # Real test-time-only values, never real secrets -- matches
@@ -43,6 +46,14 @@ env:
 jobs:
   test-and-scan:
     runs-on: ubuntu-latest
+    # Job-level ceiling (ported from the August master lineage, 416e6bf9). That
+    # lineage's incident, 2026-08-19: two matrix shards hung 35+ minutes on the
+    # "Install PostgreSQL 17 client" apt step while sibling shards cleared the
+    # identical step in ~5; a plain re-run fixed it. With no timeout-minutes
+    # anywhere, GitHub's 360-minute default was the only backstop, so a repeat
+    # would burn up to 6 hours of runner time per stuck job and block the PR.
+    # Set well above each job's healthy runtime so it can only fire on a hang.
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:17
@@ -106,6 +117,10 @@ jobs:
       # app/system/backup.py's explicit override, used instead of trusting Debian's
       # pg_wrapper to pick the right major version off PATH.
       - name: PostgreSQL 17 client tools
+        # The step that actually hung on 2026-08-19; healthy runs finish in minutes.
+        timeout-minutes: 8
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           # A third-party repo we never install from must not decide whether
           # PostgreSQL gets installed. On 2026-09-09 this step failed with
@@ -121,9 +136,9 @@ jobs:
           # install, naming the package it could not find.
           sudo apt-get update -qq -o Acquire::Retries=3 \
             || echo "apt-get update reported errors; the strict installs below still gate this step"
-          sudo apt-get install -y -qq postgresql-common
+          sudo apt-get install -y -qq -o Acquire::Retries=3 postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y -qq postgresql-client-17
+          sudo apt-get install -y -qq -o Acquire::Retries=3 postgresql-client-17
           /usr/lib/postgresql/17/bin/pg_dump --version
           echo "OWNER_PG_BIN_DIR=/usr/lib/postgresql/17/bin" >> "$GITHUB_ENV"
 
@@ -257,6 +272,14 @@ jobs:
 
   security-gates:
     runs-on: ubuntu-latest
+    # Job-level ceiling (ported from the August master lineage, 416e6bf9). That
+    # lineage's incident, 2026-08-19: two matrix shards hung 35+ minutes on the
+    # "Install PostgreSQL 17 client" apt step while sibling shards cleared the
+    # identical step in ~5; a plain re-run fixed it. With no timeout-minutes
+    # anywhere, GitHub's 360-minute default was the only backstop, so a repeat
+    # would burn up to 6 hours of runner time per stuck job and block the PR.
+    # Set well above each job's healthy runtime so it can only fire on a hang.
+    timeout-minutes: 20
     steps:
       - name: Source checkout
         uses: actions/checkout@v4
@@ -366,6 +389,14 @@ jobs:
   # off by an unrelated retail assertion; that trade was made deliberately.
   database-gates:
     runs-on: ubuntu-latest
+    # Job-level ceiling (ported from the August master lineage, 416e6bf9). That
+    # lineage's incident, 2026-08-19: two matrix shards hung 35+ minutes on the
+    # "Install PostgreSQL 17 client" apt step while sibling shards cleared the
+    # identical step in ~5; a plain re-run fixed it. With no timeout-minutes
+    # anywhere, GitHub's 360-minute default was the only backstop, so a repeat
+    # would burn up to 6 hours of runner time per stuck job and block the PR.
+    # Set well above each job's healthy runtime so it can only fire on a hang.
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17
@@ -460,6 +491,14 @@ jobs:
   # build.gradle, which is a different file and a different owner.
   android-tests:
     runs-on: ubuntu-latest
+    # Job-level ceiling (ported from the August master lineage, 416e6bf9). That
+    # lineage's incident, 2026-08-19: two matrix shards hung 35+ minutes on the
+    # "Install PostgreSQL 17 client" apt step while sibling shards cleared the
+    # identical step in ~5; a plain re-run fixed it. With no timeout-minutes
+    # anywhere, GitHub's 360-minute default was the only backstop, so a repeat
+    # would burn up to 6 hours of runner time per stuck job and block the PR.
+    # Set well above each job's healthy runtime so it can only fire on a hang.
+    timeout-minutes: 45
     steps:
       - name: Source checkout
         uses: actions/checkout@v4

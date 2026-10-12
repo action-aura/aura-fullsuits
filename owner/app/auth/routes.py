@@ -3,13 +3,14 @@ invitation accept (Part E/F/H)."""
 from __future__ import annotations
 
 from datetime import timedelta
+from urllib.parse import unquote, urlsplit
 
 from flask import Blueprint, current_app, make_response, redirect, render_template, request, session, url_for
 from flask_babel import gettext as _
 from sqlalchemy import select
 
 from app.audit.services import record as audit_record
-from app.auth.services import authenticate, find_staff_by_email
+from app.auth.services import authenticate, find_staff_by_email, mfa_is_mandatory
 from app.auth.session import (
     COOKIE_NAME,
     create_session,
@@ -24,6 +25,7 @@ from app.models.staff import MfaCredential, MfaRecoveryCode, StaffInvitation, St
 from app.security.mfa import (
     decrypt_totp_secret,
     encrypt_totp_secret,
+    reencrypt_if_legacy,
     generate_recovery_codes,
     generate_totp_secret,
     hash_recovery_code,
@@ -53,10 +55,23 @@ _PENDING_MFA_TTL_SECONDS = 300
 
 
 def _safe_next(value: str | None) -> str | None:
-    """Only ever redirect to a same-site relative path -- rejects absolute
-    URLs and protocol-relative '//host' values to prevent open redirect."""
-    if not value or not value.startswith("/") or value.startswith("//"):
+    """Only ever redirect to a same-site relative path. Rejects absolute
+    URLs, protocol-relative '//host', and the backslash forms browsers
+    (WHATWG URL parsing) fold into '/' -- a leading slash plus a backslash,
+    or its percent-encoded form, both land on https://evil.com/ even though they start with a single '/'
+    (review D SEC-06). Percent-decoded and re-checked so an encoded
+    backslash or control character cannot slip through."""
+    if not value or not value.startswith("/"):
         return None
+    candidates = (value, unquote(value), unquote(unquote(value)))
+    for cand in candidates:
+        if "\\" in cand or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in cand):
+            return None
+        if not cand.startswith("/") or cand.startswith("//"):
+            return None
+        parts = urlsplit(cand)
+        if parts.scheme or parts.netloc:
+            return None
     return value
 
 
@@ -97,7 +112,7 @@ def login_submit():
         return render_template("auth/login.html", error=message), 401
 
     has_mfa = staff.mfa_credential is not None and staff.mfa_credential.confirmed
-    if has_mfa or staff.mfa_required:
+    if has_mfa or mfa_is_mandatory(staff):
         if not has_mfa:
             # MFA is mandatory for this account but not yet enrolled -- force enrollment before any session exists.
             session[_PENDING_MFA_SESSION_KEY] = str(staff.id)
@@ -120,6 +135,23 @@ def login_submit():
         COOKIE_NAME, raw_token, httponly=True, samesite="Lax", secure=current_app.config["SESSION_COOKIE_SECURE"]
     )
     return response
+
+
+def _mfa_keys() -> tuple[str, str | None]:
+    return current_app.config["SECRET_KEY"], (current_app.config.get("MFA_ENCRYPTION_KEY") or None)
+
+
+def _decrypt_credential(credential: MfaCredential) -> str | None:
+    return decrypt_totp_secret(credential.totp_secret_encrypted, *_mfa_keys())
+
+
+def _upgrade_legacy_secret(credential: MfaCredential) -> None:
+    """After a successful TOTP use: move a secret still sealed under the
+    legacy OWNER_SECRET_KEY-derived key onto the dedicated MFA key. The
+    caller commits."""
+    upgraded = reencrypt_if_legacy(credential.totp_secret_encrypted, *_mfa_keys())
+    if upgraded is not None:
+        credential.totp_secret_encrypted = upgraded
 
 
 def _pending_mfa_staff() -> StaffUser | None:
@@ -153,8 +185,10 @@ def mfa_verify_submit():
         return render_template("auth/mfa_verify.html", error="Too many attempts -- try again later."), 401
 
     code = request.form.get("code", "")
-    raw_secret = decrypt_totp_secret(staff.mfa_credential.totp_secret_encrypted, current_app.config["SECRET_KEY"])
+    raw_secret = _decrypt_credential(staff.mfa_credential)
     ok = raw_secret is not None and verify_totp_code(raw_secret, code)
+    if ok:
+        _upgrade_legacy_secret(staff.mfa_credential)
     if not ok:
         ok = _consume_recovery_code(staff, code)
     if not ok:
@@ -264,7 +298,7 @@ def mfa_enroll_submit():
 
     credential = MfaCredential(
         staff_user_id=staff.id,
-        totp_secret_encrypted=encrypt_totp_secret(raw_secret, current_app.config["SECRET_KEY"]),
+        totp_secret_encrypted=encrypt_totp_secret(raw_secret, *_mfa_keys()),
         enrolled_at=utcnow(),
         confirmed=True,
     )
@@ -325,12 +359,14 @@ def reauth_submit():
             "auth/reauth.html", error="MFA is not enabled on this account -- enable it to perform this action.",
             next=request.form.get("next", "/"),
         ), 403
-    raw_secret = decrypt_totp_secret(staff.mfa_credential.totp_secret_encrypted, current_app.config["SECRET_KEY"])
+    raw_secret = _decrypt_credential(staff.mfa_credential)
     ok = raw_secret is not None and verify_totp_code(raw_secret, code)
     if not ok:
         return render_template(
             "auth/reauth.html", error="Invalid code.", next=request.form.get("next", "/")
         ), 401
+    _upgrade_legacy_secret(staff.mfa_credential)
+    db_session.commit()
     mark_mfa_verified()
     return redirect(_safe_next(request.form.get("next")) or url_for("dashboard.index"))
 

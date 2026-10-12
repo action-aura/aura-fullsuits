@@ -410,7 +410,7 @@ def test_release_and_replace_installation_require_reason(app, client, seeded):
     from app.extensions import db_session
     from app.installations.services import register_installation
 
-    staff_id = make_staff(app, "8v-ds1@example.com", role_codes=["SUPPORT"])
+    staff_id = make_staff(app, "8v-ds1@example.com", role_codes=["SUPPORT"], mfa=True)
     sub_id, lic_id, platform_id = _make_subscription(app, staff_id)
     with app.app_context():
         from app.models.licensing import License
@@ -427,7 +427,10 @@ def test_release_and_replace_installation_require_reason(app, client, seeded):
         db_session.commit()
         installation_id = str(installation.id)
 
-    force_login(client, app, staff_id)
+    # OWNER-SEC item 2: release/replace now require recent MFA (twin of
+    # licensing_admin.replace_device), so this test signs in through a real
+    # MFA-verified session. The reason-required assertions below are unchanged.
+    login_and_verify_mfa(client, "8v-ds1@example.com")
     csrf = _csrf(client, f"/installations/{installation_id}")
     no_reason = client.post(f"/commercial-ops/ui/installations/{installation_id}/release", data={"csrf_token": csrf, "reason": ""})
     assert no_reason.status_code == 400

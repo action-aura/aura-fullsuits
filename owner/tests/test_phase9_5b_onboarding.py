@@ -82,7 +82,10 @@ def test_first_login_activates_pending_profile(app, client, seeded):
         from app.staff.services import create_employee_invitation
 
         _, raw_token = create_employee_invitation(
-            "onb4@example.com", ["SALES"],
+            # VIEWER, not SALES: SALES is MFA-mandatory at login since OWNER-SEC item 5, so a SALES
+            # invitee would be sent to enrolment and never get a session on first password login.
+            # This test is about profile activation on a first real (non-MFA) login, not the role.
+            "onb4@example.com", ["VIEWER"],
             {"employee_number": "EMP-ONB4", "full_name": "Onboarded Four", "employment_start_date": date(2026, 1, 1)},
             admin_id, mfa_required=False,
         )
