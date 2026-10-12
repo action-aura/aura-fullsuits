@@ -91,7 +91,54 @@ def test_restarts_spread_beyond_the_window_are_not_a_loop(launcher):
 
 
 def test_should_supervise_only_frozen_or_forced_and_never_the_child(launcher):
-    assert launcher.should_supervise({}, frozen=True) is True
-    assert launcher.should_supervise({'AURA_LAUNCHER_SUPERVISE': '1'}, frozen=False) is True
-    assert launcher.should_supervise({}, frozen=False) is False         # dev run
-    assert launcher.should_supervise({'AURA_LAUNCHER_CHILD': '1'}, frozen=True) is False   # no recursion
+    assert launcher.should_supervise({}, frozen=True, parent_pids=(4242,)) is True
+    assert launcher.should_supervise({'AURA_LAUNCHER_SUPERVISE': '1'}, frozen=False, parent_pids=(4242,)) is True
+    assert launcher.should_supervise({}, frozen=False, parent_pids=(4242,)) is False         # dev run
+    # A real child: the marker is the pid of the process that started it.
+    # (Verifier H1 changed this test: the marker used to be the literal '1',
+    # which ANY descendant inherits. What it can no longer catch is nothing --
+    # the 'no recursion' half is kept; the inheritance half is added below.)
+    assert launcher.should_supervise({'AURA_LAUNCHER_CHILD': '4242'}, frozen=True, parent_pids=(4242,)) is False
+
+
+def test_an_inherited_child_marker_does_not_make_a_process_a_child(launcher):
+    # H1: the installer relaunches AuraRetail.exe with the child's environment.
+    # Its parent is NOT the supervisor, so it must supervise.
+    env = {'AURA_LAUNCHER_CHILD': '4242'}
+    assert launcher.should_supervise(env, frozen=True, parent_pids=(9999,)) is True
+    assert launcher.should_supervise({'AURA_LAUNCHER_CHILD': '1'}, frozen=True, parent_pids=(9999,)) is True
+    assert launcher.child_marker_is_ours(env, parent_pids=(9999,), frozen=True) is False
+    assert launcher.child_marker_is_ours(env, parent_pids=(4242,), frozen=True) is True
+    assert launcher.child_marker_is_ours({}, parent_pids=(4242,), frozen=True) is False
+
+
+def test_stale_markers_are_discarded_together_and_genuine_ones_kept(launcher):
+    stale = {'AURA_LAUNCHER_CHILD': '4242', 'AURA_RESTART_ON_RESTORE': '1', 'KEEP': 'x'}
+    assert launcher.discard_stale_supervisor_env(stale, parent_pids=(9999,), frozen=True) is True
+    assert stale == {'KEEP': 'x'}               # the 75-exit is disarmed with the marker
+    genuine = {'AURA_LAUNCHER_CHILD': '4242', 'AURA_RESTART_ON_RESTORE': '1'}
+    assert launcher.discard_stale_supervisor_env(genuine, parent_pids=(4242,), frozen=True) is False
+    assert genuine == {'AURA_LAUNCHER_CHILD': '4242', 'AURA_RESTART_ON_RESTORE': '1'}
+    clean = {'KEEP': 'x'}
+    assert launcher.discard_stale_supervisor_env(clean, parent_pids=(9999,), frozen=True) is False
+
+
+def test_the_supervisor_arms_its_child_with_its_own_pid_and_the_restore_restart(launcher, monkeypatch):
+    # M2 / R4: nothing pinned this contract, so deleting the restart variable
+    # left every launcher suite green while F16 was silently off.
+    import os
+    import subprocess
+    seen = {}
+    monkeypatch.setattr(subprocess, 'call', lambda cmd, env=None: seen.update(cmd=cmd, env=env) or 0)
+    monkeypatch.delenv('AURA_LAUNCHER_CHILD', raising=False)
+    assert launcher._run_child_process() == 0
+    assert seen['env']['AURA_LAUNCHER_CHILD'] == str(os.getpid())
+    assert seen['env']['AURA_RESTART_ON_RESTORE'] == '1'
+    assert launcher.should_supervise(seen['env'], frozen=True, parent_pids=(os.getpid(),)) is False
+
+
+def test_supervisor_env_names_agree_across_files(launcher):
+    from commercial_runtime.install_support import restart, supervisor_env
+    assert launcher.CHILD_ENV == supervisor_env.CHILD_ENV == 'AURA_LAUNCHER_CHILD'
+    assert launcher.RESTART_ENV == supervisor_env.RESTART_ENV == restart.RESTART_ENV == 'AURA_RESTART_ON_RESTORE'
+    assert set(supervisor_env.SUPERVISOR_ENV_VARS) == {launcher.CHILD_ENV, launcher.RESTART_ENV}

@@ -91,10 +91,19 @@ def default_is_installable_build() -> bool:
 def default_installer_launcher(path: str, args: Sequence[str]) -> None:
     """Starts the installer detached from this process, so it survives the
     app closing itself (the installer's whole job is to close it). A list, never
-    shell=True: the path is ours but the habit is the guard."""
+    shell=True: the path is ours but the habit is the guard.
+
+    The environment is passed EXPLICITLY, minus the supervisor's private
+    markers (verifier H1): the installer relaunches the new AuraRetail.exe with
+    whatever environment it was started with, and an exe that inherits "I am the
+    supervised child" runs unsupervised, so the first restore after the update
+    kills the till for good. This function is also the rollback's launcher."""
+    from commercial_runtime.install_support.supervisor_env import scrubbed_env
+
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     subprocess.Popen(
         [str(path), *args],
+        env=scrubbed_env(),
         creationflags=flags,
         close_fds=True,
         stdin=subprocess.DEVNULL,

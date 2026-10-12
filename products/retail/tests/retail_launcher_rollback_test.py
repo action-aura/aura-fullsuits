@@ -112,6 +112,23 @@ def test_not_offered_on_a_dev_run(L):
     assert spy.asked == []
 
 
+def test_the_rollback_installer_does_not_inherit_the_supervisor_markers(L, monkeypatch):
+    # H1: the rollback uses the updater's default launcher; a Popen with an
+    # inherited env would relaunch the old version as an unsupervised child.
+    import subprocess
+    seen = []
+    monkeypatch.setattr(subprocess, 'Popen', lambda argv, **kw: seen.append(kw.get('env')))
+    monkeypatch.setenv('AURA_LAUNCHER_CHILD', '4242')
+    monkeypatch.setenv('AURA_RESTART_ON_RESTORE', '1')
+    _arm_update(L)
+    spy = Spy(True)
+    outcome = L._offer_rollback(installable=True, version=RUNNING, ask=spy.ask, restore=spy.restore,
+                                show_error=lambda t, m: None)        # launch=None -> the real default
+    assert outcome == 'rolled_back'
+    assert len(seen) == 1 and seen[0] is not None
+    assert 'AURA_LAUNCHER_CHILD' not in seen[0] and 'AURA_RESTART_ON_RESTORE' not in seen[0]
+
+
 def test_a_restore_that_fails_reports_failed_and_runs_no_installer(L):
     _arm_update(L)
     spy = Spy(True)

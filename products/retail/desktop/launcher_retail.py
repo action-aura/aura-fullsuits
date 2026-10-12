@@ -1126,7 +1126,8 @@ def main():
 # Not supervised: a plain `python launcher_retail.py` (dev run) -- the child
 # env marker and the frozen check below keep the old single-process behaviour.
 SUPERVISE_ENV = 'AURA_LAUNCHER_SUPERVISE'   # "1" forces supervision from source (tests/proof)
-CHILD_ENV = 'AURA_LAUNCHER_CHILD'           # set on the child so it never supervises itself
+CHILD_ENV = 'AURA_LAUNCHER_CHILD'           # = the supervisor's pid; set on the child so it never supervises itself
+RESTART_ENV = 'AURA_RESTART_ON_RESTORE'     # == install_support.restart.RESTART_ENV
 RESTART_EXIT_CODE = 75                      # == install_support.restart.RESTART_EXIT_CODE
 # A child that keeps asking for a restart (a bug, not a restore) must not spin
 # forever: more than this many relaunches inside the window and we stop.
@@ -1144,10 +1145,80 @@ def exit_action(code: int) -> str:
     return 'crash'
 
 
-def should_supervise(environ=None, frozen=None) -> bool:
+def _parent_pids(frozen: bool) -> tuple:
+    """The pids a genuine supervised child may have as its parent. The frozen
+    exe is launched directly by the supervisor, so only os.getppid() counts --
+    deliberately strict. From source on Windows a venv's python.exe is a
+    redirector that starts the real interpreter as ITS child, so one more
+    generation is accepted there (otherwise a forced-supervision proof run would
+    re-supervise itself forever)."""
+    pids = [os.getppid()]
+    if not frozen and sys.platform == 'win32':
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class PROCESSENTRY32(ctypes.Structure):
+                _fields_ = [
+                    ('dwSize', wintypes.DWORD), ('cntUsage', wintypes.DWORD),
+                    ('th32ProcessID', wintypes.DWORD), ('th32DefaultHeapID', ctypes.c_size_t),
+                    ('th32ModuleID', wintypes.DWORD), ('cntThreads', wintypes.DWORD),
+                    ('th32ParentProcessID', wintypes.DWORD), ('pcPriClassBase', ctypes.c_long),
+                    ('dwFlags', wintypes.DWORD), ('szExeFile', ctypes.c_wchar * 260)]
+            k32 = ctypes.windll.kernel32
+            k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+            snap = k32.CreateToolhelp32Snapshot(0x2, 0)       # TH32CS_SNAPPROCESS
+            parents = {}
+            entry = PROCESSENTRY32()
+            entry.dwSize = ctypes.sizeof(entry)
+            ok = k32.Process32FirstW(snap, ctypes.byref(entry))
+            while ok:
+                parents[entry.th32ProcessID] = entry.th32ParentProcessID
+                ok = k32.Process32NextW(snap, ctypes.byref(entry))
+            k32.CloseHandle(snap)
+            grandparent = parents.get(pids[0])
+            if grandparent:
+                pids.append(grandparent)
+        except Exception as exc:
+            log.warning(f'Could not read the process tree for the supervisor check: {exc}')
+    return tuple(pids)
+
+
+def child_marker_is_ours(environ=None, parent_pids=None, frozen=None) -> bool:
+    """True only when AURA_LAUNCHER_CHILD names the process that actually
+    started us. The supervisor sets it to ITS OWN pid, so the marker cannot be
+    satisfied by inheritance: a copy of this exe started by anything else (the
+    installer's relaunch after an update, a rollback, a shortcut run from a
+    supervised app) has a different parent and is not a child (verifier H1)."""
+    environ = os.environ if environ is None else environ
+    marker = environ.get(CHILD_ENV)
+    if not marker:
+        return False
+    frozen = getattr(sys, 'frozen', False) if frozen is None else frozen
+    parent_pids = _parent_pids(bool(frozen)) if parent_pids is None else parent_pids
+    return marker in {str(p) for p in parent_pids}
+
+
+def discard_stale_supervisor_env(environ=None, parent_pids=None, frozen=None) -> bool:
+    """If the supervisor markers are present but not ours, remove BOTH
+    (AURA_LAUNCHER_CHILD and AURA_RESTART_ON_RESTORE): the second one would
+    otherwise arm the 75-exit in a process nobody is supervising. Returns True
+    when it removed something (logged: this is the H1 signature)."""
+    environ = os.environ if environ is None else environ
+    present = [n for n in (CHILD_ENV, RESTART_ENV) if n in environ]
+    if not present or child_marker_is_ours(environ, parent_pids, frozen):
+        return False
+    for name in present:
+        environ.pop(name, None)
+    log.warning(f'Ignoring inherited supervisor markers {present}: they do not name our '
+                'parent process, so this copy runs as a top-level app.')
+    return True
+
+
+def should_supervise(environ=None, frozen=None, parent_pids=None) -> bool:
     environ = os.environ if environ is None else environ
     frozen = getattr(sys, 'frozen', False) if frozen is None else frozen
-    if environ.get(CHILD_ENV) == '1':
+    if child_marker_is_ours(environ, parent_pids, frozen):
         return False
     return bool(frozen) or environ.get(SUPERVISE_ENV) == '1'
 
@@ -1173,8 +1244,11 @@ def supervise(run_child, clock=time.monotonic) -> int:
 def _run_child_process() -> int:
     import subprocess
     env = dict(os.environ)
-    env[CHILD_ENV] = '1'
-    env['AURA_RESTART_ON_RESTORE'] = '1'
+    # The marker is OUR pid, not "1": a child accepts it only if it equals its
+    # parent's pid (child_marker_is_ours), so a copy of the marker that leaks
+    # into some other process's environment cannot make that process a child.
+    env[CHILD_ENV] = str(os.getpid())
+    env[RESTART_ENV] = '1'
     if getattr(sys, 'frozen', False):
         cmd = [sys.executable, *sys.argv[1:]]
     else:
@@ -1183,6 +1257,7 @@ def _run_child_process() -> int:
 
 
 if __name__ == '__main__':
+    discard_stale_supervisor_env()
     if should_supervise():
         sys.exit(supervise(_run_child_process))
     main()
