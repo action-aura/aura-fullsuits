@@ -7898,3 +7898,44 @@ PROVEN (see the hand-back for quoted red/green)
   catch-up without the payment_uid exclusion. Real app :5098: a 15.000 "Other income" paid-in through the drawer
   dialog (EN + AR shots) -> cash 500.000 -> 515.000, P&L revenue_accounts 4000 500.000 + 4800 15.000, trial
   balance and balance sheet balanced. Full run: 488 files, 488 passed, 0 failed.
+
+## 2026-10-12 — INSTALL-1 (restart after restore, update rollback, installer icon/WebView2, firewall at the owner's moment, crash trail) — no schema claim
+
+Branch `feat/install-1`. No schema change.
+
+**Built.** (1) Restore ends with the backend exiting 75; the frozen exe now runs itself as a tiny supervisor around the
+real launcher (the Flask server is a thread inside the launcher, so only a second process can act on the exit): 75 ->
+relaunch, 0 -> quit, other -> pass through (never retried; >3 restarts in 120 s stops). Opt-in via
+`AURA_RESTART_ON_RESTORE=1`, set only by the supervisor, so dev runs and tests keep the manual-restart message and can
+never `os._exit` themselves. (2) `updates/previous/` keeps exactly one installer (the version being replaced; source =
+`{app}\installer-cache`, a copy the installer now drops of itself, else an earlier download), `state.json.last_update`
+= {from,to,backup}; `updates/rollback.py` + launcher: a failed first boot after an update offers "Go back" (restore the
+pre-update backup first, re-hash, run the kept installer /VERYSILENT /RELAUNCH=1). The downgrade guard in `install()` is
+untouched (remote older version still refused; tested both ways). (3) `aura_retail.ico` (brand mark, 7 sizes, from
+`scripts/release/make_app_icon.py`), `MinVersion=10.0.17763`, WebView2 Evergreen bootstrapper run only when the runtime
+key is absent (downloaded + Microsoft-signature-checked + SHA-256 printed/recorded by `build_desktop_installer.ps1`, not
+committed), `.iss` header corrected. (4) `install_support/firewall.py`: one inbound rule, private+domain, via one UAC
+prompt; idempotent; decline recorded (`GET /api/site-relay/firewall`, `POST .../retry`). (5) Fallback Edge window now ends
+the launcher when it closes; faulthandler log + `sys`/`threading` excepthooks into the crash-report store.
+
+**Deviations from the brief, on purpose.** There is NO "Shop network" switch in the product (the hub starts by itself
+once the licence is ACTIVE), so the firewall prompt is tied to the owner's "Connect a device" press
+(`POST /api/site-relay/pair-code`). The backend exit is opt-in rather than unconditional (above).
+
+**Proven on the real artefact** (full `build_desktop_installer.ps1` build with a fake owner URL, silent per-user install
+to a temp dir under a throw-away AppId, installed exe with AURA_* stripped): exe icon extracted = the Aura mark; `/`
+served; a restore through the API took the server down at 3.7 s and back at 7.8 s with a new child process and the same
+supervisor; a simulated failed post-update boot (`AURA_TEST_FAIL_BOOT`, honoured only with `AURA_DEV_TEST_HOOKS=1`)
+showed the real native Yes/No box, "Yes" restored the data (a `pre-restore-*` folder appeared), ran the installer and
+relaunched, "No" fell through to the normal failure dialog; the crash store got the boot failure as a `thread` row.
+
+**NOT proven / left.** No clean Windows VM: the WebView2 bootstrapper never ran (this PC already has the runtime) and
+`MinVersion` was not exercised on an old Windows. No real UAC click and no real `netsh` call (all stubbed). The
+rollback "Yes" chain re-ran the SAME build's installer renamed as the previous version, because only one build existed;
+a genuine old-to-new-to-old cycle has not been run. An install made with an installer that predates this one has no
+`installer-cache`, so its first update keeps nothing and "Go back" is not offered for that one update. The Edge-fallback
+exit was proven with a fake process, not by closing a real Edge window (hand-off to a stray Edge owning that profile is a
+known limit). The proof build used a different AppId than production (a stale registered test install shares the real
+one on this PC); every other byte is the production script. Settings has no UI for the firewall status yet (frontend was
+off limits), and the restore-success page poll is a few lines in `subsystem-retail.js` (another crew edits that file:
+expect a trivial merge).
