@@ -195,7 +195,23 @@ def _bind_free_socket(start=DEFAULT_PORT, stop=DEFAULT_PORT + 20):
     return None
 
 
+# Proof-only switch (INSTALL-1): lets a real installed exe be driven through a
+# FAILED first boot after an update without having to ship a broken build.
+# Honoured ONLY when the explicit dev flag is also set, so neither variable
+# alone -- and in particular nothing a customer's environment is likely to
+# contain -- can make a till fail to start.
+TEST_HOOKS_ENV = 'AURA_DEV_TEST_HOOKS'
+FAIL_BOOT_ENV = 'AURA_TEST_FAIL_BOOT'
+
+
+def _test_fail_boot_requested(environ=None) -> bool:
+    environ = os.environ if environ is None else environ
+    return environ.get(TEST_HOOKS_ENV) == '1' and environ.get(FAIL_BOOT_ENV) == '1'
+
+
 def _run_server(sock):
+    if _test_fail_boot_requested():
+        raise RuntimeError(f'{FAIL_BOOT_ENV}: simulated failed boot (proof hook)')
     import app as retail_app
     retail_app.init_app()
     from waitress import serve as _serve
@@ -321,6 +337,90 @@ def _save_fullscreen_pref(value: bool) -> None:
 def _message_box(title, message):
     import ctypes
     ctypes.windll.user32.MessageBoxW(0, message, title, 0x10)
+
+
+def _ask_yes_no(title, message) -> bool:
+    """Native Yes/No box (MB_YESNO | MB_ICONWARNING | MB_TOPMOST). Unlike
+    _fatal's bounded dialog this WAITS for the person: it is only ever shown
+    when a human is at an installed till whose app just failed to start, and
+    the answer decides what happens to their shop's data."""
+    import ctypes
+    IDYES = 6
+    return ctypes.windll.user32.MessageBoxW(0, message, title, 0x04 | 0x30 | 0x1000) == IDYES
+
+
+def _running_version():
+    try:
+        import config as _config
+        return _config.APP_VERSION
+    except Exception as exc:
+        log.warning(f'Could not read the app version for the rollback check: {exc}')
+        return None
+
+
+def _backup_dir() -> str:
+    return os.environ.get('AURA_BACKUP_DIR') or str(Path(_app_data) / 'backups')
+
+
+def _offer_rollback(*, installable=None, version=None, ask=None, restore=None, launch=None,
+                    show_error=None) -> str:
+    """The first boot after an update failed: offer the way back (INSTALL-1).
+
+    Returns 'not_offered' | 'declined' | 'rolled_back' | 'failed'. It is only
+    ever offered when (a) this is an installed build (a dev run must never
+    start an installer), (b) the failed boot is the first one after an update
+    -- a healthy post-update boot writes boot_ok and never reaches here -- and
+    (c) everything needed to go back is on disk (rollback.plan_rollback). Each
+    outcome is logged: 'never offered' and 'offered and declined' must not look
+    the same in startup.log."""
+    from commercial_runtime.updates import rollback
+    installable = getattr(sys, 'frozen', False) if installable is None else installable
+    if not installable:
+        log.info('Rollback not offered: not an installed build.')
+        return 'not_offered'
+    version = version or _running_version()
+    if not version:
+        return 'not_offered'
+    plan = rollback.plan_rollback(_app_data, version, _backup_dir())
+    if plan is None:
+        log.info('Rollback not offered: this boot is not a failed first boot after an update, '
+                 'or the way back is not on disk.')
+        return 'not_offered'
+    ask = ask or _ask_yes_no
+    show_error = show_error or (lambda title, msg: _message_box(title, msg))
+    log.warning(f'Rollback OFFERED: {plan.to_version} failed to start; could go back to {plan.from_version}.')
+    answer = ask(
+        APP_NAME,
+        f'{APP_NAME} could not start after its last update (to version {plan.to_version}).\n\n'
+        f'Do you want to go back to the previous version ({plan.from_version})?\n\n'
+        'Your shop data from just before the update will be put back. '
+        'Anything entered since the update is set aside, not deleted.')
+    if not answer:
+        log.info('Rollback declined by the person at the till.')
+        return 'declined'
+    if restore is None:
+        from commercial_runtime.backup.service import restore_backup as restore
+    if launch is None:
+        from commercial_runtime.updates.service import default_installer_launcher as launch
+    try:
+        rollback.execute_rollback(plan, app_data_dir=_app_data, backup_dir=_backup_dir(),
+                                  product_code='retail', launch=launch, restore=restore)
+    except Exception as exc:
+        log.error(f'Rollback FAILED: {exc}', exc_info=True)
+        show_error(APP_NAME, 'Going back to the previous version did not work. '
+                             'Nothing was changed. Please contact Action Aura support.')
+        return 'failed'
+    log.info('Rollback started: the previous version installer is running.')
+    return 'rolled_back'
+
+
+def _mark_healthy_boot() -> None:
+    """The server answered and is the right product: the first boot after an
+    update (if this is one) is over, so "Go back" is never offered for it."""
+    version = _running_version()
+    if version:
+        from commercial_runtime.updates import rollback
+        rollback.mark_boot_ok(_app_data, version)
 
 
 def _fatal(message: str, reason_code: str):
@@ -834,6 +934,8 @@ def main():
             'health_endpoint_error': 'HEALTH_ENDPOINT_ERROR',
             'not_ready_timeout': 'STARTUP_TIMEOUT',
         }
+        if _offer_rollback() == 'rolled_back':
+            sys.exit(0)           # the installer is closing and replacing this build
         _fatal(f'The Aura Retail server did not become ready in time ({result.detail})',
                reason_code=reason_map.get(result.reason, 'STARTUP_TIMEOUT'))
         return
@@ -853,6 +955,8 @@ def main():
         product_code = None
         log.warning(f'Could not verify product identity at http://{HOST}:{port}/api/version: {exc}')
     if product_code != 'AURA_RETAIL':
+        if _offer_rollback() == 'rolled_back':
+            sys.exit(0)
         _fatal(f'Port {port} answered as "{product_code}", not Aura Retail -- another Aura '
                'product is using this port. Close all Aura applications and try again.',
                reason_code='WRONG_PRODUCT_ON_PORT')
@@ -863,6 +967,7 @@ def main():
     # startup-timeout failure after this point; check_readiness() has
     # already returned, and nothing below re-invokes it.
     _set_state(LauncherState.READY)
+    _mark_healthy_boot()
     log.info(f'Server ready after {result.attempts} attempt(s), {result.elapsed:.2f}s -- launching application window.')
 
     _set_state(LauncherState.UI_RUNNING)
