@@ -347,7 +347,16 @@ def test_the_migration_is_one_revision_on_top_of_the_crash_reports_head():
     cfg = Config(os.path.join(owner_dir, "alembic.ini"))
     cfg.set_main_option("script_location", os.path.join(owner_dir, "migrations"))
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_heads() == ["b5e1c8a27d94"]
+    # 2026-10-12: this asserted `get_heads() == ["b5e1c8a27d94"]`, which pinned
+    # "nothing may ever come after the email revision" -- PORT-AUG's claimed
+    # c7a4f2d8e613 (AUDIT-032) now sits on top and turned it red. What this test
+    # exists for is unchanged and still pinned: ONE head (no fork in the chain),
+    # the email revision is ON that chain, and it sits directly on the
+    # crash-reports revision. What it no longer says: that email is the newest.
+    heads = script.get_heads()
+    assert len(heads) == 1, f"the Owner migration chain forked: {heads}"
+    chain = {rev.revision for rev in script.walk_revisions(base="base", head=heads[0])}
+    assert "b5e1c8a27d94" in chain
     assert script.get_revision("b5e1c8a27d94").down_revision == "a3d9e6c14b72"
 
 
