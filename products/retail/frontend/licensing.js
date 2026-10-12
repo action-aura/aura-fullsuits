@@ -1039,6 +1039,23 @@
     await refresh();
   }
 
+  // SUPPORT-1 item 1: make the "Contact support" line on this page useful.
+  // help.js (loaded before this file) owns the support number and builds the
+  // WhatsApp link with the installation id and version filled in -- reused
+  // here rather than re-typed so the Help dialog and this page can never
+  // point at two different numbers. Best-effort: if help.js is absent or the
+  // two lookups fail, the static link already in licensing.html still works.
+  (function wireSupportContact() {
+    try {
+      const help = window.AuraHelp;
+      const link = document.getElementById('support-whatsapp');
+      if (!help || !link || typeof help.load !== 'function') return;
+      help.load().then(function () {
+        const url = help.supportUrl();
+        if (url) link.setAttribute('href', url);
+      }).catch(function () { /* the static link stays */ });
+    } catch (e) { /* a courtesy link must never break the licence page */ }
+  })();
   // Gate the first render on the translation dictionaries the same way
   // index.html gates SubsystemApp.init() -- see i18n.js's docstring/apply():
   // this is what lets the very first paint (STATE_LABELS/REASON_MESSAGES

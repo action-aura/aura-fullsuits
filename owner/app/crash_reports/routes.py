@@ -18,9 +18,10 @@ from __future__ import annotations
 import re
 
 from flask import Blueprint, abort, render_template, request
-from sqlalchemy import func, select
+from sqlalchemy import false, func, select
 
 from app.extensions import db_session
+from app.crash_reports.reference_code import fingerprint_range, reference_code
 from app.models.crash_reports import CrashReport
 from app.security.rbac import require_permission
 
@@ -44,7 +45,27 @@ def _first_frame(frames) -> str:
 def list_reports():
     page = max(request.args.get("page", 1, type=int) or 1, 1)
 
-    total = db_session.execute(select(func.count(func.distinct(CrashReport.fingerprint)))).scalar_one()
+    # SUPPORT-1: filter by kind (crash reports vs diagnostics snapshots) and
+    # search by the 6-character reference code the shopkeeper read out. The code
+    # is a range of fingerprints (reference_code.fingerprint_range), so this is
+    # an indexed BETWEEN. A code that is not a code (wrong length, a 0/O/1/I)
+    # matches NOTHING -- never "something near it".
+    kind_filter = request.args.get("kind", "all")
+    if kind_filter not in ("all", "crashes", "diagnostics"):
+        kind_filter = "all"
+    query_text = (request.args.get("q", "") or "").strip()[:20]
+    conditions = []
+    if kind_filter == "diagnostics":
+        conditions.append(CrashReport.kind == "diagnostics")
+    elif kind_filter == "crashes":
+        conditions.append(CrashReport.kind != "diagnostics")
+    if query_text:
+        bounds = fingerprint_range(query_text)
+        conditions.append(CrashReport.fingerprint.between(*bounds) if bounds else false())
+
+    total = db_session.execute(
+        select(func.count(func.distinct(CrashReport.fingerprint))).where(*conditions)
+    ).scalar_one()
     groups = db_session.execute(
         select(
             CrashReport.fingerprint,
@@ -55,6 +76,7 @@ def list_reports():
             func.min(CrashReport.first_seen_at).label("first_seen"),
             func.max(CrashReport.last_seen_at).label("last_seen"),
         )
+        .where(*conditions)
         .group_by(CrashReport.fingerprint)
         .order_by(func.max(CrashReport.last_seen_at).desc(), CrashReport.fingerprint)
         .limit(PAGE_SIZE)
@@ -75,6 +97,7 @@ def list_reports():
     entries = [
         {
             "fingerprint": g.fingerprint,
+            "code": reference_code(g.fingerprint),
             "exception_type": g.exception_type,
             "first_frame": _first_frame(latest[g.fingerprint].frames) if g.fingerprint in latest else "",
             "kind": latest[g.fingerprint].kind if g.fingerprint in latest else "",
@@ -90,7 +113,7 @@ def list_reports():
         "rows": entries, "page": page, "page_size": PAGE_SIZE, "total": total, "total_pages": total_pages,
         "has_prev": page > 1, "has_next": page < total_pages,
     }
-    return render_template("crash_reports/list.html", result=result)
+    return render_template("crash_reports/list.html", result=result, kind_filter=kind_filter, query_text=query_text)
 
 
 @bp.route("/<fingerprint>", methods=["GET"])
@@ -106,6 +129,7 @@ def detail(fingerprint):
     newest = rows[0]
     summary = {
         "fingerprint": fingerprint,
+        "code": reference_code(fingerprint),
         "exception_type": newest.exception_type,
         "kind": newest.kind,
         "message": newest.message,

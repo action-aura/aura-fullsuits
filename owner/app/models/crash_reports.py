@@ -42,7 +42,7 @@ class CrashReport(Base, UUIDPKMixin):
     platform: Mapped[str] = mapped_column(String(32), nullable=False)
     app_version: Mapped[str] = mapped_column(String(64), nullable=False)
     fingerprint: Mapped[str] = mapped_column(String(32), nullable=False)
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)               # server | thread | client
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)               # server | thread | client | diagnostics
     exception_type: Mapped[str] = mapped_column(String(200), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)                   # <= 300 chars, scrubbed on the till
     frames: Mapped[list] = mapped_column(JSONB, nullable=False)                  # [{file, function, line}], <= 30, innermost first

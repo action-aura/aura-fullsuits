@@ -148,6 +148,37 @@ class CrashReportSender:
         if not rows:
             log.info("crash reports: run skipped -- nothing pending")
             return "NOTHING_PENDING"
+        # SUPPORT-1: diagnostics snapshots travel in a request of their own,
+        # AFTER the crash reports. An Owner built before the "diagnostics" kind
+        # existed refuses a whole request that contains one (all-or-nothing
+        # validation); mixed into one request that refusal would also hold back
+        # every real crash report behind it, forever, oldest-first.
+        crashes = [r for r in rows if r["kind"] != "diagnostics"]
+        snapshots = [r for r in rows if r["kind"] == "diagnostics"]
+        outcome = "NOTHING_PENDING"
+        for group in (crashes, snapshots):
+            if not group:
+                continue
+            outcome = self._send_group(installation_id, group)
+            if outcome != "SENT":
+                return outcome
+        return outcome
+
+    def run_once_now(self) -> str:
+        """One extra send attempt on demand (the shopkeeper pressed "Send
+        diagnostics"), WITHOUT touching the schedule: a failed attempt leaves
+        the back-off exactly as it was. run_once() doubles the wait on every
+        failure, so a shop pressing the button repeatedly while offline would
+        otherwise push the till's own retries out to six hours.
+        (Not locked against the loop thread: at worst both send, and Owner's
+        upsert is idempotent -- count = max(existing, incoming).)"""
+        before = self.interval
+        outcome = self.run_once()
+        if outcome != "SENT":
+            self.interval = before
+        return outcome
+
+    def _send_group(self, installation_id: str, rows: list) -> str:
         reports = self._payload_for(rows)
         sent_rows = rows[:len(reports)]
         try:

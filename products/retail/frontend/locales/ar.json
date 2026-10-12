@@ -2769,5 +2769,19 @@
   "A reason is required to void an expense.": "السبب مطلوب لإلغاء المصروف.",
   "Expense voided": "تم إلغاء المصروف",
   "Cash from the office": "نقدًا من المكتب",
-  "Bank transfer": "تحويل بنكي"
+  "Bank transfer": "تحويل بنكي",
+  "Chat on WhatsApp": "تحدّث عبر واتساب",
+  "Send diagnostics to support": "إرسال التشخيص إلى الدعم",
+  "Sends a short summary of this computer. No customer or sales details.": "يرسل ملخصًا قصيرًا عن هذا الجهاز. لا يتضمن بيانات العملاء أو المبيعات.",
+  "Let support see my screen": "السماح للدعم برؤية شاشتي",
+  "Opens Quick Assist. Call support first: they give you a 6-digit code to type in.": "يفتح المساعدة السريعة (Quick Assist). اتصل بالدعم أولًا: سيعطونك رمزًا من 6 أرقام لتكتبه.",
+  "Collecting…": "جارٍ التجميع…",
+  "Could not collect the diagnostics. Please try again.": "تعذّر تجميع التشخيص. حاول مرة أخرى.",
+  "Could not save the diagnostics. Please try again.": "تعذّر حفظ التشخيص. حاول مرة أخرى.",
+  "Saved. It is sent to Action Aura automatically when this computer is online.": "تم الحفظ. سيُرسل إلى Action Aura تلقائيًا عندما يتصل هذا الجهاز بالإنترنت.",
+  "Saved on this computer. Tell support this code on WhatsApp or by phone.": "تم الحفظ على هذا الجهاز. أخبر الدعم بهذا الرمز عبر واتساب أو الهاتف.",
+  "Your support code": "رمز الدعم الخاص بك",
+  "Copy": "نسخ",
+  "Copy failed": "تعذّر النسخ",
+  "Something went wrong. A report was saved (code {code}).": "حدث خلل ما. تم حفظ تقرير (الرمز {code})."
 }

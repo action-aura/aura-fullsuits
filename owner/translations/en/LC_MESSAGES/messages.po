@@ -8347,3 +8347,23 @@ msgstr "Why are you withdrawing it?"
 #: app/templates (release-publish wave)
 msgid "Yes, withdraw"
 msgstr "Yes, withdraw"
+
+#: app/templates/crash_reports/list.html
+msgid "Kind"
+msgstr "Kind"
+
+#: app/templates/crash_reports/list.html
+msgid "Crashes"
+msgstr "Crashes"
+
+#: app/templates/crash_reports/list.html
+msgid "Diagnostics"
+msgstr "Diagnostics"
+
+#: app/templates/crash_reports/list.html
+msgid "Search by code"
+msgstr "Search by code"
+
+#: app/templates/crash_reports/list.html
+msgid "Support code"
+msgstr "Support code"

@@ -42,7 +42,13 @@ MAX_FRAMES = 30
 MAX_FIELD_CHARS = 200
 MAX_COUNT = 100000
 RETENTION_DAYS = 90
-VALID_KINDS = frozenset({"server", "thread", "client"})
+# "diagnostics" (SUPPORT-1): a support snapshot the shopkeeper chose to send,
+# carried on this same channel. No schema change -- the column is a free
+# String(16). An Owner WITHOUT this value refuses a request that contains one
+# (all-or-nothing validation), which is why the till sends snapshots in a
+# request of their own: deploy Owner first, and an older Owner only delays the
+# snapshot, never a real crash report.
+VALID_KINDS = frozenset({"server", "thread", "client", "diagnostics"})
 _FINGERPRINT_RE = re.compile(r"^[0-9a-f]{32}$")
 _REQUIRED_FIELDS = ("installation_id", "timestamp", "nonce", "signature", "request_id", "reports")
 
