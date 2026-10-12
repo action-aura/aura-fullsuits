@@ -7812,3 +7812,4 @@ PROVEN (see the hand-back for quoted red/green)
 * Real artefact on port 5096: a 20.000 paid-out through the drawer dialog and a 250.000 rent expense on the Expenses
   screen (EN + AR screenshots); balance sheet Cash and Bank 500.000 -> 230.000, trial balance and balance sheet
   balanced, P&L operating expenses 270.000 (6300 20.000, 6000 250.000).
+* Canonical full run on the committed tree (products\run_all_tests.py retail commercial_runtime sync -j 6): 488 file(s) run, 488 passed, 0 failed. (The first full run, before the head-version tripwires, nav table, option-label source scan and DEFAULT_CHART comment placement were adjusted for v52, was 471 passed / 16 failed -- every one a direct consequence of this change, none pre-existing.)
