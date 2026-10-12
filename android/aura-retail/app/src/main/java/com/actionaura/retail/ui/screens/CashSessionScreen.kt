@@ -265,11 +265,11 @@ fun CashSessionScreen(snackbar: SnackbarHostState) {
                                 ReportRow(tr("Opening float"), money(r.opening_float))
                                 ReportRow(tr("Cash sales"), money(r.cash_sales))
                                 ReportRow(tr("Customer payments (cash)"), money(r.customer_cash_in))
-                                ReportRow(tr("Cash refunds"), money(-kotlin.math.abs(r.cash_refunds)))
+                                ReportRow(tr("Cash refunds"), outflow(r.cash_refunds))
                                 ReportRow(tr("Float in"), money(r.movements.float_in))
-                                ReportRow(tr("Float out"), money(-kotlin.math.abs(r.movements.float_out)))
+                                ReportRow(tr("Float out"), outflow(r.movements.float_out))
                                 ReportRow(tr("Paid in"), money(r.movements.paid_in))
-                                ReportRow(tr("Paid out"), money(-kotlin.math.abs(r.movements.paid_out)))
+                                ReportRow(tr("Paid out"), outflow(r.movements.paid_out))
                                 if (mayApprove) {
                                     HorizontalDivider()
                                     ReportRow(tr("Expected cash in drawer"), money(r.expected_cash), bold = true)
@@ -375,6 +375,9 @@ fun CashSessionScreen(snackbar: SnackbarHostState) {
     }
 }
 
+/** An outflow shown negative -- but a zero stays "0.000", never "-0.000". */
+private fun outflow(v: Double): String = if (kotlin.math.abs(v) < 1e-9) money(0.0) else money(-kotlin.math.abs(v))
+
 @Composable
 private fun ReportRow(label: String, value: String, bold: Boolean = false) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -407,7 +410,7 @@ private fun MovementDialog(busy: Boolean, onDismiss: () -> Unit, onSubmit: (Cash
     var error by remember { mutableStateOf<String?>(null) }
     val purposes = purposesFor(type)
 
-    AlertDialog(
+    LocalizedAlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(tr("Cash Movement")) },
         text = {
@@ -496,7 +499,7 @@ private fun EndShiftDialog(
     val reveal = closeReveal(hasCount = countedMinor != null, mayApprove = mayApprove)
     val expectedMinor = expected?.let { toMinor(it, dp) }
 
-    AlertDialog(
+    LocalizedAlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(tr("End Shift — Z Report")) },
         text = {

@@ -40,7 +40,7 @@ import com.actionaura.retail.ui.i18n.tr
 @Composable
 internal fun HoldDialog(busy: Boolean, onHold: (String) -> Unit, onDismiss: () -> Unit) {
     var note by remember { mutableStateOf("") }
-    AlertDialog(
+    LocalizedAlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(tr("Hold This Sale")) },
         text = {
@@ -66,7 +66,7 @@ internal fun ConfirmDialog(
     title: String, message: String, confirmLabel: String,
     onConfirm: () -> Unit, onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    LocalizedAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = { Text(message) },

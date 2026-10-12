@@ -44,7 +44,7 @@ internal fun LineDiscountDialog(
     val asked = clampDiscountPct(parseNum(text))
     val max = access.maxPct()
     val tooHigh = asked > max + 1e-9
-    AlertDialog(
+    LocalizedAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(tr("Discount") + " — " + productName, maxLines = 2) },
         text = {
