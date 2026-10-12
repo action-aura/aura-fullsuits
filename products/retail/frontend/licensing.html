@@ -124,7 +124,23 @@
     Need help? Contact Action Aura support with your installation status shown above.
   </div>
 
+  <!-- SUPPORT-1 item 1: the sentence above told the shopkeeper to "contact
+       support" and gave no way to. The number is the company phone/WhatsApp
+       line (owner, 2026-10-04), the same one help.js carries; licensing.js
+       upgrades the WhatsApp link with the installation id and version once
+       they are known (the same prefill the Help dialog builds). The static
+       hrefs here are the fallback if that script cannot run, so the page
+       never shows a contact line with no way to act on it. A test keeps this
+       number equal to help.js's, so the two cannot drift apart. -->
+  <p class="support" id="support-contact">
+    <span data-i18n="Phone and WhatsApp">Phone and WhatsApp</span>:
+    <a id="support-phone" href="tel:+962780069485" dir="ltr">+962 78 006 9485</a>
+    &middot; <a id="support-whatsapp" href="https://wa.me/962780069485" target="_blank" rel="noopener" data-i18n="Chat on WhatsApp">Chat on WhatsApp</a><br>
+    <span data-i18n="Email">Email</span>:
+    <a id="support-email" href="mailto:info@actionaura.me" dir="ltr">info@actionaura.me</a>
+  </p>
   <script src="i18n.js"></script>
+  <script src="help.js"></script>
   <script src="licensing.js"></script>
 </body>
 </html>
