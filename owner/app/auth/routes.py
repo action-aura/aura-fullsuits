@@ -10,7 +10,7 @@ from flask_babel import gettext as _
 from sqlalchemy import select
 
 from app.audit.services import record as audit_record
-from app.auth.services import authenticate, find_staff_by_email
+from app.auth.services import authenticate, find_staff_by_email, mfa_is_mandatory
 from app.auth.session import (
     COOKIE_NAME,
     create_session,
@@ -111,7 +111,7 @@ def login_submit():
         return render_template("auth/login.html", error=message), 401
 
     has_mfa = staff.mfa_credential is not None and staff.mfa_credential.confirmed
-    if has_mfa or staff.mfa_required:
+    if has_mfa or mfa_is_mandatory(staff):
         if not has_mfa:
             # MFA is mandatory for this account but not yet enrolled -- force enrollment before any session exists.
             session[_PENDING_MFA_SESSION_KEY] = str(staff.id)

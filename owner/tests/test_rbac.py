@@ -39,22 +39,28 @@ def test_support_cannot_manage_pricing(app, client, seeded):
 
 
 def test_sales_cannot_manage_staff(app, client, seeded):
-    make_staff(app, "sales@example.com", password="Correct-Password-1!", role_codes=["SALES"])
-    login(client, "sales@example.com", password="Correct-Password-1!")
+    # SALES/FINANCE are MFA-mandatory at login (OWNER-SEC item 5); this test is about
+    # authorization, not the login flow, so it establishes the session directly.
+    staff_id = make_staff(app, "sales@example.com", password="Correct-Password-1!", role_codes=["SALES"])
+    force_login(client, app, staff_id)
     resp = client.get("/staff")
     assert resp.status_code == 403
 
 
 def test_finance_cannot_issue_license_secrets(app, client, seeded):
-    make_staff(app, "finance@example.com", password="Correct-Password-1!", role_codes=["FINANCE"])
-    login(client, "finance@example.com", password="Correct-Password-1!")
+    # SALES/FINANCE are MFA-mandatory at login (OWNER-SEC item 5); this test is about
+    # authorization, not the login flow, so it establishes the session directly.
+    staff_id = make_staff(app, "finance@example.com", password="Correct-Password-1!", role_codes=["FINANCE"])
+    force_login(client, app, staff_id)
     resp = client.get("/licenses")
     assert resp.status_code == 403  # FINANCE has no licenses.view permission at all
 
 
 def test_non_super_admin_cannot_restore_database(app, client, seeded):
-    make_staff(app, "finance2@example.com", password="Correct-Password-1!", role_codes=["FINANCE"])
-    login(client, "finance2@example.com", password="Correct-Password-1!")
+    # SALES/FINANCE are MFA-mandatory at login (OWNER-SEC item 5); this test is about
+    # authorization, not the login flow, so it establishes the session directly.
+    staff_id = make_staff(app, "finance2@example.com", password="Correct-Password-1!", role_codes=["FINANCE"])
+    force_login(client, app, staff_id)
     resp = client.post("/system/backups/restore", data={"csrf_token": "x"})
     assert resp.status_code in (403, 404)
 
