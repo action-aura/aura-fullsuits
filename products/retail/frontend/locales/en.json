@@ -2770,5 +2770,18 @@
   "Expense voided": "Expense voided",
   "Cash from the office": "Cash from the office",
   "Bank transfer": "Bank transfer",
-  "Chat on WhatsApp": "Chat on WhatsApp"
+  "Chat on WhatsApp": "Chat on WhatsApp",
+  "Send diagnostics to support": "Send diagnostics to support",
+  "Sends a short summary of this computer. No customer or sales details.": "Sends a short summary of this computer. No customer or sales details.",
+  "Let support see my screen": "Let support see my screen",
+  "Opens Quick Assist. Call support first: they give you a 6-digit code to type in.": "Opens Quick Assist. Call support first: they give you a 6-digit code to type in.",
+  "Collecting…": "Collecting…",
+  "Could not collect the diagnostics. Please try again.": "Could not collect the diagnostics. Please try again.",
+  "Could not save the diagnostics. Please try again.": "Could not save the diagnostics. Please try again.",
+  "Saved. It is sent to Action Aura automatically when this computer is online.": "Saved. It is sent to Action Aura automatically when this computer is online.",
+  "Saved on this computer. Tell support this code on WhatsApp or by phone.": "Saved on this computer. Tell support this code on WhatsApp or by phone.",
+  "Your support code": "Your support code",
+  "Copy": "Copy",
+  "Copy failed": "Copy failed",
+  "Something went wrong. A report was saved (code {code}).": "Something went wrong. A report was saved (code {code})."
 }

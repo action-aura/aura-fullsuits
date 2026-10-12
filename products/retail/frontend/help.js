@@ -81,9 +81,12 @@ const AuraHelp = {
 
   // null while the number is null. The message is English on purpose: it is
   // read by the support team, not the shopkeeper.
-  supportUrl(context) {
+  supportUrl(context, diagnosticsCode) {
     const c = context || this.context();
     const lines = ['Hello Action Aura support,'];
+    // SUPPORT-1: after "Send diagnostics", the 6-character code goes in the
+    // message so support finds the exact snapshot in Owner without asking.
+    if (diagnosticsCode) lines.push('Diagnostics code: ' + diagnosticsCode);
     if (c.installationId) lines.push('Installation: ' + c.installationId);
     if (c.appVersion) lines.push('Version: ' + c.appVersion);
     if (c.screen) lines.push('Screen: ' + c.screen);
@@ -95,6 +98,88 @@ const AuraHelp = {
     const lines = ['Hello Action Aura sales,'];
     if (c.installationId) lines.push('Installation: ' + c.installationId);
     return this._url(this.ACTION_AURA_SALES_WHATSAPP, lines);
+  },
+
+  // ── SUPPORT-1: send diagnostics, and remote help ──────────────────────────
+  // "Send diagnostics to support": reads the EXISTING diagnostics export (the
+  // same one Settings offers as a download), hands its facts to the till's own
+  // backend, which queues a snapshot on the device-signed crash-report channel
+  // and answers with a 6-character reference code. The shopkeeper quotes the
+  // code (Copy / WhatsApp) instead of finding and emailing a file. Nothing is
+  // sent from the page to Action Aura directly; offline, the snapshot waits in
+  // the till's queue and goes when it can. Resolves, never rejects:
+  //   { ok: true, code, sendingEnabled }  |  { ok: false, reason: 'export' | 'send' }
+  async sendDiagnostics() {
+    let facts;
+    try {
+      const r = await fetch('/api/sub/retail/diagnostics/export', { credentials: 'include' });
+      if (!r.ok) return { ok: false, reason: 'export' };
+      const body = await r.json();
+      facts = body && body.data;
+      if (!facts || typeof facts !== 'object') return { ok: false, reason: 'export' };
+    } catch (e) { return { ok: false, reason: 'export' }; }
+    // The log tail stays on this computer: it is free text and the snapshot
+    // only needs the facts. (The backend ignores it too -- belt and braces.)
+    const safe = Object.assign({}, facts);
+    delete safe.log_tail;
+    try {
+      const r = await fetch('/api/crash-reports/diagnostics', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(safe),
+      });
+      if (!r.ok) return { ok: false, reason: 'send' };
+      const body = await r.json();
+      const code = body && body.data && body.data.reference_code;
+      if (!code) return { ok: false, reason: 'send' };
+      return { ok: true, code: String(code), sendingEnabled: !!body.data.sending_enabled };
+    } catch (e) { return { ok: false, reason: 'send' }; }
+  },
+
+  // Quick Assist ships with Windows 10/11 (no install, no account on the shop's
+  // side). Offered on Windows only: on Android (or anything else) the URI means
+  // nothing and a dead button is worse than none. navigator.platform is read
+  // first because it is the plain 'Win32' / 'Linux armv8l' answer; the user
+  // agent is the fallback.
+  isWindowsDesktop() {
+    const nav = (typeof navigator !== 'undefined' && navigator) || {};
+    const platform = String((nav.userAgentData && nav.userAgentData.platform) || nav.platform || '');
+    const ua = String(nav.userAgent || '');
+    if (/android/i.test(ua) || /android/i.test(platform)) return false;
+    return /^win/i.test(platform) || (!platform && /windows/i.test(ua));
+  },
+
+  QUICK_ASSIST_URI: 'ms-quick-assist:',
+
+  openQuickAssist() {
+    if (!this.isWindowsDesktop()) return false;
+    const a = document.createElement('a');
+    a.href = this.QUICK_ASSIST_URI;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    try { a.click(); } finally { a.remove(); }
+    return true;
+  },
+
+  // Copies text; true on success. The async clipboard needs a secure context
+  // (127.0.0.1 counts); the textarea route covers an embedded webview without it.
+  async copyText(text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (e) { /* fall through to the textarea route */ }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;inset-block-start:-1000px;';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand && document.execCommand('copy');
+      ta.remove();
+      return !!ok;
+    } catch (e) { return false; }
   },
 
   _esc(s) {
@@ -222,6 +307,43 @@ const AuraHelp = {
     return frame;
   },
 
+  // Paints the result of "Send diagnostics" into the dialog: the code, Copy,
+  // and a WhatsApp link with the code already in the message. The wording
+  // never claims delivery -- the snapshot is QUEUED here; it reaches Action Aura
+  // when this computer is online (immediately if it already is).
+  async _runDiagnostics(overlay, button) {
+    const panel = overlay.querySelector('#aura-help-diag');
+    if (!panel || button.disabled) return;
+    button.disabled = true;
+    panel.hidden = false;
+    panel.textContent = t('Collecting…');
+    const result = await this.sendDiagnostics();
+    button.disabled = false;
+    if (!result.ok) {
+      panel.textContent = t(result.reason === 'export'
+        ? 'Could not collect the diagnostics. Please try again.'
+        : 'Could not save the diagnostics. Please try again.');
+      return;
+    }
+    const wa = this.supportUrl(null, result.code);
+    const note = result.sendingEnabled
+      ? t('Saved. It is sent to Action Aura automatically when this computer is online.')
+      : t('Saved on this computer. Tell support this code on WhatsApp or by phone.');
+    panel.innerHTML = `
+      <div style="font-size:13px;color:var(--text-muted)">${this._esc(t('Your support code'))}</div>
+      <div id="aura-help-diag-code" dir="ltr" style="font:700 28px/1.2 ui-monospace,Consolas,monospace;letter-spacing:.12em;margin:4px 0 8px">${this._esc(result.code)}</div>
+      <div style="font-size:14px;margin-bottom:10px">${this._esc(note)}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" class="ret-btn ret-btn-sm" data-help="diag-copy">${this._esc(t('Copy'))}</button>
+        ${wa ? `<a class="ret-btn ret-btn-sm" data-help="diag-whatsapp" href="${this._esc(wa)}" target="_blank" rel="noopener">${this._esc(t('Send on WhatsApp'))}</a>` : ''}
+      </div>`;
+    const copy = panel.querySelector('[data-help="diag-copy"]');
+    copy.addEventListener('click', async () => {
+      const ok = await this.copyText(result.code);
+      copy.textContent = t(ok ? 'Copied' : 'Copy failed');
+    });
+  },
+
   // ── dialog ────────────────────────────────────────────────────────────────
   open() {
     if (document.getElementById('aura-help-overlay')) return;
@@ -230,6 +352,10 @@ const AuraHelp = {
     const app = window.SubsystemApp;
     const support = this.supportUrl();
     const showSetup = !!(app && app.role === 'admin' && window.AuraSetupGuide && typeof window.AuraSetupGuide.open === 'function');
+    // The snapshot route is administrator-only (same tier as the diagnostics
+    // export it summarises), so a cashier is not shown a button that would 403.
+    const isAdmin = !!(app && app.role === 'admin');
+    const showQuickAssist = this.isWindowsDesktop();
     const c = this.context();
 
     const overlay = document.createElement('div');
@@ -253,7 +379,14 @@ const AuraHelp = {
           ${showSetup ? `<button type="button" class="aura-help-action" data-help="setup-guide">
             <span class="aura-help-action-title">${this._esc(t('Setup guide'))}</span>
             <span class="aura-help-action-sub">${this._esc(t('The steps to get your shop ready'))}</span></button>` : ''}
+          ${isAdmin ? `<button type="button" class="aura-help-action" data-help="diagnostics">
+            <span class="aura-help-action-title">${this._esc(t('Send diagnostics to support'))}</span>
+            <span class="aura-help-action-sub">${this._esc(t('Sends a short summary of this computer. No customer or sales details.'))}</span></button>` : ''}
+          ${showQuickAssist ? `<button type="button" class="aura-help-action" data-help="quick-assist">
+            <span class="aura-help-action-title">${this._esc(t('Let support see my screen'))}</span>
+            <span class="aura-help-action-sub">${this._esc(t('Opens Quick Assist. Call support first: they give you a 6-digit code to type in.'))}</span></button>` : ''}
         </div>
+        <div class="aura-help-diag" id="aura-help-diag" role="status" aria-live="polite" hidden style="margin:12px 4px 0;padding:12px;border:1px solid var(--border-soft, #ccc);border-radius:10px"></div>
         <dl class="aura-help-about">
           <dt>${this._esc(t('Version'))}</dt><dd id="aura-help-version" dir="ltr">${this._esc(c.appVersion || '—')}</dd>
           <dt>${this._esc(t('Installation ID'))}</dt><dd id="aura-help-install" dir="ltr">${this._esc(c.installationId || '—')}</dd>
@@ -266,6 +399,10 @@ const AuraHelp = {
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
     overlay.querySelector('#aura-help-close').addEventListener('click', close);
     overlay.querySelector('[data-help="fkeys"]').addEventListener('click', () => this.printFkeyCard());
+    const diagBtn = overlay.querySelector('[data-help="diagnostics"]');
+    if (diagBtn) diagBtn.addEventListener('click', () => this._runDiagnostics(overlay, diagBtn));
+    const qaBtn = overlay.querySelector('[data-help="quick-assist"]');
+    if (qaBtn) qaBtn.addEventListener('click', () => this.openQuickAssist());
     const setupBtn = overlay.querySelector('[data-help="setup-guide"]');
     if (setupBtn) setupBtn.addEventListener('click', () => { close(); window.AuraSetupGuide.open(); });
 
