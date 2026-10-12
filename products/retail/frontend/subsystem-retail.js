@@ -18578,6 +18578,17 @@ const RetailSystem = {
         // is not optional, and inventing different wording here risks
         // saying something the server did not mean.
         SubsystemApp.showToast(d.message || t('Restore complete. Restart the application before continuing.'), 'success');
+        // INSTALL-1: the server exits ~1.5s after answering and the desktop
+        // launcher relaunches it (the till window itself is reopened by the
+        // launcher). A page reached some other way (browser on the LAN) just
+        // waits for /api/health to answer again, then reloads.
+        if (d.restarting) {
+          const _wait = async (n) => {
+            try { const r = await fetch('/api/health', { cache: 'no-store' }); if (r.ok && n > 3) { location.reload(); return; } } catch (e) { /* server is down: expected */ }
+            if (n < 90) setTimeout(() => _wait(n + 1), 1000);
+          };
+          setTimeout(() => _wait(0), 2500);
+        }
       } else {
         SubsystemApp.showToast((d && d.message) || t('Error'), 'error');
       }

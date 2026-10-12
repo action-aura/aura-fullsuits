@@ -887,5 +887,81 @@ def main():
     _set_state(LauncherState.STOPPED)
 
 
+# ── Restart supervisor (INSTALL-1, review F16) ─────────────────────────────
+# WHY A SECOND PROCESS: the Flask server runs on a thread INSIDE this process,
+# so "the backend exits with code 75" can only be acted on by something that
+# outlives it. The frozen exe therefore runs itself twice: the outer copy is a
+# tiny supervisor (no window, no server, no mutex) that runs the real launcher
+# as a child and looks at the child's exit code; the child is the app exactly as
+# before. A restore ends with the child exiting 75 (commercial_runtime/
+# install_support/restart.py), and the supervisor starts a fresh child -- new
+# server process, new window -- instead of quitting.
+#
+#   0  -> the person closed the app: quit.
+#   75 -> restart requested after a restore: relaunch.
+#   anything else -> the child crashed/failed: pass its code through and quit,
+#   exactly what the single-process launcher did (no crash loops, ever).
+#
+# Not supervised: a plain `python launcher_retail.py` (dev run) -- the child
+# env marker and the frozen check below keep the old single-process behaviour.
+SUPERVISE_ENV = 'AURA_LAUNCHER_SUPERVISE'   # "1" forces supervision from source (tests/proof)
+CHILD_ENV = 'AURA_LAUNCHER_CHILD'           # set on the child so it never supervises itself
+RESTART_EXIT_CODE = 75                      # == install_support.restart.RESTART_EXIT_CODE
+# A child that keeps asking for a restart (a bug, not a restore) must not spin
+# forever: more than this many relaunches inside the window and we stop.
+MAX_RELAUNCHES = 3
+RELAUNCH_WINDOW_SECONDS = 120.0
+
+
+def exit_action(code: int) -> str:
+    """What the supervisor does with a child's exit code. 'relaunch' | 'quit'
+    | 'crash' (quit, passing the failing code through)."""
+    if code == RESTART_EXIT_CODE:
+        return 'relaunch'
+    if code == 0:
+        return 'quit'
+    return 'crash'
+
+
+def should_supervise(environ=None, frozen=None) -> bool:
+    environ = os.environ if environ is None else environ
+    frozen = getattr(sys, 'frozen', False) if frozen is None else frozen
+    if environ.get(CHILD_ENV) == '1':
+        return False
+    return bool(frozen) or environ.get(SUPERVISE_ENV) == '1'
+
+
+def supervise(run_child, clock=time.monotonic) -> int:
+    """Runs `run_child()` (returns the child's exit code) until it says quit.
+    Returns the code this process should exit with."""
+    relaunches = []
+    while True:
+        code = run_child()
+        action = exit_action(code)
+        log.info(f'[supervisor] child exited with {code} -> {action}')
+        if action != 'relaunch':
+            return code
+        now = clock()
+        relaunches = [t for t in relaunches if now - t < RELAUNCH_WINDOW_SECONDS]
+        if len(relaunches) >= MAX_RELAUNCHES:
+            log.error('[supervisor] too many restarts in a row; giving up.')
+            return code
+        relaunches.append(now)
+
+
+def _run_child_process() -> int:
+    import subprocess
+    env = dict(os.environ)
+    env[CHILD_ENV] = '1'
+    env['AURA_RESTART_ON_RESTORE'] = '1'
+    if getattr(sys, 'frozen', False):
+        cmd = [sys.executable, *sys.argv[1:]]
+    else:
+        cmd = [sys.executable, os.path.abspath(__file__), *sys.argv[1:]]
+    return subprocess.call(cmd, env=env)
+
+
 if __name__ == '__main__':
+    if should_supervise():
+        sys.exit(supervise(_run_child_process))
     main()
