@@ -66,7 +66,10 @@ import com.actionaura.retail.ui.pos.DiscountAccess
 import com.actionaura.retail.ui.pos.buildSaleItems
 import com.actionaura.retail.ui.pos.clampDiscountPct
 import com.actionaura.retail.ui.pos.discountAccess
+import com.actionaura.retail.ui.pos.buildHoldRequest
 import com.actionaura.retail.ui.pos.overLimit
+import com.actionaura.retail.ui.CAPS_HOLD_SALE
+import com.actionaura.retail.ui.i18n.Currency
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -101,11 +104,6 @@ private fun catColor(key: String?): Color {
     return catPalette[(k.hashCode().let { if (it < 0) -it else it }) % catPalette.size]
 }
 
-// A parked POS cart (Hold / Resume). Held in a process-wide singleton so parked
-// sales survive navigating away from POS while the app is running.
-data class HeldSale(val id: Long, val items: Map<String, Double>, val total: Double, val count: Int)
-object HeldSales { val list = androidx.compose.runtime.mutableStateListOf<HeldSale>() }
-
 @Composable
 fun PosScreen(snackbar: SnackbarHostState) {
     var products by remember { mutableStateOf<List<Product>>(emptyList()) }
@@ -123,6 +121,15 @@ fun PosScreen(snackbar: SnackbarHostState) {
     var lastScanned by remember { mutableStateOf<String?>(null) }
     var paymentMethod by remember { mutableStateOf("cash") }
     var showHeld by remember { mutableStateOf(false) }
+    // -- Hold / resume (ANDROID-2a). The parked carts live on the SHOP SERVER (the desktop's own
+    // /held-sales routes), not in this process: the old in-memory list died with the app and
+    // was invisible to every other till. `heldRows == null` = not loaded yet / load failed.
+    var heldCount by remember { mutableStateOf(0) }
+    var heldRows by remember { mutableStateOf<List<HeldSaleRow>?>(null) }
+    var showHoldDialog by remember { mutableStateOf(false) }
+    var holdBusy by remember { mutableStateOf(false) }
+    var pendingResume by remember { mutableStateOf<HeldSaleRow?>(null) }
+    var pendingDiscard by remember { mutableStateOf<HeldSaleRow?>(null) }
     var customers by remember { mutableStateOf<List<Customer>>(emptyList()) }
     var customer by remember { mutableStateOf<Customer?>(null) }   // null = walk-in
     var customerMenu by remember { mutableStateOf(false) }
@@ -258,19 +265,60 @@ fun PosScreen(snackbar: SnackbarHostState) {
         }
     }
 
-    // Park the current cart so another sale can be rung up, then resumed later.
-    fun holdCurrent() {
-        if (cart.isEmpty()) return
-        val t = cart.entries.sumOf { (id, q) -> (byId[id]?.sell_price ?: 0.0) * q }
-        val c = cart.values.sumOf { it }.toInt()
-        HeldSales.list.add(HeldSale(System.currentTimeMillis(), cart.toMap(), t, c))
-        cart.clear()
+    // Hold / resume against the server's /held-sales routes (the desktop's own).
+    suspend fun refreshHeld() {
+        val rows = try { ApiClient.get().heldSales().data } catch (e: Exception) { null }
+        heldRows = rows
+        if (rows != null) heldCount = rows.size
     }
-    fun resumeHeld(h: HeldSale) {
-        if (cart.isNotEmpty()) holdCurrent()   // park whatever is in the cart first
-        cart.clear(); cart.putAll(h.items)
-        HeldSales.list.remove(h)
-        showHeld = false
+    fun clearSaleState() {
+        cart.clear(); lineDiscounts.clear(); salePctText = ""
+        downPayment = ""; loyaltyRedeemInput = ""; customer = null; paymentMethod = "cash"
+    }
+    LaunchedEffect(Unit) { refreshHeld() }
+
+    // Park the cart. The hold body is built in ui/pos/HoldRequestBuilder.kt (the desktop's
+    // `_saveHold` shape); subtotal/total in it are display-only, the server re-prices at checkout.
+    suspend fun holdCurrent(label: String) {
+        if (cart.isEmpty()) return
+        holdBusy = true
+        try {
+            val r = ApiClient.get().holdSale(buildHoldRequest(
+                cart = cart.toMap(), products = byId, lineDiscounts = lineDiscounts.toMap(), salePct = salePct,
+                access = access, customerId = customer?.id, label = label, singleMethod = paymentMethod,
+                displayTotal = total, dp = Currency.decimals))
+            if (r.status == "success") {
+                clearSaleState(); showHoldDialog = false; showCart = false
+                snackbar.showSnackbar(tr("Sale held") + " \u2014 " + (r.data?.hold_number ?: ""))
+                refreshHeld()
+            } else snackbar.showSnackbar(r.message ?: tr("Could not hold sale"))
+        } catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)) }
+        finally { holdBusy = false }
+    }
+    // The server DELETES the held row when it hands the cart back, so the cart is rebuilt from
+    // the response at once. A non-empty current cart is replaced only after the cashier agreed.
+    suspend fun resumeHeld(h: HeldSaleRow) {
+        try {
+            val r = ApiClient.get().resumeHeldSale(h.id)
+            if (r.status != "success") { snackbar.showSnackbar(r.message ?: tr("Could not resume sale")); return }
+            val c = parseResumedCart(r.data)
+            clearSaleState()
+            cart.putAll(c.quantities); lineDiscounts.putAll(c.lineDiscounts)
+            salePctText = if (c.salePct > 0.0) pctText(c.salePct) else ""
+            paymentMethod = c.paymentMethod.takeIf { it != "split" } ?: "cash"
+            customer = customers.firstOrNull { it.id == c.customerId }
+            showHeld = false
+            if (cart.isNotEmpty()) showCart = true
+            snackbar.showSnackbar(tr("Resumed") + " " + (c.holdNumber ?: ""))
+            refreshHeld()
+        } catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)) }
+    }
+    suspend fun discardHeld(h: HeldSaleRow) {
+        try {
+            val r = ApiClient.get().discardHeldSale(h.id)
+            snackbar.showSnackbar(if (r.status == "success") tr("Held sale discarded") else (r.message ?: tr("Server error")))
+            refreshHeld()
+        } catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)) }
     }
 
     val categories = remember(products) {
@@ -322,8 +370,10 @@ fun PosScreen(snackbar: SnackbarHostState) {
                 FilledTonalIconButton(
                     onClick = { showScanner = true }, modifier = Modifier.size(52.dp),
                 ) { Icon(Icons.Default.QrCodeScanner, contentDescription = tr("Scan barcode")) }
-                if (HeldSales.list.isNotEmpty()) {
-                    FilledTonalButton(onClick = { showHeld = true }) { Text(tr("Held") + " ${HeldSales.list.size}") }
+                if (heldCount > 0) {
+                    FilledTonalButton(onClick = { showHeld = true; scope.launch { refreshHeld() } }) {
+                        Text(tr("Held") + " $heldCount")
+                    }
                 }
             }
             if (categories.size > 1) {
@@ -651,7 +701,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
                         modifier = Modifier.fillMaxWidth())
                 }
                 Spacer(Modifier.height(16.dp))
-                OutlinedButton(onClick = { holdCurrent(); showCart = false },
+                OutlinedButton(onClick = { showHoldDialog = true }, enabled = RetailSession.hasAnyCapability(CAPS_HOLD_SALE),
                     modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(tr("Hold sale (park for later)")) }
                 Spacer(Modifier.height(8.dp))
                 Button(
@@ -778,30 +828,34 @@ fun PosScreen(snackbar: SnackbarHostState) {
         )
     }
 
+    if (showHoldDialog) {
+        HoldDialog(busy = holdBusy, onHold = { note -> scope.launch { holdCurrent(note) } }, onDismiss = { showHoldDialog = false })
+    }
     if (showHeld) {
-        ModalBottomSheet(onDismissRequest = { showHeld = false }) {
-            Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
-                Text(tr("Held sales"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(4.dp))
-                Text(tr("Resuming parks the current cart first, so nothing is lost."),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(12.dp))
-                if (HeldSales.list.isEmpty())
-                    Text(tr("No held sales."), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                HeldSales.list.toList().forEach { h ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(tr("%d item(s)").format(h.count), fontWeight = FontWeight.Bold)
-                            Text(money(h.total), style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        TextButton(onClick = { HeldSales.list.remove(h) }) { Text(tr("Discard")) }
-                        Spacer(Modifier.width(4.dp))
-                        Button(onClick = { resumeHeld(h) }) { Text(tr("Resume")) }
-                    }
-                }
-            }
-        }
+        HeldSalesSheet(
+            rows = heldRows,
+            onResume = { h -> if (cart.isNotEmpty()) pendingResume = h else scope.launch { resumeHeld(h) } },
+            onDiscard = { h -> pendingDiscard = h },
+            onDismiss = { showHeld = false },
+        )
+    }
+    pendingResume?.let { h ->
+        ConfirmDialog(
+            title = tr("Resume Held Sale"),
+            message = tr("Your current cart is not empty. Resuming will replace it with the held sale. Continue?"),
+            confirmLabel = tr("Resume"),
+            onConfirm = { pendingResume = null; scope.launch { resumeHeld(h) } },
+            onDismiss = { pendingResume = null },
+        )
+    }
+    pendingDiscard?.let { h ->
+        ConfirmDialog(
+            title = tr("Discard Held Sale"),
+            message = tr("Discard this held sale? This cannot be undone."),
+            confirmLabel = tr("Discard"),
+            onConfirm = { pendingDiscard = null; scope.launch { discardHeld(h) } },
+            onDismiss = { pendingDiscard = null },
+        )
     }
 
     if (showScanner) {

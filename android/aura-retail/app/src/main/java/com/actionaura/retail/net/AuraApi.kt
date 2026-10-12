@@ -150,6 +150,20 @@ interface AuraApi {
     @POST("api/sub/retail/sales")
     suspend fun createSale(@Body body: CreateSaleRequest): SaleResponse
 
+    // ANDROID-2a: held (parked) sales - the desktop's own routes (see HeldSales.kt).
+    @GET("api/sub/retail/held-sales")
+    suspend fun heldSales(): HeldSalesResponse
+
+    @POST("api/sub/retail/held-sales")
+    suspend fun holdSale(@Body body: HoldSaleRequest): HoldSaleResponse
+
+    // The server DELETES the held row in the same transaction as it returns the cart.
+    @POST("api/sub/retail/held-sales/{id}/resume")
+    suspend fun resumeHeldSale(@Path("id") id: Int): ResumeHeldResponse
+
+    @DELETE("api/sub/retail/held-sales/{id}")
+    suspend fun discardHeldSale(@Path("id") id: Int): SimpleStatusResponse
+
     // Customers + credit (AR)
     @GET("api/sub/retail/customers")
     suspend fun customers(@Query("q") q: String? = null): CustomersResponse

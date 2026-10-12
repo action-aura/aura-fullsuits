@@ -123,6 +123,17 @@ class WriteGateContractTest {
     }
 
     @Test
+    fun hold_resume_and_discard_buttons_match_the_held_sale_routes() {
+        // ANDROID-2a: a held sale is a paused sale, so all three routes demand CAP_SELL. If the
+        // server moves one onto another code this names which route drifted.
+        for (fn in listOf("hold_sale", "resume_held_sale", "discard_held_sale")) {
+            val g = routeGate(fn)
+            assertThat(g.any).isFalse()
+            assertThat(CAPS_HOLD_SALE).containsExactlyElementsIn(g.codes)
+        }
+    }
+
+    @Test
     fun supplier_side_payment_buttons_match_books_record() {
         for (fn in listOf("supplier_payment", "pay_purchase_order")) {
             val g = routeGate(fn)

@@ -1218,4 +1218,34 @@ private val AR_STRINGS: Map<String, String> = mapOf(
         "تعيين",
     "Clear" to
         "مسح",
+    "Hold This Sale" to
+        "تعليق هذه الفاتورة",
+    "The cart is parked and cleared here so you can start a new sale. Resume it later from Held sales." to
+        "تُحفظ السلة وتُفرَّغ هنا لتبدأ فاتورة جديدة. يمكنك استئنافها لاحقًا من المبيعات المعلّقة.",
+    "Note (optional)" to
+        "ملاحظة (اختياري)",
+    "e.g. Table 4, customer name" to
+        "مثال: طاولة 4، اسم العميل",
+    "Hold Sale" to
+        "تعليق الفاتورة",
+    "A held sale is kept on this device's shop server, so any till can resume it." to
+        "تُحفظ الفاتورة المعلّقة على خادم المحل، فيمكن لأي نقطة بيع استئنافها.",
+    "Sale held" to
+        "تم تعليق الفاتورة",
+    "Could not hold sale" to
+        "تعذّر تعليق الفاتورة",
+    "Could not resume sale" to
+        "تعذّر استئناف الفاتورة",
+    "Resume Held Sale" to
+        "استئناف فاتورة معلّقة",
+    "Your current cart is not empty. Resuming will replace it with the held sale. Continue?" to
+        "السلة الحالية ليست فارغة. الاستئناف سيستبدلها بالفاتورة المعلّقة. هل تتابع؟",
+    "Discard Held Sale" to
+        "تجاهل فاتورة معلّقة",
+    "Discard this held sale? This cannot be undone." to
+        "هل تريد تجاهل هذه الفاتورة المعلّقة؟ لا يمكن التراجع عن ذلك.",
+    "Held sale discarded" to
+        "تم تجاهل الفاتورة المعلّقة",
+    "Resumed" to
+        "تم الاستئناف",
 )
