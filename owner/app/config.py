@@ -49,6 +49,7 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_DATABASE_URL",
         "OWNER_TEST_DATABASE_URL",
         "OWNER_LICENSE_PEPPER",
+        "OWNER_MFA_ENCRYPTION_KEY",
         "OWNER_DB_STATEMENT_TIMEOUT_MS",
         "OWNER_DB_LOCK_TIMEOUT_MS",
         "OWNER_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS",
@@ -130,6 +131,10 @@ class BaseConfig:
     TESTING = False
 
     SECRET_KEY = os.environ.get("OWNER_SECRET_KEY", "")
+    # Optional dedicated key for TOTP secrets at rest (app/security/mfa.py).
+    # Unset = legacy behaviour (derived from SECRET_KEY), so nothing changes
+    # until an operator opts in and runs `flask rekey-mfa`.
+    MFA_ENCRYPTION_KEY = os.environ.get("OWNER_MFA_ENCRYPTION_KEY", "")
     SQLALCHEMY_DATABASE_URI = os.environ.get("OWNER_DATABASE_URL", "")
     SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
     SQLALCHEMY_TRACK_MODIFICATIONS = False
@@ -323,6 +328,11 @@ class BaseConfig:
             problems.append(
                 "OWNER_SECRET_KEY is missing, a known default/placeholder value, or shorter than "
                 f"{_MIN_SECRET_LENGTH} characters -- generate a real random secret for this environment"
+            )
+        if cls.MFA_ENCRYPTION_KEY and not cls._looks_like_a_real_secret(cls.MFA_ENCRYPTION_KEY):
+            problems.append(
+                "OWNER_MFA_ENCRYPTION_KEY is set but is a known default/placeholder value or shorter than "
+                f"{_MIN_SECRET_LENGTH} characters (leave it unset to keep the legacy OWNER_SECRET_KEY derivation)"
             )
         if not cls._looks_like_a_real_secret(cls.LICENSE_PEPPER):
             problems.append(

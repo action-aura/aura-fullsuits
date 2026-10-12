@@ -25,6 +25,7 @@ from app.models.staff import MfaCredential, MfaRecoveryCode, StaffInvitation, St
 from app.security.mfa import (
     decrypt_totp_secret,
     encrypt_totp_secret,
+    reencrypt_if_legacy,
     generate_recovery_codes,
     generate_totp_secret,
     hash_recovery_code,
@@ -136,6 +137,23 @@ def login_submit():
     return response
 
 
+def _mfa_keys() -> tuple[str, str | None]:
+    return current_app.config["SECRET_KEY"], (current_app.config.get("MFA_ENCRYPTION_KEY") or None)
+
+
+def _decrypt_credential(credential: MfaCredential) -> str | None:
+    return decrypt_totp_secret(credential.totp_secret_encrypted, *_mfa_keys())
+
+
+def _upgrade_legacy_secret(credential: MfaCredential) -> None:
+    """After a successful TOTP use: move a secret still sealed under the
+    legacy OWNER_SECRET_KEY-derived key onto the dedicated MFA key. The
+    caller commits."""
+    upgraded = reencrypt_if_legacy(credential.totp_secret_encrypted, *_mfa_keys())
+    if upgraded is not None:
+        credential.totp_secret_encrypted = upgraded
+
+
 def _pending_mfa_staff() -> StaffUser | None:
     staff_id = session.get(_PENDING_MFA_SESSION_KEY)
     expires = session.get("pending_mfa_expires")
@@ -167,8 +185,10 @@ def mfa_verify_submit():
         return render_template("auth/mfa_verify.html", error="Too many attempts -- try again later."), 401
 
     code = request.form.get("code", "")
-    raw_secret = decrypt_totp_secret(staff.mfa_credential.totp_secret_encrypted, current_app.config["SECRET_KEY"])
+    raw_secret = _decrypt_credential(staff.mfa_credential)
     ok = raw_secret is not None and verify_totp_code(raw_secret, code)
+    if ok:
+        _upgrade_legacy_secret(staff.mfa_credential)
     if not ok:
         ok = _consume_recovery_code(staff, code)
     if not ok:
@@ -278,7 +298,7 @@ def mfa_enroll_submit():
 
     credential = MfaCredential(
         staff_user_id=staff.id,
-        totp_secret_encrypted=encrypt_totp_secret(raw_secret, current_app.config["SECRET_KEY"]),
+        totp_secret_encrypted=encrypt_totp_secret(raw_secret, *_mfa_keys()),
         enrolled_at=utcnow(),
         confirmed=True,
     )
@@ -339,12 +359,14 @@ def reauth_submit():
             "auth/reauth.html", error="MFA is not enabled on this account -- enable it to perform this action.",
             next=request.form.get("next", "/"),
         ), 403
-    raw_secret = decrypt_totp_secret(staff.mfa_credential.totp_secret_encrypted, current_app.config["SECRET_KEY"])
+    raw_secret = _decrypt_credential(staff.mfa_credential)
     ok = raw_secret is not None and verify_totp_code(raw_secret, code)
     if not ok:
         return render_template(
             "auth/reauth.html", error="Invalid code.", next=request.form.get("next", "/")
         ), 401
+    _upgrade_legacy_secret(staff.mfa_credential)
+    db_session.commit()
     mark_mfa_verified()
     return redirect(_safe_next(request.form.get("next")) or url_for("dashboard.index"))
 
