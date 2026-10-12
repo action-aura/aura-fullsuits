@@ -7736,3 +7736,12 @@ list (review finding F7; confirmed inside the built APK).
   rendered anywhere: the module has no Robolectric, so only the layout PLAN is unit-tested. A phone + printer afternoon is
   owed (checklist: Arabic name + 3-dp total legible, QR scans, drawer opens once on cash and never on card, reprint never
   opens it, printer off -> message within ~6 s and the sale stays recorded).
+
+## 2026-10-12 — retail schema v52 RE-CLAIMED for MONEY-4b (expenses and paid-outs reach the books)
+
+The v52 claim made for TIDY-RETAIL this morning is RELEASED (that wave needed no schema change: MONEY-4a and the
+test tidying shipped with none). v52 now belongs to MONEY-4b, branch `feat/money-4b`: drawer paid-outs/paid-ins
+post GL journals against an expense/income account the cashier picks, a non-drawer "Expenses" record (rent,
+utilities, salaries) posts Dr expense / Cr cash-and-bank, and historical paid-outs that never reached the books
+get a one-time catch-up journal at their own business date. Review B defect D2 (HIGH). Nobody else bumps
+RETAIL_SCHEMA_VERSION until this is cashed in.
