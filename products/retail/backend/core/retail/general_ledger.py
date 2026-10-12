@@ -2295,7 +2295,7 @@ def po_order_journal(conn, cid, po_id, order_journal_uid=None):
 
 
 def post_po_receipt(conn, cid, branch_id, po_id, po_number, currency, posted_by=None,
-                    order_journal_uid=None):
+                    order_journal_uid=None, business_date=None):
     """Goods ordered have arrived: Dr Inventory (1200) / Cr Goods Ordered Not
     Received (1260), for the ORDER journal's own 1260 debit (NOT qty x cost:
     a supplier-less, partly paid PO booked only the accounted part, and the
@@ -2323,7 +2323,7 @@ def post_po_receipt(conn, cid, branch_id, po_id, po_number, currency, posted_by=
          'memo': f'Order {po_number} received'},
     ]
     return _post_once(conn, cid, stock_journal_uid(order['uid'], 'po_receipt'),
-                      branch_id, _today(), 'po_receipt', po_id, currency, lines,
+                      branch_id, business_date or _today(), 'po_receipt', po_id, currency, lines,
                       reference=po_number, posted_by=posted_by,
                       source_uid=order['uid'])
 
@@ -2382,7 +2382,8 @@ def _po_receipt_values_sum(conn, cid, po_id, exclude_uid=None) -> Decimal:
     return sum((Decimal(str(r[0] or 0)) for r in rows), Decimal('0'))
 
 
-def post_po_receipt_for(conn, cid, branch_id, po_row, receipt_uid, value, currency, posted_by=None):
+def post_po_receipt_for(conn, cid, branch_id, po_row, receipt_uid, value, currency, posted_by=None,
+                        business_date=None):
     """Book ONE receipt of purchase order `po_row` (a row with id, po_number,
     supplier_id, total, ap_basis, order_journal_uid), of worth `value` (computed
     once by the writer, `purchase_orders.receipt_value`). uid =
@@ -2437,12 +2438,12 @@ def post_po_receipt_for(conn, cid, branch_id, po_row, receipt_uid, value, curren
         {'account_code': credit, 'credit': amount,
          'memo': f'Receipt of order {po_number}'},
     ]
-    return _post_once(conn, cid, uid, branch_id, _today(), 'po_receipt', po_row['id'], currency,
+    return _post_once(conn, cid, uid, branch_id, business_date or _today(), 'po_receipt', po_row['id'], currency,
                       lines, reference=po_number, posted_by=posted_by, source_uid=receipt_uid)
 
 
 def post_po_prepayment(conn, cid, branch_id, po_id, has_supplier, amount, pay_uid, currency,
-                       reference=None, posted_by=None):
+                       reference=None, posted_by=None, business_date=None):
     """Cash paid against a 'receipt'-basis order (down payment at create, or a
     later instalment): Dr Accounts Payable (Dr Goods Ordered when the order has
     no supplier) / Cr Cash. A standalone journal, source_type 'po_payment',
@@ -2459,11 +2460,11 @@ def post_po_prepayment(conn, cid, branch_id, po_id, has_supplier, amount, pay_ui
          'memo': 'Paid to supplier on purchase order'},
         {'account_code': ACCOUNT_CASH, 'credit': amount, 'memo': 'Payment to supplier'},
     ]
-    return post_journal(conn, cid, branch_id, _today(), 'po_payment', po_id, currency, lines,
+    return post_journal(conn, cid, branch_id, business_date or _today(), 'po_payment', po_id, currency, lines,
                         reference=reference, posted_by=posted_by, source_uid=pay_uid)
 
 
-def post_po_close_short(conn, cid, branch_id, po_row, currency):
+def post_po_close_short(conn, cid, branch_id, po_row, currency, business_date=None):
     """An 'order'-basis order the shop closes SHORT: release what will never
     come. Dr Accounts Payable / Cr Goods Ordered (1260) -- or Cr Inventory
     (1200) when the order debited Inventory directly -- for the part of the
@@ -2504,11 +2505,12 @@ def post_po_close_short(conn, cid, branch_id, po_row, currency):
         {'account_code': order['debit_code'], 'credit': amount,
          'memo': f'Undelivered part of order {po_number}'},
     ]
-    return _post_once(conn, cid, uid, branch_id, _today(), 'po_close_short', po_row['id'], currency,
+    return _post_once(conn, cid, uid, branch_id, business_date or _today(), 'po_close_short', po_row['id'], currency,
                       lines, reference=po_number, source_uid=po_row['uid'])
 
 
-def post_transfer_send(conn, cid, branch_id, transfer_id, lines, currency, costs_key=None):
+def post_transfer_send(conn, cid, branch_id, transfer_id, lines, currency, costs_key=None,
+                       business_date=None):
     """Stock leaves the source branch: Dr Stock in Transit (1250) / Cr
     Inventory (1200) for the sum of quantize(qty x unit_cost) over `lines`
     (a list of (product_id, qty, unit_cost)) -- per-line rounding, because the
@@ -2537,7 +2539,7 @@ def post_transfer_send(conn, cid, branch_id, transfer_id, lines, currency, costs
     return _post_once(conn, cid,
                       stock_journal_uid(costs_key if costs_key is not None else transfer_id,
                                         'transfer_send'),
-                      branch_id, _today(), 'stock_transfer', None, currency, jl,
+                      branch_id, business_date or _today(), 'stock_transfer', None, currency, jl,
                       reference=str(transfer_id), source_uid=str(transfer_id))
 
 
@@ -2655,7 +2657,7 @@ def transfers_with_duplicate_sends(conn):
         (ACCOUNT_STOCK_IN_TRANSIT,)).fetchall()]
 
 
-def post_transfer_receive(conn, cid, branch_id, transfer_id, lines, currency):
+def post_transfer_receive(conn, cid, branch_id, transfer_id, lines, currency, business_date=None):
     """Stock arrives at the destination: per LINE, Dr Inventory (1200) for what
     was received, Cr Stock in Transit (1250) for what THAT LINE's send debited,
     and the difference to Shrinkage and Adjustments (5910): a shortage debits
@@ -2712,7 +2714,7 @@ def post_transfer_receive(conn, cid, branch_id, transfer_id, lines, currency):
             conn, cid,
             stock_journal_uid(xfer.receive_line_key(transfer_id, line_key, qty_received),
                               'transfer_receive_line'),
-            branch_id, _today(), 'stock_transfer', None, currency, jl,
+            branch_id, business_date or _today(), 'stock_transfer', None, currency, jl,
             reference=str(transfer_id), source_uid=str(transfer_id))
         if first_id is None:
             first_id = journal_id
@@ -2720,7 +2722,8 @@ def post_transfer_receive(conn, cid, branch_id, transfer_id, lines, currency):
 
 
 def _post_movement_journal(conn, cid, branch_id, movement_uid, qty, unit_cost,
-                           reference, currency, kind, source_type, offset_code):
+                           reference, currency, kind, source_type, offset_code,
+                           business_date=None):
     amount = _stock_amount(qty, unit_cost, currency)
     if amount <= _gl_epsilon(currency):
         return None
@@ -2731,12 +2734,12 @@ def _post_movement_journal(conn, cid, branch_id, movement_uid, qty, unit_cost,
         jl = [{'account_code': offset_code, 'debit': amount, 'memo': kind},
               {'account_code': ACCOUNT_INVENTORY, 'credit': amount, 'memo': kind}]
     return _post_once(conn, cid, stock_journal_uid(movement_uid, kind), branch_id,
-                      _today(), source_type, None, currency, jl,
+                      business_date or _today(), source_type, None, currency, jl,
                       reference=reference, source_uid=movement_uid)
 
 
 def post_stock_adjustment(conn, cid, branch_id, movement_uid, qty, unit_cost,
-                          reference, currency):
+                          reference, currency, business_date=None):
     """A manual stock in/out or a counted exception: +qty is Dr Inventory /
     Cr Shrinkage and Adjustments (5910), -qty is Dr 5910 / Cr Inventory, at
     abs(qty) x `unit_cost` (callers pass `stock_books.effective_unit_cost`).
@@ -2744,18 +2747,20 @@ def post_stock_adjustment(conn, cid, branch_id, movement_uid, qty, unit_cost,
     posts it and a synced peer never does."""
     return _post_movement_journal(conn, cid, branch_id, movement_uid, qty, unit_cost,
                                   reference, currency, 'stock_adjustment',
-                                  'stock_adjustment', ACCOUNT_SHRINKAGE)
+                                  'stock_adjustment', ACCOUNT_SHRINKAGE,
+                                  business_date=business_date)
 
 
 def post_opening_entry(conn, cid, branch_id, movement_uid, qty, unit_cost,
-                       reference, currency):
+                       reference, currency, business_date=None):
     """Stock entered at product create/import: +qty is Dr Inventory / Cr
     Opening Balance Equity (3900), -qty the mirror. NEVER source_type
     'opening_balance' -- that name belongs to the v38 AR/AP backfill and the
     sheets treat it specially."""
     return _post_movement_journal(conn, cid, branch_id, movement_uid, qty, unit_cost,
                                   reference, currency, 'opening_entry',
-                                  'opening_entry', ACCOUNT_OPENING_EQUITY)
+                                  'opening_entry', ACCOUNT_OPENING_EQUITY,
+                                  business_date=business_date)
 
 
 def inventory_tie(conn, cid, tb):

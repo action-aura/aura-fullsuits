@@ -2305,7 +2305,8 @@ def create_product():
             # STOCK-BOOKS B6: Dr Inventory / Cr Opening Balance Equity (3900).
             # Posts nothing at cost 0 (unknown cost is silence, not a guess).
             gl.post_opening_entry(conn, cid, bid, movement_uid, movement_qty, open_cost,
-                                  'OPENING', _open_currency)
+                                  'OPENING', _open_currency,
+                                  business_date=_gl_business_date(conn, cid))
             # Wave B: every writer into inventory_movements queues the
             # matching sync event, this one included -- see the module-wide
             # note at create_sale's own inventory_movement emission below for
@@ -2607,7 +2608,8 @@ def delete_product(pid):
                 VALUES (?,?,?,'stock_out',?,?,?,?,?,?,?,?,?)
             """, (cid, pid, _del_bid, -_del_qty, _del_cost, 'DELETE', 'Product deleted', _uid(),
                   _del_uid, _del_actor, _del_terminal, _del_utc))
-            gl.post_stock_adjustment(conn, cid, _del_bid, _del_uid, -_del_qty, _del_cost, 'DELETE', _del_currency)
+            gl.post_stock_adjustment(conn, cid, _del_bid, _del_uid, -_del_qty, _del_cost, 'DELETE', _del_currency,
+                                     business_date=_gl_business_date(conn, cid))
             _queue_sync_event(cur, 'inventory_movement', _del_uid, 'create', {
                 'uid': _del_uid, 'product_id': pid, 'branch_id': _del_bid, 'branch_uid': _branch_uid(conn, _del_bid),
                 'movement_type': 'stock_out', 'quantity': -_del_qty, 'unit_cost': _del_cost,
@@ -2893,9 +2895,11 @@ def adjust_stock(pid):
         if adj_kind == 'added':
             # REHEARSAL-1007 B3: keyed 'opening_entry' on the movement uid, which
             # stock_books's tie already recognises (_MOVEMENT_KEYED_JOURNALS).
-            gl.post_opening_entry(conn, cid, bid, movement_uid, qty, adj_cost, 'ADJ', adj_currency)
+            gl.post_opening_entry(conn, cid, bid, movement_uid, qty, adj_cost, 'ADJ', adj_currency,
+                                  business_date=_gl_business_date(conn, cid))
         else:
-            gl.post_stock_adjustment(conn, cid, bid, movement_uid, qty, adj_cost, 'ADJ', adj_currency)
+            gl.post_stock_adjustment(conn, cid, bid, movement_uid, qty, adj_cost, 'ADJ', adj_currency,
+                                     business_date=_gl_business_date(conn, cid))
         # Wave B: queue the matching sync event -- see create_sale's own
         # inventory_movement emission for the shape every writer shares.
         _queue_sync_event(conn.cursor(), 'inventory_movement', movement_uid, 'create', {
@@ -4218,7 +4222,8 @@ def create_purchase_order():
         if amount_paid > _eps:
             # W4a-2 fix: reference = the payment's, as post_supplier_payment does.
             gl.post_po_prepayment(conn, cid, branch_id, po_id, bool(supplier_id),
-                                  amount_paid, down_pay_uid, currency, reference=down_pay_ref)
+                                  amount_paid, down_pay_uid, currency, reference=down_pay_ref,
+                                  business_date=_gl_business_date(conn, cid))
         # W4a: queue order + lines in THIS transaction, so the outbox rows and
         # the rows they describe land or roll back together.
         _po_stamp_and_queue_create(cur, po_id, None)
@@ -4886,7 +4891,8 @@ def receive_purchase_order(po_id):
         # the order's 1260 into Inventory. Same transaction as the stock
         # movements above, so books and shelves cannot part. Peers post nothing:
         # the journal syncs itself.
-        gl.post_po_receipt_for(conn, cid, bid, po, recv_uid, recv_value, currency)
+        gl.post_po_receipt_for(conn, cid, bid, po, recv_uid, recv_value, currency,
+                               business_date=_gl_business_date(conn, cid))
         # status / received_qty / received_at are caches of the receipts.
         new_status = po_core.recompute_po_receive_state(conn, cid, po_id)
         if po['supplier_id']:
@@ -5139,7 +5145,8 @@ def close_purchase_order_short(po_id):
         po_core.recompute_po_paid(conn, cid, po_id, _money_epsilon(currency))
         if ap_basis == 'order':
             bid = po['branch_id'] or _resolve_working_branch(conn, cid)[0]
-            gl.post_po_close_short(conn, cid, bid, po, currency)
+            gl.post_po_close_short(conn, cid, bid, po, currency,
+                                   business_date=_gl_business_date(conn, cid))
         _refresh_party_balance(conn, 'suppliers', po['supplier_id'], cid, currency)
         _queue_sync_event(cur, 'purchase_order', po['uid'], 'update', {
             'uid': po['uid'], 'cancelled_at': po['cancelled_at'], 'closed_at': closed_at})
@@ -6277,7 +6284,8 @@ def send_stock_transfer(transfer_id):
         # reconcile (also run after every pull) reverses the loser; here it is a
         # no-op unless a sibling's journal has already arrived.
         gl.post_transfer_send(conn, cid, source_bid, transfer_id, sent_lines, currency,
-                              costs_key=xfer_core.send_key(transfer_id, sent_costs))
+                              costs_key=xfer_core.send_key(transfer_id, sent_costs),
+                              business_date=_gl_business_date(conn, cid))
         gl.reconcile_transfer_send_duplicates(conn, cid, transfer_id)
         _audit(conn, 'STOCK_TRANSFER_SENT', 'stock_transfer', transfer_id,
                f'{len(items)} line(s) from branch {source_bid} to {transfer["destination_branch_id"]}')
@@ -6523,7 +6531,8 @@ def receive_stock_transfer(transfer_id):
         # quantity received) -- the stock movement already collapses per line, so
         # a per-receipt journal double-booked any line two computers agreed on.
         _journal_id, written_off = gl.post_transfer_receive(
-            conn, cid, dest_bid, transfer_id, recv_lines, currency)
+            conn, cid, dest_bid, transfer_id, recv_lines, currency,
+            business_date=_gl_business_date(conn, cid))
         for s, line in zip(shortages, [l for l in recv_lines
                                        if l[2] < l[1] - stock_reconciliation.DEFAULT_TOLERANCE]):
             s['written_off_value'] = float(written_off.get(line[0], 0))
@@ -9407,9 +9416,11 @@ def create_sale():
         ar_amount_for_gl = balance_due if (is_credit and balance_due > _eps and customer_id) else 0.0
         revenue_amount = float(
             (Decimal(str(subtotal)) - Decimal(str(discount))).quantize(_quant, rounding=ROUND_HALF_UP))
+        # MONEY-4a / D1: ONE business date for the sale AND its COGS journal below.
+        gl_business_date = _gl_business_date(conn, cid)
         gl.post_sale(conn, cid, bid, sale_id, sale_number, currency,
                      net_received, ar_amount_for_gl, points_redeemed_amount,
-                     tax, revenue_amount)
+                     tax, revenue_amount, business_date=gl_business_date)
 
         # Schema v39 (cost basis for COGS): Dr Cost of Goods Sold / Cr
         # Inventory for the cost basis of what actually left the shelf on
@@ -9431,7 +9442,8 @@ def create_sale():
             (Decimal(str(line['unit_cost'])) * Decimal(str(line['quantity'])) for line in resolved_lines),
             Decimal('0')
         ).quantize(_quant, rounding=ROUND_HALF_UP))
-        gl.post_cogs(conn, cid, bid, 'sale', sale_id, sale_number, currency, cogs_amount)
+        gl.post_cogs(conn, cid, bid, 'sale', sale_id, sale_number, currency, cogs_amount,
+                     business_date=gl_business_date)
 
         if quotation_id:
             # (f) Aseel-parity wave A-PAR (schema v33): after the sale row
@@ -11510,11 +11522,13 @@ def create_return():
         #
         # DAY-1d review F1: post_return takes the STORED tax figure
         # (returns.tax_refunded, decided above) -- no ratio is recomputed.
+        # MONEY-4a / D1: the return's business day (shared with its COGS reversal below).
+        gl_business_date = _gl_business_date(conn, cid)
         gl.post_return(conn, cid, bid, ret_id, ret_num, currency,
                         tender_refund, ar_forgiven + store_credit,
                         tax_refunded=return_tax_refunded,
                         points_restored_value=float(_points_restored_value),
-                        tender_legs=refund_legs)
+                        tender_legs=refund_legs, business_date=gl_business_date)
 
         # Schema v39 (cost basis for COGS): the MIRROR of create_sale's own
         # COGS posting -- Cr Cost of Goods Sold / Dr Inventory for the cost
@@ -11541,7 +11555,7 @@ def create_return():
             Decimal('0')
         ).quantize(tax_engine.currency_quantum(currency), rounding=ROUND_HALF_UP))
         gl.post_cogs(conn, cid, bid, 'return', ret_id, ret_num, currency,
-                     cogs_reversal_amount, reverse=True)
+                     cogs_reversal_amount, reverse=True, business_date=gl_business_date)
 
         _audit(conn, 'RETURN_PROCESSED', 'return', ret_id, f'{ret_num} refund={refund}{loyalty_audit_note}')
         conn.commit()
@@ -19380,6 +19394,29 @@ def _shop_today(conn, cid):
     return metrics.business_now(conn, cid, datetime.now(timezone.utc)).date()
 
 
+def _gl_business_date(conn, cid, moment=None):
+    """The date a LIVE journal is booked on: the shop's BUSINESS day of `moment`
+    (default: now), as 'YYYY-MM-DD'.
+
+    MONEY-4a / review D1. Every sales report buckets by the business day
+    (`metrics.business_now`, shifted by `business_day_start_hour`), but
+    `general_ledger._today()` -- the fallback each poster used when the route
+    passed no date -- is the CALENDAR day. A shop whose trading day starts at 06:00
+    that rang a 100.000 sale at 01:30 therefore saw it on Saturday in the Z-report
+    and the Today card and on Sunday in the P&L, balance sheet and cash flow
+    (measured, probe_business_date_test.py). Every live route computes this ONCE and
+    hands it to every poster it calls, so a sale and its COGS can never land on two
+    different days, and the books agree with the reports.
+
+    Reads `datetime.now` through this module (a test that freezes
+    `api.retail_api.datetime` governs it, like `_shop_today`). With
+    `business_day_start_hour=0` and no declared zone it is exactly the calendar day
+    the old fallback returned, so unconfigured shops are unchanged. It deliberately
+    does NOT touch `general_ledger._today()`: replay/backfill callers keep that
+    fallback, and a synced `gl_journal` keeps the SENDER's business_date."""
+    return metrics.business_now(conn, cid, moment or datetime.now()).strftime('%Y-%m-%d')
+
+
 def _fifo_open_charges(events, credit_balance):
     """Pure FIFO allocation. `events` are the statement's events, oldest first,
     each with `amount`, `sign`, `ref` and a `date` (a business date or None).
@@ -19909,7 +19946,8 @@ def customer_payment(cust_id):
         # context on this route (an account payment is not tied to a
         # terminal or a branch), so branch_id is None -- matches
         # gl_journals.branch_id's own nullable design.
-        gl.post_customer_payment(conn, cid, None, ref, currency, amt, source_uid=pay_uid)
+        gl.post_customer_payment(conn, cid, None, ref, currency, amt, source_uid=pay_uid,
+                                 business_date=_gl_business_date(conn, cid))
         _audit(conn, 'CUSTOMER_PAYMENT', 'customer', cust_id, f'{ref} amount={amt}')
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -20267,7 +20305,8 @@ def supplier_payment(sid):
         # Schema v38 (general ledger core): Dr AP / Cr Cash. See
         # customer_payment's identical comment just above -- same
         # reasoning, no branch context on this route.
-        gl.post_supplier_payment(conn, cid, None, ref, currency, amt, source_uid=pay_uid)
+        gl.post_supplier_payment(conn, cid, None, ref, currency, amt, source_uid=pay_uid,
+                                 business_date=_gl_business_date(conn, cid))
         _audit(conn, 'SUPPLIER_PAYMENT', 'supplier', sid, f'{ref} amount={amt}')
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -20367,7 +20406,8 @@ def pay_purchase_order(po_id):
             # journal (post_supplier_payment gets `ref`), so the books line and
             # the payment row are findable from each other by reference.
             gl.post_po_prepayment(conn, cid, po['branch_id'], po_id, bool(po['supplier_id']),
-                                  amt, pay_uid, currency, reference=ref)
+                                  amt, pay_uid, currency, reference=ref,
+                                  business_date=_gl_business_date(conn, cid))
         elif po['supplier_id']:
             # v44: re-derived (the instalment is a 'po' payment row, which
             # the supplier formula counts), not moved by -amt.
@@ -20382,7 +20422,8 @@ def pay_purchase_order(po_id):
             # `suppliers.credit_balance` will ever match.
             gl.post_supplier_payment(conn, cid, None, ref, currency, amt,
                                       source_type='po_payment', source_id=po_id,
-                                      source_uid=pay_uid)
+                                      source_uid=pay_uid,
+                                      business_date=_gl_business_date(conn, cid))
         _audit(conn, 'PO_PAYMENT', 'purchase_order', po_id, f"{ref} amount={amt}")
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -22093,10 +22134,11 @@ def _reverse_payment_journal(conn, cid, payment):
         if linked:
             # Dated TODAY (the accounting date of the void), not the original's
             # date: a reversal posted into an already-reported day would change
-            # that day's figures after the fact.
+            # that day's figures after the fact. "Today" is the shop's BUSINESS
+            # day (MONEY-4a / D1), the same clock the reports use.
             return gl.reverse_journal(conn, cid, linked['id'],
                                       memo=f"Void of payment {payment['reference']}",
-                                      business_date=gl._today())
+                                      business_date=_gl_business_date(conn, cid))
     ref = payment['reference']
     if not ref:
         return None
@@ -22117,7 +22159,7 @@ def _reverse_payment_journal(conn, cid, payment):
         if _money(cash['d'] or cash['c'], currency) == want:
             return gl.reverse_journal(conn, cid, cand['id'],
                                       memo=f"Void of payment {ref}",
-                                      business_date=gl._today())
+                                      business_date=_gl_business_date(conn, cid))
     return None
 
 
@@ -22159,7 +22201,7 @@ def _post_missing_void_reversals(conn, company_id):
     for row in rows:
         gl.reverse_journal(conn, company_id, row['journal_id'],
                            memo=f"Void of payment {row['reference']}",
-                           business_date=gl._today())
+                           business_date=_gl_business_date(conn, company_id))
         posted += 1
     return posted
 
@@ -23369,7 +23411,8 @@ def resolve_stock_exception(exception_id):
                       delta, exc_cost, 'EXCEPTION_RESOLVE', note, _uid(),
                       movement_uid, actor, terminal, utc_now))
                 gl.post_stock_adjustment(conn, cid, bid, movement_uid, delta, exc_cost,
-                                         'EXCEPTION_RESOLVE', exc_currency)
+                                         'EXCEPTION_RESOLVE', exc_currency,
+                                         business_date=_gl_business_date(conn, cid))
                 # Wave B shape, identical to adjust_stock's own emission just
                 # above: the correction is only useful if it travels.
                 _queue_sync_event(conn.cursor(), 'inventory_movement', movement_uid, 'create', {

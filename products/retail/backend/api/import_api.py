@@ -1943,8 +1943,11 @@ def _handle_retail_products(records):
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (cid, pid, bid, movement_type, delta, move_cost, movement_reference, movement_notes,
                       _uid(), movement_uid, actor, terminal, utc_now))
-                _gl.post_opening_entry(conn, cid, bid, movement_uid, delta, move_cost,
-                                       movement_reference, currency)
+                # MONEY-4a / D1: booked on the shop's BUSINESS day, like every report
+                # (the calendar-day fallback put a 01:30 import on the wrong day).
+                _gl.post_opening_entry(
+                    conn, cid, bid, movement_uid, delta, move_cost, movement_reference, currency,
+                    business_date=_metrics.business_now(conn, cid, datetime.now()).strftime('%Y-%m-%d'))
                 # Wave B (AUDIT parity with the 2026-08-19 fix noted on
                 # `_queue_sync_event` above): this is the sixth and highest-
                 # leverage writer into inventory_movements in the product
