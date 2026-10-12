@@ -232,6 +232,18 @@ def _texts(model):
 
 # ── receipt-model ────────────────────────────────────────────────────────────
 
+def test_model_tells_a_phone_whether_the_drawer_may_open(shop):
+    """PRINT-2: the phone composes its own print job, so the model carries the
+    server's drawer verdict (the SAME `_drawer_refusal` rule print-raster uses).
+    Both directions: cash -> True, card -> False. A route that hard-coded True
+    would open a drawer on a card sale; hard-coded False would never open one."""
+    admin = shop[0]
+    cash = _ring(shop)
+    card = _ring(shop, method='card')
+    assert _model(admin, cash['id']).get_json()['data']['kick_allowed'] is True
+    assert _model(admin, card['id']).get_json()['data']['kick_allowed'] is False
+
+
 def test_model_of_a_real_split_sale_matches_the_stored_figures(shop):
     admin = shop[0]
     sale = _split_sale(shop, discount_pct=10)

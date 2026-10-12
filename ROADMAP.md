@@ -7712,3 +7712,27 @@ list (review finding F7; confirmed inside the built APK).
   OWED: a native Arabic reader must review the five new strings in `locales/ar.json` (auto-print option, "Receipt did not
   print", "Drawer didn't open?", "Drawer opened", "Drawer did not open") and the receipt labels in
   `receipt_model.AR_LABELS` (inherited from the existing catalogue, not re-reviewed).
+
+* **2026-10-12 -- PRINT-2 (phone prints on Bluetooth, USB, Sunmi built-in; Arabic as bitmap) -- no schema claim**
+  (branch `feat/print-android`, off `feat/print-desktop`; no `RETAIL_SCHEMA_VERSION` bump, printer choice lives in the
+  phone's `aura_prefs`). BUILT: `printer/EscPosRaster.kt` (Kotlin port of `escpos_raster.wrap_raster`, pinned byte for byte
+  by golden files that the PYTHON module writes -- `products/retail/tests/tools/gen_escpos_golden.py`), `ReceiptLayout.kt`
+  (pure layout planning, a port of the desktop `receipt-raster.js` rules: quantity as its own LTR run at the line-start edge,
+  name drawn separately, receipt-level base direction, amounts LTR at the end edge), `ReceiptRasterizer.kt` (StaticLayout +
+  the bundled Latin+Arabic face -> 1-bit bitmap, threshold luma<160, no dithering, 576 or 384 dots), adapters
+  `BluetoothPrinterAdapter` (SPP, 5 s connect deadline, bonded devices only), `UsbPrinterAdapter` (class 7, bulk OUT, 16 KB
+  chunks), `SunmiInnerPrinterAdapter` (`com.sunmi:printerlibrary:1.0.24`, the library's real API: `InnerPrinterManager` /
+  `SunmiPrinterService`, not the `IWoyouService` sketch), LAN now sends the raster bytes too; Settings -> Receipt Printer
+  rebuilt (type chips, paper, Test print, admin-only Open drawer test; the two outdated copy lines replaced, EN + AR);
+  `printer_auto_kick` pref (default OFF); backend: `GET /printer/receipt-model` now returns `kick_allowed` (the existing
+  `_drawer_refusal` rule), so only an AUTO-print of a cash sale with the pref on can open the drawer -- a card sale or a
+  manual reprint never does.
+  NOT BUILT: iMin built-in printer (no Maven Central artefact; its SDK would need a vendor repository or a vendored jar --
+  a separate decision); Sunmi V2/V2 Pro/T2 (Android 7.1) are still below the app's minSdk 26; no scan UI for Bluetooth.
+  NOT PROVEN ON HARDWARE (none was available): no Bluetooth, USB or Sunmi printer has received a byte; RFCOMM drain delay
+  (300 ms), `GS ( k` QR and the partial-cut feed on real firmware, Sunmi call order / `cutPaper` on a model with no cutter /
+  `openDrawer` on a model with no drawer port, and the USB permission dialog flow are all by-design, not measured. The bitmap
+  rendering (Arabic shaping and bidi isolates through Android's StaticLayout, bold weight at 1 bit on 58 mm) was NOT
+  rendered anywhere: the module has no Robolectric, so only the layout PLAN is unit-tested. A phone + printer afternoon is
+  owed (checklist: Arabic name + 3-dp total legible, QR scans, drawer opens once on cash and never on card, reprint never
+  opens it, printer off -> message within ~6 s and the sale stays recorded).

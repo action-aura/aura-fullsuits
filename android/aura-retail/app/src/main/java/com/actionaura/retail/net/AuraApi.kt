@@ -201,6 +201,16 @@ interface AuraApi {
         @Query("kick") kick: Int,
     ): ReceiptPayloadResponse
 
+    // PRINT-2: the receipt as layout data (core/retail/receipt_model.py) for the
+    // phone to DRAW as a bitmap, so Arabic prints. `kick_allowed` in the reply is
+    // the server's own cash-only drawer verdict for this sale.
+    @GET("api/sub/retail/printer/receipt-model")
+    suspend fun receiptModel(
+        @Query("sale_id") saleId: Int,
+        @Query("width_dots") widthDots: Int,
+        @Query("lang") lang: String,
+    ): com.actionaura.retail.printer.ReceiptModelResponse
+
     // Suppliers
     @GET("api/sub/retail/suppliers")
     suspend fun suppliers(): SuppliersResponse

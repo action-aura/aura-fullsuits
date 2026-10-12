@@ -43,7 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.*
-import com.actionaura.retail.printer.NetworkPrinterAdapter
+import com.actionaura.retail.printer.ReceiptPrintService
 import com.actionaura.retail.printer.PrinterPrefs
 import com.actionaura.retail.ui.CAP_DISCOUNT
 import com.actionaura.retail.ui.CAP_STOCK_ADJUST
@@ -683,7 +683,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                         // load()/loadCustomers() below.
                                         r.data?.id?.let { saleId ->
                                             if (PrinterPrefs.getAutoPrint(ctx)) {
-                                                scope.launch { printReceipt(ctx, saleId, snackbar) }
+                                                scope.launch { printReceipt(ctx, saleId, snackbar, isAutoPrint = true) }
                                             }
                                         }
                                         load(); loadCustomers()   // refresh stock + customer balances
@@ -968,12 +968,17 @@ private fun shareReceipt(ctx: android.content.Context, sale: com.actionaura.reta
     ctx.startActivity(android.content.Intent.createChooser(intent, tr("Share Receipt")))
 }
 
-// Receipt printing (retail-hardware-viewports): fetches the server-
-// rendered ESC/POS byte stream for `saleId` and sends it to the network
-// printer configured in Settings -> Receipt Printer. Both the manual
-// "Print Receipt" button above and auto-print (PosScreen's sale-success
-// branch) call this exact same function, so there is only one place that
-// can get "what does printing a receipt mean" wrong.
+// Receipt printing: asks the server for the receipt as layout data, DRAWS it as a
+// 1-bit bitmap on the phone (so Arabic prints) and sends it to whichever printer
+// Settings -> Receipt Printer chose (built-in, Bluetooth, USB or network) --
+// see printer/ReceiptPrintService.kt. Both the manual "Print Receipt" button
+// and auto-print (PosScreen's sale-success branch) call this one function, so
+// there is only one place that can get "what does printing a receipt mean" wrong.
+//
+// `isAutoPrint` is the drawer rule's input: ONLY the print that follows a sale
+// may open the drawer (and then only if the owner switched auto-open on AND the
+// server says this sale was cash) -- a manual reprint never kicks, because
+// opening the drawer is a deliberate act, not a side effect of printing a copy.
 //
 // Never lets a print failure look like the sale failed: this is only ever
 // called with a sale id from an already-successful, server-issued sale
@@ -981,44 +986,11 @@ private fun shareReceipt(ctx: android.content.Context, sale: com.actionaura.reta
 // it. So every failure path here ends in a snackbar, exactly like the
 // checkout screen's own error handling above -- never a thrown exception,
 // never a dialog that could read as "the sale didn't go through."
-private suspend fun printReceipt(ctx: android.content.Context, saleId: Int, snackbar: SnackbarHostState) {
-    try {
-        val width = PrinterPrefs.getWidth(ctx)
-        // kick=0: reprinting/manual-printing a receipt must never pop the
-        // cash drawer a second time -- see the backend route's own doc
-        // comment (retail_api.py::printer_receipt_payload) for the "opening
-        // the drawer is a deliberate act, not a side effect of rendering
-        // bytes" reasoning this mirrors.
-        val resp = ApiClient.get().receiptPayload(saleId, width, kick = 0)
-        val data = resp.data
-        if (resp.status != "success" || data == null) {
-            snackbar.showSnackbar(resp.message ?: tr("Couldn't print receipt"))
-            return
-        }
-        // java.util.Base64, NOT android.util.Base64: android.util.Base64 is
-        // a stubbed Android framework class that throws in a plain JVM unit
-        // test (NetworkPrinterAdapterTest / ReceiptPayloadContractTest run
-        // under `testDebugUnitTest`, no emulator/Robolectric involved),
-        // while java.util.Base64 has been available since API 26 -- this
-        // app's own minSdk -- so the exact same call works at runtime and
-        // in tests. That matters here specifically because this decode is
-        // exactly where a corrupted payload would surface.
-        val bytes = try {
-            java.util.Base64.getDecoder().decode(data.payload_b64)
-        } catch (e: IllegalArgumentException) {
-            snackbar.showSnackbar(tr("Couldn't print receipt"))
-            return
-        }
-        val host = PrinterPrefs.getHost(ctx)
-        val port = PrinterPrefs.getPort(ctx)
-        NetworkPrinterAdapter(host, port).print(bytes)
-            .onFailure { e -> snackbar.showSnackbar(e.message ?: tr("Couldn't print receipt")) }
-    } catch (e: Exception) {
-        // apiErrorMessage (net/ApiErrors.kt): the same mapping every other
-        // screen's catch block uses, so a licensing block or an expired
-        // session reads the same way here as everywhere else in the app.
-        snackbar.showSnackbar(apiErrorMessage(e))
-    }
+private suspend fun printReceipt(
+    ctx: android.content.Context, saleId: Int, snackbar: SnackbarHostState, isAutoPrint: Boolean = false,
+) {
+    ReceiptPrintService.printSale(ctx, saleId, isAutoPrint)
+        .onFailure { e -> snackbar.showSnackbar(e.message ?: tr("Couldn't print receipt")) }
 }
 
 @Composable

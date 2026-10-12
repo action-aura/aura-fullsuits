@@ -35,6 +35,30 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
+    <!--
+      PRINT-2 receipt printing. Bluetooth: API 31+ asks BLUETOOTH_CONNECT at
+      runtime (the Settings screen requests it when a Bluetooth printer is
+      chosen); API 26-30 use the old normal permissions, so they are capped at
+      maxSdkVersion 30 and cost nothing on a newer phone. No SCAN / location:
+      printers are paired in Android Settings and listed from bonded devices.
+      neverForLocation is not needed because BLUETOOTH_SCAN is not requested.
+    -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <!-- USB printers over OTG; optional so the app still installs on phones without host mode. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+
+    <!--
+      Android 11+ package visibility: without this, the Sunmi printer service is
+      invisible to resolveService() and the "Built-in printer" choice would never
+      appear on a Sunmi terminal.
+    -->
+    <queries>
+        <package android:name="woyou.aidlservice.jiuiv5" />
+    </queries>
+
     <application
         android:allowBackup="false"
         android:enableOnBackInvokedCallback="true"

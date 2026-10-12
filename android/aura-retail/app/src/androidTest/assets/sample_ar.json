@@ -1,0 +1,99 @@
+{
+ "version": 1,
+ "lang": "ar",
+ "rtl": true,
+ "width_dots": 576,
+ "lines": [
+  {
+   "kind": "text",
+   "text": "مقهى الأصالة",
+   "align": "center",
+   "bold": true,
+   "size": "large"
+  },
+  {
+   "kind": "text",
+   "text": "عمّان - الرابية",
+   "align": "center",
+   "bold": false,
+   "size": "small"
+  },
+  {
+   "kind": "text",
+   "text": "⁦+962 78 006 9485⁩",
+   "align": "center",
+   "bold": false,
+   "size": "small"
+  },
+  {
+   "kind": "text",
+   "text": "إيصال ⁦#S-000123⁩",
+   "align": "center",
+   "bold": false,
+   "size": "normal"
+  },
+  {
+   "kind": "text",
+   "text": "⁦2026-10-12 14:05⁩",
+   "align": "center",
+   "bold": false,
+   "size": "normal"
+  },
+  {
+   "kind": "rule"
+  },
+  {
+   "kind": "row",
+   "start": "قهوة عربية",
+   "end": "⁦د.أ⁩ 3.000",
+   "bold": false,
+   "qty": "2×"
+  },
+  {
+   "kind": "row",
+   "start": "Mint Tea",
+   "end": "⁦د.أ⁩ 2.250",
+   "bold": false,
+   "qty": "1×"
+  },
+  {
+   "kind": "rule"
+  },
+  {
+   "kind": "row",
+   "start": "المجموع الفرعي",
+   "end": "⁦د.أ⁩ 5.250",
+   "bold": false
+  },
+  {
+   "kind": "row",
+   "start": "الإجمالي",
+   "end": "⁦د.أ⁩ 5.250",
+   "bold": true
+  },
+  {
+   "kind": "row",
+   "start": "المدفوع",
+   "end": "⁦د.أ⁩ 10.000",
+   "bold": false
+  },
+  {
+   "kind": "row",
+   "start": "الباقي",
+   "end": "⁦د.أ⁩ 4.750",
+   "bold": false
+  },
+  {
+   "kind": "rule"
+  },
+  {
+   "kind": "text",
+   "text": "شكراً لكم",
+   "align": "center",
+   "bold": false,
+   "size": "normal"
+  }
+ ],
+ "qr_payload": null,
+ "kick_allowed": true
+}

@@ -200,6 +200,9 @@ android {
         versionCode 12
         versionName "1.0.0-rc.10"
 
+        // PRINT-2: androidTest/ renders the receipt on a real Android text stack.
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
         ndk {
             // Chaquopy's Python 3.12 ships only these ABIs.
             abiFilters "arm64-v8a", "x86_64"
@@ -473,8 +476,19 @@ dependencies {
     // (ADR-7.1) for the full rationale.
     implementation 'com.google.crypto.tink:tink-android:1.15.0'
 
+    // ── PRINT-2: Sunmi built-in printer ──────────────────────────────────────
+    // Sunmi's PUBLISHED helper library (Maven Central), never a hand-copied AIDL:
+    // the service's transaction ids are positional, so a partial copy silently
+    // calls the wrong method (see printer/NetworkPrinterAdapter.kt). 1.0.24 is the
+    // newest 1.0.x on Central (maven-metadata <release>, checked 2026-10-12) and
+    // its classes.jar was read to confirm the API SunmiInnerPrinterAdapter uses.
+    // Pinned exactly: the vendor changes this surface between minors.
+    implementation 'com.sunmi:printerlibrary:1.0.24'
+
     // ── Unit/contract tests (JVM, no device/emulator needed) ─────────────────
     testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
     // gson is already on the test classpath via the `implementation` entry
     // above -- no separate testImplementation needed.
     testImplementation 'com.google.truth:truth:1.4.4'
