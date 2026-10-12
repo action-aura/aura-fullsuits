@@ -142,7 +142,7 @@ def test_a_restore_that_fails_reports_failed_and_runs_no_installer(L):
 
 
 # -- main() end to end with fakes -------------------------------------------------
-def _drive_main(monkeypatch, L, ready, offer_result='not_offered'):
+def _drive_main(monkeypatch, L, ready, offer_result='not_offered', product='AURA_RETAIL'):
     offered = []
     fatal = []
     trail_calls = []
@@ -171,7 +171,7 @@ def _drive_main(monkeypatch, L, ready, offer_result='not_offered'):
     class _Resp:
         def __enter__(self): return self
         def __exit__(self, *a): return False
-        def read(self): return b'{"product_code": "AURA_RETAIL"}'
+        def read(self): return ('{"product_code": "%s"}' % product).encode()
     monkeypatch.setattr(urllib.request, 'urlopen', lambda *a, **k: _Resp())
     return offered, fatal
 
@@ -205,10 +205,50 @@ def test_failed_boot_with_a_started_rollback_exits_cleanly_without_the_fatal_dia
     assert offered == [1] and fatal == [] and exc.value.code == 0
 
 
+def test_the_wrong_product_on_the_port_path_also_offers_the_way_back_once(monkeypatch, L):
+    # M2/B12: a post-update build that answers as the wrong product is a failed
+    # first boot like any other. The offer is COUNTED, and a started rollback
+    # exits cleanly instead of showing the fatal dialog.
+    _arm_update(L)
+    offered, fatal = _drive_main(monkeypatch, L, ready=True, offer_result='rolled_back', product='AURA_CLINIC')
+    with pytest.raises(SystemExit) as exc:
+        L.main()
+    assert offered == [1] and fatal == [] and exc.value.code == 0
+    assert not (Path(L._app_data) / 'updates' / 'boot_ok.json').exists()      # not marked healthy
+
+
+def test_the_wrong_product_path_declined_falls_through_to_the_fatal_dialog(monkeypatch, L):
+    _arm_update(L)
+    offered, fatal = _drive_main(monkeypatch, L, ready=True, offer_result='declined', product='AURA_CLINIC')
+    with pytest.raises(SystemExit):
+        L.main()
+    assert offered == [1] and fatal == ['WRONG_PRODUCT_ON_PORT']
+
+
 def test_the_fail_boot_proof_hook_needs_both_flags(L):
     assert L._test_fail_boot_requested({'AURA_TEST_FAIL_BOOT': '1'}) is False
     assert L._test_fail_boot_requested({'AURA_DEV_TEST_HOOKS': '1'}) is False
     assert L._test_fail_boot_requested({'AURA_DEV_TEST_HOOKS': '1', 'AURA_TEST_FAIL_BOOT': '1'}) is True
+
+
+def test_the_fail_boot_proof_hook_is_inert_in_a_frozen_exe_whatever_the_environment(L):
+    # LOW (verifier L2): two user environment variables must not be able to make
+    # a shipped till unbootable. Frozen = the shipped exe; the hook is dev-only.
+    both = {'AURA_DEV_TEST_HOOKS': '1', 'AURA_TEST_FAIL_BOOT': '1'}
+    assert L._test_fail_boot_requested(both, frozen=True) is False
+    assert L._test_fail_boot_requested(both, frozen=False) is True      # allow-half: still works from source
+
+
+def test_run_server_does_not_raise_in_a_frozen_exe_even_with_both_flags(monkeypatch, L):
+    monkeypatch.setenv('AURA_DEV_TEST_HOOKS', '1')
+    monkeypatch.setenv('AURA_TEST_FAIL_BOOT', '1')
+    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+    # With the hook inert the function goes on to import the real app; stop it
+    # right there so the test proves "did not raise the hook's error" without
+    # booting a server.
+    monkeypatch.setitem(sys.modules, 'app', None)          # `import app` -> ImportError
+    with pytest.raises(ImportError):
+        L._run_server(object())
 
 
 def test_run_server_raises_under_the_hook_before_touching_the_app(monkeypatch, L):

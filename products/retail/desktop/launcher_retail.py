@@ -204,7 +204,14 @@ TEST_HOOKS_ENV = 'AURA_DEV_TEST_HOOKS'
 FAIL_BOOT_ENV = 'AURA_TEST_FAIL_BOOT'
 
 
-def _test_fail_boot_requested(environ=None) -> bool:
+def _test_fail_boot_requested(environ=None, frozen=None) -> bool:
+    # INERT in the shipped exe whatever the environment says (verifier L2): a
+    # customer's till must not be made unbootable by two environment variables.
+    # The proof that needs it (a failed first boot after an update) uses a
+    # source run, or a build that does not set sys.frozen.
+    frozen = getattr(sys, 'frozen', False) if frozen is None else frozen
+    if frozen:
+        return False
     environ = os.environ if environ is None else environ
     return environ.get(TEST_HOOKS_ENV) == '1' and environ.get(FAIL_BOOT_ENV) == '1'
 

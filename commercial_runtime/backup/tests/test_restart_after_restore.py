@@ -6,6 +6,7 @@ did not die" cannot tell "the hook was never asked" from "asked and declined").
 The restart.py tests stub the exit function: a test that really os._exit'ed
 would only prove the runner can be killed.
 """
+import logging
 import os
 import sqlite3
 import threading
@@ -18,7 +19,10 @@ from commercial_runtime.backup.service import create_backup
 from commercial_runtime.install_support import restart
 
 
-def _rig(tmp_path, hook):
+_DEFAULT = object()
+
+
+def _rig(tmp_path, hook=_DEFAULT):
     app_data = tmp_path / "app"
     db_dir = app_data / "database"
     (db_dir / "subsystems").mkdir(parents=True)
@@ -30,8 +34,8 @@ def _rig(tmp_path, hook):
     made = create_backup("retail", str(app_data), str(app_data / "backups"), "1.0.0")
     flask_app = Flask(__name__)
     flask_app.secret_key = "t"
-    flask_app.register_blueprint(
-        make_backup_blueprint("retail", str(db_dir), "1.0.0", restart_after_restore=hook))
+    kwargs = {} if hook is _DEFAULT else {"restart_after_restore": hook}
+    flask_app.register_blueprint(make_backup_blueprint("retail", str(db_dir), "1.0.0", **kwargs))
     client = flask_app.test_client()
     with client.session_transaction() as s:
         s["mt_user_id"] = 1
@@ -48,6 +52,33 @@ def test_successful_restore_asks_for_the_restart_and_says_so(tmp_path):
     body = r.get_json()
     assert body["restarting"] is True
     assert "restarting" in body["message"].lower()
+
+
+def test_the_production_default_hook_really_restarts_an_opted_in_process(tmp_path, monkeypatch):
+    # M2/R5: every test above injects a hook, so the DEFAULT (what the real app
+    # gets) could be swapped for a no-op with the whole suite green and F16 off
+    # in production. Nothing is injected here; the exit itself is stubbed.
+    exits = []
+    done = threading.Event()
+    monkeypatch.setenv(restart.RESTART_ENV, "1")
+    monkeypatch.setattr(os, "_exit", lambda code: (exits.append(code), done.set()))
+    monkeypatch.setattr(logging, "shutdown", lambda: None)      # the real one would close pytest's handlers
+    client, name = _rig(tmp_path)
+    body = client.post("/api/backup/restore", json={"filename": name}).get_json()
+    assert body["restarting"] is True
+    assert done.wait(10)                                        # the delayed exit really fired
+    assert exits == [75]
+
+
+def test_the_production_default_hook_does_nothing_without_the_opt_in(tmp_path, monkeypatch):
+    exits = []
+    monkeypatch.delenv(restart.RESTART_ENV, raising=False)
+    monkeypatch.setattr(os, "_exit", exits.append)
+    client, name = _rig(tmp_path)
+    body = client.post("/api/backup/restore", json={"filename": name}).get_json()
+    assert body["restarting"] is False
+    threading.Event().wait(0.3)
+    assert exits == []
 
 
 def test_successful_restore_without_opt_in_keeps_the_manual_message(tmp_path):

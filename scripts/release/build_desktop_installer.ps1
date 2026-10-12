@@ -72,6 +72,8 @@ if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -Er
 # and still reaches a redirected stdout. Nothing inside Main may write to the
 # pipeline except its final `return <int>`; the call site at the bottom
 # fails closed if anything else ever does.
+. (Join-Path $PSScriptRoot 'webview2_bootstrapper_check.ps1')
+
 function Write-Step {
     param([string]$Message)
     Write-Host ('[build_desktop_installer] ' + $Message)
@@ -418,19 +420,17 @@ function Main {
                     return 24
                 }
             }
-            $WebView2Signature = Get-AuthenticodeSignature -FilePath $WebView2Path
-            $WebView2Subject = ''
-            if ($WebView2Signature.SignerCertificate) { $WebView2Subject = $WebView2Signature.SignerCertificate.Subject }
-            if ($WebView2Signature.Status -ne 'Valid' -or $WebView2Subject -notmatch 'O=Microsoft Corporation') {
+            $WebView2Problem = Test-WebView2Bootstrapper -Path $WebView2Path
+            if ($WebView2Problem) {
                 Remove-Item -Path $WebView2Path -Force -ErrorAction SilentlyContinue
-                Write-Fail ('WebView2 bootstrapper signature is not a valid Microsoft one (status ' + $WebView2Signature.Status + ', subject [' + $WebView2Subject + ']). Deleted it; nothing was bundled.')
+                Write-Fail ('WebView2 bootstrapper is not the genuine Microsoft one: ' + $WebView2Problem + '. Deleted it; nothing was bundled.')
                 return 24
             }
             $WebView2Sha = [System.Security.Cryptography.SHA256]::Create()
             $WebView2Stream = [System.IO.File]::OpenRead($WebView2Path)
             try { $WebView2Hash = $WebView2Sha.ComputeHash($WebView2Stream) } finally { $WebView2Stream.Dispose(); $WebView2Sha.Dispose() }
             $WebView2HashHex = ([System.BitConverter]::ToString($WebView2Hash)).Replace('-', '').ToLower()
-            Write-Step ('WebView2 bootstrapper: signature Valid (Microsoft Corporation), SHA256 ' + $WebView2HashHex)
+            Write-Step ('WebView2 bootstrapper: signature Valid (CN=Microsoft Corporation, MicrosoftEdgeUpdateSetup.exe), SHA256 ' + $WebView2HashHex)
             $IsccLog = Join-Path $OutDirResolved 'iscc.log'
             Write-Step ('Running: ' + $Iscc + ' ' + $IssPath)
             $IsccOutputLines = & $Iscc $IssPath 2>&1

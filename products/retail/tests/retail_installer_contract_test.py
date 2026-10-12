@@ -80,3 +80,89 @@ def test_the_licence_activation_hook_is_wrapped_to_ask_for_the_firewall_rule():
     app_py = (Path(__file__).resolve().parents[1] / 'backend' / 'app.py').read_text(encoding='utf-8')
     assert re.search(r'^\s+on_activation_success=_with_firewall_ask_after_activation\(\s*_on_licence_activated,',
                      app_py, re.M)
+
+
+# -- verifier I3 / L6: the Pascal logic and the bootstrapper check ---------------------
+def _pascal_function(name):
+    match = re.search(r'^function %s\([^)]*\)[^\n]*\n(?:var\n(?:[ \t][^\n]*\n)*)?begin\n(.*?)\nend;' % name,
+                      ISS, re.M | re.S)
+    assert match, '%s not found in the .iss' % name
+    return ' '.join(match.group(1).split())
+
+
+def test_webview2_missing_is_the_negation_of_the_three_runtime_lookups():
+    # Inno Pascal cannot be run from here, so the body is pinned as text. An
+    # inverted Result (verifier I3) compiles, passes every other check and
+    # installs the bootstrapper on PCs that HAVE the runtime and skips it on
+    # the ones that do not -- the only thing that distinguishes it is the `not`
+    # and the exact three lookups.
+    body = _pascal_function('WebView2Missing')
+    assert body == ('Result := not (WebView2VersionOk(HKEY_LOCAL_MACHINE, False) '
+                    'or WebView2VersionOk(HKEY_LOCAL_MACHINE, True) '
+                    'or WebView2VersionOk(HKEY_CURRENT_USER, False));')
+
+
+def test_a_runtime_counts_as_present_only_with_a_real_version():
+    body = _pascal_function('WebView2VersionOk')
+    assert "Result := Found and (Version <> '') and (Version <> '0.0.0.0');" in body
+    assert all(view in body for view in ('HKCU', 'HKLM32', 'HKLM64'))
+
+
+def _ps(script):
+    import subprocess
+    import sys
+    if sys.platform != 'win32':
+        import pytest
+        pytest.skip('Windows PowerShell only')
+    import os
+    # A PSModulePath inherited from PowerShell 7 stops Windows PowerShell 5.1
+    # from loading Microsoft.PowerShell.Security (Get-AuthenticodeSignature).
+    env = {k: v for k, v in os.environ.items() if k.upper() != 'PSMODULEPATH'}
+    done = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
+                          capture_output=True, text=True, timeout=120, env=env)
+    assert done.returncode == 0, done.stderr
+    return done.stdout.strip()
+
+
+CHECK_PS1 = Path(__file__).resolve().parents[3] / 'scripts' / 'release' / 'webview2_bootstrapper_check.ps1'
+
+
+def _check(path, extra=''):
+    out = _ps(". '%s'; $r = Test-WebView2Bootstrapper -Path '%s' %s; if ($r) { $r } else { 'ACCEPTED' }"
+              % (CHECK_PS1, path, extra))
+    return out
+
+
+def test_bootstrapper_check_rejects_unsigned_and_wrong_signer_files(tmp_path):
+    fake = tmp_path / 'MicrosoftEdgeWebview2Setup.exe'
+    fake.write_bytes(b'not a binary')
+    assert 'signature status' in _check(fake)
+    import os
+    notepad = os.path.join(os.environ.get('WINDIR', r'C:\Windows'), 'System32', 'notepad.exe')
+    # Microsoft-signed, valid, and exactly what the OLD 'O=Microsoft Corporation'
+    # test accepted -- but it is not the Microsoft code-signing identity.
+    assert 'signer is not CN=Microsoft Corporation' in _check(notepad)
+
+
+def test_bootstrapper_check_also_requires_the_bootstrapper_s_own_name():
+    import os
+    notepad = os.path.join(os.environ.get('WINDIR', r'C:\Windows'), 'System32', 'notepad.exe')
+    # Right signer (told to expect Windows' catalog identity), wrong file: the
+    # original-filename half must be what refuses it.
+    assert 'original filename' in _check(notepad, "-ExpectedSignerCommonName 'Microsoft Windows'")
+
+
+def test_bootstrapper_check_accepts_when_signer_and_names_all_match():
+    import os
+    notepad = os.path.join(os.environ.get('WINDIR', r'C:\Windows'), 'System32', 'notepad.exe')
+    info = _ps("$v=(Get-Item '%s').VersionInfo; $v.OriginalFilename + '|' + $v.ProductName" % notepad).split('|')
+    extra = ("-ExpectedSignerCommonName 'Microsoft Windows' -ExpectedOriginalFilename '%s' "
+             "-ExpectedProductNameFragment '%s'" % (info[0], info[1][:5]))
+    assert _check(notepad, extra) == 'ACCEPTED'      # the allow-half: a matching file is not refused
+
+
+def test_the_build_script_uses_the_two_part_check():
+    build = (Path(__file__).resolve().parents[3] / 'scripts' / 'release' / 'build_desktop_installer.ps1').read_text(encoding='utf-8')
+    assert "webview2_bootstrapper_check.ps1" in build
+    assert re.search(r'\$WebView2Problem = Test-WebView2Bootstrapper -Path \$WebView2Path', build)
+    assert "O=Microsoft Corporation" not in build
