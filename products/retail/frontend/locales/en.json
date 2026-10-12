@@ -2757,5 +2757,15 @@
   "No sales yet.": "No sales yet.",
   "Filled in from the last count on this terminal. Change it if the drawer has changed since.": "Filled in from the last count on this terminal. Change it if the drawer has changed since.",
   "{n} held sale(s) are still parked. Ending the shift keeps them, but check them before you leave.": "{n} held sale(s) are still parked. Ending the shift keeps them, but check them before you leave.",
-  "Count notes and coins": "Count notes and coins"
+  "Count notes and coins": "Count notes and coins",
+  "New customer": "New customer",
+  "owes": "owes",
+  "Allow credit (pay later)": "Allow credit (pay later)",
+  "Save and choose": "Save and choose",
+  "Customer saved, but only a manager can allow credit.": "Customer saved, but only a manager can allow credit.",
+  "Could not save the customer.": "Could not save the customer.",
+  "Customer saved, but the credit terms could not be set.": "Customer saved, but the credit terms could not be set.",
+  "Unlimited": "Unlimited",
+  "Open balance": "Open balance",
+  "Nothing owed": "Nothing owed"
 }

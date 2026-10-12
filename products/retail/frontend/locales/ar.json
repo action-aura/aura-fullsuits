@@ -2757,5 +2757,15 @@
   "No sales yet.": "لا توجد مبيعات بعد.",
   "Filled in from the last count on this terminal. Change it if the drawer has changed since.": "تم تعبئته من آخر عدّ لهذا الجهاز. غيّره إذا تغيّر محتوى الدرج منذ ذلك الحين.",
   "{n} held sale(s) are still parked. Ending the shift keeps them, but check them before you leave.": "{n} فاتورة معلّقة ما زالت محفوظة. إنهاء الوردية يُبقيها، لكن راجعها قبل أن تغادر.",
-  "Count notes and coins": "عدّ الأوراق النقدية والعملات المعدنية"
+  "Count notes and coins": "عدّ الأوراق النقدية والعملات المعدنية",
+  "New customer": "عميل جديد",
+  "owes": "عليه",
+  "Allow credit (pay later)": "السماح بالدين (الدفع لاحقًا)",
+  "Save and choose": "حفظ واختيار",
+  "Customer saved, but only a manager can allow credit.": "تم حفظ العميل، لكن المدير فقط يمكنه السماح بالدين.",
+  "Could not save the customer.": "تعذّر حفظ العميل.",
+  "Customer saved, but the credit terms could not be set.": "تم حفظ العميل، لكن تعذّر ضبط شروط الدين.",
+  "Unlimited": "غير محدود",
+  "Open balance": "الرصيد المستحق",
+  "Nothing owed": "لا يوجد مستحق"
 }

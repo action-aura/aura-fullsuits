@@ -69,7 +69,14 @@ function loadRetail(opts) {
     querySelector() { return null; }, querySelectorAll() { return []; },
     head: { appendChild() {} },
     body: {
-      appendChild(o) { overlays.push(o); if (o.id) live[o.id] = o; return o; }, classList: { add() {}, remove() {} },
+      appendChild(o) {
+        overlays.push(o); if (o.id) live[o.id] = o;
+        // an overlay answers #id lookups for the ids in ITS markup, like a real subtree
+        o.querySelector = (sel) => ((typeof sel === 'string' && sel[0] === '#') ? document.getElementById(sel.slice(1)) : null);
+        o.querySelectorAll = () => [];
+        return o;
+      },
+      classList: { add() {}, remove() {} },
     },
     documentElement: { getAttribute: () => 'light', style: { setProperty() {} } }, addEventListener() {},
   };
@@ -113,4 +120,10 @@ function loadRetail(opts) {
   };
 }
 
-module.exports = { loadRetail, makeEl, assert };
+// Run the listeners an element registered with addEventListener (the fake DOM has no events).
+function fire(el, type, ev) {
+  const e = Object.assign({ preventDefault() {}, stopPropagation() {}, target: el }, ev || {});
+  ((el && el._listeners && el._listeners[type]) || []).forEach((fn) => fn(e));
+}
+
+module.exports = { loadRetail, makeEl, assert, fire };

@@ -517,7 +517,184 @@ def item_count(page, ids):
     login_as(page, OWNER)
 
 
-ITEMS = {"fav": item_fav, "returns": item_returns, "count": item_count}
+# ───────────────────────── item 4: the customer at the till ─────────────────────────
+
+def item_customer(page, ids):
+    cust = ids["customer"]                      # Samira Haddad +962791112233
+    short_vh = lambda: page.evaluate("() => innerHeight")
+
+    # Give Samira an open balance: credit terms, then a real credit sale rung at the till.
+    B.api(page, "PATCH", f"/api/sub/retail/customers/{cust}", {"credit_mode": "unlimited"})
+    close_modals(page)
+    B.go_pos(page)
+    page.evaluate("(c) => RetailSystem._chooseCustomerOnSale(c)", cust)
+    page.evaluate("() => RetailSystem._clearCart()")
+    page.evaluate("(id) => RetailSystem._addToCart(id)", ids["widget"])
+    page.wait_for_timeout(250)
+    page.evaluate("() => RetailSystem._chooseCustomerOnSale('" + cust + "')")
+    page.wait_for_timeout(250)
+    page.click('.pos-pay-btn[data-method="credit"]')
+    page.wait_for_timeout(200)
+    page.evaluate("() => RetailSystem._checkout()")
+    page.wait_for_selector("#ret-receipt-dialog", timeout=8000)
+    page.evaluate("() => RetailSystem._closeModalOverlay(document.getElementById('ret-receipt-dialog'))")
+    page.wait_for_timeout(300)
+    _, lst = B.api(page, "GET", "/api/sub/retail/customers")
+    samira = next(c for c in lst["data"] if c["id"] == cust)
+    owed = float(samira["credit_balance"])
+    assert owed > 0, f"setup failed: Samira owes {owed}"
+
+    def header_button():
+        B.go_pos(page)
+        btn = page.locator("#pos-cust-btn")
+        assert btn.is_visible(), "no visible customer button"
+        assert "Walk-in" in btn.inner_text()
+        page.evaluate("(c) => RetailSystem._chooseCustomerOnSale(c)", cust)
+        page.wait_for_timeout(250)
+        txt = btn.inner_text()
+        assert "Samira Haddad" in txt and "owes" in txt and f"{owed:.3f}" in txt and "+962791112233" in txt, f"button text {txt!r}"
+        geo = page.evaluate("""() => { const b = document.getElementById('pos-cust-btn').getBoundingClientRect(); const c = document.getElementById('pos-checkout-btn').getBoundingClientRect();
+            return { h: b.height, w: b.width, chargeBottom: c.bottom, vh: innerHeight, scrollW: document.getElementById('pos-cust-btn').scrollWidth, clientW: document.getElementById('pos-cust-btn').clientWidth }; }""")
+        assert geo["h"] >= 44, f"customer button under the touch floor: {geo}"
+        assert geo["chargeBottom"] <= geo["vh"] + 1, f"the taller header pushed Charge off screen: {geo}"
+        shot(page, "cust_01_header_button_1366_en")
+    B.check("customer: the header is a button showing name + phone + 'owes JD x' chip, and Charge stays on screen", header_button)
+
+    def picker_new_customer_owner():
+        close_modals(page)
+        page.evaluate("() => RetailSystem._chooseCustomerOnSale('')")
+        page.keyboard.press("F7")
+        page.wait_for_selector("#cp-search", timeout=5000)
+        page.fill("#cp-search", "Lina")                     # nobody matches: "+ New customer: Lina" is the selected row
+        sel_row = page.inner_text(".pk-row-sel")
+        assert "New customer" in sel_row and "Lina" in sel_row, f"selected row {sel_row!r}"
+        page.keyboard.press("Enter")
+        page.wait_for_selector("#cp-new-name", state="visible", timeout=5000)
+        assert page.input_value("#cp-new-name") == "Lina", "typed text should pre-fill the name"
+        shot(page, "cust_02_new_customer_form_1366_en")
+        page.fill("#cp-new-phone", "0795551234")
+        assert page.is_visible("#cp-new-credit"), "the owner is not offered 'Allow credit'"
+        page.check("#cp-new-credit")
+        page.keyboard.press("Enter")                         # Enter saves and chooses
+        page.wait_for_function("() => !document.getElementById('ret-cust-pick')", timeout=8000)
+        page.wait_for_timeout(300)
+        btn = page.inner_text("#pos-cust-btn")
+        assert "Lina" in btn, f"the new customer is not on the sale: {btn!r}"
+        _, lst2 = B.api(page, "GET", "/api/sub/retail/customers")
+        lina = next(c for c in lst2["data"] if c["name"] == "Lina")
+        assert lina["phone"] == "0795551234" and lina["credit_mode"] == "unlimited", lina
+        credit_tile = page.get_attribute('.pos-pay-btn[data-method="credit"]', "aria-disabled")
+        assert credit_tile != "true", "Credit should be available for a customer allowed credit"
+    B.check("customer: F7 -> type a new name -> Enter -> form -> phone + Allow credit -> Enter: saved, on the sale, Credit tile open", picker_new_customer_owner)
+
+    def credit_root_cause_measured():
+        # Informational (the report records it): with the SHOP default set to unlimited, a customer created
+        # the normal way still reads credit_mode 'none' (the column default), so the shop default never applies.
+        B.api(page, "POST", "/api/sub/retail/settings/credit", {"default_credit_mode": "unlimited"})
+        _, r = B.api(page, "POST", "/api/sub/retail/customers", {"name": "Default Probe", "phone": "0790000000"})
+        probe_id = r["data"]["id"]
+        _, lst3 = B.api(page, "GET", "/api/sub/retail/customers")
+        probe = next(c for c in lst3["data"] if c["id"] == probe_id)
+        print(f"      MEASURED: shop default_credit_mode=unlimited; new customer credit_mode={probe['credit_mode']!r}", flush=True)
+        close_modals(page)
+        B.go_pos(page)
+        page.evaluate("() => RetailSystem._loadPOSData()")
+        page.wait_for_timeout(700)
+        page.evaluate("(c) => RetailSystem._chooseCustomerOnSale(c)", probe_id)
+        page.wait_for_timeout(250)
+        reason = page.get_attribute('.pos-pay-btn[data-method="credit"]', "data-credit-reason")
+        print(f"      MEASURED: Credit tile reason for that customer: {reason!r}", flush=True)
+        B.api(page, "POST", "/api/sub/retail/settings/credit", {"default_credit_mode": "none"})
+    B.check("customer: (measurement) shop default 'unlimited' vs a normally-created customer -- recorded for the report", credit_root_cause_measured)
+
+    def edit_dialog_and_detail():
+        close_modals(page)
+        B.go(page, "customers")
+        page.wait_for_selector("#cust-table tbody tr", timeout=8000)
+        page.evaluate("(c) => RetailSystem._openEditCustomer(c)", cust)
+        page.wait_for_selector("#cm-credit-mode", timeout=5000)
+        assert page.input_value("#cm-credit-mode") == "unlimited"
+        page.select_option("#cm-credit-mode", "limited")
+        page.wait_for_selector("#cm-credit-limit", state="visible", timeout=3000)
+        assert page.get_attribute("#cm-credit-limit", "step") == "0.001"
+        page.fill("#cm-credit-limit", "75.500")
+        shot(page, "cust_03_edit_dialog_1366_en")
+        page.click("#cm-btn"); page.wait_for_timeout(900)
+        _, lst4 = B.api(page, "GET", "/api/sub/retail/customers")
+        s = next(c for c in lst4["data"] if c["id"] == cust)
+        assert s["credit_mode"] == "limited" and abs(float(s["credit_limit"]) - 75.5) < 1e-9, s
+        # contact-only edit leaves credit alone
+        page.evaluate("(c) => RetailSystem._openEditCustomer(c)", cust)
+        page.wait_for_selector("#cm-credit-mode", timeout=5000)
+        page.fill("#cm-phone", "+962791112233")
+        page.click("#cm-btn"); page.wait_for_timeout(900)
+        _, lst5 = B.api(page, "GET", "/api/sub/retail/customers")
+        s2 = next(c for c in lst5["data"] if c["id"] == cust)
+        assert s2["credit_mode"] == "limited", s2
+        # detail modal: open balance + statement link
+        page.evaluate("(c) => RetailSystem._viewCustomer(c)", cust)
+        page.wait_for_selector("#cu-balance", timeout=5000)
+        txt = page.inner_text("#cu-balance")
+        assert f"{owed:.3f}" in txt and "75.500" in txt, f"detail balance block {txt!r}"
+        shot(page, "cust_04_detail_modal_1366_en")
+        page.click("#cu-statement-btn")
+        page.wait_for_selector("text=Statement", timeout=8000)
+        shot(page, "cust_05_statement_from_detail_1366_en")
+    B.check("customer: Edit dialog sets credit mode + limit (3dp step), contact-only edit leaves it; detail modal shows balance + opens the statement", edit_dialog_and_detail)
+
+    def cashier_flow():
+        close_modals(page)
+        make_cashier(*CASHIER)
+        login_as(page, CASHIER)
+        B.go_pos(page)
+        page.keyboard.press("F7")
+        page.wait_for_selector("#cp-search", timeout=5000)
+        page.click("#cp-new")
+        page.wait_for_selector("#cp-new-name", state="visible", timeout=3000)
+        assert page.locator("#cp-new-credit").count() == 0, "a cashier is offered 'Allow credit'"
+        page.fill("#cp-new-name", "Counter Customer")
+        page.keyboard.press("Enter")
+        page.wait_for_function("() => !document.getElementById('ret-cust-pick')", timeout=8000)
+        page.wait_for_timeout(300)
+        assert "Counter Customer" in page.inner_text("#pos-cust-btn")
+        assert page.get_attribute('.pos-pay-btn[data-method="credit"]', "aria-disabled") == "true", "Credit must stay unavailable for a customer with no credit"
+        # a cashier's Edit dialog has no credit fields
+        B.go(page, "customers")
+        page.wait_for_selector("#cust-table tbody tr", timeout=8000)
+        page.evaluate("(c) => RetailSystem._openEditCustomer(c)", cust)
+        page.wait_for_selector("#cm-name", timeout=5000)
+        assert page.locator("#cm-credit-mode").count() == 0, "a cashier is offered credit terms"
+        close_modals(page)
+        login_as(page, OWNER)
+    B.check("customer: a real CASHIER can add a customer at the till but gets no credit box and no credit fields in Edit", cashier_flow)
+
+    for (w, h) in SIZES:
+        for lang in ("en", "ar"):
+            def sized(w=w, h=h, lang=lang):
+                set_size(page, w, h); set_lang(page, lang)
+                B.go_pos(page)
+                page.evaluate("(c) => RetailSystem._chooseCustomerOnSale(c)", cust)
+                page.wait_for_timeout(300)
+                geo = page.evaluate("""() => { const b = document.getElementById('pos-cust-btn'); const r = b.getBoundingClientRect(); const c = document.getElementById('pos-checkout-btn').getBoundingClientRect();
+                    const t = b.querySelector('.pos-cust-name');
+                    return { h: r.height, nameClipped: t.scrollWidth > t.clientWidth, chargeBottom: c.bottom, vh: innerHeight, over: document.documentElement.scrollWidth - document.documentElement.clientWidth }; }""")
+                assert geo["over"] <= 1 and geo["chargeBottom"] <= geo["vh"] + 1 and geo["h"] >= 44, geo
+                shot(page, f"cust_06_till_{w}x{h}_{lang}")
+                page.keyboard.press("F7")
+                page.wait_for_selector("#cp-new", timeout=5000)
+                page.click("#cp-new")
+                page.wait_for_selector("#cp-new-name", state="visible", timeout=3000)
+                shot(page, f"cust_07_form_{w}x{h}_{lang}")
+                # close it the way a person does (Esc steps back to the list, Esc again closes) --
+                # removing the node would leave the modal stack believing a dialog is still open
+                page.keyboard.press("Escape"); page.wait_for_timeout(150)
+                page.keyboard.press("Escape"); page.wait_for_timeout(250)
+                assert page.locator("#ret-cust-pick").count() == 0, "Esc did not close the picker"
+            B.check(f"customer: {w}x{h} {lang}: header button >=44px, Charge on screen, picker form renders (screenshots)", sized)
+    set_size(page, 1366, 768); set_lang(page, "en")
+
+
+ITEMS = {"fav": item_fav, "returns": item_returns, "count": item_count, "customer": item_customer}
 
 
 def main():

@@ -1946,7 +1946,7 @@ const RetailSystem = {
   // Loyalty redemption wave 1: 'pos-loyalty-redeem' joins this list for the
   // identical reason 'pos-disc' is here -- its own oninput -> _recalc() ->
   // re-render path would otherwise yank the caret away mid-number.
-  _POS_FOCUS_KEEPERS: ['pos-search', 'pos-disc', 'pos-tendered', 'pos-customer', 'pos-loyalty-redeem'],
+  _POS_FOCUS_KEEPERS: ['pos-search', 'pos-disc', 'pos-tendered', 'pos-customer', 'pos-cust-btn', 'pos-loyalty-redeem'],
 
   // True only on a device whose primary input cannot hover and is coarse --
   // a phone or tablet, where focusing an input summons an on-screen keyboard.
@@ -4204,6 +4204,26 @@ const RetailSystem = {
              56px and the acceptance check measured "Wall▾" at 1366. */
           min-inline-size:120px;max-inline-size:190px;text-overflow:ellipsis;transition:border-color .15s ease; }
         .pos-cust-select:focus { border-color:var(--focus-ring-color, var(--sub-accent)); }
+        /* UI-2 item 4: the header customer control is a BUTTON that shows who is
+           on the sale (name, then balance chip + phone) and opens the F7 picker.
+           It keeps the .pos-cust-select class on purpose: every width / short-till
+           rule that already budgets this slot of the header applies to it, so the
+           sale pane's height does not move. Two short lines, ellipsised -- the
+           native <select> it replaces truncated to "Sara Khalil (079...". */
+        .pos-cust-btn { display:flex;flex-direction:column;justify-content:center;align-items:stretch;gap:1px;
+          padding-block:3px;text-align:start;cursor:pointer;line-height:1.2;outline:revert; }
+        .pos-cust-btn:hover, .pos-cust-btn:focus-visible { background:var(--surface-hover);border-color:var(--border-strong, var(--border-mid)); }
+        .pos-cust-name { font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-inline-size:0; }
+        .pos-cust-sub { display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim);min-inline-size:0; }
+        .pos-cust-phone { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-inline-size:0; }
+        .pos-cust-owes { flex:none;font-weight:700;padding-inline:6px;border-radius:var(--radius-pill, 22px);
+          background:var(--state-warning-surface);color:var(--state-warning-text); }
+        /* The real <select> stays in the page as the model the whole till reads and
+           writes (.value, onchange, the F7 picker, held-sale resume), but is not
+           painted: a 1px, fully transparent box. Not display:none -- it must stay a
+           real, reachable form control for assistive tech and for tests that drive
+           it. Out of the tab order (the button is the keyboard route). */
+        .pos-cust-model { position:absolute;inline-size:1px;block-size:1px;margin:-1px;padding:0;border:0;overflow:hidden;opacity:0;pointer-events:none; }
 
         /* ── Summary + the total ─────────────────────────────────────────── */
         /* SHRINKABLE AND SCROLLABLE, not flex-shrink:0. Measured at 1366x768
@@ -4817,6 +4837,12 @@ const RetailSystem = {
         .pk-row-sub { inline-size:100%;color:var(--text-dim);font-size:13px; }
         .pk-empty { padding:16px;text-align:center;color:var(--text-dim); }
         .pk-hint { margin-block-start:10px;color:var(--text-dim);font-size:12px; }
+        /* UI-2 item 4: "+ New customer" in the F7 picker and its three-field form. */
+        .pk-new { inline-size:100%;margin-block-start:10px;min-block-size:var(--touch-target-min, 44px); }
+        .pk-check { display:flex;align-items:center;gap:10px;min-block-size:var(--touch-target-min, 44px);color:var(--text);
+          font-size:15px;cursor:pointer; }
+        .pk-check input { inline-size:20px;block-size:20px; }
+        .pk-err { min-block-size:18px;margin-block-start:6px;color:var(--state-danger-text);font-size:13px; }
         .pk-keytable { inline-size:100%;border-collapse:collapse;font-size:14px; }
         .pk-keytable td { padding-block:6px;padding-inline:4px;border-block-end:1px solid var(--border-soft);vertical-align:top; }
         .pk-key { white-space:nowrap;inline-size:1%; }
@@ -5115,7 +5141,12 @@ const RetailSystem = {
                  two are never on screen together. -->
             <h3 class="pos-pane-title" id="pos-pane-title">${this._esc(t('Current Sale'))}</h3>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <select id="pos-customer" class="pos-cust-select" onchange="RetailSystem._onCustomerChange()" aria-keyshortcuts="F7" title="${this._esc(t('Customer'))} (F7)">
+              <button type="button" id="pos-cust-btn" class="pos-cust-select pos-cust-btn" onclick="RetailSystem._openCustomerPicker()"
+                aria-keyshortcuts="F7" title="${this._esc(t('Customer'))} (F7)" aria-label="${this._esc(t('Customer'))}: ${this._esc(t('Walk-in'))}">
+                <span class="pos-cust-name" id="pos-cust-name" dir="auto">${this._esc(t('Walk-in'))}</span>
+                <span class="pos-cust-sub" id="pos-cust-sub"><span class="pos-pay-kbd" aria-hidden="true">F7</span></span>
+              </button>
+              <select id="pos-customer" class="pos-cust-model" tabindex="-1" onchange="RetailSystem._onCustomerChange()" aria-label="${this._esc(t('Customer'))}">
                 <option value="">${this._esc(t('Walk-in'))}</option>
               </select>
               <button class="pos-hold-btn" onclick="RetailSystem._holdSale()" aria-keyshortcuts="F9"
@@ -7526,7 +7557,42 @@ const RetailSystem = {
   // Best-effort: a failed balance fetch hides the control rather than
   // showing one against an unknown/stale balance -- the till must never
   // block a sale over this fetch.
+  //
+  // UI-2 item 4: the visible customer control (#pos-cust-btn) is repainted from
+  // the same place every change already flows through, so it can never disagree
+  // with #pos-customer, the model the rest of the till reads. Shows who is on the
+  // sale, and -- when the customer owes the shop -- a balance chip, so a cashier
+  // sees "owes JD 12.500" before taking more on account. The balance is the
+  // customers-list cache (`credit_balance`, refreshed with the list), shown only
+  // above half a minor unit so a settled account carries no chip. Guarded for
+  // the minimal element stubs several test harnesses hand this screen.
+  _renderCustomerButton() {
+    const nameEl = document.getElementById('pos-cust-name');
+    const subEl = document.getElementById('pos-cust-sub');
+    if (!nameEl || !subEl) return;
+    const id = document.getElementById('pos-customer')?.value || '';
+    const cu = id ? (this._customers || []).find(c => String(c.id) === String(id)) : null;
+    const btn = document.getElementById('pos-cust-btn');
+    if (!cu) {
+      nameEl.textContent = t('Walk-in');
+      subEl.innerHTML = '<span class="pos-pay-kbd" aria-hidden="true">F7</span>';
+      if (btn && typeof btn.setAttribute === 'function') btn.setAttribute('aria-label', `${t('Customer')}: ${t('Walk-in')}`);
+      return;
+    }
+    nameEl.textContent = cu.name || '';
+    const bal = Number(cu.credit_balance) || 0;
+    const owes = bal > this._halfMinorUnit();
+    subEl.innerHTML =
+      (owes ? `<span class="pos-cust-owes">${this._esc(t('owes'))} ${this._money(bal)}</span>` : '') +
+      (cu.phone ? `<span class="pos-cust-phone" dir="ltr">${this._esc(cu.phone)}</span>` : '');
+    if (btn && typeof btn.setAttribute === 'function') {
+      btn.setAttribute('aria-label',
+        `${t('Customer')}: ${cu.name || ''}${cu.phone ? ', ' + cu.phone : ''}${owes ? ', ' + t('owes') + ' ' + this._fmt(bal) : ''}`);
+    }
+  },
+
   async _onCustomerChange() {
+    this._renderCustomerButton();
     const section = document.getElementById('pos-loyalty-section');
     const input = document.getElementById('pos-loyalty-redeem');
     if (input) input.value = '0';
@@ -9232,17 +9298,91 @@ const RetailSystem = {
     return { overlay, close };
   },
 
+  // Put `id` ('' = walk-in) on the current sale: write the model <select>, then
+  // run the same _onCustomerChange() every other path uses (it repaints the
+  // header button, the Credit tile, loyalty). One place, so the F7 picker, a
+  // new customer, and anything later all do the identical thing.
+  _chooseCustomerOnSale(id) {
+    const sel = document.getElementById('pos-customer');
+    if (sel) sel.value = id == null ? '' : String(id);
+    return this._onCustomerChange();
+  },
+
+  // UI-2 item 4 -- a customer created at the till. POST /customers writes name /
+  // phone only (create_customer deliberately CANNOT grant credit: that is the
+  // same authority as a discount, retail.discount, and is refused to a cashier by
+  // update_customer). So "may buy on account" is a SECOND request, a PATCH with
+  // credit_mode: 'unlimited' -- "yes" means unlimited here, the plainest reading
+  // of a yes/no box; a ceiling is set in the Edit Customer dialog. If the server
+  // refuses the PATCH (a cashier) the customer is still created and chosen, and
+  // the person is told credit needs a manager -- never a silent half-success.
+  // Resolves to the new customer row (also added to the till's caches); throws
+  // an Error with a sentence a person can read when the customer was not created.
+  async _createCustomerAtTill({ name, phone, credit }) {
+    let res;
+    try {
+      res = await this._post('/api/sub/retail/customers', { name, phone: phone || '' });
+    } catch (e) {
+      throw new Error(t('Could not save the customer.'));
+    }
+    if (!res || res.status !== 'success' || !res.data || !res.data.id) {
+      throw new Error((res && res.message) || t('Could not save the customer.'));
+    }
+    const id = String(res.data.id);
+    let mode = 'none';
+    if (credit) {
+      let ok = false;
+      try {
+        const r2 = await this._patch(`/api/sub/retail/customers/${id}`, { credit_mode: 'unlimited' });
+        ok = !!(r2 && r2.status === 'success');
+      } catch (e) { ok = false; }
+      if (ok) mode = 'unlimited';
+      else SubsystemApp.showToast(t('Customer saved, but only a manager can allow credit.'), 'info');
+    }
+    const cu = { id, name, phone: phone || '', email: '', address: '', credit_mode: mode, credit_limit: 0,
+                 credit_balance: 0, loyalty_points: 0, total_spent: 0, order_count: 0 };
+    this._customers = (this._customers || []).concat([cu]);
+    const sel = document.getElementById('pos-customer');
+    if (sel && typeof document.createElement === 'function') {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = this._namePhoneLabel(name, phone);
+      if (typeof sel.appendChild === 'function') sel.appendChild(opt);
+    }
+    return cu;
+  },
+
   // ── F7: customer picker ─────────────────────────────────────────────────
   // Type a name or phone, arrows move, Enter selects, Esc closes. "Walk-in" is
   // always the first row. The <select> in the sale header stays for the mouse;
   // picking here writes to it and goes through the same _onCustomerChange().
   _openCustomerPicker() {
     if (document.getElementById('ret-cust-pick')) return;
+    const canGrantCredit = !window.SubsystemApp || SubsystemApp.hasCapability('retail.discount');
     const { overlay, close } = this._pickerOverlay('ret-cust-pick', t('Choose a customer'), `
-        <input id="cp-search" class="pk-input" type="text" autocomplete="off"
-               aria-label="${this._esc(t('Type a name or phone'))}" placeholder="${this._esc(t('Type a name or phone'))}" />
-        <div class="pk-list" id="cp-list" role="listbox"></div>
-        <div class="pk-hint">↑ ↓ · ${this._esc(t('Enter'))} · ${this._esc(t('Esc'))}</div>`);
+        <div id="cp-pick">
+          <input id="cp-search" class="pk-input" type="text" autocomplete="off"
+                 aria-label="${this._esc(t('Type a name or phone'))}" placeholder="${this._esc(t('Type a name or phone'))}" />
+          <div class="pk-list" id="cp-list" role="listbox"></div>
+          <button type="button" id="cp-new" class="ret-btn ret-btn-ghost pk-new">+ ${this._esc(t('New customer'))}</button>
+          <div class="pk-hint">↑ ↓ · ${this._esc(t('Enter'))} · ${this._esc(t('Esc'))}</div>
+        </div>
+        <!-- UI-2 item 4: a new customer without leaving the sale -- name, phone, and
+             (for someone who may grant it) whether they may buy on account. Enter
+             saves and puts them on this sale; Esc goes back to the list. -->
+        <div id="cp-form" hidden>
+          <div class="ret-field"><label for="cp-new-name">${this._esc(t('Name'))} *</label>
+            <input id="cp-new-name" class="pk-input" type="text" autocomplete="off" dir="auto" /></div>
+          <div class="ret-field"><label for="cp-new-phone">${this._esc(t('Phone'))}</label>
+            <input id="cp-new-phone" class="pk-input" type="tel" inputmode="tel" autocomplete="off" dir="ltr" /></div>
+          ${canGrantCredit ? `<label class="pk-check" for="cp-new-credit">
+            <input type="checkbox" id="cp-new-credit" /> <span>${this._esc(t('Allow credit (pay later)'))}</span></label>` : ''}
+          <div id="cp-new-err" class="pk-err" role="alert"></div>
+          <div class="ret-modal-footer">
+            <button type="button" id="cp-new-cancel" class="ret-btn ret-btn-ghost">${this._esc(t('Back'))}</button>
+            <button type="button" id="cp-new-save" class="ret-btn ret-btn-primary">${this._esc(t('Save and choose'))}</button>
+          </div>
+        </div>`);
     const input = overlay.querySelector('#cp-search');
     const list = overlay.querySelector('#cp-list');
     const state = { rows: [], sel: 0 };
@@ -9260,6 +9400,9 @@ const RetailSystem = {
         const hay = `${cu.name || ''} ${this._asciiDigits(cu.phone || '')}`.toLowerCase();
         if (!q || hay.indexOf(q) !== -1) rows.push({ id: cu.id, label: `${cu.name}${cu.phone ? ' (' + cu.phone + ')' : ''}` });
       });
+      // Nothing matched what was typed: the natural next step is "add them", so
+      // that is offered as the row Enter lands on (the typed text pre-fills the form).
+      if (q && rows.length === 1) rows.push({ isNew: true, label: `+ ${t('New customer')}: ${input.value.trim()}` });
       state.rows = rows.slice(0, 50);
       state.sel = q && state.rows.length > 1 ? 1 : 0;   // a typed query lands on the first real match
       paint();
@@ -9267,11 +9410,58 @@ const RetailSystem = {
     const pick = (i) => {
       const r = state.rows[i];
       if (!r) return;
-      const sel = document.getElementById('pos-customer');
-      if (sel) sel.value = r.id == null ? '' : String(r.id);
+      if (r.isNew) { showForm(); return; }
+      this._chooseCustomerOnSale(r.id == null ? '' : String(r.id));
       close();
-      this._onCustomerChange();
     };
+    // ── the "+ New customer" form ──────────────────────────────────────────
+    const pickPane = overlay.querySelector('#cp-pick');
+    const form = overlay.querySelector('#cp-form');
+    const nameEl = overlay.querySelector('#cp-new-name');
+    const phoneEl = overlay.querySelector('#cp-new-phone');
+    const errEl = overlay.querySelector('#cp-new-err');
+    const titleEl = overlay.querySelector('#ret-cust-pick-title');
+    const showForm = () => {
+      const typed = input.value.trim();
+      const phoneLike = /^[+\d][\d\s-]{4,}$/.test(this._asciiDigits(typed));
+      nameEl.value = phoneLike ? '' : typed;
+      phoneEl.value = phoneLike ? this._asciiDigits(typed) : '';
+      errEl.textContent = '';
+      pickPane.hidden = true; form.hidden = false;
+      if (titleEl) titleEl.textContent = t('New customer');
+      nameEl.focus();
+    };
+    const hideForm = () => {
+      form.hidden = true; pickPane.hidden = false;
+      if (titleEl) titleEl.textContent = t('Choose a customer');
+      input.focus();
+    };
+    let saving = false;
+    const saveNew = async () => {
+      if (saving) return;
+      const name = nameEl.value.trim();
+      if (!name) { errEl.textContent = t('Name required'); nameEl.focus(); return; }
+      saving = true;
+      try {
+        const cu = await this._createCustomerAtTill({
+          name, phone: phoneEl.value.trim(),
+          credit: !!(overlay.querySelector('#cp-new-credit') || {}).checked,
+        });
+        this._chooseCustomerOnSale(String(cu.id));
+        close();
+      } catch (e) {
+        errEl.textContent = (e && e.message) || t('Could not save the customer.');
+        saving = false;
+      }
+    };
+    overlay.querySelector('#cp-new').addEventListener('click', showForm);
+    overlay.querySelector('#cp-new-cancel').addEventListener('click', hideForm);
+    overlay.querySelector('#cp-new-save').addEventListener('click', saveNew);
+    form.addEventListener('keydown', (ev) => {
+      const k = this._keyCode(ev);
+      if (k === 'Enter' || k === 'NumpadEnter') { ev.preventDefault(); ev.stopPropagation(); saveNew(); }
+      else if (k === 'Escape') { ev.preventDefault(); ev.stopPropagation(); hideForm(); }
+    });
     input.addEventListener('input', build);
     input.addEventListener('keydown', (ev) => {
       const k = this._keyCode(ev);
@@ -11440,6 +11630,7 @@ const RetailSystem = {
           <div class="ret-field"><label for="cm-email">${t('Email')}</label><input type="email" id="cm-email" value="${this._esc(cu.email||'')}" /></div>
         </div>
         <div class="ret-field"><label for="cm-addr">${t('Address')}</label><input id="cm-addr" value="${this._esc(cu.address||'')}" /></div>
+        ${this._customerCreditFieldsHtml(cu)}
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" id="cm-btn" onclick="RetailSystem._saveCustomer(${cu.id ? `'${this._esc(cu.id)}'` : 'null'})">${t(isEdit?'Save':'Add Customer')}</button>
@@ -11451,6 +11642,55 @@ const RetailSystem = {
     document.getElementById('cm-name')?.focus();
   },
 
+  // UI-2 item 4: credit terms in the Add/Edit Customer dialog. The backend ALREADY
+  // accepts and returns credit_mode / credit_limit (PATCH /customers/<id>; GET
+  // /customers is `c.*`), so this is a form on existing routes. They are shown
+  // ONLY to someone the server will let write them (retail.discount -- granting
+  // credit is value handed over with no matching payment, the same authority as
+  // a discount): for anyone else a PATCH carrying them would be refused whole,
+  // taking the name/phone edit down with it, so the fields are not offered.
+  // `none` is the stored default and means "no credit"; an empty/null mode (a
+  // legacy row) shows as "No credit" and is left alone unless the person changes it.
+  _canEditCustomerCredit() { return !window.SubsystemApp || SubsystemApp.hasCapability('retail.discount'); },
+
+  _customerCreditFieldsHtml(cu) {
+    if (!this._canEditCustomerCredit()) return '';
+    const mode = cu.credit_mode === 'limited' || cu.credit_mode === 'unlimited' ? cu.credit_mode : 'none';
+    const dp = this._currencyDp();
+    const step = dp > 0 ? (1 / Math.pow(10, dp)).toFixed(dp) : '1';
+    const limit = Number(cu.credit_limit) > 0 ? Number(cu.credit_limit).toFixed(dp) : '';
+    return `
+        <div class="ret-field-row">
+          <div class="ret-field"><label for="cm-credit-mode">${t('Credit')}</label>
+            <select id="cm-credit-mode" onchange="RetailSystem._syncCustomerCreditLimit()">
+              <option value="none"${mode === 'none' ? ' selected' : ''}>${t('No credit')}</option>
+              <option value="limited"${mode === 'limited' ? ' selected' : ''}>${t('Up to a limit')}</option>
+              <option value="unlimited"${mode === 'unlimited' ? ' selected' : ''}>${t('Unlimited')}</option>
+            </select></div>
+          <div class="ret-field" id="cm-limit-wrap"${mode === 'limited' ? '' : ' hidden'}><label for="cm-credit-limit">${t('Credit limit')}</label>
+            <input type="number" id="cm-credit-limit" min="0" step="${step}" inputmode="decimal" value="${limit}" /></div>
+        </div>`;
+  },
+
+  _syncCustomerCreditLimit() {
+    const mode = document.getElementById('cm-credit-mode')?.value;
+    const wrap = document.getElementById('cm-limit-wrap');
+    if (wrap) wrap.hidden = mode !== 'limited';
+  },
+
+  // The credit part of a save, or null when the dialog has no credit fields or
+  // nothing about credit changed (so an ordinary contact edit never carries them).
+  _readCustomerCredit(original) {
+    const modeEl = document.getElementById('cm-credit-mode');
+    if (!modeEl) return null;
+    const mode = modeEl.value;
+    const limit = mode === 'limited' ? (parseFloat(document.getElementById('cm-credit-limit')?.value) || 0) : 0;
+    const wasMode = original && (original.credit_mode === 'limited' || original.credit_mode === 'unlimited') ? original.credit_mode : 'none';
+    const wasLimit = original && wasMode === 'limited' ? (Number(original.credit_limit) || 0) : 0;
+    if (mode === wasMode && Math.abs(limit - wasLimit) < this._halfMinorUnit()) return null;
+    return { credit_mode: mode, credit_limit: limit };
+  },
+
   async _saveCustomer(cid) {
     const name = document.getElementById('cm-name')?.value.trim();
     if (!name) { SubsystemApp.showToast(t('Name required'),'error'); return; }
@@ -11459,10 +11699,20 @@ const RetailSystem = {
     const payload = { name, phone:document.getElementById('cm-phone')?.value||'',
                       email:document.getElementById('cm-email')?.value||'',
                       address:document.getElementById('cm-addr')?.value||'' };
+    const original = cid ? (this._customers || []).find(x => String(x.id) === String(cid)) : null;
+    const credit = this._readCustomerCredit(original);
     try {
+      // Edit: the credit terms ride the same PATCH. Add: POST /customers cannot
+      // carry them (by design), so they follow as a second PATCH on the new id.
       const d = cid
-        ? await this._patch(`/api/sub/retail/customers/${cid}`, payload)
+        ? await this._patch(`/api/sub/retail/customers/${cid}`, Object.assign(payload, credit || {}))
         : await this._post('/api/sub/retail/customers', payload);
+      if (!cid && d.status === 'success' && credit && d.data && d.data.id) {
+        const d2 = await this._patch(`/api/sub/retail/customers/${d.data.id}`, credit);
+        if (!d2 || d2.status !== 'success') {
+          SubsystemApp.showToast((d2 && d2.message) || t('Customer saved, but the credit terms could not be set.'), 'error');
+        }
+      }
       if (d.status==='success') {
         SubsystemApp.showToast(cid?'Customer updated':'Customer added','success');
         this._closeModalOverlay(document.getElementById('ret-cust-modal'));
@@ -11494,6 +11744,35 @@ const RetailSystem = {
       console.error('Customer delete failed', e);
       SubsystemApp.showToast(t('Could not delete this customer.'), 'error');
     }
+  },
+
+  // UI-2 item 4: what this customer owes, and on what terms, on the detail view
+  // (it showed spend / orders / points / phone and nothing about the money they
+  // owe), with a door to the statement that already exists (_openPartyStatement,
+  // the Receivables screen's own). The figure is the list's `credit_balance`
+  // (the server's derived balance, refreshed with the list); a settled account
+  // reads "Nothing owed" rather than a zero that could be mistaken for unknown.
+  // The statement button is offered even at zero -- the history is still there.
+  _creditTermsText(cu) {
+    if (cu.credit_mode === 'unlimited') return t('Unlimited');
+    if (cu.credit_mode === 'limited') return `${t('Up to a limit')}: ${this._fmt(Number(cu.credit_limit) || 0)}`;
+    return t('No credit');
+  },
+
+  _customerBalanceBlockHtml(cu) {
+    const bal = Number(cu.credit_balance) || 0;
+    const owes = bal > this._halfMinorUnit();
+    return `
+        <div id="cu-balance" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+             background:var(--surface-sunken);border-radius:10px;padding:12px 14px;margin-bottom:20px">
+          <div>
+            <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:4px">${t('Open balance')}</div>
+            <div style="font-size:20px;font-weight:700">${owes ? this._money(bal) : this._esc(t('Nothing owed'))}</div>
+            <div style="color:var(--text-muted);font-size:12px;margin-top:2px">${t('Credit')}: ${this._esc(this._creditTermsText(cu))}</div>
+          </div>
+          <button type="button" class="ret-btn ret-btn-ghost" id="cu-statement-btn"
+            onclick="RetailSystem._openPartyStatement('customer','${this._esc(cu.id)}')">${t('View statement')}</button>
+        </div>`;
   },
 
   // Same escaping gap as _showCustomerModal above: cu.name/cu.phone were
@@ -11533,6 +11812,7 @@ const RetailSystem = {
             <div style="color:var(--text-primary);font-size:16px;font-weight:600">${cu.phone?this._esc(cu.phone):'—'}</div>
           </div>
         </div>
+        ${this._customerBalanceBlockHtml(cu)}
         <div class="sub-chart-title" style="margin-bottom:12px">Purchase History</div>
         <div id="cu-hist-loading" style="color:var(--text-muted);text-align:center;padding:20px">Loading…</div>
       </div>`;
