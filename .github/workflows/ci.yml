@@ -18,7 +18,10 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [master, "phase9/**"]
+    # feat/** and fix/** added 2026-10-12 (review D): the real main line of work
+    # lives on feat/* branches, so push-to-branch was running no CI at all
+    # unless a PR happened to be open.
+    branches: [master, "phase9/**", "feat/**", "fix/**"]
 
 env:
   # Real test-time-only values, never real secrets -- matches
