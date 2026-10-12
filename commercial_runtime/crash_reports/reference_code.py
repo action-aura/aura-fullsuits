@@ -19,8 +19,7 @@ which report a code means.
 
 Owner has a copy of this file's logic in owner/app/crash_reports/
 reference_code.py (Owner ships separately and cannot import this package);
-owner/tests/test_crash_reports_cross_stack.py-style test
-test_crash_reports_reference_code.py keeps the two byte-for-byte in agreement.
+owner/tests/test_crash_reports_diagnostics.py keeps the two byte-for-byte in agreement.
 """
 from __future__ import annotations
 

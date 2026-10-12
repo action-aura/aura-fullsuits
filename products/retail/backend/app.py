@@ -845,11 +845,11 @@ def _send_crash_reports_now():
     """SUPPORT-1: right after a shopkeeper presses "Send diagnostics to support",
     try one send in the background instead of making them wait up to 30 minutes
     for the sender's next tick. A thread of its own so the button answers at
-    once; run_once never raises past its own handling and, if the till is
-    offline, the row simply stays queued for the normal schedule."""
+    once; run_once_now never raises past its own handling, leaves the schedule's
+    back-off alone, and if the till is offline the row simply stays queued."""
     if _crash_sender is None:
         return
-    threading.Thread(target=_crash_sender.run_once, name="crash-report-send-now", daemon=True).start()
+    threading.Thread(target=_crash_sender.run_once_now, name="crash-report-send-now", daemon=True).start()
 
 
 app.register_blueprint(make_crash_reports_blueprint(

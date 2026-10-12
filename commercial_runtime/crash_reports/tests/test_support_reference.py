@@ -27,7 +27,7 @@ def test_code_is_six_chars_from_the_unambiguous_alphabet():
 
 def test_code_is_stable_and_pinned():
     # A pinned value, not a re-derivation: Owner's copy of the function must
-    # produce exactly this too (owner test_crash_reports_reference_code.py).
+    # produce exactly this too (owner test_crash_reports_diagnostics.py).
     assert reference_code(FP) == reference_code(FP) == "26KNCT"  # derived by hand: 0x01234567>>2 = 00000 00100 10001 10100 01010 11001
 
 
@@ -47,7 +47,7 @@ def test_malformed_fingerprint_never_becomes_a_plausible_code(bad):
 EXPORT = {
     "retail_schema_version": 52, "licence": {"state": "ACTIVE_ONLINE"},
     "row_counts": {"sales": 12345, "products": 87, "customers": 3, "users": 2},
-    "sync_health": {"state": "OK"},
+    "sync_health": {"configured": True, "healthy": True, "pending_count": 3},
     "log_tail": ["GET /x for Ahmad Al-Khalidi ahmad@shop.example"],
     "platform": "Windows-11 C:\\Users\\bob\\x",
 }
@@ -64,6 +64,15 @@ def test_snapshot_is_kind_diagnostics_and_carries_only_the_whitelisted_facts():
         assert leaked not in wire
     assert re.fullmatch(r"[0-9a-f]{32}", report["fingerprint"])
     assert len(report["message"]) <= 300
+
+
+def test_sync_state_is_derived_from_the_real_health_shape():
+    def msg(health):
+        return capture.build_diagnostics_report(dict(EXPORT, sync_health=health), app_version="1", platform="W")["message"]
+    assert "sync ok pending 3" in msg({"configured": True, "healthy": True, "pending_count": 3})
+    assert "sync unhealthy pending 12k" in msg({"configured": True, "healthy": False, "pending_count": 12345})
+    assert "sync off" in msg({"configured": False})
+    assert "sync ?" in msg({"configured": True, "healthy": "yes please Ahmad"})
 
 
 def test_free_text_in_a_state_field_is_refused_not_forwarded():
@@ -178,3 +187,19 @@ def test_no_code_header_when_the_report_could_not_be_saved(tmp_path):
         assert resp.status_code == 500 and capture.REPORT_CODE_HEADER not in resp.headers
     finally:
         handle.remove()
+
+
+def test_the_on_demand_send_leaves_the_retry_schedule_alone(tmp_path):
+    class Down:
+        def send_crash_reports(self, **kw):
+            raise OSError("offline")
+
+    store = CrashStore(tmp_path / "c.db")
+    _crash(store)
+    s = _sender(store, Down())
+    base = s.interval
+    assert s.run_once_now() == "SEND_FAILED" and s.interval == base, "a button press must not push retries out"
+    assert s.run_once() == "SEND_FAILED" and s.interval == base * 2, "positive control: the scheduled run does back off"
+    s.interval = base
+    ok = _sender(store, FakeClient())
+    assert ok.run_once_now() == "SENT"

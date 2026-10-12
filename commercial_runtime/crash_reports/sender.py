@@ -164,6 +164,20 @@ class CrashReportSender:
                 return outcome
         return outcome
 
+    def run_once_now(self) -> str:
+        """One extra send attempt on demand (the shopkeeper pressed "Send
+        diagnostics"), WITHOUT touching the schedule: a failed attempt leaves
+        the back-off exactly as it was. run_once() doubles the wait on every
+        failure, so a shop pressing the button repeatedly while offline would
+        otherwise push the till's own retries out to six hours.
+        (Not locked against the loop thread: at worst both send, and Owner's
+        upsert is idempotent -- count = max(existing, incoming).)"""
+        before = self.interval
+        outcome = self.run_once()
+        if outcome != "SENT":
+            self.interval = before
+        return outcome
+
     def _send_group(self, installation_id: str, rows: list) -> str:
         reports = self._payload_for(rows)
         sent_rows = rows[:len(reports)]

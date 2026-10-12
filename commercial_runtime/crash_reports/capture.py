@@ -145,9 +145,17 @@ def build_diagnostics_report(facts: object, *, app_version: str, platform: str,
     licence = facts.get("licence") if isinstance(facts.get("licence"), dict) else {}
     sync = facts.get("sync_health") if isinstance(facts.get("sync_health"), dict) else {}
     schema = facts.get("retail_schema_version")
+    # sync_health (SyncService.get_health): {"configured": False} when sync is
+    # off, else booleans "healthy" and a pending_count. Only those three facts.
+    if sync.get("configured") is False:
+        sync_text = "off"
+    elif isinstance(sync.get("healthy"), bool):
+        sync_text = ("ok" if sync["healthy"] else "unhealthy") + " pending " + _fmt_count(sync.get("pending_count"))
+    else:
+        sync_text = "?"
     text = "snapshot v%s schema %s licence %s sync %s sales %s products %s customers %s users %s" % (
         app_version, schema if isinstance(schema, int) and not isinstance(schema, bool) else "?",
-        _state_text(licence.get("state")), _state_text(sync.get("state") or sync.get("status")),
+        _state_text(licence.get("state")), sync_text,
         _fmt_count(counts.get("sales")), _fmt_count(counts.get("products")),
         _fmt_count(counts.get("customers")), _fmt_count(counts.get("users")))
     fingerprint = hashlib.sha256(("diagnostics|" + (nonce or uuid.uuid4().hex)).encode("utf-8")).hexdigest()[:scrub.FINGERPRINT_LENGTH]
