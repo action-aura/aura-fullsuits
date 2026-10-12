@@ -9013,7 +9013,22 @@ const RetailSystem = {
         // `printer` alone, or a shop that only set up a network printer
         // would never fire this best-effort kick at all.
         const _kickCfg = this._printerCfg();
-        if (_kickCfg.autoKick && (_kickCfg.printer || _kickCfg.host)) {
+        const _hasPrinter = !!(_kickCfg.printer || _kickCfg.host);
+        if (_kickCfg.autoPrint && _hasPrinter) {
+          // PRINT-1: the receipt is printed silently (no OS dialog, Arabic
+          // drawn by the browser) and, when the shop opted into auto-kick, the
+          // drawer pulse rides in THE SAME print job, behind the cut -- so
+          // this path deliberately does NOT also fire the separate
+          // /printer/kick below (that pair was the "drawer opened before /
+          // after / twice" race). Fire-and-forget like the kick it replaces: a
+          // failure is a toast only, the receipt modal is already up, and the
+          // next sale is never blocked.
+          this._printEscPosReceipt(data.data.id, { kick: !!_kickCfg.autoKick })
+            .then(r => { if (!r.printed) this._toastPrintFailure(r.reason); })
+            .catch(e => { console.error('Silent receipt print failed:', e); this._toastPrintFailure(e && e.message); });
+        } else if (_kickCfg.autoKick && _hasPrinter) {
+          // Auto-print is off: nothing is printing a job to ride in, so the
+          // drawer still gets its own best-effort pulse, exactly as before.
           this._post('/api/sub/retail/printer/kick', {
             sale_id: data.data.id,
             printer: _kickCfg.printer,
@@ -9374,9 +9389,12 @@ const RetailSystem = {
           </div>
         </div>
         <div style="display:flex;gap:10px">
-          <button class="ret-btn ret-btn-ghost" style="flex:1" onclick="RetailSystem._printReceipt(RetailSystem._lastSaleData)"><span aria-hidden="true">${this._icon('printer', 16, '🖨️')}</span> ${t('Print')}</button>
+          <button class="ret-btn ret-btn-ghost" style="flex:1" onclick="RetailSystem._printFromModal()"><span aria-hidden="true">${this._icon('printer', 16, '🖨️')}</span> ${t('Print')}</button>
           <button class="ret-btn ret-btn-primary" style="flex:1" onclick="RetailSystem._closeModalOverlay(this)">${t('New Sale')}</button>
         </div>
+        ${(this._printerCfg().printer || this._printerCfg().host) ? `<div style="margin-top:8px;text-align:center">
+          <button type="button" class="ret-btn ret-btn-ghost" id="rcpt-retry-drawer" style="font-size:12px" onclick="RetailSystem._retryDrawer()">${t("Drawer didn't open?")}</button>
+        </div>` : ''}
         <!-- P1a item #6 ("Send on WhatsApp"): sent ON REQUEST, not
              automatically -- switching windows mid-queue is slow, per
              contract.md's own reasoning, so this never fires on its own.
@@ -9439,7 +9457,7 @@ const RetailSystem = {
         this._refocusScan(true);
       } else if (k === 'KeyP') {
         ev.preventDefault(); ev.stopPropagation();
-        this._printReceipt(this._lastSaleData);
+        this._printFromModal();
       }
     };
     document.addEventListener('keydown', onReceiptKey, true);
@@ -9553,6 +9571,73 @@ const RetailSystem = {
   // regular document printer, or a PDF printer), no ESC/POS protocol needed.
   // Every field is read directly from `saleData` (see _showReceipt's
   // docstring) -- this function does not compute or re-derive any total.
+  // PRINT-1: print one finished sale silently on the configured ESC/POS
+  // printer. receipt-model (server: what is on the paper) -> ReceiptRaster
+  // (browser canvas: Arabic shaping, 1-bit bitmap) -> print-raster (server:
+  // wrap + send, drawer pulse after the cut when `kick`). Resolves
+  // {printed, kicked, reason}; THROWS only for a broken pipeline (model fetch
+  // failed, canvas error) -- callers treat both as "toast, never block".
+  async _printEscPosReceipt(saleId, opts) {
+    const cfg = this._printerCfg();
+    const widthDots = cfg.paperWidth === '58mm' ? 384 : 576;
+    // Only used by the server when the shop's receipt language is 'auto'.
+    const lang = (window.AuraI18n && AuraI18n.current === 'ar') ? 'ar' : 'en';
+    const m = await this._get('/api/sub/retail/printer/receipt-model?sale_id=' + encodeURIComponent(saleId)
+      + '&width_dots=' + widthDots + '&lang=' + lang);
+    if (!m || m.status !== 'success') throw new Error((m && m.message) || 'Could not build the receipt');
+    if (!window.ReceiptRaster) throw new Error('Receipt renderer is not loaded');
+    const img = await window.ReceiptRaster.render(m.data);
+    const r = await this._post('/api/sub/retail/printer/print-raster', {
+      sale_id: saleId, bitmap_b64: img.bitmap_b64, width_dots: img.width_dots, height: img.height,
+      printer: cfg.printer, host: cfg.host, port: cfg.port,
+      qr_payload: img.qr_payload, cut: true, kick: !!(opts && opts.kick),
+    });
+    if (!r || r.status !== 'success') throw new Error((r && r.message) || 'Print failed');
+    return r.data;
+  },
+
+  _toastPrintFailure(reason) {
+    SubsystemApp.showToast(t('Receipt did not print') + (reason ? ': ' + reason : ''), 'error');
+  },
+
+  // The receipt modal's Print button (and its P key). With an ESC/POS printer
+  // configured it prints silently through the raster path -- WITHOUT the
+  // drawer (a reprint must never pop the till). Without one, or when the
+  // silent print reports it did not print, it falls back to today's browser
+  // print dialog: the cashier pressed Print and wants paper.
+  async _printFromModal() {
+    const sale = this._lastSaleData;
+    const cfg = this._printerCfg();
+    if (sale && sale.id && (cfg.printer || cfg.host)) {
+      try {
+        const r = await this._printEscPosReceipt(sale.id, { kick: false });
+        if (r.printed) return;
+        this._toastPrintFailure(r.reason);
+      } catch (e) {
+        console.error('Silent receipt print failed:', e);
+        this._toastPrintFailure(e && e.message);
+      }
+    }
+    return this._printReceipt(sale);
+  },
+
+  // "Drawer didn't open?" -- the retry for the pulse that rode in the print
+  // job. Same server-decided rule as the original kick (cash only).
+  async _retryDrawer() {
+    const sale = this._lastSaleData;
+    const cfg = this._printerCfg();
+    if (!sale || !sale.id) return;
+    try {
+      const r = await this._post('/api/sub/retail/printer/kick', {
+        sale_id: sale.id, printer: cfg.printer, host: cfg.host, port: cfg.port });
+      const d = (r && r.data) || {};
+      if (d.kicked) SubsystemApp.showToast(t('Drawer opened'), 'success');
+      else SubsystemApp.showToast(d.reason || (r && r.message) || t('Drawer did not open'), 'error');
+    } catch (e) {
+      SubsystemApp.showToast(t('Drawer did not open'), 'error');
+    }
+  },
+
   _printerCfg() {
     // `autoKick` (retail-hardware-viewports): whether a completed CASH sale
     // should fire a best-effort POST /printer/kick from _checkout() below.
@@ -9565,8 +9650,10 @@ const RetailSystem = {
     // own SELECTION RULE docstrings in retail_api.py. `port` defaults to
     // 9100, the de facto standard nearly every network receipt printer
     // listens on, matching escpos_transport.send_to_network's own default.
-    try { return Object.assign({ paperWidth: '80mm', autoKick: false, host: '', port: 9100 }, JSON.parse(localStorage.getItem('aura_printer_cfg') || '{}')); }
-    catch (e) { return { paperWidth: '80mm', autoKick: false, host: '', port: 9100 }; }
+    // `autoPrint` (PRINT-1): print the receipt silently after every sale on
+    // the configured ESC/POS printer. Default OFF, same rule as autoKick.
+    try { return Object.assign({ paperWidth: '80mm', autoKick: false, autoPrint: false, host: '', port: 9100 }, JSON.parse(localStorage.getItem('aura_printer_cfg') || '{}')); }
+    catch (e) { return { paperWidth: '80mm', autoKick: false, autoPrint: false, host: '', port: 9100 }; }
   },
   savePrinterCfg(cfg) { try { localStorage.setItem('aura_printer_cfg', JSON.stringify(cfg)); } catch (e) {} },
 
@@ -18362,6 +18449,13 @@ const RetailSystem = {
                  are touchscreens with no pointer at all, and a checkbox
                  that is only tall enough is one a cashier misses in a
                  queue, same as any other control on this screen. -->
+            <!-- PRINT-1: silent receipt after every sale (no OS dialog, Arabic
+                 drawn correctly, the drawer pulse in the same job when the
+                 option below is on). Default OFF like every new behaviour. -->
+            <div class="ret-field" style="display:flex;align-items:center;gap:8px;margin-top:12px">
+              <input type="checkbox" id="pr-auto-print" ${this._printerCfg().autoPrint ? 'checked' : ''} style="min-inline-size:var(--touch-target-min, 44px);min-block-size:var(--touch-target-min, 44px)" />
+              <label for="pr-auto-print" style="margin:0;text-transform:none;font-size:13px;color:var(--text-primary)">${this._esc(t('Print receipt automatically after each sale'))}</label>
+            </div>
             <div class="ret-field" style="display:flex;align-items:center;gap:8px;margin-top:12px">
               <input type="checkbox" id="pr-auto-kick" ${this._printerCfg().autoKick ? 'checked' : ''} style="min-inline-size:var(--touch-target-min, 44px);min-block-size:var(--touch-target-min, 44px)" />
               <label for="pr-auto-kick" style="margin:0;text-transform:none;font-size:13px;color:var(--text-primary)">${this._esc(t('Open the drawer automatically on a cash sale'))}</label>
@@ -18497,6 +18591,8 @@ const RetailSystem = {
     // this SAME blob (see _printerCfg's own comment) -- same reasoning as
     // `device` above, or a Save here would silently turn it back off.
     const autoKick = has('pr-auto-kick') ? !!document.getElementById('pr-auto-kick').checked : !!stored.autoKick;
+    // PRINT-1: same blob, same keep-what-is-stored rule when the field is hidden.
+    const autoPrint = has('pr-auto-print') ? !!document.getElementById('pr-auto-print').checked : !!stored.autoPrint;
     // retail-hardware-viewports: the network printer host/port live in this
     // SAME blob (see _printerCfg's own comment) -- same reasoning as
     // `device`/`autoKick` above, or a Save here would silently erase them.
@@ -18506,7 +18602,7 @@ const RetailSystem = {
     const host = has('pr-host') ? (document.getElementById('pr-host').value || '').trim() : (stored.host || '');
     const portRaw = has('pr-port') ? +(document.getElementById('pr-port').value) : +(stored.port);
     const port = (Number.isInteger(portRaw) && portRaw >= 1 && portRaw <= 65535) ? portRaw : 9100;
-    this.savePrinterCfg({ paperWidth: width, printer: device, autoKick, host, port });
+    this.savePrinterCfg({ paperWidth: width, printer: device, autoKick, autoPrint, host, port });
     SubsystemApp.showToast(t('Printer settings saved'), 'success');
     // The Settings hub's one Save bar reads this (it is a device-local save:
     // localStorage, no server round trip, so it cannot be refused).
@@ -18601,6 +18697,11 @@ const RetailSystem = {
         host: host || null,
         port,
         kick: !!kick,
+        // PRINT-1: the "Open Cash Drawer" test used to render and print a whole
+        // sample receipt WITH the pulse behind it (verified: printer_test's
+        // kick=True only appended the pulse to render_receipt's output). A
+        // drawer test must send the pulse and nothing else.
+        drawer_only: !!kick,
         paper_width: paperWidth,
       });
       if (resp && resp.status === 'success') {

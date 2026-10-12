@@ -7690,3 +7690,25 @@ list (review finding F7; confirmed inside the built APK).
 * Pruning of the secondary folder only touches our own `-auto` files there; a full USB stick is reported as
   "copy failed", not retried sooner than the next business day.
 * No Android device was available: Save/Share UI is proven by compile + source-contract tests, not on hardware.
+
+* **2026-10-12 -- PRINT-1 (silent Arabic receipts, drawer kick in the same job) -- no schema claim** (branch
+  `feat/print-desktop`; no `RETAIL_SCHEMA_VERSION` bump, settings stay in the client-side `aura_printer_cfg`).
+  BUILT: `core/retail/escpos_raster.py` (GS v 0 bands of <=255 rows + native QR + partial cut + drawer pulse AFTER the
+  cut, one job), `core/retail/receipt_model.py` + `GET /printer/receipt-model` (the receipt as layout data from the stored
+  sale), `POST /printer/print-raster` (cash-only drawer rule shared with `/printer/kick` via `_drawer_refusal`; host wins;
+  1 MiB cap; audit RECEIPT_PRINTED / CASH_DRAWER_KICKED), `frontend/receipt-raster.js` (canvas, shipped Arabic font,
+  1-bit pack), the sale path (`autoPrint` -> silent print, kick rides in the same job; the separate `/printer/kick` stays
+  only for auto-kick WITHOUT auto-print and for the "Drawer didn't open?" button), the modal Print button, a Settings
+  "Print receipt automatically after each sale" option (default OFF), and the Settings "Open Cash Drawer" test now sends ONLY
+  the pulse (it used to print a whole sample receipt). Proven: unit + route tests with mutation proofs, and the real
+  artefact -- the app run from source, a cash sale rung through the UI, the TCP bytes decoded back to a picture (Arabic
+  joined and right-to-left, amounts at 3 decimals, kick bytes after the cut in the same job).
+  NOT BUILT: the "no-sale drawer open" capability (`retail.drawer.open`, audit `CASH_DRAWER_OPENED_NO_SALE`); the GDI /
+  WebView2 fallback for printers with no ESC/POS; the shop logo on the raster receipt; the e-invoice QR prints natively
+  AFTER the footer rather than inline; Android is untouched (its own printing is a separate item).
+  NOT PROVEN: no physical printer has received these bytes yet -- band size, density, partial-cut feed and the pulse width
+  are pinned by tests but a thermal head and a real drawer have not been asked. The restricted-licence reprint path
+  (`retail.records.read` on the allowlist) is by construction, not exercised with a lapsed licence.
+  OWED: a native Arabic reader must review the five new strings in `locales/ar.json` (auto-print option, "Receipt did not
+  print", "Drawer didn't open?", "Drawer opened", "Drawer did not open") and the receipt labels in
+  `receipt_model.AR_LABELS` (inherited from the existing catalogue, not re-reviewed).

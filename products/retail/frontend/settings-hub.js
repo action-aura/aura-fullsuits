@@ -160,7 +160,7 @@
     // button of its own.
     printer: {
       section: 'hardware',
-      fields: ['pr-width', 'pr-device', 'pr-host', 'pr-port', 'pr-auto-kick'],
+      fields: ['pr-width', 'pr-device', 'pr-host', 'pr-port', 'pr-auto-kick', 'pr-auto-print'],
       save: async () => !!R()._savePrinterSettings(),
     },
   };

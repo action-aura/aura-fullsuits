@@ -232,6 +232,22 @@ def test_kick_true_ends_with_drawer_kick_bytes(admin):
     assert payload.endswith(escpos_receipt.drawer_kick()), payload
 
 
+def test_drawer_only_sends_just_the_pulse_not_a_sample_receipt(admin):
+    """PRINT-1: Settings "Open Cash Drawer" used to print a whole sample receipt
+    (kick=True alone appends the pulse to render_receipt's output). With
+    drawer_only the file holds EXACTLY the pulse. Both directions: drawer_only
+    absent keeps the receipt (guarded by the test above), and a plain test
+    print (kick=False) ignores drawer_only so it can never be a silent no-op.
+    """
+    client, _ = admin
+    r = client.post('/api/sub/retail/printer/test', json={'printer': None, 'kick': True, 'drawer_only': True})
+    assert r.status_code == 200, r.get_json()
+    payload = Path(r.get_json()['data']['file']).read_bytes()
+    assert payload == escpos_receipt.drawer_kick(), payload
+    r2 = client.post('/api/sub/retail/printer/test', json={'printer': None, 'kick': False, 'drawer_only': True})
+    assert len(Path(r2.get_json()['data']['file']).read_bytes()) > len(escpos_receipt.drawer_kick())
+
+
 def test_unknown_printer_name_returns_a_readable_error_not_a_traceback(admin):
     client, _ = admin
     r = client.post('/api/sub/retail/printer/test', json={

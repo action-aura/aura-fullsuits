@@ -114,6 +114,17 @@ def drawer_kick(pin: int = 0, on_ms: int = 50, off_ms: int = 200) -> bytes:
     return ESC + b"p" + bytes([m, t1, t2])
 
 
+def partial_cut() -> bytes:
+    """`GS V 66 3` -- feed to the cut position and PARTIAL cut (see the module
+    docstring's "CUT STYLE" section for why partial, not full).
+
+    Its own function (it used to be an inline literal in `render_receipt`) so
+    the raster receipt path (`escpos_raster.wrap_raster`) ends its job with
+    the SAME cut bytes instead of a second hand-typed copy that could drift.
+    """
+    return GS + b"V" + bytes([0x42, 0x03])
+
+
 def _ascii(text: str) -> bytes:
     """Encode `text` for the printer's Latin/ASCII code page.
 
@@ -357,7 +368,7 @@ def render_receipt(
 
     # Feed to the cut position and PARTIAL cut (function 66/'B') -- see
     # module docstring's "CUT STYLE" section for why partial, not full.
-    out += GS + b"V" + bytes([0x42, 0x03])
+    out += partial_cut()
 
     if kick:
         out += drawer_kick()
