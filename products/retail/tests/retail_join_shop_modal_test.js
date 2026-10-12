@@ -364,7 +364,7 @@ function loadApp(opts) {
   vm.createContext(sandbox);
   vm.runInContext(shellCode, sandbox, { filename: SHELL_FILE });
   assert.ok(sandbox.SubsystemApp, 'app-shell.js did not expose window.SubsystemApp');
-  return { SubsystemApp: sandbox.SubsystemApp, doc, calls: fetchFn.calls };
+  return { SubsystemApp: sandbox.SubsystemApp, doc, calls: fetchFn.calls, sandbox };
 }
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -474,7 +474,7 @@ async function testToggleBackRestoresSetupForm() {
   await ctx.SubsystemApp._toggleJoinMode({ preventDefault() {} });
   await ctx.SubsystemApp._toggleJoinMode({ preventDefault() {} }); // back
 
-  assert.strictEqual(ctx.doc.getElementById('su-title').textContent, 'Welcome to Action Aura');
+  assert.strictEqual(ctx.doc.getElementById('su-title').textContent, 'Welcome to Aura Retail');
   assert.strictEqual(ctx.doc.getElementById('su-btn').getAttribute('onclick'), 'SubsystemApp._setupSubmit()');
   assert.strictEqual(ctx.doc.getElementById('su-join-link').textContent,
     'Already have a shop? Join it with your licence key');
@@ -482,6 +482,52 @@ async function testToggleBackRestoresSetupForm() {
   assert.ok(setupOnly.every((el) => el.style.display !== 'none'),
     'A setup-only field stayed hidden after toggling back out of join mode.');
   console.log('PASS: toggling back out of join mode restores the ordinary setup form');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (4b) UI-1: EN | ع on the create-account form must not eat what was typed.
+//      Switching language re-runs init() -> showSetupModal(), which rebuilds
+//      the form; every field (both passwords too) came back empty.
+//      Both directions: fresh snapshot -> restored; stale or absent -> not.
+//      [MUTATION-PROVED: drop the restore loop in showSetupModal -> RED]
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function testLanguageToggleKeepsTypedValues() {
+  const ctx = loadApp({ routes: { 'GET /api/licensing/status': () => NEEDS_KEY_LIC } });
+  let toggles = 0;
+  ctx.sandbox.AuraI18n = { toggle() { toggles += 1; } };   // the real one re-runs init() -> showSetupModal()
+  await ctx.SubsystemApp.showSetupModal();
+  const typed = { 'su-name': 'Haya Nasser', 'su-company': 'Nasser Mart', 'su-email': 'haya@example.com',
+    'su-key': 'AURA-RETAIL-AAAA', 'su-pass': 'secret-1', 'su-pass2': 'secret-1' };
+  Object.keys(typed).forEach((id) => { ctx.doc.getElementById(id).value = typed[id]; });
+
+  ctx.SubsystemApp._toggleSetupLang();
+  assert.strictEqual(toggles, 1, 'EN | ع did not switch the language at all');
+  ctx.doc.body.children.length = 0;                        // the old form is gone, as after a real re-render
+  await ctx.SubsystemApp.showSetupModal();
+  for (const id of Object.keys(typed)) {
+    assert.strictEqual(ctx.doc.getElementById(id).value, typed[id], `${id} was not carried across the language switch`);
+  }
+
+  // Consumed once: a later, unrelated first run starts empty.
+  ctx.doc.body.children.length = 0;
+  await ctx.SubsystemApp.showSetupModal();
+  assert.strictEqual(ctx.doc.getElementById('su-name').value, '', 'the carried values leaked into a second render');
+
+  // A stale snapshot is not restored.
+  ctx.doc.getElementById('su-name').value = 'Old Typing';
+  ctx.SubsystemApp._toggleSetupLang();
+  ctx.SubsystemApp._setupCarry.at -= ctx.SubsystemApp.SETUP_CARRY_MAX_AGE_MS + 1000;
+  ctx.doc.body.children.length = 0;
+  await ctx.SubsystemApp.showSetupModal();
+  assert.strictEqual(ctx.doc.getElementById('su-name').value, '', 'a stale snapshot was restored');
+
+  // Nothing typed -> nothing carried (no empty-string shuffling, no throw).
+  ctx.doc.body.children.length = 0;
+  await ctx.SubsystemApp.showSetupModal();
+  ctx.SubsystemApp._toggleSetupLang();
+  assert.strictEqual(ctx.SubsystemApp._setupCarry, null, 'an empty form produced a carry snapshot');
+  console.log('PASS: EN | ع keeps what was typed on the create-account form (fresh only, once only)');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -662,7 +708,7 @@ async function testCheckAuthAndSetupShowsSetupModalWhenUnactivated() {
   await ctx.SubsystemApp.checkAuthAndSetup();
   await settle();
   const title = ctx.doc.getElementById('su-title');
-  assert.ok(title && title.textContent === 'Welcome to Action Aura',
+  assert.ok(title && title.textContent === 'Welcome to Aura Retail',
     `Expected the ordinary setup modal for an unactivated device, got: ${title && title.textContent}`);
   assert.ok(ctx.doc.getElementById('su-join-link'), 'The join link is missing even though this device still needs a key.');
   ctx.SubsystemApp._stopWaitForShopAccountPoll();
@@ -690,7 +736,7 @@ async function testCheckAuthAndSetupShowsSetupModalWhenNoOwnerWired() {
     await ctx.SubsystemApp.checkAuthAndSetup();
     await settle();
     const title = ctx.doc.getElementById('su-title');
-    assert.ok(title && title.textContent === 'Welcome to Action Aura',
+    assert.ok(title && title.textContent === 'Welcome to Aura Retail',
       `Expected the ordinary setup modal on a build with no Owner wired up, got: ${title && title.textContent}`);
     assert.ok(!ctx.doc.getElementById('su-join-link'), 'The join link rendered on a build that has no shop to join.');
   } finally {
@@ -715,7 +761,7 @@ async function testCheckAuthAndSetupShowsSetupModalWhilePendingApproval() {
     await ctx.SubsystemApp.checkAuthAndSetup();
     await settle();
     const title = ctx.doc.getElementById('su-title');
-    assert.ok(title && title.textContent === 'Welcome to Action Aura',
+    assert.ok(title && title.textContent === 'Welcome to Aura Retail',
       `Expected the ordinary setup modal while activation is pending approval, got: ${title && title.textContent}`);
   } finally {
     ctx.SubsystemApp._stopWaitForShopAccountPoll();
@@ -763,7 +809,7 @@ async function testInitShowsSetupModalWhenUnactivated() {
     await ctx.SubsystemApp.init();
     await settle();
     const title = ctx.doc.getElementById('su-title');
-    assert.ok(title && title.textContent === 'Welcome to Action Aura',
+    assert.ok(title && title.textContent === 'Welcome to Aura Retail',
       `Expected init() to open the ordinary setup modal on an unactivated device, got: ${title && title.textContent}`);
   } finally {
     ctx.SubsystemApp._stopWaitForShopAccountPoll();
@@ -861,6 +907,7 @@ const CHECKS = [
   ['join link absent when no Owner is wired up', testJoinLinkAbsentWhenNoOwnerWired],
   ['toggling join mode hides fields and rewires the button', () => testToggleJoinModeHidesFieldsAndRewiresButton()],
   ['toggling back restores the ordinary setup form', testToggleBackRestoresSetupForm],
+  ['EN | ع keeps what was typed on the create-account form', testLanguageToggleKeepsTypedValues],
   ['_joinSubmit success posts only activate and renders connected', testJoinSubmitSuccessPostsOnlyActivateAndRendersConnected],
   ['_joinSubmit no-create-admin check is mutation-proved', testJoinSubmitNoCreateAdminCallIsMutationProved],
   ['wait screen offers first-device immediately (mutation-proved)', testWaitScreenOffersFirstDeviceImmediatelyMutationProved],

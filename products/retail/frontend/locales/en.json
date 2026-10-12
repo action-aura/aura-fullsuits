@@ -2731,5 +2731,8 @@
   "The licensing service is temporarily unavailable, so this key has not been checked yet. Your account is saved — please try again shortly.": "The licensing service is temporarily unavailable, so this key has not been checked yet. Your account is saved — please try again shortly.",
   "Action Aura approved this activation, but this computer could not verify the signed licence it received, so it has not been applied yet. Your license key is not the problem — do not replace it, and re-entering it cannot help. Please contact support and quote this code: {code}.": "Action Aura approved this activation, but this computer could not verify the signed licence it received, so it has not been applied yet. Your license key is not the problem — do not replace it, and re-entering it cannot help. Please contact support and quote this code: {code}.",
   "e.g. SKU-001": "e.g. SKU-001",
-  "Items from": "Items from"
+  "Items from": "Items from",
+  "transaction": "transaction",
+  "E-invoicing is off, which is optional for now": "E-invoicing is off, which is optional for now",
+  "This computer will stop being licensed. To use Aura Retail on it again you will need to enter a license key. Your sales and records are not deleted.": "This computer will stop being licensed. To use Aura Retail on it again you will need to enter a license key. Your sales and records are not deleted."
 }

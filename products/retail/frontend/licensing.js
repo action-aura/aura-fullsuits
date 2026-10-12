@@ -903,7 +903,7 @@
   // a plain date; the raw values that support may ask for live in a collapsed
   // "Technical details" block instead of being deleted.
   const PRODUCT_NAMES = {
-    AURA_RETAIL: 'Aura Shop',
+    AURA_RETAIL: 'Aura Retail',   // was 'Aura Shop': the owner's name for the product is Aura Retail
     AURA_CLINIC: 'Aura Clinic',
   };
 
@@ -912,6 +912,9 @@
     // catalogue already says "Aura" inside Arabic sentences), so it is not a
     // translation key: a catalogue entry "Aura" -> "Aura" would be the
     // byte-identical, untranslated pair the parity test exists to refuse.
+    // Retail is the bare Latin brand (no catalogue key, per the note above);
+    // the other products keep going through t().
+    if (code === 'AURA_RETAIL') return PRODUCT_NAMES[code];
     return PRODUCT_NAMES[code] ? t(PRODUCT_NAMES[code]) : 'Aura';
   }
 
@@ -1013,7 +1016,7 @@
   async function onDeactivateClicked() {
     const ok = await confirmDialog({
       title: t('Deactivate this computer?'),
-      message: t('This computer will stop being licensed. To use Aura Shop on it again you will need to enter a license key. Your sales and records are not deleted.'),
+      message: t('This computer will stop being licensed. To use Aura Retail on it again you will need to enter a license key. Your sales and records are not deleted.'),
       confirmLabel: t('Deactivate'),
       danger: true,
     });

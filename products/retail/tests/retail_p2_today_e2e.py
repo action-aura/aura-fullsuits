@@ -208,6 +208,28 @@ def main():
         page.on("response", lambda r: PROBLEMS.append(f"HTTP {r.status} {r.url}") if r.status >= 500 else None)
 
         seed(page)
+
+        # UI-1 (review A #9): a brand-new shop has never switched e-invoicing on,
+        # so the server's tax card says reason 'switched_off'. The owner must see
+        # ONE calm line ("optional for now", the checklist's own words), not a
+        # "Needs attention" card. Checked in the real browser BEFORE the shop
+        # switches it on below -- after that the card is genuinely wanted.
+        def fresh_einvoicing_is_quiet():
+            d0 = kinds_from_server(page)
+            tax0 = [c for c in d0.get("cards", []) if c["kind"] == "tax"]
+            assert tax0 and (tax0[0].get("extra") or {}).get("reason") == "switched_off", (
+                f"harness: a fresh shop should open the tax card with reason switched_off, got {tax0}")
+            B.go(page, "dashboard", 1800)
+            page.wait_for_selector(".td-hero", timeout=15000)
+            assert page.locator(".td-card[data-kind='tax']").count() == 0, "a switched-off e-invoicing is drawn as a card"
+            clear = page.locator(".td-card[data-kind='all_clear']").inner_text()
+            assert "optional for now" in clear, f"no calm optional line in All clear: {clear!r}"
+        check("a fresh shop (e-invoicing never switched on) gets a calm line, not a tax card", fresh_einvoicing_is_quiet)
+
+        # From here on the shop HAS switched e-invoicing on (regime jordan, no provider wired:
+        # reason not_connected), which is the state the card verbs are for.
+        st, r = api(page, "POST", "/api/einvoicing/settings", {"tax_regime": "jordan", "enabled": "1"})
+        assert st == 200, f"could not switch e-invoicing on for the harness: {st} {r}"
         data = kinds_from_server(page)
         kinds = [c["kind"] for c in data.get("cards", [])]
         print(f"server cards: {kinds}; aura_did: {[a['kind'] for a in data.get('aura_did', [])]}; all_clear: {[a['kind'] for a in data.get('all_clear', [])]}", flush=True)

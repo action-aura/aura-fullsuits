@@ -2233,7 +2233,7 @@ const SubsystemApp = {
     overlay.className = 'auth-overlay';
     overlay.innerHTML = `
       <div class="auth-card">
-        <button onclick="AuraI18n.toggle()" title="Language / اللغة" class="auth-lang-btn">EN | ع</button>
+        <button onclick="SubsystemApp._toggleSetupLang()" title="Language / اللغة" class="auth-lang-btn">EN | ع</button>
         <div class="auth-head">
           <!-- Guarded on the METHOD, not on the module: window.AuraIcons
                alone is truthy for a partially-loaded or older icons.js, and
@@ -2246,7 +2246,11 @@ const SubsystemApp = {
                template literal -- it ends the literal, which is how this
                very comment first broke the whole file. -->
           <div class="auth-icon">${window.AuraIcons && AuraIcons.mark ? AuraIcons.mark(40) : ''}</div>
-          <h2 class="auth-title" id="su-title">${t('Welcome to Action Aura')}</h2>
+          <!-- One product name for the shop owner: "Aura Retail" (the owner's own
+               decision). This heading said "Action Aura" -- the COMPANY name --
+               while the sign-in screen said "Aura Retail" and the licence page
+               "Aura Shop", so the first three screens named three products. -->
+          <h2 class="auth-title" id="su-title">${t('Welcome to Aura Retail')}</h2>
           <p class="auth-sub" id="su-sub">${t('Create your administrator account to get started.')}</p>
           <!-- Translated. This is the FIRST screen a fresh install shows, and
                it was the only auth surface still hard-coded to English while
@@ -2300,7 +2304,51 @@ const SubsystemApp = {
         <p class="auth-foot">${t('Your data is stored locally on this device. No cloud required.')}</p>
       </div>`;
     document.body.appendChild(overlay);
-    setTimeout(() => document.getElementById('su-name')?.focus(), 150);
+    // Put back what the owner had typed before pressing EN | ع (see
+    // _toggleSetupLang). Consumed exactly once, and only if it is fresh, so a
+    // stale snapshot can never leak into a later, unrelated first run.
+    const carry = this._setupCarry;
+    this._setupCarry = null;
+    let restored = false;
+    if (carry && Date.now() - carry.at < this.SETUP_CARRY_MAX_AGE_MS) {
+      Object.keys(carry.values).forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) { el.value = carry.values[id]; restored = true; }
+      });
+    }
+    // Focus the first EMPTY field when we restored something, so the owner
+    // carries on typing where they stopped instead of at "Full name" again.
+    setTimeout(() => {
+      const order = ['su-name', 'su-company', 'su-email', 'su-key', 'su-pass', 'su-pass2'];
+      const target = restored
+        ? order.map((id) => document.getElementById(id)).find((el) => el && !el.value)
+        : document.getElementById('su-name');
+      (target || document.getElementById('su-name'))?.focus();
+    }, 150);
+  },
+
+  // EN | ع on the create-account form. Switching language re-runs init() ->
+  // showSetupModal(), which rebuilds the form from scratch: everything the
+  // owner had typed (name, company, email, key, BOTH passwords) was silently
+  // discarded -- on the very first screen of the product, where the owner is
+  // least able to tell why it happened. Snapshot the fields, let the language
+  // switch run its normal rebuild, and showSetupModal() puts the values back.
+  // The same "carry across a re-render" idea settings-hub.js uses for its
+  // sections. Held in memory only (never localStorage): passwords are in it.
+  SETUP_CARRY_MAX_AGE_MS: 15000,
+  SETUP_CARRY_FIELDS: ['su-name', 'su-company', 'su-email', 'su-key', 'su-pass', 'su-pass2'],
+  _setupCarry: null,
+  _snapshotSetupFields() {
+    const values = {};
+    this.SETUP_CARRY_FIELDS.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && el.value) values[id] = el.value;
+    });
+    return Object.keys(values).length ? { at: Date.now(), values } : null;
+  },
+  _toggleSetupLang() {
+    this._setupCarry = this._snapshotSetupFields();
+    AuraI18n.toggle();
   },
 
   async _setupSubmit() {
