@@ -63,6 +63,8 @@ RETRY_AFTER_FAILURE = timedelta(hours=1)
 #: (a broken zone setting), a backup this old is always due.
 MAX_AGE = timedelta(hours=24)
 TICK_SECONDS = 15 * 60
+#: The timer thread's name (see _arm for why it must have one).
+THREAD_NAME = "aura-backup-scheduler"
 FIRST_TICK_DELAY_SECONDS = 5 * 60
 
 _NAME_RE = re.compile(
@@ -450,6 +452,12 @@ class BackupScheduler:
     def _arm(self, delay: float) -> None:
         timer = self._timer_factory(delay, self._run_tick)
         timer.daemon = True
+        # A NAME, not the default "Thread-N": process-level checks (the
+        # e-invoicing "no worker started" regression test enumerates every
+        # live thread) must be able to tell this timer from a worker that
+        # should not exist. Measured 2026-10-12: unnamed, it read as
+        # 'Thread-1' and failed that test for a reason unrelated to it.
+        timer.name = THREAD_NAME
         self._timer = timer
         timer.start()
 

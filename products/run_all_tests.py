@@ -410,6 +410,12 @@ def _child_test_env():
     """
     env = dict(os.environ)
     env.setdefault('AURA_SITE_RELAY_ENABLED', '0')
+    # Same idea for the BACKUP-1 daily backup timer (2026-10-12): it arms on
+    # every boot by design, so every in-process test app would carry a live
+    # timer thread and take a real backup 5 minutes in. Off by default for
+    # children; retail_backup_scheduler_boot_test.py sets it explicitly to
+    # prove a normal boot arms it.
+    env.setdefault('AURA_BACKUP_SCHEDULER', '0')
     # Measured 2026-10-07: a developer shell that points at the lab
     # (AURA_SYNC_RELAY_URL=http://127.0.0.1:5551, AURA_OWNER_LICENSING_URL)
     # leaked both into every child, and two files failed for that reason

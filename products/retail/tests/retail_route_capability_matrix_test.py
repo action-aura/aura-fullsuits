@@ -195,6 +195,11 @@ EXPECTED_MUTATION_CAPABILITIES = {
     # would mean the drawer never opens for the cashier it exists for. See
     # printer_kick's own docstring in retail_api.py for the full reasoning.
     'printer_kick': CAP_SELL,
+    # PRINT-1 (2026-10-12): the silent receipt print. It rides the SAME sale
+    # moment as printer_kick (and carries the drawer pulse in the same job,
+    # under printer_kick's own cash-only rule), so it needs the same authority:
+    # the cashier who rang the sale, not Settings administration.
+    'printer_print_raster': CAP_SELL,
     # P1a "Send on WhatsApp" (retail-hardware-viewports) -- share_log is an
     # audit INSERT, not a business mutation (no sale/customer data is
     # touched; the wa.me share it records already happened client-side), so
@@ -596,6 +601,9 @@ EXPECTED_READ_CAPABILITIES = {
     # reasoning in EXPECTED_MUTATION_CAPABILITIES above, not the Settings-
     # screen hardware administration those two GETs gate.
     'printer_receipt_payload': CAP_SELL,
+    # PRINT-1 (2026-10-12): the receipt LAYOUT the till rasterises -- the same
+    # data as printer_receipt_payload in a drawable shape, so the same gate.
+    'printer_receipt_model': CAP_SELL,
 
     # ── Diagnostics export (retail-hardware-viewports) ────────────────────────
     # `diagnostics_export` (GET /diagnostics/export) builds a support bundle

@@ -877,6 +877,18 @@ def _start_backup_scheduler():
     scheduler must not stop a till booting. No-op on Android."""
     if _backup_scheduler is None:
         return
+    # AURA_BACKUP_SCHEDULER=0 is the operator/test kill switch, the same shape
+    # as AURA_SITE_RELAY_ENABLED=0. Unlike updates and crash reports (no-ops
+    # without an Owner URL), the backup timer arms on EVERY boot by design --
+    # so every in-process test app armed a real timer thread, and a process-
+    # level thread check (retail_einvoicing_regression_test) failed on it
+    # (measured 2026-10-12). run_all_tests.py defaults it off for children;
+    # retail_backup_scheduler_boot_test.py proves a normal boot still arms it.
+    # Logged, so "never started" is never silent.
+    if os.environ.get('AURA_BACKUP_SCHEDULER', '').strip() == '0':
+        logging.getLogger(__name__).info(
+            'Backup scheduler NOT started: AURA_BACKUP_SCHEDULER=0.')
+        return
     try:
         _backup_scheduler.start()
     except Exception:

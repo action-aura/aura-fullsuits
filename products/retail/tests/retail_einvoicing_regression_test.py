@@ -55,8 +55,12 @@ DATA = Path(tempfile.mkdtemp(prefix="aura_retail_einvoice_regression_"))
 # thing it exists to catch), and it would leave a regression test opening a
 # network listener on the machine running it. Turning the relay off keeps the
 # baseline strict AND stops the test binding a port.
+#
+# AURA_BACKUP_SCHEDULER="0" (2026-10-12), same reasoning: BACKUP-1 arms a
+# daily backup timer on every boot, which this process-level thread check saw
+# as an unexpected 'Thread-1'. Off here, BASELINE_THREAD_NAMES stays strict.
 os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA),
-                  AURA_SITE_RELAY_ENABLED="0")
+                  AURA_SITE_RELAY_ENABLED="0", AURA_BACKUP_SCHEDULER="0")
 os.environ.pop("AURA_DEV", None)
 
 from commercial_runtime.licensing_contracts.test_support import seed_active_license  # noqa: E402
