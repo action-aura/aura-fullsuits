@@ -293,6 +293,29 @@ interface AuraApi {
     @GET("api/sub/retail/cash-sessions/current")
     suspend fun currentCashSession(): CurrentCashSessionResponse
 
+    // ANDROID-2a: the whole drawer, the desktop's own routes (see CashSessions.kt). The same
+    // "current" URL as above, typed - the untyped one stays for the supplier-payment default.
+    @GET("api/sub/retail/cash-sessions/current")
+    suspend fun currentCashSessionFull(): CurrentCashSessionFull
+
+    @POST("api/sub/retail/cash-sessions/open")
+    suspend fun openCashSession(@Body body: OpenCashSessionRequest): CashSessionResponse
+
+    @GET("api/sub/retail/cash-sessions")
+    suspend fun cashSessions(@Query("limit") limit: Int = 20): CashSessionListResponse
+
+    @POST("api/sub/retail/cash-sessions/{id}/movements")
+    suspend fun cashMovement(@Path("id") id: String, @Body body: CashMovementRequest): CashMovementResponse
+
+    @GET("api/sub/retail/cash-sessions/{id}/x-report")
+    suspend fun xReport(@Path("id") id: String): XReportResponse
+
+    @POST("api/sub/retail/cash-sessions/{id}/close")
+    suspend fun closeCashSession(@Path("id") id: String, @Body body: CloseCashSessionRequest): CloseCashSessionResponse
+
+    @POST("api/sub/retail/cash-sessions/{id}/approve")
+    suspend fun approveCashSession(@Path("id") id: String, @Body body: ApproveCashSessionRequest): ApproveCashSessionResponse
+
     // Daily cash + settings + payment methods
     @GET("api/sub/retail/reports/daily-cash")
     suspend fun dailyCash(@Query("date") date: String? = null): DailyCashResponse

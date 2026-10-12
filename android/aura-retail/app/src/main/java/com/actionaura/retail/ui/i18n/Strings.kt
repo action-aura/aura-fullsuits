@@ -1276,4 +1276,132 @@ private val AR_STRINGS: Map<String, String> = mapOf(
         "الجزء النقدي سيعود كله كباقٍ. أزله.",
     "Add a second part to split, or turn split payment off." to
         "أضف دفعة ثانية للتجزئة، أو أوقف الدفع المجزّأ.",
+    "Cash Drawer" to
+        "درج النقد",
+    "Open a shift, cash in and out, end the shift" to
+        "فتح وردية، إدخال وإخراج النقد، وإنهاء الوردية",
+    "Could not load the cash drawer. Its state is unknown." to
+        "تعذّر تحميل درج النقد. حالته غير معروفة.",
+    "Retry" to
+        "إعادة المحاولة",
+    "Open Cash Shift" to
+        "فتح وردية نقدية",
+    "This drawer belongs to" to
+        "هذا الدرج يخص",
+    "Another till in this shop has a drawer open." to
+        "هناك نقطة بيع أخرى في هذا المحل لديها درج مفتوح.",
+    "Opening Float" to
+        "رصيد افتتاح الدرج",
+    "Filled in from the last count on this terminal. Change it if the drawer has changed since." to
+        "تمت تعبئته من آخر عدّ لهذا الجهاز. غيّره إذا تغيّر محتوى الدرج منذ ذلك الحين.",
+    "Enter a valid opening float" to
+        "أدخل رصيد افتتاح صحيحًا",
+    "Cash shift opened" to
+        "تم فتح الوردية النقدية",
+    "Failed to open shift" to
+        "تعذّر فتح الوردية",
+    "Open Shift" to
+        "فتح الوردية",
+    "Shift open" to
+        "الوردية مفتوحة",
+    "Opening float" to
+        "رصيد الافتتاح",
+    "Opened" to
+        "وقت الفتح",
+    "Cash In / Cash Out" to
+        "إدخال / إخراج نقد",
+    "X Report" to
+        "تقرير X",
+    "End Shift" to
+        "إنهاء الوردية",
+    "Cash sales" to
+        "مبيعات نقدية",
+    "Customer payments (cash)" to
+        "دفعات العملاء (نقدًا)",
+    "Cash refunds" to
+        "مرتجعات نقدية",
+    "Float in" to
+        "إيداع في الدرج",
+    "Float out" to
+        "سحب من الدرج",
+    "Paid in" to
+        "مقبوضات أخرى",
+    "Paid out" to
+        "مدفوعات أخرى",
+    "Expected cash in drawer" to
+        "النقد المتوقع في الدرج",
+    "The expected cash is shown to the person who approves the count." to
+        "يظهر النقد المتوقع لمن يعتمد العدّ.",
+    "Waiting for approval" to
+        "بانتظار الاعتماد",
+    "Force-closed, never counted" to
+        "أُغلقت تلقائيًا دون عدّ",
+    "Expected cash" to
+        "النقد المتوقع",
+    "Counted Cash (physical count)" to
+        "النقد المعدود (العدّ الفعلي)",
+    "Variance (counted − expected)" to
+        "الفرق (المعدود − المتوقع)",
+    "Variance accepted." to
+        "تم قبول الفرق.",
+    "Failed to accept the variance" to
+        "تعذّر قبول الفرق",
+    "Acknowledge uncounted" to
+        "الإقرار بعدم العدّ",
+    "Accept variance" to
+        "قبول الفرق",
+    "Shift ended and variance accepted." to
+        "انتهت الوردية وتم قبول الفرق.",
+    "Shift ended. The variance is recorded and awaiting approval." to
+        "انتهت الوردية. سُجّل الفرق وهو بانتظار الاعتماد.",
+    "Failed to end shift" to
+        "تعذّر إنهاء الوردية",
+    "Cash movement recorded" to
+        "تم تسجيل حركة النقد",
+    "Failed to record movement" to
+        "تعذّر تسجيل الحركة",
+    "Float In (add cash to drawer)" to
+        "إيداع في الدرج (إضافة نقد)",
+    "Float Out (remove cash from drawer)" to
+        "سحب من الدرج (إخراج نقد)",
+    "Paid In (misc. cash received)" to
+        "مقبوضات أخرى (نقد مستلم)",
+    "Paid Out (misc. cash paid)" to
+        "مدفوعات أخرى (نقد مدفوع)",
+    "Cash Movement" to
+        "حركة نقدية",
+    "What for?" to
+        "لأي غرض؟",
+    "Choose what the money was for" to
+        "اختر الغرض من المبلغ",
+    "Optional note" to
+        "ملاحظة اختيارية",
+    "Record" to
+        "تسجيل",
+    "End Shift — Z Report" to
+        "إنهاء الوردية — تقرير Z",
+    "{n} held sale(s) are still parked. Ending the shift keeps them, but check them before you leave." to
+        "{n} فاتورة معلّقة ما زالت محفوظة. إنهاء الوردية يُبقيها، لكن راجعها قبل أن تغادر.",
+    "Ending locks this count. A short drawer never blocks you from ending your shift. The variance is recorded and someone with approval authority reviews it." to
+        "الإنهاء يثبّت هذا العدّ. نقص الدرج لا يمنعك من إنهاء ورديتك. يُسجَّل الفرق ويراجعه من لديه صلاحية الاعتماد.",
+    "Rent" to
+        "الإيجار",
+    "Utilities" to
+        "الكهرباء والماء والخدمات",
+    "Salaries and wages" to
+        "الرواتب والأجور",
+    "Transport and delivery" to
+        "النقل والتوصيل",
+    "Marketing" to
+        "التسويق",
+    "Bank and card fees" to
+        "رسوم البنك والبطاقات",
+    "Other expenses" to
+        "مصاريف أخرى",
+    "Owner took it home (drawings)" to
+        "أخذه المالك (مسحوبات المالك)",
+    "Other income" to
+        "دخل آخر",
+    "Owner put money back (drawings)" to
+        "أعاده المالك إلى الدرج (مسحوبات المالك)",
 )
