@@ -2734,5 +2734,6 @@
   "Items from": "أصناف من",
   "transaction": "معاملة",
   "E-invoicing is off, which is optional for now": "الفاتورة الإلكترونية متوقفة، وهي اختيارية حاليًا",
-  "This computer will stop being licensed. To use Aura Retail on it again you will need to enter a license key. Your sales and records are not deleted.": "سيتوقف ترخيص هذا الجهاز. لاستخدام Aura Retail عليه مرة أخرى ستحتاج إلى إدخال مفتاح ترخيص. مبيعاتك وسجلاتك لا تُحذف."
+  "This computer will stop being licensed. To use Aura Retail on it again you will need to enter a license key. Your sales and records are not deleted.": "سيتوقف ترخيص هذا الجهاز. لاستخدام Aura Retail عليه مرة أخرى ستحتاج إلى إدخال مفتاح ترخيص. مبيعاتك وسجلاتك لا تُحذف.",
+  "Aura Retail": "Aura للتجزئة"
 }

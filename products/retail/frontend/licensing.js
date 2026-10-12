@@ -912,9 +912,6 @@
     // catalogue already says "Aura" inside Arabic sentences), so it is not a
     // translation key: a catalogue entry "Aura" -> "Aura" would be the
     // byte-identical, untranslated pair the parity test exists to refuse.
-    // Retail is the bare Latin brand (no catalogue key, per the note above);
-    // the other products keep going through t().
-    if (code === 'AURA_RETAIL') return PRODUCT_NAMES[code];
     return PRODUCT_NAMES[code] ? t(PRODUCT_NAMES[code]) : 'Aura';
   }
 
