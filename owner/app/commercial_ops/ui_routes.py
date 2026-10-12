@@ -578,6 +578,7 @@ def activation_policy_create():
 
 @bp.route("/installations/<uuid:installation_id>/release", methods=["POST"])
 @require_permission("installations.replace_device")
+@require_recent_auth
 def release_installation(installation_id):
     actor = _staff()
     installation = db_session.get(Installation, installation_id)
@@ -592,6 +593,7 @@ def release_installation(installation_id):
 
 @bp.route("/installations/<uuid:installation_id>/replace", methods=["POST"])
 @require_permission("installations.replace_device")
+@require_recent_auth
 def replace_installation(installation_id):
     actor = _staff()
     installation = db_session.get(Installation, installation_id)
