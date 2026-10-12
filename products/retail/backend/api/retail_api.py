@@ -16747,6 +16747,15 @@ def printer_receipt_model():
     conn = get_retail_conn()
     try:
         inputs = _receipt_model_inputs(conn, cid, sale_id)
+        # PRINT-2: a client that prints from its own device (the phone) needs to
+        # know whether THIS sale may pop the drawer BEFORE it builds the job,
+        # because it composes the bytes itself. Same rule object as
+        # printer_kick / print-raster, never a copy: cash (or a split with a
+        # cash part) only.
+        kick_allowed = None
+        if inputs is not None:
+            kick_allowed = _drawer_refusal(
+                conn, cid, sale_id, inputs['sale'].get('payment_method')) is None
     finally:
         conn.close()
     if inputs is None:
@@ -16757,6 +16766,7 @@ def printer_receipt_model():
         tenders=inputs['tenders'], employee_name=inputs['employee_name'],
         customer_name=inputs['customer_name'], einvoice=inputs['einvoice'],
     )
+    model['kick_allowed'] = kick_allowed
     return jsonify({'status': 'success', 'data': model})
 
 
