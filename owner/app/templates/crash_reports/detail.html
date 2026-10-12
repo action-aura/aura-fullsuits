@@ -17,6 +17,9 @@
     {% if summary.route %}{{ dot }} {{ _("Route") }}{{ colon }} <bdi dir="ltr">{{ summary.route }}</bdi>{% endif %}
   </p>
 
+  <p class="muted">{{ _("Support code") }}{{ colon }} <bdi dir="ltr" class="crash-code"><strong>{{ summary.code }}</strong></bdi>
+    {% if summary.kind == "diagnostics" %}{{ dot }} <span class="badge">{{ _("Diagnostics") }}</span>{% endif %}</p>
+
   <h3>{{ _("Stack") }}</h3>
   <table class="responsive-table">
     <thead><tr><th>{{ _("File") }}</th><th>{{ _("Function") }}</th><th>{{ _("Line") }}</th></tr></thead>

@@ -5,9 +5,25 @@
 <div class="card">
   <h2>{{ _("Crash reports") }}</h2>
   <p class="muted">{{ _("Bugs installed products reported, grouped by where they break. Newest first.") }}</p>
+  {# SUPPORT-1: a shopkeeper reads a 6-character code off their screen; staff type it here. #}
+  <form method="get" action="{{ url_for('crash_reports.list_reports') }}" class="filters" style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin:12px 0">
+    <label>{{ _("Kind") }}
+      <select name="kind" id="crash-kind-filter">
+        <option value="all" {% if kind_filter == "all" %}selected{% endif %}>{{ _("All") }}</option>
+        <option value="crashes" {% if kind_filter == "crashes" %}selected{% endif %}>{{ _("Crashes") }}</option>
+        <option value="diagnostics" {% if kind_filter == "diagnostics" %}selected{% endif %}>{{ _("Diagnostics") }}</option>
+      </select>
+    </label>
+    <label>{{ _("Search by code") }}
+      <input type="text" name="q" id="crash-code-search" value="{{ query_text }}" maxlength="20" dir="ltr" autocomplete="off">
+    </label>
+    <button type="submit" class="btn secondary">{{ _("Filter") }}</button>
+  </form>
   <table class="responsive-table">
     <thead>
       <tr>
+        <th>{{ _("Support code") }}</th>
+        <th>{{ _("Kind") }}</th>
         <th>{{ _("Bug") }}</th>
         <th>{{ _("Where") }}</th>
         <th>{{ _("Occurrences") }}</th>
@@ -19,6 +35,8 @@
     <tbody>
     {% for e in result.rows %}
     <tr>
+      <td><bdi dir="ltr" class="crash-code">{{ e.code }}</bdi></td>
+      <td>{% if e.kind == "diagnostics" %}<span class="badge crash-kind-diagnostics">{{ _("Diagnostics") }}</span>{% else %}{{ e.kind }}{% endif %}</td>
       <td><a href="{{ url_for('crash_reports.detail', fingerprint=e.fingerprint) }}"><bdi dir="ltr">{{ e.exception_type }}</bdi></a></td>
       <td><bdi dir="ltr">{{ e.first_frame }}</bdi></td>
       <td>{{ e.total_count }}</td>
@@ -26,7 +44,7 @@
       <td><bdi dir="ltr">{{ e.versions | join(", ") }}</bdi></td>
       <td>{{ format_owner_datetime(e.last_seen) }}</td>
     </tr>
-    {% else %}<tr><td colspan="6" class="empty">{{ _("No crash reports yet.") }}</td></tr>
+    {% else %}<tr><td colspan="8" class="empty">{{ _("No crash reports yet.") }}</td></tr>
     {% endfor %}
     </tbody>
   </table>

@@ -7834,3 +7834,23 @@ msgstr ""
 #: app/templates/crash_reports/detail.html
 msgid "First seen"
 msgstr ""
+
+#: app/templates/crash_reports/list.html
+msgid "Kind"
+msgstr ""
+
+#: app/templates/crash_reports/list.html
+msgid "Crashes"
+msgstr ""
+
+#: app/templates/crash_reports/list.html
+msgid "Diagnostics"
+msgstr ""
+
+#: app/templates/crash_reports/list.html
+msgid "Search by code"
+msgstr ""
+
+#: app/templates/crash_reports/list.html
+msgid "Support code"
+msgstr ""
