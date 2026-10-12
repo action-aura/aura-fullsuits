@@ -289,6 +289,11 @@ interface AuraApi {
     @GET("api/sub/retail/settings/credit")
     suspend fun creditSettingsGet(): CreditSettingsResponse
 
+    // ANDROID-2a: the shop's cashier discount limit, read through its own read-only class
+    // (see CashierLimit.kt for why it is not a field of CreditSettings).
+    @GET("api/sub/retail/settings/credit")
+    suspend fun cashierDiscountLimit(): CashierLimitResponse
+
     @POST("api/sub/retail/settings/credit")
     suspend fun creditSettingsSet(@Body body: CreditSettings): CreditSettingsResponse
 

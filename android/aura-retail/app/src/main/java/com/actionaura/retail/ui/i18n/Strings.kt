@@ -1206,4 +1206,16 @@ private val AR_STRINGS: Map<String, String> = mapOf(
         "تغيّر الملف الذي تم تنزيله قبل تثبيته، لذلك حُذف. حاول مرة أخرى.",
     "Android couldn't finish the install. Try again." to "تعذّر على أندرويد إكمال التثبيت. حاول مرة أخرى.",
     "Something went wrong with the update. Try again." to "حدث خطأ في التحديث. حاول مرة أخرى.",
+    "Discount %" to
+        "نسبة الخصم %",
+    "Discount on the whole sale (%)" to
+        "خصم على كامل الفاتورة (%)",
+    "Up to %s%%" to
+        "حتى %s%%",
+    "You can give at most %s%% discount. Ask a manager for more." to
+        "يمكنك منح خصم بحد أقصى %s%%. اطلب من المدير لمنح خصم أكبر.",
+    "Set" to
+        "تعيين",
+    "Clear" to
+        "مسح",
 )

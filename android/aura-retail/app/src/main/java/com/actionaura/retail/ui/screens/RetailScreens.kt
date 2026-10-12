@@ -62,6 +62,11 @@ import com.actionaura.retail.ui.i18n.money
 import com.actionaura.retail.ui.i18n.parseIntFlexible
 import com.actionaura.retail.ui.i18n.parseNum
 import com.actionaura.retail.ui.i18n.tr
+import com.actionaura.retail.ui.pos.DiscountAccess
+import com.actionaura.retail.ui.pos.buildSaleItems
+import com.actionaura.retail.ui.pos.clampDiscountPct
+import com.actionaura.retail.ui.pos.discountAccess
+import com.actionaura.retail.ui.pos.overLimit
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -139,6 +144,14 @@ fun PosScreen(snackbar: SnackbarHostState) {
     // below on every change of `customer`, including back to Walk-in.
     var loyaltyBalance by remember { mutableStateOf(0) }
     var loyaltyRedeemInput by remember { mutableStateOf("") }
+    // -- Discount (ANDROID-2a; ui/pos/DiscountRules.kt is the rulebook). The whole-sale
+    // percentage is typed as TEXT so a half-typed "7." survives recomposition; each line may
+    // also carry its own percentage, which wins for that line. `cashierLimitPct` is the
+    // owner's limit for a cashier who does not hold retail.discount (0 = none).
+    var cashierLimitPct by remember { mutableStateOf(0.0) }
+    var salePctText by remember { mutableStateOf("") }
+    val lineDiscounts = remember { mutableStateMapOf<String, Double>() }
+    var discountLineId by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     // Needed here (not just inside PaymentSuccess below) for auto-print:
     // PrinterPrefs is a per-device Context read, and the fire-and-forget
@@ -159,7 +172,10 @@ fun PosScreen(snackbar: SnackbarHostState) {
             parseNum(ApiClient.get().creditSettingsGet().data?.loyalty_point_value) ?: 0.0
         } catch (e: Exception) { 0.0 }
     }
-    LaunchedEffect(Unit) { loading = true; load(); loadCustomers(); loadMethods(); loadLoyaltySetting(); loading = false }
+    suspend fun loadCashierLimit() {
+        cashierLimitPct = try { ApiClient.get().cashierDiscountLimit().data.limitPct() } catch (e: Exception) { 0.0 }
+    }
+    LaunchedEffect(Unit) { loading = true; load(); loadCustomers(); loadMethods(); loadLoyaltySetting(); loadCashierLimit(); loading = false }
 
     // Loyalty balance is CUSTOMER-scoped (a different customer has a
     // different ledger), so it resets and refetches on every change of
@@ -177,6 +193,11 @@ fun PosScreen(snackbar: SnackbarHostState) {
     }
 
     val byId = products.associateBy { it.id }
+    // Reads RetailSession.capabilities (Compose state), so the control appears or vanishes the
+    // moment the session resolves. Fails OPEN while capabilities are unknown, like every other
+    // rendering gate here; the server re-gates the sale itself.
+    val access = discountAccess(RetailSession.capabilities, cashierLimitPct)
+    val salePct = clampDiscountPct(parseNum(salePctText))
     val total = cart.entries.sumOf { (id, qty) -> (byId[id]?.sell_price ?: 0.0) * qty }
     val count = cart.values.sumOf { it }.toInt()
 
@@ -519,6 +540,10 @@ fun PosScreen(snackbar: SnackbarHostState) {
                         )
                     }
                 }
+                if (access !is DiscountAccess.None) {
+                    Spacer(Modifier.height(12.dp))
+                    SaleDiscountField(access = access, text = salePctText, onChange = { salePctText = it })
+                }
                 Spacer(Modifier.height(12.dp))
                 LazyColumn(Modifier.heightIn(max = 340.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(cart.keys.toList()) { id ->
@@ -537,6 +562,17 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                     overflow = TextOverflow.Ellipsis)
                                 Text(money(p.sell_price), style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (access !is DiscountAccess.None) {
+                                    // Tap to give THIS line its own percentage (it wins over the
+                                    // whole-sale one for this line; the two never stack).
+                                    val own = lineDiscounts[id]
+                                    Text(
+                                        if (own != null) "−" + pctText(own) + "%  " + tr("Discount") else "+ " + tr("Discount"),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.clickable { discountLineId = id }.padding(vertical = 6.dp),
+                                    )
+                                }
                             }
                             // No Modifier.size(34.dp) override -- 34dp sits below Material3's
                             // own ~48dp default and the 44dp accessibility floor the desktop
@@ -622,8 +658,13 @@ fun PosScreen(snackbar: SnackbarHostState) {
                     onClick = {
                         val pm = paymentMethod
                         val cust = customer
+                        val overLim = (listOf(salePct) + lineDiscounts.values).mapNotNull { overLimit(it, access) }.firstOrNull()
                         if (pm == "credit" && cust == null) {
                             scope.launch { snackbar.showSnackbar(tr("Select a customer for credit sales (walk-in not allowed)")) }
+                        } else if (access !is DiscountAccess.None && overLim != null) {
+                            // Courtesy only: the server refuses an over-limit discount itself
+                            // (403 DISCOUNT_OVER_LIMIT) and its limit is shown the same way.
+                            scope.launch { snackbar.showSnackbar(tr("You can give at most %s%% discount. Ask a manager for more.").format(pctText(overLim))) }
                         } else {
                             charging = true
                             // `total` here is a local, pre-tax, pre-discount PREVIEW only
@@ -652,7 +693,10 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             // server always resolves/computes them from the product row
                             // and ignores any client-submitted equivalent (Wave 0,
                             // AUDIT-002/003). See docs/architecture/financial-authority-contracts.md.
-                            val items = cart.entries.map { (id, qty) -> SaleItemReq(id, qty) }
+                            // ANDROID-2a: product_id + quantity + discount_pct per line, exactly the
+                            // desktop's shape (the whole-sale % goes on every line without its own).
+                            // Under DiscountAccess.None every line goes out at 0 whatever state holds.
+                            val items = buildSaleItems(cart.toMap(), lineDiscounts.toMap(), salePct, access)
                             scope.launch {
                                 try {
                                     val r = ApiClient.get().createSale(CreateSaleRequest(
@@ -673,6 +717,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                         // or a server-validated discount at all.
                                         cart.clear(); showCart = false; successSale = r.data
                                         paymentMethod = "cash"; customer = null; downPayment = ""; loyaltyRedeemInput = ""
+                                        salePctText = ""; lineDiscounts.clear()
                                         r.data?.warning?.takeIf { it.isNotBlank() }?.let { snackbar.showSnackbar(it) }
                                         // Auto-print (Settings toggle, default off): fire-and-
                                         // forget, no blocking, no error dialog -- printReceipt's
@@ -723,6 +768,14 @@ fun PosScreen(snackbar: SnackbarHostState) {
                 }
             }
         }
+    }
+
+    discountLineId?.let { lid ->
+        LineDiscountDialog(
+            productName = byId[lid]?.name ?: "—", current = lineDiscounts[lid], access = access,
+            onSet = { v -> if (v == null) lineDiscounts.remove(lid) else lineDiscounts[lid] = v; discountLineId = null },
+            onDismiss = { discountLineId = null },
+        )
     }
 
     if (showHeld) {
