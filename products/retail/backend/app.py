@@ -249,6 +249,13 @@ from commercial_runtime.sync.site_relay.admin_routes import make_site_relay_admi
 app.register_blueprint(make_site_relay_admin_blueprint(
     hub_provider=lambda: _site_relay_server))
 
+# INSTALL-1: the one-time Windows Firewall rule for the shop network, asked at
+# the owner's own "Connect a device" press (see install_support/firewall.py for
+# why there, and why never on a dev run). Wiring only; the logic and its tests
+# live in commercial_runtime/install_support.
+from commercial_runtime.install_support.firewall import make_firewall_blueprint as _make_firewall_blueprint
+app.register_blueprint(_make_firewall_blueprint(str(Path(DATABASE_DIR).parent)))
+
 # docs/einvoicing/phase1/ -- Jordan JoFotara e-invoicing. Default ON for the
 # Jordan tax regime since 2026-09-08 (Jordan mandated e-invoicing from
 # 2024-05-31 -- see commercial_runtime/einvoicing/settings.py's DEFAULTS and
