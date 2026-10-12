@@ -1,7 +1,8 @@
 """
 Aura FullSuits -- local backup/restore foundation (Wave 0, AUDIT-019).
 
-Offline-only. No network calls, no cloud upload, no scheduler. A backup is
+Offline-only. No network calls, no cloud upload. (Scheduling and the second
+copy live in schedule.py; this module only makes and restores one archive.) A backup is
 one zip file containing:
   - registry.db   (shared multi-tenant identity/licensing db)
   - <product>.db  (the product's own subsystem db, e.g. retail.db/clinic.db)
@@ -97,7 +98,18 @@ def _snapshot_db(source_path, dest_path):
         src.close()
 
 
-def create_backup(product_code, app_data_dir, dest_dir, app_version):
+# Who asked for the backup. Encoded in the FILE NAME (not only the manifest) so
+# retention can decide what it may delete without opening a zip: only 'auto'
+# files are ever pruned, 'manual' and 'pre-update' are kept until a person
+# removes them. A name without a tag is a manual backup, which is also what
+# every file written before this wave looks like -- so old backups stay safe.
+REASON_MANUAL = 'manual'
+REASON_AUTO = 'auto'
+REASON_PRE_UPDATE = 'pre-update'
+KNOWN_REASONS = (REASON_MANUAL, REASON_AUTO, REASON_PRE_UPDATE)
+
+
+def create_backup(product_code, app_data_dir, dest_dir, app_version, reason=REASON_MANUAL):
     """
     Build one backup archive for `product_code` ('retail' or 'clinic') from
     the live databases under `app_data_dir`, written into `dest_dir`.
@@ -109,6 +121,8 @@ def create_backup(product_code, app_data_dir, dest_dir, app_version):
     """
     if product_code not in SUPPORTED_PRODUCTS:
         raise BackupError(f"Unknown product_code: {product_code}")
+    if reason not in KNOWN_REASONS:
+        raise BackupError(f"Unknown backup reason: {reason}")
     if not is_safe_backup_dir(dest_dir):
         raise BackupError("Refusing to write a backup inside a Program Files directory")
     os.makedirs(dest_dir, exist_ok=True)
@@ -140,7 +154,8 @@ def create_backup(product_code, app_data_dir, dest_dir, app_version):
     # to the fresh device key -- unrelated to backup entirely.
 
     stamp = _utc_stamp()
-    final_name = f'aura-{product_code}-backup-{stamp}-app{app_version}-schema{SCHEMA_VERSION}.aurabak.zip'
+    tag = '' if reason == REASON_MANUAL else f'-{reason}'
+    final_name = f'aura-{product_code}-backup-{stamp}-app{app_version}-schema{SCHEMA_VERSION}{tag}.aurabak.zip'
     final_path = os.path.join(dest_dir, final_name)
 
     with tempfile.TemporaryDirectory(prefix='aura-backup-') as tmp:

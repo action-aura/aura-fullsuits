@@ -61,10 +61,19 @@ class UpdatesWiringContractTest {
     }
 
     @Test
-    fun no_file_provider_is_declared_because_the_installer_uses_a_session() {
-        // A FileProvider would be a door into the private cache just to hand a
-        // file to a viewer; the session API writes the bytes straight in.
-        assertThat(elements("provider")).isEmpty()
+    fun the_only_file_provider_is_the_backup_share_one_and_the_installer_does_not_use_it() {
+        // The installer uses a PackageInstaller session, so it needs NO provider
+        // (a provider would be a door into the private cache just to hand a file
+        // to a viewer). BACKUP-1 added exactly one provider, for the backup Share
+        // sheet; it is pinned here so that any OTHER provider -- or this one
+        // turning exported -- still fails. What this no longer catches: a second
+        // narrow provider with the backupshare authority; the cache-path scope is
+        // pinned in BackupShareWiringContractTest instead.
+        val providers = elements("provider")
+        assertThat(providers).hasSize(1)
+        assertThat(providers.single().getAttribute("android:authorities")).endsWith(".backupshare")
+        assertThat(providers.single().getAttribute("android:exported")).isEqualTo("false")
+        assertThat(source("src/main/java/com/actionaura/retail/updates/ApkInstaller.kt")).doesNotContain("FileProvider.getUriForFile")
     }
 
     @Test

@@ -12,6 +12,10 @@ Endpoints (all require an authenticated session with role == 'admin'):
   GET  /api/backup/download/<name>   -> download a backup file
   POST /api/backup/restore           -> restore from an uploaded file or a
                                          filename already in the default dir
+  GET  /api/backup/status            -> last automatic backup, last second-copy
+                                         outcome, and the 48 h warning flag
+  GET/POST /api/backup/settings      -> backup_schedule ('off'|'daily') and
+                                         backup_dir_secondary (a folder)
 """
 import os
 import logging
@@ -21,6 +25,9 @@ from werkzeug.utils import secure_filename
 
 from commercial_runtime.backup.service import (
     create_backup, restore_backup, BackupError, is_safe_backup_dir,
+)
+from commercial_runtime.backup.schedule import (
+    BackupSettings, BackupStatus, build_status,
 )
 
 log = logging.getLogger('aura.backup')
@@ -50,8 +57,22 @@ def make_backup_blueprint(product_code, database_dir, app_version, default_backu
     """
     app_data_dir = os.path.dirname(database_dir)
     backup_dir = default_backup_dir or os.environ.get('AURA_BACKUP_DIR') or os.path.join(app_data_dir, 'backups')
+    settings = BackupSettings(app_data_dir)
+    status = BackupStatus(app_data_dir)
 
     bp = Blueprint('backup_api', __name__, url_prefix='/api/backup')
+
+    def _listed_names():
+        """The ONLY names a download/restore-by-name may resolve: exactly what
+        /list shows. Matching against the listing (not sanitising the string)
+        means parent-folder names, backslash names, drive-letter names and any unlisted name
+        fail by construction -- there is no path-building step to get wrong."""
+        if not os.path.isdir(backup_dir):
+            return set()
+        prefix = f'aura-{product_code}-backup-'
+        return {n for n in os.listdir(backup_dir)
+                if n.startswith(prefix) and n.endswith('.zip')
+                and os.path.isfile(os.path.join(backup_dir, n))}
 
     @bp.route('/create', methods=['POST'])
     def _create():
@@ -95,12 +116,37 @@ def make_backup_blueprint(product_code, database_dir, app_version, default_backu
         denied = _require_admin()
         if denied:
             return denied
-        safe_name = os.path.basename(filename)
-        if safe_name != filename or not safe_name.startswith(f'aura-{product_code}-backup-'):
-            return jsonify({'status': 'error', 'message': 'Invalid backup filename'}), 400
-        if not os.path.isfile(os.path.join(backup_dir, safe_name)):
+        if filename not in _listed_names():
             return jsonify({'status': 'error', 'message': 'Backup not found'}), 404
-        return send_from_directory(backup_dir, safe_name, as_attachment=True)
+        return send_from_directory(backup_dir, filename, as_attachment=True)
+
+    @bp.route('/status', methods=['GET'])
+    def _status():
+        denied = _require_admin()
+        if denied:
+            return denied
+        return jsonify({'status': 'ok', **build_status(product_code, backup_dir, settings, status)})
+
+    @bp.route('/settings', methods=['GET'])
+    def _settings_get():
+        denied = _require_admin()
+        if denied:
+            return denied
+        return jsonify({'status': 'ok', **settings.load()})
+
+    @bp.route('/settings', methods=['POST'])
+    def _settings_set():
+        denied = _require_admin()
+        if denied:
+            return denied
+        body = request.get_json(silent=True) or {}
+        try:
+            saved = settings.save(
+                schedule=body.get('backup_schedule'),
+                secondary_dir=body.get('backup_dir_secondary'))
+        except BackupError as e:
+            return jsonify({'status': 'error', 'message': str(e)}), 400
+        return jsonify({'status': 'ok', **saved})
 
     @bp.route('/restore', methods=['POST'])
     def _restore():
@@ -127,10 +173,9 @@ def make_backup_blueprint(product_code, database_dir, app_version, default_backu
                 filename = (request.get_json(silent=True) or {}).get('filename')
                 if not filename:
                     return jsonify({'status': 'error', 'message': 'Provide a file upload or a filename'}), 400
-                safe_name = os.path.basename(filename)
-                if safe_name != filename:
+                if filename not in _listed_names():
                     return jsonify({'status': 'error', 'message': 'Invalid backup filename'}), 400
-                source_path = os.path.join(backup_dir, safe_name)
+                source_path = os.path.join(backup_dir, filename)
 
             result = restore_backup(product_code, app_data_dir, source_path)
         except BackupError as e:

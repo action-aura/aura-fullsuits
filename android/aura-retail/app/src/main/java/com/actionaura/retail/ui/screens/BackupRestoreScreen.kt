@@ -2,6 +2,10 @@
 
 package com.actionaura.retail.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -17,6 +21,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.ApiClient
@@ -27,7 +32,11 @@ import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.components.EmptyState
 import com.actionaura.retail.ui.components.SkeletonList
 import com.actionaura.retail.ui.i18n.tr
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,6 +63,63 @@ fun BackupRestoreScreen(onBack: () -> Unit, snackbar: SnackbarHostState) {
     var restoring by remember { mutableStateOf(false) }
     var restoredMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
+    // The backup the person picked "Save a copy" for; the system file picker
+    // answers asynchronously, so the choice has to survive until it does.
+    var saveTarget by remember { mutableStateOf<BackupEntry?>(null) }
+
+    // BACKUP-1: a backup that never leaves the phone dies with the phone (the
+    // folder is the app sandbox, wiped on uninstall). Streamed to the
+    // person-chosen place (Drive, USB OTG, Downloads): CreateDocument gives us a
+    // write-only URI, so no storage permission is needed at all.
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri: Uri? ->
+        val target = saveTarget
+        saveTarget = null
+        if (uri != null && target != null) {
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        ApiClient.get().downloadBackup(target.filename).use { body ->
+                            val out = ctx.contentResolver.openOutputStream(uri)
+                                ?: throw java.io.IOException("Could not open the chosen location")
+                            out.use { sink -> body.byteStream().use { it.copyTo(sink) } }
+                        }
+                    }
+                    snackbar.showSnackbar(tr("Backup saved"))
+                } catch (e: Exception) {
+                    snackbar.showSnackbar(apiErrorMessage(e))
+                }
+            }
+        }
+    }
+
+    // Share: copy into cache/backup_share (only that folder is exposed by the
+    // FileProvider), clearing older copies first so the cache never keeps more
+    // than the one file being shared.
+    fun share(b: BackupEntry) {
+        scope.launch {
+            try {
+                val file = withContext(Dispatchers.IO) {
+                    val dir = File(ctx.cacheDir, "backup_share").apply { mkdirs() }
+                    dir.listFiles()?.forEach { it.delete() }
+                    val f = File(dir, b.filename)
+                    ApiClient.get().downloadBackup(b.filename).use { body ->
+                        f.outputStream().use { sink -> body.byteStream().use { it.copyTo(sink) } }
+                    }
+                    f
+                }
+                val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".backupshare", file)
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                ctx.startActivity(Intent.createChooser(send, tr("Share")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (e: Exception) {
+                snackbar.showSnackbar(apiErrorMessage(e))
+            }
+        }
+    }
 
     suspend fun load() {
         backups = try { ApiClient.get().listBackups().backups } catch (e: Exception) { emptyList() }
@@ -129,7 +195,13 @@ fun BackupRestoreScreen(onBack: () -> Unit, snackbar: SnackbarHostState) {
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
-                                TextButton(onClick = { restoreTarget = b }) { Text(tr("Restore backup")) }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Row {
+                                        TextButton(onClick = { saveTarget = b; saveLauncher.launch(b.filename) }) { Text(tr("Save a copy…")) }
+                                        TextButton(onClick = { share(b) }) { Text(tr("Share")) }
+                                    }
+                                    TextButton(onClick = { restoreTarget = b }) { Text(tr("Restore backup")) }
+                                }
                             }
                         }
                     }

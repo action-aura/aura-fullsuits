@@ -17882,6 +17882,10 @@ const RetailSystem = {
           </table>
         </div>
       </div>
+      <div class="sub-chart-card" id="bex-auto-card" style="margin-top:20px">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Automatic backups')}</h3>
+        <div id="bex-auto-body" style="color:var(--text-muted);font-size:13px">${t('Loading…')}</div>
+      </div>
       <div class="sub-chart-card" style="margin-top:20px">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Export Data (CSV)')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">${t('Download a spreadsheet of this shop\'s records for the date range below, for accounting or an outside system.')}</p>
@@ -17903,6 +17907,72 @@ const RetailSystem = {
         <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._exportDiagnostics()">${t('Export Diagnostics')}</button>
       </div>`;
     await this._loadBackups();
+    await this._loadBackupStatus();
+  },
+
+  // BACKUP-1: the "is my shop actually protected?" panel. Everything shown
+  // here is read from /api/backup/status (what the scheduler really did), never
+  // inferred -- "Last copy to E:\: skipped, folder not found" is the line that
+  // tells an owner their USB stick was out when the backup ran.
+  _bexWhen(iso) {
+    const d = iso ? new Date(iso) : null;
+    return d && !isNaN(d.getTime()) ? this._bdi(this._fixedDateTime(d)) : '—';
+  },
+
+  _bexSkipReason(r) {
+    switch (r) {
+      case 'folder_missing': return t('the folder was not found (is the USB drive plugged in?)');
+      case 'unsafe_folder': return t('that folder cannot be used');
+      default: return t('the copy failed');
+    }
+  },
+
+  async _loadBackupStatus() {
+    const host = document.getElementById('bex-auto-body');
+    if (!host) return;
+    try {
+      const d = await this._get('/api/backup/status');
+      if (!d || d.status !== 'ok') { host.textContent = t('Could not load backup status.'); return; }
+      const sec = d.last_secondary || null;
+      const folder = d.backup_dir_secondary || '';
+      let copyLine = '';
+      if (folder) {
+        let outcome = t('not copied yet');
+        if (sec && sec.folder === folder) {
+          outcome = sec.ok ? this._bexWhen(sec.at) : `${t('skipped')} (${this._bexSkipReason(sec.reason)}) — ${this._bexWhen(sec.at)}`;
+        }
+        copyLine = `<p style="margin:4px 0">${t('Last copy to')} <b>${this._esc(folder)}</b>: ${outcome}</p>`;
+      }
+      const warn = d.warning
+        ? `<p role="alert" id="bex-backup-warning" style="display:inline-block;margin:0 0 10px;padding:4px 10px;border-radius:999px;background:var(--state-warning-surface);color:var(--state-warning-text);font-weight:600">${t('No backup in the last 48 hours')}</p>`
+        : '';
+      const lastAuto = d.last_auto && d.last_auto.ok ? this._bexWhen(d.last_auto.at) : (d.last_auto ? `${t('failed')} — ${this._bexWhen(d.last_auto.at)}` : '—');
+      host.innerHTML = `${warn}
+        <p style="margin:4px 0">${t('Last backup')}: ${d.last_backup_at ? this._bexWhen(d.last_backup_at) : t('never')}</p>
+        <p style="margin:4px 0">${t('Last automatic backup')}: ${lastAuto}</p>
+        ${copyLine}
+        <div class="ret-field-row" style="grid-template-columns:1fr;gap:10px;margin-top:14px;max-width:520px">
+          <div class="ret-field" style="margin:0"><label for="bex-schedule">${t('Automatic backup')}</label>
+            <select id="bex-schedule">
+              <option value="daily"${d.backup_schedule === 'daily' ? ' selected' : ''}>${t('Every day')}</option>
+              <option value="off"${d.backup_schedule === 'off' ? ' selected' : ''}>${t('Off')}</option>
+            </select></div>
+          <div class="ret-field" style="margin:0"><label for="bex-secondary">${t('Also copy each backup to this folder (USB drive, OneDrive or Google Drive folder)')}</label>
+            <input type="text" id="bex-secondary" value="${this._esc(folder)}" placeholder="D:/Aura backups" /></div>
+          <div><button class="ret-btn ret-btn-primary" id="bex-auto-save" onclick="RetailSystem._saveBackupSettings()">${t('Save')}</button></div>
+        </div>`;
+    } catch (e) { console.error(e); host.textContent = t('Could not load backup status.'); }
+  },
+
+  async _saveBackupSettings() {
+    const schedule = (document.getElementById('bex-schedule') || {}).value;
+    const folder = (document.getElementById('bex-secondary') || {}).value || '';
+    try {
+      const d = await this._post('/api/backup/settings', { backup_schedule: schedule, backup_dir_secondary: folder });
+      if (d && d.status === 'ok') SubsystemApp.showToast(t('Settings saved.'), 'success');
+      else SubsystemApp.showToast((d && d.message) || t('Error'), 'error');
+    } catch (e) { SubsystemApp.showToast(t('Error'), 'error'); }
+    await this._loadBackupStatus();
   },
 
   async _loadBackups() {
