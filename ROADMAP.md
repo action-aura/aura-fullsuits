@@ -7898,3 +7898,61 @@ PROVEN (see the hand-back for quoted red/green)
   catch-up without the payment_uid exclusion. Real app :5098: a 15.000 "Other income" paid-in through the drawer
   dialog (EN + AR shots) -> cash 500.000 -> 515.000, P&L revenue_accounts 4000 500.000 + 4800 15.000, trial
   balance and balance sheet balanced. Full run: 488 files, 488 passed, 0 failed.
+
+
+## 2026-10-12 — SUPPORT-1 (help that reaches a human) — no schema claim
+
+Branch feat/support-1 off bd57c31b. No retail/registry/clinic schema version and NO Owner Alembic revision used
+(head stays c7a4f2d8e613): the crash outbox `kind` column is a free 16-char string, so "diagnostics" needed only
+an Owner code change (`VALID_KINDS`). Review C-mobile-hardware-install #5 items 1-4 built; item 5 (launcher
+faulthandler/excepthook) still not built.
+
+What shipped
+* Licence page: phone/WhatsApp +962 78 006 9485 and info@actionaura.me; WhatsApp link upgraded with installation id +
+  version through help.js (one number, two surfaces, a test keeps them equal).
+* "Send diagnostics to support" (Help dialog, administrators): reads the existing diagnostics export, posts its FACTS
+  to `POST /api/crash-reports/diagnostics`, which queues kind "diagnostics" on the device-signed crash outbox and
+  returns a 6-character code (alphabet without 0/O/1/I, first 30 bits of the fingerprint, same function in
+  commercial_runtime and Owner, pinned equal by an Owner cross-stack test). Copy + WhatsApp-with-code. Owner list:
+  code column, distinct label, kind filter, search by code (fingerprint range).
+* Quiet toast "Something went wrong. A report was saved (code ...)": `X-Aura-Report-Code` header, set only when a
+  report was really saved (client report 204, captured 500); `error-toast.js` (one script line in index.html)
+  shows it through the shell's own toast, max once per 60 s.
+* "Let support see my screen": opens Quick Assist (`ms-quick-assist:`), Windows only, hidden elsewhere.
+
+Gaps, recorded not fixed
+* The snapshot carries a SUMMARY of the export (version, schema, licence state, sync ok/unhealthy + pending, row
+  counts), NOT the log tail: Owner's message field is 300 chars and the log is free text. If support needs the log
+  they still ask for the downloaded file.
+* DEPLOY ORDER: ship Owner before the till build. An Owner without "diagnostics" refuses the whole request holding
+  one; the till sends snapshots in their own request after the crashes, so real crashes are not held back, but the
+  snapshot stays pending (and the sender backs off) until Owner is updated.
+* Sending only exists when an Owner URL is configured and not on Android (as crash reports already). With no Owner
+  the dialog says "Saved on this computer. Tell support this code" and the WhatsApp link carries the code.
+* Android has no Help dialog, no diagnostics send and no toast (Kotlin side not touched).
+* Quick Assist launch uses an `ms-quick-assist:` anchor click: proven that the button shows/hides and the anchor is
+  created, NOT proven that a pywebview/Edge shell hands the URI to Windows. The on-screen line tells the shopkeeper to
+  call support for the 6-digit code either way. Needs one try on a real Windows till.
+* The toast depends on the page's fetch being wrapped by error-toast.js: a 500 from a request made before that
+  script loads, or by code that captured an older `fetch` reference, shows no toast.
+* Real-artefact run: till from source on :5099 (EN + AR screenshots in tmp/support1/shots), the queue row with the same
+  code confirmed in its local store, Owner side exercised through the Owner test client with the till's own
+  wire shape. No local Owner was started and the till was not activated against one, so "row appears on a live Owner
+  with the same code" is proven only at test-client level.
+* retail_p1b_help_e2e.py is red on 7 checks that predate this work (key-card list, Setup guide expectations, and an
+  exact `== 2 actions` count that the Setup guide already broke). Left alone; this wave adds two more actions to that
+  count.
+
+Arabic strings for a native reader (products/retail/frontend/locales/ar.json, appended)
+  Chat on WhatsApp = تحدّث عبر واتساب | Send diagnostics to support = إرسال التشخيص إلى الدعم |
+  Sends a short summary of this computer. No customer or sales details. = يرسل ملخصًا قصيرًا عن هذا الجهاز. لا يتضمن بيانات العملاء أو المبيعات. |
+  Let support see my screen = السماح للدعم برؤية شاشتي |
+  Opens Quick Assist. Call support first: they give you a 6-digit code to type in. = يفتح المساعدة السريعة (Quick Assist). اتصل بالدعم أولًا: سيعطونك رمزًا من 6 أرقام لتكتبه. |
+  Collecting… = جارٍ التجميع… | Could not collect the diagnostics. Please try again. = تعذّر تجميع التشخيص. حاول مرة أخرى. |
+  Could not save the diagnostics. Please try again. = تعذّر حفظ التشخيص. حاول مرة أخرى. |
+  Saved. It is sent to Action Aura automatically when this computer is online. = تم الحفظ. سيُرسل إلى Action Aura تلقائيًا عندما يتصل هذا الجهاز بالإنترنت. |
+  Saved on this computer. Tell support this code on WhatsApp or by phone. = تم الحفظ على هذا الجهاز. أخبر الدعم بهذا الرمز عبر واتساب أو الهاتف. |
+  Your support code = رمز الدعم الخاص بك | Copy = نسخ | Copied = تم النسخ | Copy failed = تعذّر النسخ |
+  Send on WhatsApp = إرسال عبر واتساب | Something went wrong. A report was saved (code {code}). = حدث خلل ما. تم حفظ تقرير (الرمز {code}).
+Owner catalog (owner/translations ar): Kind = النوع | Crashes = الأعطال | Diagnostics = التشخيص |
+  Search by code = البحث بالرمز | Support code = رمز الدعم
