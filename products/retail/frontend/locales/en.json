@@ -2848,5 +2848,6 @@
   "You are not allowed to change a price. Ask a manager to approve it.": "You are not allowed to change a price. Ask a manager to approve it.",
   "Damaged": "Damaged",
   "Loyal customer": "Loyal customer",
-  "Round down": "Round down"
+  "Round down": "Round down",
+  "Not a sale, so it is not in the gross margin.": "Not a sale, so it is not in the gross margin."
 }

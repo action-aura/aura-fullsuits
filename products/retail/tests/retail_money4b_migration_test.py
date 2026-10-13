@@ -177,7 +177,7 @@ def test_upgrade_posts_one_journal_per_manual_paid_out():
     pl = admin.get(f'{API}/reports/profit-and-loss?start_date=2026-03-10&end_date=2026-03-10').get_json()['data']
     assert {a['code']: a['amount'] for a in pl['operating_expenses']['accounts']} == {'6900': 27.5}, pl
     rev = admin.get(f'{API}/reports/profit-and-loss?start_date=2026-03-10&end_date=2026-03-11').get_json()['data']
-    assert {a['code']: a['amount'] for a in rev['revenue_accounts']}.get('4800') == 19.0, rev['revenue_accounts']
+    assert {a['code']: a['amount'] for a in rev['other_income']['accounts']}.get('4800') == 19.0, rev['other_income']['accounts']
 
 
 def test_supplier_drawer_movements_and_floats_are_not_booked_manual_paid_ins_are():

@@ -2848,5 +2848,6 @@
   "You are not allowed to change a price. Ask a manager to approve it.": "لا يُسمح لك بتغيير السعر. اطلب موافقة المدير.",
   "Damaged": "تالف",
   "Loyal customer": "عميل دائم",
-  "Round down": "تقريب للأسفل"
+  "Round down": "تقريب للأسفل",
+  "Not a sale, so it is not in the gross margin.": "ليست من المبيعات، لذلك لا تدخل في هامش الربح الإجمالي."
 }

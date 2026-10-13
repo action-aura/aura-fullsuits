@@ -737,3 +737,71 @@ def test_route_refused_without_cap_reports_and_refusal_is_from_the_capability_ch
     body = r.get_json()
     assert body.get('message') == CAPABILITY_DENIED_MESSAGE, (
         f"refusal did not come from the capability check: {body!r}")
+
+# ═════════════════════════════════════════════════════════════════════════
+# POLISH-1: other income (4800) is reported apart from sales
+# ═════════════════════════════════════════════════════════════════════════
+
+def _book_other_income(cid, amount, business_date):
+    conn = get_retail_conn()
+    try:
+        gl.post_journal(conn, cid, None, business_date, 'cash_movement', None, 'JOD',
+                        [{'account_code': '1000', 'debit': amount},
+                         {'account_code': '4800', 'credit': amount}],
+                        reference='polish1-paid-in')
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_other_income_is_outside_gross_margin_but_inside_net_profit(client):
+    cid = client.test_company_id
+    supp = _seed_supplier(client)
+    pid = _seed_product(client, sell_price=10.0, tax_rate=0, initial_stock=0)
+    _po_receipt(client, supp, pid, qty=10, unit_cost=4.0, amount_paid=40.0)
+    r = client.post(f'{API}/sales', json={
+        'items': [{'product_id': pid, 'quantity': 3}], 'payment_method': 'cash',
+        'amount_paid': 30.0, 'idempotency_key': str(uuid.uuid4())})
+    assert r.status_code == 200, r.get_json()
+    today = _today()
+    base = _income_statement(cid, today, today)
+    assert base['other_income'] == {'total': 0.0, 'accounts': []}
+    _book_other_income(cid, 7.0, today)
+    data = _income_statement(cid, today, today)
+    # sales side did not move: 30.00 revenue, 12.00 COGS, 18.00 gross, 60% margin
+    assert (data['revenue'], data['gross_revenue'], data['cost_of_goods_sold']) == (30.0, 30.0, 12.0)
+    assert data['gross_profit'] == 18.0 and data['gross_margin'] == pytest.approx(0.6)
+    assert [a['code'] for a in data['revenue_accounts']] == ['4000']
+    assert data['other_income'] == {'total': 7.0, 'accounts': [
+        {'code': '4800', 'name': 'Other Income', 'amount': 7.0}]}
+    # net = gross - opex + other income
+    assert data['net_profit'] == 25.0 and base['net_profit'] == 18.0
+
+
+def test_other_income_alone_has_no_margin_and_still_counts_as_activity(client):
+    cid = client.test_company_id
+    today = _today()
+    _book_other_income(cid, 5.0, today)
+    data = _income_statement(cid, today, today)
+    assert data['has_activity'] is True
+    assert data['revenue'] == 0.0 and data['gross_margin'] is None
+    assert data['net_profit'] == 5.0
+
+
+def test_a_voided_expense_account_netting_to_zero_is_hidden_but_a_live_one_shows(client):
+    cid = client.test_company_id
+    today = _today()
+    rent = client.post(f'{API}/expenses', json={
+        'gl_account_code': '6000', 'amount': 250, 'paid_via': 'bank', 'memo': 'rent'})
+    util = client.post(f'{API}/expenses', json={
+        'gl_account_code': '6100', 'amount': 40, 'paid_via': 'bank', 'memo': 'power'})
+    assert rent.status_code == 200 and util.status_code == 200, (rent.get_json(), util.get_json())
+    uid = rent.get_json()['data']['uid']
+    before = _income_statement(cid, today, today)
+    assert {a['code'] for a in before['operating_expenses']['accounts']} == {'6000', '6100'}
+    v = client.post(f'{API}/expenses/{uid}/void', json={'reason': 'entered twice'})
+    assert v.status_code == 200, v.get_json()
+    after = _income_statement(cid, today, today)
+    assert [a['code'] for a in after['operating_expenses']['accounts']] == ['6100']
+    assert after['operating_expenses']['total'] == 40.0 and after['net_profit'] == -40.0
+    assert after['has_activity'] is True
