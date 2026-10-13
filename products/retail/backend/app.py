@@ -1447,6 +1447,18 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
 _start_sync_after_activation_lock = threading.RLock()
 
 
+def _hub_housekeeping_floors() -> list:
+    """SYNC-JOIN (2026-10-13): the floors the hub's hourly housekeeping
+    prunes by. A leading 0 holds the watermark at 0, so NO site_sync_events
+    row is ever deleted (replay nonces still expire): a device paired with
+    this hub later pulls the log from 0 and needs the shop's whole history,
+    and nothing re-sends it once pruned (measured on the cloud relay by
+    owner/tests/test_sync_late_join_after_prune_cross_stack.py; the hub
+    prunes by the same rule). Drop the 0 only when a bootstrap/snapshot path
+    exists. retail_sync_join_hub_floor_test.py pins it."""
+    return [0, *_hub_own_consumer_floors()]
+
+
 def _hub_own_consumer_floors() -> list:
     """This hub's OWN two sync streams' consumption positions into its own
     site log (`local_client.consumer_floor`, retail.db AND registry.db),
@@ -1653,7 +1665,14 @@ def _enter_hub_self_sync(*, start_timers: bool = True) -> None:
                 _site_housekeeping_stop = _site_relay_listener.start_housekeeping(
                     get_conn=get_retail_conn,
                     nonce_ttl_seconds=_site_relay_replay.DEFAULT_NONCE_TTL_SECONDS,
-                    consumer_floor_provider=_hub_own_consumer_floors,
+                    # SYNC-JOIN (2026-10-13): a leading 0 floor means the
+                    # hourly sweep deletes NO site_sync_events (it still
+                    # expires replay nonces). The hub prunes by the same rule
+                    # as Owner's relay, so a device paired after a sweep would
+                    # miss the shop's history -- proven for the cloud relay,
+                    # read from code for the hub. Remove once a bootstrap path
+                    # exists (ROADMAP "SYNC-JOIN").
+                    consumer_floor_provider=_hub_housekeeping_floors,
                 )
                 logging.getLogger(__name__).info(
                     'Hub self-sync ON: this till\'s own books now read and write its own '

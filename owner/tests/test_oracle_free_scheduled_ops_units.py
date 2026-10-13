@@ -89,6 +89,18 @@ class TestScheduledOpsUnitsReferenceRealCliCommands:
         assert ("sync", "prune-events") in invoked
         assert ("reports", "generate-scheduled") in invoked
 
+    def test_the_sync_prune_runs_as_a_dry_run_only(self):
+        """SYNC-JOIN stop-gap (2026-10-13): `sync prune-events --apply`
+        deletes history a device activated later can never get back
+        (measured: test_sync_late_join_after_prune_cross_stack.py). Until a
+        bootstrap path exists the nightly job must stay a dry run; this
+        fails the moment `--apply` comes back."""
+        script = Path(__file__).resolve().parents[1] / "deploy" / "oracle-free" / "run_scheduled_ops.sh"
+        live_lines = [l for l in script.read_text(encoding="utf-8").splitlines()
+                      if "prune-events" in l and not l.lstrip().startswith("#")]
+        assert live_lines, "the nightly sync prune (dry run) disappeared entirely"
+        assert not any("--apply" in l for l in live_lines), live_lines
+
     def test_every_invoked_command_is_a_real_registered_cli_command(self, app):
         registered = _registered_cli_command_paths(app)
         invoked = _invoked_command_paths_from_run_scheduled_ops_sh()

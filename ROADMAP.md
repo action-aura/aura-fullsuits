@@ -8053,3 +8053,24 @@ RETAIL_SCHEMA_VERSION 52 -> 53. Nobody else bumps it. New stored value `customer
 - OPEN, UNPROVEN: because cursor pruning is already live, a device joining LATER may miss business rows every existing device has
   already acked (reannounce.py covers authority state only). Needs a two-then-third-device test on the Lab rig.
 - Arabic privacy text: none in repo; must follow the corrected PRIVACY.md when written.
+
+## 2026-10-13 — SYNC-JOIN: a device that joins a shop late never gets its history (REAL, measured) — stop-gap in, real fix open
+
+Measured (owner/tests/test_sync_late_join_after_prune_cross_stack.py, 49e62768): three real retail processes on one
+licence through a real Owner; A makes 2 products + 1 customer + 1 sale, B syncs; the production `sync prune-events
+--apply` takes the licence's relay events 15 -> 1; device C activated afterwards pulls from 0 and gets 0 of 2
+products, no customer, no sale (control without prune: all of them). Cause: the prune counts only installations
+that exist when it runs; activation creates no cursor row; the joiner pulls from 0 and there is no snapshot endpoint;
+reannounce.py re-sends only users/permissions/tills. The LAN hub prunes by the same rule (code read, not measured).
+
+Stop-gap (this commit): Owner's nightly job runs the prune as a DRY RUN only (run_scheduled_ops.sh; pinned by
+test_the_sync_prune_runs_as_a_dry_run_only, mutation-proved), and the hub's housekeeping holds its watermark at 0
+(`app._hub_housekeeping_floors`, pinned by retail_sync_join_hub_floor_test.py, mutation-proved; replay nonces still
+expire). The proof test stays xfail(strict) until the real fix lands.
+
+OPEN: (1) the live Owner VM still runs the OLD script until redeployed — every night it prunes more; (2) events
+already pruned on the live relay are gone; (3) storage headroom on Neon's free tier must be measured before choosing
+the fix; (4) suspected, not measured: the users/permissions stream has the same gap (a late joiner may have nobody
+who can sign in), and one cursor per installation shared by two streams can let one stream's lag be pruned.
+Real fix options: a. keep newest event per record (1–2 wk, saves little); b. snapshot/bootstrap endpoint (3–4 wk,
+recommended end state); c. existing devices re-send on join (medium); d. stop pruning (the stop-gap).

@@ -80,7 +80,15 @@ log "Starting Oracle Free scheduled ops (compose dir: $COMPOSE_DIR)"
 run_job "commercial expiry-scan --apply" commercial expiry-scan --apply
 run_job "commercial reconcile --apply" commercial reconcile --apply
 run_job "commercial device-limit-scan --apply" commercial device-limit-scan --apply
-run_job "sync prune-events --apply" sync prune-events --apply
+# SYNC-JOIN (2026-10-13): DRY RUN ONLY until new devices can bootstrap.
+# Measured on a real three-device run (owner/tests/
+# test_sync_late_join_after_prune_cross_stack.py): the prune deletes every
+# event the devices that EXIST tonight have acked; a device activated later
+# pulls from seq 0 and finds the shop's earlier products, customers and sales
+# gone (15 events -> 1; late joiner got 0 of 2 products). The dry run still
+# reports counts and fires the storage alarms. Re-enable --apply only after a
+# snapshot/bootstrap path exists (ROADMAP "SYNC-JOIN").
+run_job "sync prune-events (dry-run; SYNC-JOIN gap)" sync prune-events
 # Added 2026-10-10: cleanups that had a function but no caller. Crash reports
 # keep 90 days; `commercial housekeeping` expires stale SENT quotes and purges
 # expired replay nonces / idempotency records / old rate-limit counters.
