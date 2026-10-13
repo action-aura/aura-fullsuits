@@ -160,7 +160,7 @@ from core.retail import tenders as tender_engine
 # UI-3a (schema v54): cart-level amount discounts / "make the total X" (pure, exact in
 # minor units) and the failure throttle behind a manager-PIN approval.
 from core.retail import cart_discount as cart_disc
-from core.retail.pin_throttle import PinThrottle as _PinThrottle
+from core.retail import pin_throttle as _pin_throttle
 # Schema v38, ROADMAP.md's "retail schema v38 CLAIMED: a real general
 # ledger" entry -- the double-entry posting core. UNLIKE returns_settlement
 # above, this one DOES take a connection and write (the reorder_hook.py /
@@ -1198,10 +1198,6 @@ def _this_terminal_open_session_id(conn, cid):
     except Exception:
         return None
 
-#: UI-3a. Wrong manager PINs per approver: 5 in 15 minutes locks that approver (HTTP 429
-#: PIN_LOCKED) for the rest of the window. Module-level on purpose -- see core/retail/pin_throttle.py.
-_APPROVAL_PIN_THROTTLE = _PinThrottle()
-
 #: UI-3a. The capability that lets a session set its own price on a line. The design asks
 #: for a NEW code `retail.price_override`; adding one to the identity registry needs a
 #: registry schema bump + backfill (commercial_runtime/identity, outside this wave's file
@@ -1222,6 +1218,21 @@ def _approval_error(status, code, message, **data):
     return jsonify(body), status
 
 
+def _audit_pin_event(action, approver_uid, why):
+    """One audit row for a refused / locked manager-PIN approval, on its OWN connection and
+    committed at once (the sale that asked is refused, so nothing else would commit it). It
+    names the approver and the cashier and NEVER the PIN."""
+    aconn = get_retail_conn()
+    try:
+        _audit(aconn, action, 'discount_approval', approver_uid,
+               'approver=%s cashier=%s reason=%s' % (approver_uid, _uid(), why))
+        aconn.commit()
+    except Exception:
+        log.exception('PIN audit row could not be written: action=%r', action)
+    finally:
+        aconn.close()
+
+
 def _verify_discount_approver(cid, approval):
     """Verify a manager's PIN for a discount / price override the cashier may not give alone.
 
@@ -1229,11 +1240,18 @@ def _verify_discount_approver(cid, approval):
     Returns `(approver, None)` with `approver = {'id', 'uid'}` on success, else
     `(None, (response, status))` already shaped for `return`.
 
-    ORDER matters and is deliberate: resolve -> throttle -> not-the-cashier -> PIN -> authority.
-    The authority check comes AFTER the PIN so a caller without the PIN learns nothing about who
-    is a manager; an unknown approver and a wrong PIN produce the SAME refusal and both count
-    toward the lockout, so neither can be probed for free. A locked approver is refused even
-    with the right PIN (otherwise a sweep would just continue until it hit).
+    ORDER matters and is deliberate (verifier round 2026-10-13, HIGH-1 + LOW "PIN oracle"):
+      1. resolve the approver (company-scoped) and judge everything that is NOT the PIN --
+         exists, same company, active, holds the authority;
+      2. the cashier cannot approve themselves (refused, not counted, says nothing about PINs);
+      3. COUNT the attempt first (`reserve_attempt`, one BEGIN IMMEDIATE on the retail DB) --
+         a locked approver is refused 429 with no PIN verified, even a correct one;
+      4. only then verify the PIN, outside any transaction (the KDF is slow);
+      5. a success undoes its own one increment; a failure leaves it counted.
+    "Wrong PIN", "no such approver" and "approver not allowed" all return the SAME 403
+    APPROVAL_REJECTED, so the response can never confirm that a PIN was correct. Every refusal
+    writes a DISCOUNT_APPROVAL_PIN_REFUSED audit row; the attempt that locks an approver writes
+    DISCOUNT_APPROVAL_LOCKED. The PIN is never written anywhere.
     """
     if not isinstance(approval, dict):
         return None, _approval_error(400, 'APPROVAL_INVALID', 'The manager approval is malformed.')
@@ -1248,23 +1266,40 @@ def _verify_discount_approver(cid, approval):
             "(id=? OR uid=? OR lower(email)=lower(?) OR lower(employee_id)=lower(?)) LIMIT 1",
             (cid, ref, ref, ref, ref)).fetchone()
         approver_id = row['id'] if row else None
-        key = ('user', approver_id) if approver_id else ('ref', str(cid), ref.lower())
-        if _APPROVAL_PIN_THROTTLE.is_locked(key):
-            return None, _approval_error(
-                429, 'PIN_LOCKED',
-                'Too many wrong PINs for this manager. Try again in a few minutes.',
-                retry_after_seconds=_APPROVAL_PIN_THROTTLE.retry_after(key))
         if approver_id and approver_id == session.get('mt_user_id'):
             return None, _approval_error(
                 403, 'APPROVER_IS_CASHIER', 'A different person must approve this. Pick a manager.')
-        refused = _approval_error(403, 'APPROVAL_REJECTED', 'That manager PIN was not accepted.')
-        if not row or str(row['status'] or '').lower() != 'active'                 or not _verify_user_pin(reg, approver_id, pin):
-            _APPROVAL_PIN_THROTTLE.record_failure(key)
-            return None, refused
-        if not (str(row['role'] or '') == 'admin' or _user_has_capability(reg, approver_id, CAP_DISCOUNT)):
+        allowed = bool(
+            row and str(row['status'] or '').lower() == 'active'
+            and (str(row['role'] or '') == 'admin' or _user_has_capability(reg, approver_id, CAP_DISCOUNT)))
+        bucket = (row['uid'] or approver_id) if row else _pin_throttle.UNKNOWN_APPROVER
+        tconn = get_retail_conn()
+        try:
+            _pin_throttle.ensure_table(tconn)
+            tconn.commit()
+            counted, retry_after, just_locked = _pin_throttle.reserve_attempt(tconn, cid, bucket)
+        finally:
+            tconn.close()
+        if not counted:
             return None, _approval_error(
-                403, 'APPROVER_NOT_AUTHORISED', 'That person is not allowed to approve discounts.')
-        _APPROVAL_PIN_THROTTLE.reset(key)
+                429, 'PIN_LOCKED',
+                'Too many wrong PINs for this manager. Try again in a few minutes.',
+                retry_after_seconds=retry_after)
+        if just_locked:
+            _audit_pin_event('DISCOUNT_APPROVAL_LOCKED', bucket, 'too_many_wrong_pins')
+        refused = _approval_error(403, 'APPROVAL_REJECTED', 'That manager PIN was not accepted.')
+        # A not-allowed (or unknown) approver is refused WITHOUT looking at the PIN's value, but a
+        # known one still pays for one KDF run so the two refusals take the same time.
+        pin_ok = _verify_user_pin(reg, approver_id, pin) if approver_id else False
+        if not allowed or not pin_ok:
+            _audit_pin_event('DISCOUNT_APPROVAL_PIN_REFUSED', bucket,
+                             'wrong_pin' if allowed else 'approver_not_allowed')
+            return None, refused
+        tconn = get_retail_conn()
+        try:
+            _pin_throttle.release_attempt(tconn, cid, bucket)
+        finally:
+            tconn.close()
         return {'id': approver_id, 'uid': (row['uid'] or approver_id)}, None
     finally:
         reg.close()

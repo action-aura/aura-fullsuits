@@ -46,7 +46,7 @@ app.config["TESTING"] = True
 from commercial_runtime.identity import user_accounts  # noqa: E402
 from commercial_runtime.identity.registry_db import get_conn as registry_conn  # noqa: E402
 from commercial_runtime.security.passwords import hash_password  # noqa: E402
-from core.retail.pin_throttle import PinThrottle  # noqa: E402
+from core.retail import pin_throttle  # noqa: E402
 from database.schema import get_retail_conn  # noqa: E402
 import api.retail_api as retail_api  # noqa: E402
 
@@ -59,8 +59,9 @@ def teardown_module(module):
 
 
 @pytest.fixture(autouse=True)
-def _fresh_throttle_and_no_push(monkeypatch):
-    monkeypatch.setattr(retail_api, '_APPROVAL_PIN_THROTTLE', PinThrottle())
+def _no_push(monkeypatch):
+    # (The PIN counter is in the database and keyed by company+approver; every test's `shop` is a
+    # fresh company, so nothing needs resetting between tests.)
     monkeypatch.setattr(retail_api, '_sync_nudge', lambda: None)
 
 
@@ -312,15 +313,67 @@ def test_an_unknown_approver_and_a_wrong_pin_look_the_same(shop):
     assert (a.status_code, a.get_json()['code']) == (b.status_code, b.get_json()['code']) == (403, 'APPROVAL_REJECTED')
 
 
-def test_an_approver_without_the_authority_is_refused(shop):
-    cid, owner, cashier, _, pids = shop
+def test_an_approver_without_the_authority_is_refused_with_the_same_answer_as_a_wrong_pin(shop):
+    # Verifier LOW-3: the endpoint used to answer APPROVER_NOT_AUTHORISED only AFTER the PIN
+    # verified, so for any non-manager it confirmed whether a guessed PIN was right. Now the
+    # answer for "right PIN, not allowed" is byte-identical to "wrong PIN". What this can no
+    # longer catch: the old distinct code. What it catches instead: the oracle coming back.
+    cid, owner, cashier, manager, pids = shop
     _set_limit(owner, '5')
     other_cashier = _make_user('cashier', cid, pin='5555')
     before = _state()
-    r = _post(cashier, _cart(pids, cart_discount_amount=0.65, discount_reason='x',
-                             approval=_approval(other_cashier, pin='5555')))
-    assert r.status_code == 403 and r.get_json()['code'] == 'APPROVER_NOT_AUTHORISED'
+    right_but_not_allowed = _post(cashier, _cart(pids, cart_discount_amount=0.65, discount_reason='x',
+                                                 approval=_approval(other_cashier, pin='5555')))
+    wrong_and_not_allowed = _post(cashier, _cart(pids, cart_discount_amount=0.65, discount_reason='x',
+                                                 approval=_approval(other_cashier, pin='1212')))
+    wrong_for_a_manager = _post(cashier, _cart(pids, cart_discount_amount=0.65, discount_reason='x',
+                                               approval=_approval(manager, pin='1212')))
+    bodies = [r.get_json() for r in (right_but_not_allowed, wrong_and_not_allowed, wrong_for_a_manager)]
+    assert all(r.status_code == 403 for r in (right_but_not_allowed, wrong_and_not_allowed, wrong_for_a_manager))
+    assert bodies[0] == bodies[1] == bodies[2] and bodies[0]['code'] == 'APPROVAL_REJECTED'
     assert _state() == before
+
+
+def test_an_approver_from_another_company_is_refused(shop):          # verifier survivor V1
+    _, owner, cashier, _, pids = shop
+    _set_limit(owner, '5')
+    foreign_manager = _make_user('manager', str(uuid.uuid4()), pin='8888')
+    before = _state()
+    r = _post(cashier, _cart(pids, cart_discount_amount=0.65, discount_reason='x',
+                             approval=_approval(foreign_manager, pin='8888')))
+    assert r.status_code == 403 and r.get_json()['code'] == 'APPROVAL_REJECTED'
+    assert _state() == before
+
+
+def test_a_disabled_or_deleted_approver_is_refused(shop):            # verifier survivor V2
+    cid, owner, cashier, manager, pids = shop
+    _set_limit(owner, '5')
+    assert _post(cashier, _cart(pids, cart_discount_amount=0.65, discount_reason='x',
+                                approval=_approval(manager))).status_code == 200    # control: allowed while active
+    for status in ('disabled', 'deleted'):
+        conn = registry_conn()
+        conn.execute("UPDATE users SET status=? WHERE id=?", (status, manager.user_id))
+        conn.commit(); conn.close()
+        before = _state()
+        r = _post(cashier, _cart(pids, cart_discount_amount=0.65, discount_reason='x',
+                                 approval=_approval(manager)))
+        assert r.status_code == 403 and r.get_json()['code'] == 'APPROVAL_REJECTED', (status, r.get_json())
+        assert _state() == before
+
+
+def test_an_approved_per_line_percent_over_the_limit_needs_a_reason(shop):     # verifier survivor V3
+    _, owner, cashier, manager, pids = shop
+    _set_limit(owner, '5')
+    body = _cart(pids, approval=_approval(manager))
+    for it in body['items']:
+        it['discount_pct'] = 20
+    before = _state()
+    r = _post(cashier, body)
+    assert r.status_code == 400 and r.get_json()['code'] == 'DISCOUNT_REASON_REQUIRED'
+    assert _state() == before
+    body['discount_reason'] = 'Damaged'
+    body['idempotency_key'] = str(uuid.uuid4())
+    assert _post(cashier, body).status_code == 200
 
 
 def test_the_cashier_cannot_approve_themselves(shop):
@@ -419,3 +472,164 @@ def test_the_approver_list_names_only_pin_holding_managers_and_leaks_nothing(sho
     ok = _post(cashier, _cart(pids, cart_discount_amount=0.65, discount_reason='x',
                               approval={'approver': rows[0]['ref'], 'pin': PIN}))
     assert ok.status_code == 200, ok.get_json()
+
+
+# ── the PIN lockout: counted BEFORE the KDF, kept in the database, audited ───────────────
+# Verifier HIGH-1: 15 wrong PINs were evaluated in one burst against a design of 5; a success wiped
+# failures; a restart cleared the lock; nothing was audited.
+
+def _attempt_row(cid, approver_uid):
+    rows = _q("SELECT failures, locked_until FROM pin_approval_attempts WHERE company_id=? AND approver_uid=?",
+              cid, approver_uid)
+    return rows[0] if rows else None
+
+
+def _wrong(cashier, manager, pids, pin='0000'):
+    return _post(cashier, _cart(pids, cart_discount_amount=0.65, discount_reason='x',
+                                approval=_approval(manager, pin=pin)))
+
+
+def test_a_parallel_burst_of_wrong_pins_verifies_at_most_five(shop, monkeypatch):
+    """The measurement the verifier quoted (15 in a burst on waitress), against the real route.
+
+    The wrapper makes each PIN check slow (as PBKDF2 is) so, if the attempt were counted AFTER
+    the check, every thread in flight would reach the check before any failure was recorded."""
+    import threading
+    import time
+    cid, owner, cashier, manager, pids = shop
+    _set_limit(owner, '5')
+    real = retail_api._verify_user_pin
+    seen = {'n': 0}
+    guard = threading.Lock()
+
+    def slow_counting_verify(reg, user_id, pin):
+        with guard:
+            seen['n'] += 1
+        time.sleep(0.15)
+        return real(reg, user_id, pin)
+
+    monkeypatch.setattr(retail_api, '_verify_user_pin', slow_counting_verify)
+    clients = []
+    for _ in range(12):
+        # same person, 12 browser windows: log in again as the cashier for each
+        c = app.test_client()
+        r = c.post('/api/auth/login', json={'email': cashier.email, 'password': 'UiThreeAPW1'})
+        assert r.status_code == 200
+        clients.append(c)
+    results, before = [], _state()
+
+    def fire(c):
+        results.append(c.post(f'{API}/sales', json=_cart(
+            pids, cart_discount_amount=0.65, discount_reason='x', approval=_approval(manager, pin='0000'))).status_code)
+
+    threads = [threading.Thread(target=fire, args=(clients[i % 12],)) for i in range(40)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(results) == 40
+    print('PARALLEL BURST: verified=%d  403=%d  429=%d' % (seen['n'], results.count(403), results.count(429)))
+    assert seen['n'] <= pin_throttle.MAX_FAILURES, seen
+    assert results.count(403) == pin_throttle.MAX_FAILURES and results.count(429) == 40 - pin_throttle.MAX_FAILURES
+    assert _state() == before
+    row = _attempt_row(cid, manager.user_uid)
+    assert row['failures'] == pin_throttle.MAX_FAILURES and row['locked_until']
+
+
+def test_the_lock_is_in_the_database_so_a_restart_cannot_clear_it(shop):
+    """No in-process object holds the lock: it is a row, read fresh by every request. A restart
+    (a new process) sees exactly the same row. Simulated by a connection that shares nothing."""
+    cid, owner, cashier, manager, pids = shop
+    _set_limit(owner, '5')
+    for _ in range(5):
+        assert _wrong(cashier, manager, pids).status_code == 403
+    assert not hasattr(retail_api, '_APPROVAL_PIN_THROTTLE')           # nothing in memory to lose
+    row = _attempt_row(cid, manager.user_uid)
+    assert row['failures'] == 5 and row['locked_until']
+    fresh = get_retail_conn()                                          # what a restarted process would open
+    try:
+        allowed, retry, _ = pin_throttle.reserve_attempt(fresh, cid, manager.user_uid)
+    finally:
+        fresh.close()
+    assert allowed is False and retry > 0
+    locked = _post(cashier, _cart(pids, cart_discount_amount=0.65, discount_reason='x',
+                                  approval=_approval(manager)))                  # the RIGHT pin
+    assert locked.status_code == 429 and locked.get_json()['code'] == 'PIN_LOCKED'
+
+
+def test_a_right_pin_undoes_only_its_own_attempt_never_the_failures_before_it(shop):
+    cid, owner, cashier, manager, pids = shop
+    _set_limit(owner, '5')
+    for _ in range(3):
+        assert _wrong(cashier, manager, pids).status_code == 403
+    assert _attempt_row(cid, manager.user_uid)['failures'] == 3
+    ok = _post(cashier, _cart(pids, cart_discount_amount=0.65, discount_reason='x', approval=_approval(manager)))
+    assert ok.status_code == 200, ok.get_json()
+    assert _attempt_row(cid, manager.user_uid)['failures'] == 3        # NOT wiped to 0
+    assert _wrong(cashier, manager, pids).status_code == 403            # 4th
+    assert _wrong(cashier, manager, pids).status_code == 403            # 5th -> locks
+    assert _wrong(cashier, manager, pids).status_code == 429
+
+
+def test_every_refusal_is_an_audit_row_without_the_pin_and_a_lockout_is_one_too(shop):
+    cid, owner, cashier, manager, pids = shop
+    _set_limit(owner, '5')
+    other = _make_user('cashier', cid, pin='5656')                    # not allowed to approve
+    for _ in range(4):
+        assert _wrong(cashier, manager, pids, pin='7391').status_code == 403
+    assert _wrong(cashier, other, pids, pin='5656').status_code == 403
+    refused = _q("SELECT user_id, entity_id, details FROM audit_log WHERE action='DISCOUNT_APPROVAL_PIN_REFUSED' "
+                 "AND entity_id IN (?,?)", manager.user_uid, other.user_uid)
+    assert len([r for r in refused if r['entity_id'] == manager.user_uid]) == 4
+    assert len([r for r in refused if r['entity_id'] == other.user_uid]) == 1
+    for r in refused:
+        assert r['user_id'] == cashier.user_id and 'cashier=%s' % cashier.user_id in r['details']
+        assert '7391' not in r['details'] and '5656' not in r['details']
+    assert _q("SELECT COUNT(*) AS n FROM audit_log WHERE action='DISCOUNT_APPROVAL_LOCKED' AND entity_id=?",
+              manager.user_uid)[0]['n'] == 0
+    assert _wrong(cashier, manager, pids, pin='7391').status_code == 403      # the 5th: locks
+    locked = _q("SELECT details FROM audit_log WHERE action='DISCOUNT_APPROVAL_LOCKED' AND entity_id=?",
+                manager.user_uid)
+    assert len(locked) == 1 and '7391' not in locked[0]['details']
+    assert _wrong(cashier, manager, pids, pin='7391').status_code == 429      # refused while locked: no new rows
+    assert _q("SELECT COUNT(*) AS n FROM audit_log WHERE action='DISCOUNT_APPROVAL_LOCKED' AND entity_id=?",
+              manager.user_uid)[0]['n'] == 1
+
+
+def test_guessing_at_unknown_names_cannot_grow_the_table(shop):
+    cid, owner, cashier, _, pids = shop
+    _set_limit(owner, '5')
+    for i in range(12):
+        r = _post(cashier, _cart(pids, cart_discount_amount=0.65, discount_reason='x',
+                                 approval={'approver': 'ghost-%d@nowhere' % i, 'pin': PIN}))
+        assert r.status_code in (403, 429)
+    rows = _q("SELECT approver_uid FROM pin_approval_attempts WHERE company_id=?", cid)
+    assert [r['approver_uid'] for r in rows] == [pin_throttle.UNKNOWN_APPROVER]
+
+
+def test_the_counter_rolls_over_when_the_window_or_the_lock_runs_out():
+    """Pure counter, injected clock (no sleeping). Both directions: held inside the window,
+    released after it."""
+    conn = get_retail_conn()
+    try:
+        pin_throttle.ensure_table(conn); conn.commit()
+        co, who, t0 = 'c-%s' % uuid.uuid4().hex, 'a-1', 1_000_000.0
+        for i in range(4):
+            assert pin_throttle.reserve_attempt(conn, co, who, now=t0 + i) == (True, 0, False)
+        assert pin_throttle.reserve_attempt(conn, co, who, now=t0 + 5) == (True, 0, True)      # 5th locks
+        allowed, retry, _ = pin_throttle.reserve_attempt(conn, co, who, now=t0 + 6)
+        assert allowed is False and 0 < retry <= pin_throttle.LOCK_SECONDS + 1
+        assert pin_throttle.reserve_attempt(conn, co, who, now=t0 + 5 + pin_throttle.LOCK_SECONDS - 1)[0] is False
+        assert pin_throttle.reserve_attempt(conn, co, who, now=t0 + 5 + pin_throttle.LOCK_SECONDS + 1) == (True, 0, False)
+        # a window that has run out forgets old failures
+        co2 = 'c-%s' % uuid.uuid4().hex
+        for i in range(4):
+            pin_throttle.reserve_attempt(conn, co2, who, now=t0 + i)
+        assert pin_throttle.reserve_attempt(conn, co2, who, now=t0 + pin_throttle.WINDOW_SECONDS + 10) == (True, 0, False)
+        row = conn.execute("SELECT failures FROM pin_approval_attempts WHERE company_id=?", (co2,)).fetchone()
+        assert row[0] == 1
+        # release floors at 0
+        pin_throttle.release_attempt(conn, co2, who); pin_throttle.release_attempt(conn, co2, who)
+        assert conn.execute("SELECT failures FROM pin_approval_attempts WHERE company_id=?", (co2,)).fetchone()[0] == 0
+    finally:
+        conn.close()

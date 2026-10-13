@@ -1413,7 +1413,9 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # TIME, so "sold below list" can be reported without joining today's price), `sales.discount_reason`
 # (why a cart-level / over-limit discount was given) and `sales.discount_approved_by` (the
 # approving manager's users.uid). Per-line `discount_pct` stays the only stored discount figure --
-# an amount discount is converted to it, so no new money column exists. Appended LAST.
+# an amount discount is converted to it, so no new money column exists. Plus one
+# local-only table, `pin_approval_attempts (company_id, approver_uid, window_start, failures,
+# locked_until)`: the persistent manager-PIN lockout (never synced). Appended LAST.
 RETAIL_SCHEMA_VERSION = 54
 
 # ── v13: which table gets which group of columns ────────────────────────────
@@ -2676,6 +2678,15 @@ def _migrate_add_ui3a_discount_columns(conn):
         cols = {row[1] for row in conn.execute('PRAGMA table_info("%s")' % table).fetchall()}
         if column not in cols:
             conn.execute('ALTER TABLE "%s" ADD COLUMN %s %s' % (table, column, ddl))
+    # Verifier round 2026-10-13 (HIGH-1): the manager-PIN failure counter moved out of process
+    # memory into this table so a restart cannot clear a lock. v54 had not shipped, so the same
+    # step grows it (no v55). CREATE IF NOT EXISTS: a database that already ran the earlier v54
+    # gets it on the next replay of the chain, a fresh one on its first run.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS pin_approval_attempts ("
+        "company_id TEXT NOT NULL, approver_uid TEXT NOT NULL, window_start TEXT, "
+        "failures INTEGER NOT NULL DEFAULT 0, locked_until TEXT, "
+        "PRIMARY KEY (company_id, approver_uid))")
 
 
 def _migrate_add_money4b_expenses(conn):
