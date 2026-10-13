@@ -31,7 +31,7 @@ from typing import Callable, Optional
 
 from . import audit, settings
 from .outbox import OutboxRepository
-from .ubl import document_sha256, to_ubl_xml
+from .ubl import document_sha256, render_document_xml
 
 _BACKOFF_BASE_SECONDS = 30
 _BACKOFF_CAP_SECONDS = 3600
@@ -193,7 +193,7 @@ class OutboxWorker:
         # get processed.
         try:
             document = self._document_builder(conn, row)
-            xml = to_ubl_xml(document)
+            xml = render_document_xml(document)
             sha = document_sha256(xml)
         except Exception as exc:
             audit.record(conn, self._app_data_dir, company_id=self._company_id, event='PROVIDER_ERROR',

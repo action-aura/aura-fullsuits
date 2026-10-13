@@ -9,3 +9,10 @@ Fill this in from the official ISTD integration package once obtained.
 Until then, `providers/direct_istd.py` raises `NotImplementedError` rather
 than guessing, and this file stays empty rather than containing fabricated
 field names.
+
+## Update 2026-10-13
+
+A document profile built from PUBLIC second-hand sources (not the official
+package) now exists: see `../istd-profile.md`. It does not replace the
+official integration package; it is what to check against it. The portal-issued
+details (endpoint, auth headers, response codes) are still unconfirmed here.
