@@ -133,6 +133,23 @@ function testRoundingText(src) {
   console.log('PASS: the receipt line carries the sign and is empty when there was none');
 }
 
+function testShortGuardUsesTheRoundedRemainder(src) {
+  // A card part of 5.000 is already taken; 5.457 is left; at 0.050 nearest the cash due is 5.450.
+  const { R, get } = setup(src, { interval: 0.05, rule: 'nearest' }, 'cash', 10.457);
+  R._tenderParts = [{ method: 'card', minor: 5000 }];
+  get('pos-tendered').value = '5.45';
+  let r = R._buildTenderPayload();
+  assert.strictEqual(r.ok, true, 'exactly the rounded remainder must be accepted, got ' + JSON.stringify(r));
+  get('pos-tendered').value = '5.4';
+  r = R._buildTenderPayload();
+  assert.strictEqual(r.ok, false, 'less than the rounded remainder is still short');
+  const off = setup(src, { interval: 0, rule: 'nearest' }, 'cash', 10.457);
+  off.R._tenderParts = [{ method: 'card', minor: 5000 }];
+  off.get('pos-tendered').value = '5.45';
+  assert.strictEqual(off.R._buildTenderPayload().ok, false, 'rounding off: 5.450 is short of 5.457 as before');
+  console.log('PASS: the short-cash guard judges against the rounded remainder (and the old exact one when off)');
+}
+
 function mutant(src, from, to) {
   assert.strictEqual(src.split(from).length - 1, 1, `mutation anchor is not unique: ${from}`);
   return src.replace(from, to);
@@ -150,6 +167,7 @@ function main() {
   testOnlyCashRounds(SRC);
   testChangeAgainstRoundedDue(SRC);
   testRoundingText(SRC);
+  testShortGuardUsesTheRoundedRemainder(SRC);
   mustFail('the cash-method gate removed (a card total rounds)',
     testOnlyCashRounds, mutant(SRC, "|| this._paymentMethod !== 'cash' ||", '||'));
   mustFail('the rule ignored (always nearest)',
@@ -159,6 +177,8 @@ function main() {
     testChangeAgainstRoundedDue, mutant(SRC, '    amountDue = this._fromMinor(this._roundCashMinor(this._toMinor(amountDue)));   // MONEY-5: coins, not fils\n', ''));
   mustFail('the sign dropped from the rounding text',
     testRoundingText, mutant(SRC, "return (v < 0 ? '−' : '+') + Math.abs(v)", "return '' + Math.abs(v)"));
+  mustFail('the split guard back on the exact remainder',
+    testShortGuardUsesTheRoundedRemainder, mutant(SRC, 'if (finalMinor < this._roundCashMinor(remaining)) {', 'if (finalMinor < remaining) {'));
   console.log('PASS: retail_money5_till_rounding_test.js');
 }
 

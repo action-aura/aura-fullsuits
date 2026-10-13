@@ -9026,7 +9026,8 @@ const RetailSystem = {
       const raw = box && box.value !== '' ? parseFloat(box.value) : NaN;
       if (raw > 0) {
         finalMinor = this._toMinor(raw);
-        if (finalMinor < remaining) {
+        // MONEY-5: what must be handed over is the ROUNDED remainder (the server rounds the cash leg).
+        if (finalMinor < this._roundCashMinor(remaining)) {
           return { ok: false, error: t('Cash is less than what is left. To take it as part of the payment, press F1, then choose how the rest is paid.') };
         }
       }
@@ -10408,7 +10409,9 @@ const RetailSystem = {
     // _buildTenderPayload (below); without parts it is today's check, with a
     // message that now says how to take the cash as a part instead.
     if (!(this._tenderParts && this._tenderParts.length)
-        && this._paymentMethod === 'cash' && tendered > 0 && tendered < amountDue) {
+        && this._paymentMethod === 'cash' && tendered > 0
+        // MONEY-5: short is judged against the ROUNDED amount due (3.450 covers a 3.457 sale at 0.050).
+        && this._toMinor(tendered) < this._roundCashMinor(this._toMinor(amountDue))) {
       SubsystemApp.showToast(t('Cash is less than what is left. To take it as part of the payment, press F1, then choose how the rest is paid.'), 'error'); return;
     }
     const discOver = this._discountOverLimit();
