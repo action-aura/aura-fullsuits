@@ -18,13 +18,24 @@ from commercial_runtime.einvoicing.tests.test_istd_profile import (
 )
 from commercial_runtime.einvoicing.istd_ubl import to_istd_xml
 
-lxml = pytest.importorskip('lxml.etree', reason='lxml not installed')
 _DIR = os.environ.get('AURA_UBL21_XSD_DIR')
-pytestmark = pytest.mark.skipif(not _DIR, reason='AURA_UBL21_XSD_DIR not set (see module docstring)')
+# Skips happen PER TEST (inside the fixture), never at module level: a
+# module-level importorskip/skip collects zero tests, pytest exits 5, and
+# products/run_all_tests.py rightly reports exit 5 as a failure (measured
+# 2026-10-13 on the integ/p2 full run: "1 skipped" counted as a FAIL).
+lxml = None
 
 
 @pytest.fixture(scope='module')
 def schema():
+    global lxml
+    try:
+        import lxml.etree as _etree
+    except ImportError:
+        pytest.skip('lxml not installed')
+    if not _DIR:
+        pytest.skip('AURA_UBL21_XSD_DIR not set (see module docstring)')
+    lxml = _etree
     path = os.path.join(_DIR, 'xsdrt', 'maindoc', 'UBL-Invoice-2.1.xsd')
     return lxml.XMLSchema(lxml.parse(path))
 
