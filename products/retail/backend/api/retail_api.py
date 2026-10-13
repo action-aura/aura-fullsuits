@@ -8557,6 +8557,8 @@ def create_sale():
         # `_evaluate_offline_sales_stop` above is: every line of one sale is
         # judged against the SAME snapshot of "is this device behind".
         behind_on_sync = _is_device_behind_on_sync()
+        # MONEY-5: read once, like `behind_on_sync`, from the same `_s` snapshot this sale uses.
+        allow_negative_stock = str(_s.get('allow_negative_stock')) == '1'
         # Launch-readiness Phase 7 stage 7d-iii follow-up (two-lines-same-
         # product oversell fix, 2026-08-29): `inventory_balances` is NOT
         # decremented until the SEPARATE write loop further down (`for line
@@ -8701,7 +8703,12 @@ def create_sale():
                 # quantity) -- WHAT is compared to `on_hand` is what changed
                 # here; WHEN this refuses vs. relaxes is untouched, still
                 # gated purely on `behind_on_sync` below.
-                if not behind_on_sync:
+                # MONEY-5 / review #9 part 1: the owner's `allow_negative_stock` setting takes the
+                # SAME path as being behind on sync -- allow the sale, flag it oversold, and let the
+                # write loop record the stock exception. Goods on the shelf that are not typed in yet
+                # are the everyday reason; the exception row is how the owner finds and fixes them.
+                # Default '0' keeps the hard refusal byte for byte.
+                if not behind_on_sync and not allow_negative_stock:
                     conn.rollback(); conn.close()
                     return jsonify({'status': 'error',
                                      'message': f'Insufficient stock for "{product["name"]}" (have {on_hand}, requested {requested_so_far}).'}), 400
@@ -15976,6 +15983,10 @@ _DEFAULT_SETTINGS = {
     # core/retail/cash_rounding.py; a stored value outside them reads as OFF, never a guess.
     'cash_rounding_interval': cash_rounding_engine.DEFAULT_INTERVAL,
     'cash_rounding_rule': cash_rounding_engine.DEFAULT_RULE,
+    # MONEY-5 (review #9 part 1): '1' lets create_sale sell past the recorded stock on a device that
+    # is NOT behind on sync -- the same path `behind_on_sync` takes (allow, flag the sale oversold,
+    # write the stock exception). '0' = the historic hard refusal. Owner-only (credit_settings_set).
+    'allow_negative_stock': '0',
     # 'after_discount' (default) | 'before_discount' -- see core/retail/pricing.py,
     # the single source of truth for what these two modes mean and compute.
     'tax_calculation_mode': tax_engine.DEFAULT_MODE,
@@ -16655,6 +16666,17 @@ def credit_settings_set():
                             'message': 'Rounding direction must be one of: '
                                        + ', '.join(cash_rounding_engine.VALID_RULES) + '.'}), 400
         data['cash_rounding_rule'] = _cr
+    if 'allow_negative_stock' in data:
+        _an = str(data['allow_negative_stock']).strip().lower()
+        if _an not in ('0', '1', 'true', 'false'):
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'ALLOW_NEGATIVE_STOCK_INVALID',
+                            'message': 'allow_negative_stock must be 0 or 1.'}), 400
+        data['allow_negative_stock'] = '1' if _an in ('1', 'true') else '0'
+        _old_an = '1' if str(_settings(conn, cid).get('allow_negative_stock')) == '1' else '0'
+        if _old_an != data['allow_negative_stock']:
+            _audit(conn, 'ALLOW_NEGATIVE_STOCK_CHANGED', 'retail_setting', 'allow_negative_stock',
+                   f"{_old_an} -> {data['allow_negative_stock']}")
     # LOYALTY-EARN: validated before any write, like the two above; stored as a
     # canonical plain-decimal string ('5', '2.5', '0') so it round-trips.
     if 'loyalty_earn_spend' in data:
@@ -16696,7 +16718,7 @@ def credit_settings_set():
         data['pos_favourites'] = json.dumps(_favs, separators=(',', ':'))
     for k in ('base_currency', 'default_credit_mode', 'default_credit_limit', 'enforce_credit_limit',
               'loyalty_point_value', 'cashier_discount_limit_pct', 'loyalty_earn_spend', 'pos_favourites',
-              'cash_rounding_interval', 'cash_rounding_rule'):
+              'cash_rounding_interval', 'cash_rounding_rule', 'allow_negative_stock'):
         if k in data:
             conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
                          "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
