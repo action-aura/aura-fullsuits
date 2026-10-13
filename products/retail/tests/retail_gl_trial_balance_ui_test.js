@@ -488,8 +488,12 @@ async function testEveryGuardIsProvenByBreakingIt() {
 
   proved.push(await provesMutation(
     '3. this._esc() is removed from the account name interpolation',
-    [['          <td style="font-weight:600">${this._esc(a.name)}</td>\n',
-      '          <td style="font-weight:600">${a.name}</td>\n']],
+    // Re-anchored 2026-10-13: POLISH-1's P&L "Other income" table added a
+    // 14-space-indented copy of this line, which contains the old 10-space
+    // anchor as a substring. Anchoring on the trial balance's own `rows` map
+    // keeps the mutation on THIS screen's interpolation and exactly once.
+    [['        const rows = accounts.map(a => `<tr>\n          <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(a.code)}</td>\n          <td style="font-weight:600">${this._esc(a.name)}</td>\n',
+      '        const rows = accounts.map(a => `<tr>\n          <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(a.code)}</td>\n          <td style="font-weight:600">${a.name}</td>\n']],
     async (src) => {
       const ctx = await renderScreen({ source: src, trialBalance: TB_XSS_OK });
       assert.ok(ctx.tbody().indexOf('<img src=x onerror=') === -1, 'still escaped somehow');
