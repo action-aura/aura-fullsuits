@@ -3197,6 +3197,21 @@ button.sub-nav-item.sub-settings-gear:focus-visible { outline: var(--focus-ring-
   transition: background 0.2s;
 }
 .sub-header-btn:hover { background: var(--surface-hover); }
+/* UI-3b item 1: tabs of a multi-screen entry (Reports & Books). A quiet underline bar between
+   the header and the screen; scrolls sideways on a phone instead of wrapping. */
+.sub-section-tabs {
+  display: flex; gap: 4px; flex: 0 0 auto; overflow-x: auto; scrollbar-width: none;
+  padding-inline: 20px; border-block-end: 1px solid var(--border-hairline, var(--border-default));
+}
+.sub-section-tabs[hidden] { display: none; }
+.sub-section-tab {
+  background: transparent; border: 0; border-block-end: 2px solid transparent; border-radius: 0;
+  padding: 10px 14px; min-block-size: 40px; white-space: nowrap; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--text-tertiary);
+}
+.sub-section-tab:hover { color: var(--text-primary); }
+.sub-section-tab.is-active { color: var(--text-primary); border-block-end-color: var(--sub-accent); }
+.sub-section-tab:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: -2px; }
 /* Smallest control in this set (36x36) -- the tighter end of the 0.96-0.99
    range reads as a real press at this size where 0.97-0.99 would barely
    register. */

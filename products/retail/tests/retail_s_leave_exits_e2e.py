@@ -220,12 +220,14 @@ def licence_case(browser, base, via):
     try:
         typed = dirty_hub(page)
         url = page.url
-        if via == "identity":
-            human_click(page, "#sub-identity-chip-btn", "identity chip")
-            human_click(page, '#sub-identity-menu .sub-identity-menu-item[onclick*="openLicensing"]', "Plan & devices")
-        elif via == "gear":
-            human_click(page, "#sub-settings-gear-btn", "Settings gear")
-            human_click(page, '#sub-settings-menu .sub-identity-menu-item[onclick*="openLicensing"]', "License & devices")
+        # UI-3b: the identity-menu "Plan & devices" row and the gear-menu "License & devices" row are gone
+        # (Plan & devices lives in the hub only). What this can no longer catch: those two rows skipping
+        # _leaveToPage -- they do not exist. The remaining ways in -- the licence banner and the phone More
+        # sheet -- both end in SubsystemApp.openLicensing(); "direct" drives that call itself.
+        if via == "direct":
+            # a statement, NOT `return`: openLicensing() returns the leave-guard promise, which only settles
+            # when the person answers the dialog -- awaiting it here would hang the evaluate forever.
+            page.evaluate("() => { SubsystemApp.openLicensing(); }")
         else:
             human_click(page, "#sub-tab-more", "More tab")
             page.locator(".sub-more-row").first.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
@@ -242,8 +244,7 @@ def licence_leaves_case(browser, base):
     ctx, page = open_page(browser, base)
     try:
         dirty_hub(page)
-        human_click(page, "#sub-identity-chip-btn", "identity chip")
-        human_click(page, '#sub-identity-menu .sub-identity-menu-item[onclick*="openLicensing"]', "Plan & devices")
+        page.evaluate("() => { SubsystemApp.openLicensing(); }")
         wait_dialog(page)
         discard(page)
         page.wait_for_url("**/static/licensing.html*", timeout=DEFAULT_WAIT_MS)
@@ -460,7 +461,7 @@ def main() -> int:
                 check("more", "phone More sheet WhatsApp row asks, and the sheet closes on 'Keep editing'",
                       lambda: more_case(browser, base))
             if wanted("licence"):
-                for via in ("identity", "gear", "more"):
+                for via in ("direct", "more"):
                     check("licence", f"dirty hub + licence entry via {via}: prompt, keep editing stays",
                           lambda v=via: licence_case(browser, base, v))
                 check("licence", "control: discard reaches the licensing page", lambda: licence_leaves_case(browser, base))

@@ -277,21 +277,30 @@ function assertNavEntryAndRouteOk(shellSrc, retailSrc) {
 // detectable here (that arrangement is pinned by retail_nav_groups_test.js).
 // It also cannot tell whether the gear row is GATED correctly -- only that
 // it exists. An id in NEITHER place is still caught.
-function isReachableFromShell(shellSrc, id) {
+//
+// UI-3b CHANGE: the gear MENU is gone -- the gear now opens the settings hub directly, and this
+// screen is a hub SECTION (id 'branches', rendered by _renderBranches). So "reachable from the shell" is now:
+// listed in a navGroups[] entry, OR (the gear button navigates to 'admin-center' AND settings-hub.js
+// lists the 'branches' section AND builds its pane with _renderBranches). What this can no longer
+// catch: it does not run the hub, so it cannot tell the section's visibility gate is right -- the
+// role x destination reachability table (retail_ui3b_nav_test.js) is the test that does. What it STILL
+// catches: any one of the three links missing (the gear, the section row, the pane builder).
+const HUB_SRC = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'settings-hub.js'), 'utf8');
+function isReachableFromShell(shellSrc, id, hubSrc = HUB_SRC) {
   const inGroup = new RegExp("items:\\s*\\[[^\\]]*'" + id + "'[^\\]]*\\]").test(shellSrc);
-  const start = shellSrc.indexOf('id="sub-settings-menu"');
-  const end = start === -1 ? -1 : shellSrc.indexOf('</div>', start);
-  const menu = start === -1 ? '' : shellSrc.slice(start, end);
-  const inGearMenu = menu.indexOf("_navigate('" + id + "')") !== -1;
+  const gearOpensHub = /id="sub-settings-gear-btn"[^>]*onclick="SubsystemApp\._navigate\('admin-center'\)"/.test(shellSrc);
+  const hubLists = new RegExp("\\{ id: 'branches', label: t\\('[^']+'\\), visible: [^}]+\\}").test(hubSrc);
+  const hubBuilds = hubSrc.indexOf("_renderBranches") !== -1 && new RegExp("id === 'branches'").test(hubSrc);
+  const inGearMenu = gearOpensHub && hubLists && hubBuilds;
   return { inGroup, inGearMenu };
 }
 
-function testNavEntryExistsAndPointsAtScreen(shellSrc = SHELL_SRC) {
+function testNavEntryExistsAndPointsAtScreen(shellSrc = SHELL_SRC, hubSrc = HUB_SRC) {
   assertNavEntryAndRouteOk(shellSrc, SRC);
   // Sanity: the id is reachable from the shell -- in a sidebar group OR in
   // the settings-gear menu (see isReachableFromShell for what that can no
   // longer catch).
-  const reach = isReachableFromShell(shellSrc, 'branches');
+  const reach = isReachableFromShell(shellSrc, 'branches', hubSrc);
   assert.ok(reach.inGroup || reach.inGearMenu,
     "'branches' is in nav[] but neither in any navGroups[] entry nor in the settings-gear menu -- it would render nowhere.");
   console.log(`PASS: '${SECTION_ID}' is routed, reachable from the shell (group or gear menu), and gates on retail.employees`);
@@ -487,14 +496,25 @@ async function main() {
     return provesMutation('M1 nav entry removed', null, () => assertNavEntryAndRouteOk(brokenShell, SRC));
   });
 
-  // M1b (fix round 3): drop the settings-gear row => the reachability check FAILS.
-  // With the id in no navGroups[] list either, nothing would render it.
-  await run('M1b: gear-menu row removed => testNavEntryExistsAndPointsAtScreen FAILS', async () => {
+  // M1b (UI-3b, replaces the gear-menu-row mutant: that menu no longer exists). The three links of
+  // the new path -- gear opens the hub, hub lists the section, hub builds its pane -- each broken in turn
+  // must turn the reachability check red.
+  await run('M1b: gear stops opening the hub => testNavEntryExistsAndPointsAtScreen FAILS', async () => {
     const brokenShell = mutate(SHELL_SRC, [[
-      "              ${hasBranches ? `<button type=\"button\" class=\"sub-identity-menu-item\" role=\"menuitem\" onclick=\"SubsystemApp._closeSettingsMenu();SubsystemApp._navigate('branches')\">${t('Branches')}</button>` : ''}\n",
-      '',
+      "               onclick=\"SubsystemApp._navigate('admin-center')\">\n              <span class=\"sub-nav-icon\">${window.AuraIcons ? AuraIcons.render('settings', 17)",
+      "               onclick=\"SubsystemApp.openLicensing()\">\n              <span class=\"sub-nav-icon\">${window.AuraIcons ? AuraIcons.render('settings', 17)",
     ]]);
-    return provesMutation('M1b gear-menu row removed', brokenShell, (b) => testNavEntryExistsAndPointsAtScreen(b));
+    return provesMutation('M1b gear no longer opens the hub', brokenShell, (b) => testNavEntryExistsAndPointsAtScreen(b));
+  });
+  await run('M1c: hub section row removed => testNavEntryExistsAndPointsAtScreen FAILS', async () => {
+    const m = /\n      [^\n]*\{ id: 'branches', label: t\('[^']+'\), visible: [^}]+\},/.exec(HUB_SRC.replace(/\r\n/g, '\n'));
+    assert.ok(m, "could not find the hub's 'branches' section row to mutate");
+    const brokenHub = HUB_SRC.replace(/\r\n/g, '\n').replace(m[0], '');
+    return provesMutation('M1c hub section row removed', brokenHub, (h) => testNavEntryExistsAndPointsAtScreen(SHELL_SRC, h));
+  });
+  await run('M1d: hub stops building the pane => testNavEntryExistsAndPointsAtScreen FAILS', async () => {
+    const brokenHub = mutate(HUB_SRC, [[ "id === 'branches'", "id === 'branches-removed'" ]]);
+    return provesMutation('M1d hub pane builder removed', brokenHub, (h) => testNavEntryExistsAndPointsAtScreen(SHELL_SRC, h));
   });
 
   // M2: make create() not POST => test (2) FAILS.

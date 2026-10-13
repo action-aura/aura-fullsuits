@@ -546,6 +546,60 @@ const SubsystemApp = {
     return true;
   },
 
+  // UI-3b: the tab set a screen belongs to (systems.retail.navTabs), or null.
+  _navTabSet(sectionId) {
+    const sys = this.systems && this.systems[this.active];
+    const sets = (sys && sys.navTabs) || [];
+    return sets.find((s) => s.tabs.includes(sectionId)) || null;
+  },
+
+  // The sidebar row (and More-sheet row) that lights up for a section: a tab's
+  // set id, else the section itself.
+  _navHomeId(sectionId) {
+    const set = this._navTabSet(sectionId);
+    return set ? set.id : sectionId;
+  },
+
+  // The tabs this person may open, in tab order -- each asked through
+  // _isPageOffered, the one rule the sidebar and the palette use.
+  _visibleTabs(set) {
+    const sys = this.systems && this.systems[this.active];
+    const nav = (sys && sys.nav) || [];
+    return set.tabs
+      .map((id) => nav.find((i) => i.id === id))
+      .filter((item) => item && this._isPageOffered(item));
+  },
+
+  // What the sidebar / More sheet draws for a nav item: a tab-set row becomes
+  // one entry named for the set, opening on the first tab this person may open
+  // (or nothing at all when they may open none); every other item is itself.
+  _sidebarEntry(item) {
+    const sys = this.systems && this.systems[this.active];
+    const set = ((sys && sys.navTabs) || []).find((s) => s.id === item.id);
+    if (!set) return item;
+    const tabs = this._visibleTabs(set);
+    if (!tabs.length) return null;
+    return { id: item.id, label: set.label, icon: item.icon, tabTarget: tabs[0].id };
+  },
+
+  // Fills (or hides) the tab bar for the screen now showing. Tabs are plain
+  // buttons that _navigate() to the tab's own id, so a deep link, the palette and
+  // a tab click all land on the same place. Idempotent; safe before first paint.
+  _syncSectionTabs(sectionId) {
+    const el = typeof document !== 'undefined' && document.getElementById ? document.getElementById('sub-section-tabs') : null;
+    if (!el) return;
+    const set = this._navTabSet(sectionId);
+    const tabs = set ? this._visibleTabs(set) : [];
+    // One tab is no choice: a lone tab bar is chrome, not navigation.
+    if (!set || tabs.length < 2) { el.innerHTML = ''; el.hidden = true; return; }
+    el.setAttribute('aria-label', t(set.label));
+    el.innerHTML = tabs.map((item) => `
+        <button type="button" class="sub-section-tab${item.id === sectionId ? ' is-active' : ''}"
+           role="tab" data-tab-section="${item.id}" aria-selected="${item.id === sectionId}"
+           onclick="SubsystemApp._navigate('${item.id}')">${t(item.label)}</button>`).join('');
+    el.hidden = false;
+  },
+
   // What a click (or Enter/Space) on a 'main-only' row does: explain, never
   // navigate. The sentence is ALSO printed on the row itself, so this toast is
   // the confirmation of what the row already says, not the only place it lives.
@@ -1413,9 +1467,32 @@ const SubsystemApp = {
         { label: 'Grow',    items: ['promotions'] },
         { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
         { label: 'Money',   items: ['receivables', 'payables', 'cheques'] },
-        { label: 'Books',   items: ['trial-balance', 'profit-and-loss', 'balance-sheet', 'cash-flow', 'expenses'] },
+        // UI-3b: the old 'Books' group (trial-balance, profit-and-loss, balance-sheet,
+        // cash-flow, expenses) is GONE as a sidebar group -- those five rows are tabs of the
+        // ONE 'Reports & Books' entry below (see `navTabs`). They stay in `nav` (so they keep
+        // their own capability gate, palette row and deep link) but are deliberately not
+        // navGroups members; retail_nav_groups_test.js names them in TAB_ONLY.
         { label: 'Reports', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
         { label: 'Connected services', key: 'connected', items: ['whatsapp', 'einvoicing', 'email-notifications', 'site-relay'] },
+      ],
+
+      // UI-3b item 1 ("one map, not four"): Books and Expenses stop being five more
+      // sidebar rows an owner of a dukkan never opens and become TABS of one entry,
+      // "Reports & Books". Render-time arrangement only, like navGroups: `nav` keeps every
+      // id and every gate, so WHO may open WHICH screen is unchanged -- only the door moved.
+      //
+      //  - `id` is the sidebar row's data-section and the active highlight for every tab
+      //    in the set (it is also the first tab, 'reports').
+      //  - a tab shows only when _isPageOffered(its own nav item) -- the same rule the
+      //    sidebar and the palette ask -- so a user with books.view but not retail.reports
+      //    still gets Expenses (the row then opens on their first visible tab), and a
+      //    cashier gets nothing (no row, no tab bar).
+      //  - the screen under a tab is rendered by the screen's OWN render path, unchanged;
+      //    the tab bar lives OUTSIDE #sub-content (#sub-section-tabs) so a screen that
+      //    re-renders itself (a date change) cannot wipe it.
+      navTabs: [
+        { id: 'reports', label: 'Reports & Books',
+          tabs: ['reports', 'trial-balance', 'profit-and-loss', 'balance-sheet', 'cash-flow', 'expenses'] },
       ],
     },
   },
@@ -3662,7 +3739,7 @@ const SubsystemApp = {
     const navItemHTML = (item, trailing) => {
       const action = item.externalPage
         ? `SubsystemApp._leaveToPage('/static/${item.externalPage}')`
-        : `SubsystemApp._navigate('${item.id}')`;
+        : `SubsystemApp._navigate('${item.tabTarget || item.id}')`;
       const label = this._esc(t(item.label));
       // F5: a device-bound item on a computer that is not the main one. Shown,
       // disabled, with the reason printed ON the row (visible text, not only a
@@ -3768,7 +3845,7 @@ const SubsystemApp = {
     const groupKeyOf = (g) => g.key || g.label;
     let activeGroupKey = null;
     for (const g of (sys.navGroups || [])) {
-      if (g.items.includes(activeSection)) { activeGroupKey = groupKeyOf(g); break; }
+      if (g.items.includes(this._navHomeId(activeSection))) { activeGroupKey = groupKeyOf(g); break; }
     }
     const firstGroupKey = (sys.navGroups && sys.navGroups[0]) ? groupKeyOf(sys.navGroups[0]) : null;
     const storedGroups = this._loadSidebarGroupPreference();
@@ -3781,6 +3858,8 @@ const SubsystemApp = {
       const isConnected = gKey === 'connected';
       const visibleItems = group.items
         .map((id) => byId.get(id))
+        // UI-3b: a tab-set row (Reports & Books) is drawn as one entry or not at all.
+        .map((item) => (item ? this._sidebarEntry(item) : item))
         // 'main-only' items stay in the list (rendered disabled, with the
         // reason) -- see _navItemState. Only 'hidden' ones are dropped.
         .filter((item) => item && this._navItemState(item) !== 'hidden');
@@ -3845,17 +3924,11 @@ const SubsystemApp = {
     // More sheet does -- one rule, never re-derived.
     const adminCenterItem = byId.get('admin-center');
     const hasAdminCenter = !!(adminCenterItem && this._isNavItemVisible(adminCenterItem));
-    // H1 fix-round ("Employees, Branches, Backup & export and Licence have
-    // no click path"): the footer gear is now a small MENU, the same
-    // pattern as the identity chip's own menu, listing every one of the
-    // five settings-shaped screens -- each gated EXACTLY like its own nav
-    // entry (reusing `_isNavItemVisible` on the real nav item, never a
-    // second copy of the rule), so this menu and the (now-empty)
-    // navGroups arrangement can never disagree about who sees what.
-    // 'employees'/'branches'/'backup-export' are still UNGROUPED in
-    // navGroups (no sidebar-list membership -- see that array's own
-    // comment for why), but they are NOT unreachable any more: the gear
-    // menu is their real path, in exactly 2 clicks (gear, then the row).
+    // UI-3b: the footer gear no longer opens a MENU (H1 fix round) -- it opens the settings
+    // hub, where Team (Employees), Branches, Data & backup and Plan & devices are SECTIONS.
+    // The gear is still offered to exactly the people who could reach any of those five
+    // screens before (each asked through `_isNavItemVisible` on the real nav item, never a
+    // second copy of the rule), so who sees the gear did not change -- only where it leads.
     const employeesItem = byId.get('employees');
     const branchesItem = byId.get('branches');
     const backupExportItem = byId.get('backup-export');
@@ -3863,12 +3936,8 @@ const SubsystemApp = {
     const hasBranches = !!(branchesItem && this._isNavItemVisible(branchesItem));
     const hasBackupExport = !!(backupExportItem && this._isNavItemVisible(backupExportItem));
     const hasSettingsGear = hasAdminCenter || hasEmployees || hasBranches || hasBackupExport;
-    // M10: with no admin device claimed yet, there was no way back to the
-    // claim action at all (the old red bar this replaced is deleted --
-    // see item 1's own comment). Offered here, inside the same population
-    // that can already see the gear (never to a cashier), rather than a
-    // second unconditional banner.
-    const canClaimHere = hasSettingsGear && this.canClaimAdminDevice;
+    // (M10's "Make this the main computer" row left with the menu: it is the claim button in the
+    // hub's Plan & devices section now, offered to the same population.)
 
     // ── Identity chip (P1a item 2) ───────────────────────────────────────────
     const displayName = this._identityDisplayName();
@@ -3894,7 +3963,6 @@ const SubsystemApp = {
         <div class="sub-identity-menu" id="sub-identity-menu" role="menu" aria-label="${t('Account menu')}" hidden>
           <button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeIdentityMenu();AuraI18n.toggle()">${t('Language')}</button>
           <button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeIdentityMenu();ThemeEngine.openPicker()">${t('Appearance')}</button>
-          ${this.role === 'admin' ? `<button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeIdentityMenu();SubsystemApp.openLicensing()">${t('Plan & devices')}</button>` : ''}
           ${this._hasHelp() ? `<button type="button" class="sub-identity-menu-item" role="menuitem" data-action="help" onclick="SubsystemApp._closeIdentityMenu();AuraHelp.open()">${t('Help')}</button>` : ''}
           ${this.role === 'admin' && this._hasSetupGuide() ? `<button type="button" class="sub-identity-menu-item" role="menuitem" data-action="setup-guide" onclick="SubsystemApp._closeIdentityMenu();window.AuraSetupGuide.open()">${t('Setup guide')}</button>` : ''}
           <button type="button" class="sub-identity-menu-item" role="menuitem" data-action="minimize-app" hidden onclick="SubsystemApp._closeIdentityMenu();SubsystemApp._minimizeApp()">${t('Minimise')}</button>
@@ -3999,21 +4067,18 @@ const SubsystemApp = {
           ` : ''}
           ${hasSettingsGear ? `
           <div class="sub-settings-menu-wrap">
+            <!-- UI-3b item 1: the gear opens the settings hub DIRECTLY. It used to open a
+                 five-row menu (Settings / Employees / Branches / Backup & Export / License)
+                 whose every row the hub already holds as a section (Team, Branches, Data &
+                 backup, Plan & devices) -- two maps to the same rooms. 'Make this the main
+                 computer' lives in the hub's Plan & devices section for the same reason. -->
             <button type="button" class="sub-nav-item sub-settings-gear" id="sub-settings-gear-btn"
-               aria-haspopup="true" aria-expanded="false"
-               title="${t('Settings menu')}" aria-label="${t('Settings menu')}"
-               onclick="SubsystemApp._toggleSettingsMenu()">
+               data-section="admin-center"
+               title="${t('Settings')}" aria-label="${t('Settings')}"
+               onclick="SubsystemApp._navigate('admin-center')">
               <span class="sub-nav-icon">${window.AuraIcons ? AuraIcons.render('settings', 17) : '⚙️'}</span>
               <span class="sub-nav-label">${t('Settings')}</span>
             </button>
-            <div class="sub-identity-menu sub-settings-menu" id="sub-settings-menu" role="menu" aria-label="${t('Settings menu')}" hidden>
-              ${hasAdminCenter ? `<button type="button" class="sub-identity-menu-item" role="menuitem" data-section="admin-center" onclick="SubsystemApp._closeSettingsMenu();SubsystemApp._navigate('admin-center')">${t('Settings')}</button>` : ''}
-              ${hasEmployees ? `<button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeSettingsMenu();SubsystemApp._navigate('employees')">${t('Employees')}</button>` : ''}
-              ${hasBranches ? `<button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeSettingsMenu();SubsystemApp._navigate('branches')">${t('Branches')}</button>` : ''}
-              ${hasBackupExport ? `<button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeSettingsMenu();SubsystemApp._navigate('backup-export')">${t('Backup & Export')}</button>` : ''}
-              <button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeSettingsMenu();SubsystemApp.openLicensing()">${t('License & devices')}</button>
-              ${canClaimHere ? `<button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeSettingsMenu();SubsystemApp._claimAdminDeviceFromMenu()">${t('Make this the main computer')}</button>` : ''}
-            </div>
           </div>
           ` : ''}
         </div>
@@ -4073,6 +4138,11 @@ const SubsystemApp = {
           ${chipHTML}
         </header>
 
+        <!-- UI-3b: tabs of a multi-screen entry (Reports & Books). Outside #sub-content on
+             purpose: those screens re-render #sub-content themselves. Hidden until
+             _syncSectionTabs fills it. -->
+        <div class="sub-section-tabs" id="sub-section-tabs" role="tablist" hidden></div>
+
         <!-- tabindex="-1" is what makes the skip link above actually move
              focus. <main> is not focusable by default, so without it the
              browser scrolls to the element and leaves focus back on the link
@@ -4091,6 +4161,7 @@ const SubsystemApp = {
     // operate -- which is arguably worse than being skipped, because it looks
     // like it should work.
     this._wireNavKeyboardActivation(shell);
+    this._syncSectionTabs(activeSection);
     // UI-1: learn whether an assistant is configured, so the AI button is not
     // offered on a shop where it can only say "Not set up". Quiet and
     // authoritative-answers-only (see SubAI.refreshAvailability). Only when the
@@ -4519,9 +4590,7 @@ const SubsystemApp = {
   _toggleIdentityMenu() { this._toggleDropdown('sub-identity-chip-btn', 'sub-identity-menu'); },
   _closeIdentityMenu() { this._closeDropdown('sub-identity-chip-btn', 'sub-identity-menu'); },
 
-  // H1: the footer gear's own menu -- same controller, different ids.
-  _toggleSettingsMenu() { this._toggleDropdown('sub-settings-gear-btn', 'sub-settings-menu'); },
-  _closeSettingsMenu() { this._closeDropdown('sub-settings-gear-btn', 'sub-settings-menu'); },
+  // (UI-3b: the gear no longer has a menu of its own -- it opens the settings hub.)
 
   // M10: "with no main computer claimed, there is no claim path" -- the
   // gear menu's own entry (shown only when canClaimAdminDevice is true,
@@ -5040,9 +5109,12 @@ const SubsystemApp = {
     }
 
     // Update nav active state
+    // UI-3b: a tab of Reports & Books lights its set's ONE sidebar row.
+    const homeId = this._navHomeId(sectionId);
     document.querySelectorAll('.sub-nav-item').forEach(el => {
-      el.classList.toggle('active', el.dataset.section === sectionId);
+      el.classList.toggle('active', el.dataset.section === homeId);
     });
+    this._syncSectionTabs(sectionId);
 
     // P1a item 4: the sidebar collapses to a 64px icon rail on the Till
     // route specifically -- kept in step here (not only in _renderShell's
@@ -5061,7 +5133,7 @@ const SubsystemApp = {
     // 2026-10-07; see _toggleSidebarGroup's comment).
     const activeSys = this.systems[this.active];
     if (activeSys && Array.isArray(activeSys.navGroups)) {
-      const grp = activeSys.navGroups.find((g) => g.items.includes(sectionId));
+      const grp = activeSys.navGroups.find((g) => g.items.includes(homeId));
       if (grp) this._ensureSidebarGroupOpen(grp.key || grp.label);
     }
 
@@ -5298,9 +5370,9 @@ const SubsystemApp = {
             </a>
           `;
     })() : `
-            <a class="sub-more-row${item.id === this.currentSection ? ' active' : ''}"
+            <a class="sub-more-row${item.id === this._navHomeId(this.currentSection) ? ' active' : ''}"
                tabindex="0" role="button"
-               onclick="${item.externalPage ? `SubsystemApp._leaveToPage('/static/${item.externalPage}')` : `SubsystemApp._navigate('${item.id}')`}">
+               onclick="${item.externalPage ? `SubsystemApp._leaveToPage('/static/${item.externalPage}')` : `SubsystemApp._navigate('${item.tabTarget || item.id}')`}">
               <span class="sub-more-row-icon">${icon(item.icon)}</span>
               <span>${t(item.label)}</span>
             </a>
@@ -5308,6 +5380,8 @@ const SubsystemApp = {
     const groupsHTML = (sys.navGroups || []).map((group) => {
       const visibleItems = group.items
         .map((id) => byId.get(id))
+        // UI-3b: Reports & Books is one row here too (the Books group no longer exists).
+        .map((item) => (item ? this._sidebarEntry(item) : item))
         .filter((item) => item && this._navItemState(item) !== 'hidden')
         // A destination that is already a BOTTOM TAB must not also appear in
         // this sheet. The sheet exists for "the other fifteen"; a row for Till

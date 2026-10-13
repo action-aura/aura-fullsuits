@@ -59,9 +59,12 @@ const GROUPS = [
   { label: 'Grow',    items: ['promotions'] },
   { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
   { label: 'Money',   items: ['receivables', 'payables', 'cheques'] },
-  // MONEY-4b: 'expenses' joined Books (rent/utilities/salaries; retail.books.view). This table is the
-  // expected NAV ORDER, so it must name the new row; it can still catch a row dropped or reordered.
-  { label: 'Books',   items: ['trial-balance', 'profit-and-loss', 'balance-sheet', 'cash-flow', 'expenses'] },
+  // UI-3b CHANGE: the 'Books' GROUP (trial-balance, profit-and-loss, balance-sheet, cash-flow, expenses --
+  // MONEY-4b had just added 'expenses') is gone from the sidebar. Those five are TABS of the ONE "Reports &
+  // Books" row, which is the 'reports' item of the Reports group. What this table can no longer catch: the
+  // five rows' presence in the sidebar list (they are not there on purpose). What still catches them:
+  // TAB_ONLY below (each must be a `navTabs` tab of source) and retail_ui3b_nav_test.js (each must be an
+  // openable tab for the roles that could open it before).
   { label: 'Reports', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
   { label: 'Connected services', key: 'connected', items: ['whatsapp', 'einvoicing', 'email-notifications', 'site-relay'] },
 ];
@@ -76,11 +79,17 @@ const GROUPS = [
 // navGroups members, and none of them should be: the flat one-click list is
 // for the shopkeeper's daily screens, not the settings cluster.
 const UNGROUPED_BY_DESIGN = new Set(['dashboard', 'admin-center', 'employees', 'branches', 'backup-export']);
+// UI-3b: nav entries that have NO sidebar row of their own because they are TABS of "Reports & Books".
+// Pinned exactly, and cross-checked against `navTabs` scraped from source in testEveryNavEntryIsInAGroup,
+// so this list cannot become a second place to hide an orphan: an id here that is not really a navTabs
+// tab fails, and a nav entry that is in neither a group, UNGROUPED_BY_DESIGN nor a tab still fails.
+const TAB_ONLY = new Set(['trial-balance', 'profit-and-loss', 'balance-sheet', 'cash-flow', 'expenses']);
 // Every id that must show up as `_navigate('<id>')` (or the external-page
 // click shape, for whatsapp/einvoicing/site-relay) somewhere in the shell:
 // every UNGROUPED_BY_DESIGN id PLUS every grouped id.
 const ALL_DESTINATIONS = ['dashboard', 'admin-center', ...GROUPS.flatMap((g) => g.items)];
-// 30 = dashboard + admin-center (2 ungrouped, footer-rendered) + 28 grouped (UI-2 added 'sales', MONEY-4b 'expenses').
+// 25 = dashboard + admin-center (2 ungrouped, footer-rendered) + 23 grouped. UI-3b: was 30 (28 grouped, after UI-2
+// 'sales' and MONEY-4b 'expenses'); the five Books rows left the sidebar for tabs (TAB_ONLY), so 28 - 5 = 23.
 // 'employees'/'branches'/'backup-export' are DELIBERATELY NOT in this list
 // -- they are reachable (see UNGROUPED_BY_DESIGN's own comment above), but
 // through the gear's own MENU, not through anything `_navigate`-shaped this
@@ -342,7 +351,23 @@ function testEveryNavEntryIsInAGroup() {
   assert.ok(groupedIds.size >= 15,
     `only ${groupedIds.size} grouped ids scraped from navGroups -- this check has nothing to inspect`);
 
-  const orphans = navIds.filter((id) => !groupedIds.has(id) && !UNGROUPED_BY_DESIGN.has(id));
+  // UI-3b: tabs of a navTabs set, scraped from source (same anti-vacuity stance as the two scrapes above).
+  const tabsBlock = src.slice(src.indexOf('navTabs: ['), src.indexOf('navTabs: [') + 1200);
+  const tabIds = new Set();
+  const tabsRe = /tabs:\s*\[([^\]]*)\]/g;
+  while ((m = tabsRe.exec(tabsBlock))) {
+    for (const raw of m[1].split(',')) {
+      const id = raw.trim().replace(/^'|'$/g, '');
+      if (id) tabIds.add(id);
+    }
+  }
+  assert.ok(tabIds.size >= 6, `only ${tabIds.size} tab ids scraped from navTabs -- this check has nothing to inspect`);
+  for (const id of TAB_ONLY) {
+    assert.ok(tabIds.has(id), `TAB_ONLY names '${id}' but it is not a navTabs tab in app-shell.js -- it would be an orphan.`);
+    assert.ok(navIds.includes(id), `'${id}' is a tab but has no nav entry (no gate, no render path).`);
+    assert.ok(!groupedIds.has(id), `'${id}' is both a tab and a sidebar group member -- two doors for one room.`);
+  }
+  const orphans = navIds.filter((id) => !groupedIds.has(id) && !UNGROUPED_BY_DESIGN.has(id) && !tabIds.has(id));
   assert.deepStrictEqual(orphans, [],
     'nav entries that belong to no navGroup AND are not in the named UNGROUPED_BY_DESIGN set are ' +
     'UNREACHABLE by accident, not on purpose: ' + orphans.join(', '));
@@ -361,13 +386,13 @@ function testAdminCenterRendersAsFooterGearNotAGroupMember() {
     "button (next to the AI button), same treatment as 'dashboard'. If this fires, either the " +
     "gear is still a navGroups member (it must not be) or the footer gear was deleted."
   );
-  // ANCHOR UPDATED (fix round, H1): the gear button itself no longer
-  // carries data-section="admin-center" -- it is a MENU TOGGLE now (see
-  // that item's own comment in app-shell.js), and the attribute moved onto
-  // the 'Settings' row INSIDE the gear's menu (testFiveSettingsScreens
-  // ReachableInTwoClicksForOwner, below, is the dedicated proof for that
-  // whole menu). Same underlying question -- is admin-center reachable
-  // through the gear, anywhere -- just no longer both on the SAME element.
+  // UI-3b: the gear is a plain button again and carries data-section="admin-center" itself (it
+  // opens the settings hub directly; the menu from the H1 fix round is gone -- see
+  // testGearOpensTheHubDirectlyForOwner below).
+  assert.ok(
+    /id="sub-settings-gear-btn"[^>]*data-section="admin-center"/.test(html),
+    "the footer gear does not carry data-section=\"admin-center\" itself."
+  );
   assert.ok(
     /sub-settings-gear/.test(html) && /data-section="admin-center"/.test(html),
     "no '.sub-settings-gear' footer button, or no data-section=\"admin-center\" anywhere in the " +
@@ -398,16 +423,16 @@ function testAllDestinationsReachableForOwner() {
     `${missing.length} destination(s) unreachable for an owner after grouping: ${missing.join(', ')}. ` +
     'Every id in systems.retail.navGroups must resolve to a real nav entry with a working click ' +
     'action, and every non-dashboard, non-admin-center nav entry must be listed in exactly one ' +
-    'group UNLESS it is named in UNGROUPED_BY_DESIGN (employees/branches/backup-export reach ' +
-    'through the gear menu instead -- tested separately, below).'
+    'group UNLESS it is named in UNGROUPED_BY_DESIGN or is a navTabs tab (employees/branches/backup-export ' +
+    'reach through the settings hub instead -- tested separately, below).'
   );
-  // 30 = dashboard + admin-center (both ungrouped-by-design but reachable)
-  // + 28 grouped entries (MONEY-4b added 'expenses', UI-2 added 'sales' to Sell -- both landed
-  // in one merge, so the two separate +1 bumps became +2 here). Bumped together with this message on purpose --
+  // 25 = dashboard + admin-center (both ungrouped-by-design but reachable)
+  // + 23 grouped entries (UI-3b: was 28 -- the five Books/Expenses rows became tabs of 'reports'; their
+  // reachability is proved per role in retail_ui3b_nav_test.js). Bumped together with this message on purpose --
   // this assertion exists to catch ALL_DESTINATIONS drifting from the
   // product, so a count that disagrees with its own prose is the exact
   // failure it is supposed to make loud.
-  assert.strictEqual(ALL_DESTINATIONS.length, 30, "sanity: this file's own expectation list drifted from 30 reachable destinations");
+  assert.strictEqual(ALL_DESTINATIONS.length, 25, "sanity: this file's own expectation list drifted from 25 reachable destinations");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -431,27 +456,33 @@ const GEAR_MENU_SCREENS = [
   ['backup-export', 'Backup & Export'],
 ];
 
-function testFiveSettingsScreensReachableInTwoClicksForOwner() {
+// UI-3b: REPLACES testFiveSettingsScreensReachableInTwoClicksForOwner. The gear no longer opens a five-row
+// menu; it opens the settings hub in ONE click, and Employees / Branches / Backup & Export / Plan & devices
+// are hub sections (Team / Branches / Data & backup / Plan & devices). What this test can no longer say:
+// that those doors EXIST for each role -- it does not run the hub. retail_ui3b_nav_test.js does (a
+// role x destination table, before vs after, both directions). What it now guarantees: the gear is one
+// click to the hub, there is no second menu, and the identity menu no longer carries Plan & devices.
+function testGearOpensTheHubDirectlyForOwner() {
   const html = ownerEverythingVisibleHTML();
-  assert.ok(/id="sub-settings-gear-btn"/.test(html), 'no gear button (click 1) found for an owner.');
-  const menuMatch = /id="sub-settings-menu"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/.exec(html);
-  assert.ok(menuMatch, 'no #sub-settings-menu panel found for an owner -- the gear has nothing to open.');
-  const menuHTML = menuMatch[1];
-  for (const [id, label] of GEAR_MENU_SCREENS) {
-    assert.ok(
-      new RegExp(`_navigate\\('${id}'\\)`).test(menuHTML),
-      `'${id}' (${label}) has no _navigate('${id}') row inside the gear menu for an owner -- ` +
-      'H1 says every one of the five settings screens must be reachable in <=2 clicks (gear, ' +
-      'then this row); this menu is click 2 and it is missing.'
-    );
+  assert.ok(/id="sub-settings-gear-btn"[^>]*onclick="SubsystemApp\._navigate\('admin-center'\)"/.test(html),
+    'the owner gear button does not navigate straight to admin-center (the settings hub).');
+  assert.ok(!/id="sub-settings-menu"/.test(html) && !/_toggleSettingsMenu/.test(html),
+    'a gear MENU is still rendered -- the gear must open the hub directly (one map, not two).');
+  for (const [id] of GEAR_MENU_SCREENS) {
+    if (id === 'admin-center') continue;
+    assert.ok(!new RegExp(`_navigate\\('${id}'\\)`).test(html),
+      `'${id}' still has a _navigate row in the shell chrome -- it is a hub section now, not a second door.`);
   }
-  // License & devices has no nav entry (it opens the standalone licensing
-  // page, not a `_navigate` section) -- its own real action, checked by name.
-  assert.ok(
-    /SubsystemApp\.openLicensing\(\)/.test(menuHTML),
-    "the gear menu has no 'License & devices' row calling SubsystemApp.openLicensing() for an owner."
-  );
-  console.log('PASS: all five settings screens (Settings/Employees/Branches/Backup & Export/License) are reachable in <=2 clicks for an owner');
+  const idMenu = /id="sub-identity-menu"[^>]*>([\s\S]*?)<\/div>/.exec(html);
+  assert.ok(idMenu, 'no identity menu found');
+  assert.ok(!/openLicensing/.test(idMenu[1]) && !/Plan & devices/.test(idMenu[1]),
+    'the identity menu still carries Plan & devices (it lives in the hub only).');
+  // Help is offered only when help.js is loaded (_hasHelp), which this harness does not load; the Help row
+  // is proved in retail_ui3b_nav_test.js (with a Help stub) and in the Playwright run.
+  for (const keep of ['AuraI18n.toggle()', 'ThemeEngine.openPicker()', 'SubsystemApp.logout()']) {
+    assert.ok(idMenu[1].includes(keep), `the identity menu lost '${keep}' (Language / Appearance / Help / Log out must stay).`);
+  }
+  console.log('PASS: the owner gear opens the hub directly (no menu); the identity menu keeps Language, Appearance, Help, Log out');
 }
 
 function testFiveSettingsScreensAbsentForCashier() {
@@ -462,11 +493,11 @@ function testFiveSettingsScreensAbsentForCashier() {
     if (id === 'admin-center') continue; // covered by testCashierOnTheAdminDeviceStillSeesNoGear already
     assert.ok(
       !new RegExp(`_navigate\\('${id}'\\)`).test(html),
-      `'${id}' is reachable for a cashier -- the gear menu (or something else) leaked it.`
+      `'${id}' is reachable for a cashier -- the gear (or something else) leaked it.`
     );
   }
-  assert.ok(!/SubsystemApp\.openLicensing\(\)/.test(html), "a cashier can reach 'License & devices' through the gear menu.");
-  console.log('PASS: none of the five settings screens are reachable for a cashier, both directions proved with the owner case above');
+  assert.ok(!/SubsystemApp\.openLicensing\(\)/.test(html), "a cashier can reach 'License & devices' from the shell chrome.");
+  console.log('PASS: none of the settings screens are reachable for a cashier from the shell chrome (owner case proved above)');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -535,7 +566,12 @@ function testCashierSeesNoMoneyBooksReportsGrowConnectedHeader() {
   // must see every one of these five headers, or "absent for a cashier"
   // could be satisfied by a group that is simply broken for everyone.
   const ownerTokens = orderedTokens(ownerEverythingVisibleHTML());
-  for (const label of ['Money', 'Books', 'Reports', 'Grow', 'Connected services']) {
+  // UI-3b: 'Books' is no longer a sidebar GROUP; the owner direction for it is the "Reports & Books" ROW
+  // (data-section="reports", opening on its first tab) -- and the cashier direction is that the row is absent.
+  assert.ok(!/data-section="reports"/.test(html), 'a cashier sees the Reports & Books row.');
+  assert.ok(/data-section="reports"[\s\S]{0,400}Reports &amp; Books|data-section="reports"[\s\S]{0,400}Reports & Books/.test(subNavRegion(ownerEverythingVisibleHTML())),
+    'the owner sidebar has no row labelled "Reports & Books" for data-section="reports".');
+  for (const label of ['Money', 'Reports', 'Grow', 'Connected services']) {
     assert.ok(
       ownerTokens.includes(`GROUP:${label}`),
       `The ${label} header did NOT render for an owner (capabilities: null, fail-open). If this ` +
@@ -833,7 +869,7 @@ const CASES = [
   testEveryNavEntryIsInAGroup,
   testAdminCenterRendersAsFooterGearNotAGroupMember,
   testAllDestinationsReachableForOwner,
-  testFiveSettingsScreensReachableInTwoClicksForOwner,
+  testGearOpensTheHubDirectlyForOwner,
   testFiveSettingsScreensAbsentForCashier,
   testGroupsRenderInSpecifiedOrderWithMembers,
   testCashierSeesNoMoneyBooksReportsGrowConnectedHeader,

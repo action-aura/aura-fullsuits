@@ -441,9 +441,8 @@ with sync_playwright() as p:
     # 1. Reaching the hub and every section (owner)
     # =========================================================================
     def owner_reaches_hub_from_the_gear_and_every_section():
-        # The path a person takes: footer gear, then the Settings entry.
+        # The path a person takes: the footer gear (UI-3b: ONE click -- the gear menu is gone).
         real_click(owner, "#sub-settings-gear-btn", "settings gear")
-        real_click(owner, '#sub-settings-menu .sub-identity-menu-item[data-section="admin-center"]', "settings menu entry")
         hub_ready(owner)
         markers = {
             "shop-receipt": "#brand-name",
@@ -886,9 +885,16 @@ with sync_playwright() as p:
         # manager sees it too. WHAT THIS CAN NO LONGER CATCH: "Display" being hidden from a
         # manager -- it is not owner-data. Every owner-only section is still refused below.
         # EXTRAS: a manager holds retail.stock.adjust, so the Extras set-up section shows too.
-        assert ids == ["tills", "extras", "display", "team"], f"a delegated manager sees sections {ids}"
+        # UI-3b: the gear menu is gone, so the two doors it gave a delegated manager -- Branches and
+        # "License & devices" -- are hub sections now (Branches = retail.employees, same gate as before;
+        # Plan & devices = a small door pane for them, the full pane stays owner-only). WHAT THIS CAN NO
+        # LONGER CATCH: "a manager sees only four sections". Still caught: any owner-only section
+        # (Shop & receipt, Tax, Credit, Hardware, Data & backup, Updates) leaking to a manager -- the list is
+        # compared for EQUALITY, and the owner-only cards are asserted absent below.
+        EXPECTED = ["tills", "extras", "display", "team", "branches", "plan-devices"]
+        assert ids == EXPECTED, f"a delegated manager sees sections {ids}"
         secs = manager.evaluate("() => SettingsHub.sections().filter(s => s.visible).map(s => s.id)")
-        assert secs == ["tills", "extras", "display", "team"], secs
+        assert secs == EXPECTED, secs
         # owner-only sections refuse to open
         assert manager.evaluate("() => SettingsHub.open('credit')") is False
         for sel in ("#branding-card", "#default-tax-card", "#business-day-card", "#einvoicing-card",
@@ -903,11 +909,18 @@ with sync_playwright() as p:
         manager.wait_for_timeout(900)
         assert visible_panes(manager) == ["team"], visible_panes(manager)
         assert manager.locator('[data-sh-pane="team"]').inner_text().strip(), "the Team pane is empty for the manager"
+        # UI-3b allow-half: the doors that left the gear menu really open for them, and are the DOOR pane (not
+        # the owner's full Plan & devices screen, whose routes would answer 403).
+        real_click(manager, '#sh-root .sh-nav-item[data-sh="branches"]', "manager branches nav")
+        manager.wait_for_selector('[data-sh-pane="branches"] #branch-table', timeout=15000)
+        real_click(manager, '#sh-root .sh-nav-item[data-sh="plan-devices"]', "manager plan & devices nav")
+        manager.wait_for_selector('[data-sh-pane="plan-devices"] [data-sh-licence]', timeout=15000)
+        assert manager.query_selector('[data-sh-pane="plan-devices"] [data-pd]') is None, "a manager got the owner's Plan & devices screen"
         # the server agrees: the owner-only write the hub does not offer is 403 for this person
         st, body = api(manager, "POST", "/api/sub/retail/settings/credit", {"loyalty_point_value": "9"})
         assert st == 403, f"expected 403 for a manager posting credit settings, got {st}: {body}"
 
-    check("gating: a delegated manager sees ONLY Tills, Display and Team (and the server still refuses the rest)",
+    check("gating: a delegated manager sees ONLY Tills, Extras, Display, Team, Branches and the Plan & devices door (and the server still refuses the rest)",
           manager_sees_only_tills_and_team)
 
     def cashier_gets_lock_panel():

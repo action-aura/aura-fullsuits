@@ -204,11 +204,9 @@ def more_case(browser, base):
 def menu_case(browser, base):
     ctx, page = guarded(browser, base, "false")
     try:
+        # UI-3b: the gear opens the hub directly (no menu), so the click that must be guarded is the gear itself.
         human_click(page, "#sub-settings-gear-btn", "Settings gear")
-        page.locator("#sub-settings-menu .sub-identity-menu-item[data-section]").first.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
-        target = page.evaluate("() => document.querySelector('#sub-settings-menu .sub-identity-menu-item[data-section]').dataset.section")
-        human_click(page, f'#sub-settings-menu .sub-identity-menu-item[data-section="{target}"]', f"settings menu {target}")
-        expect_stay(page, target)
+        expect_stay(page, "admin-center")
     finally:
         ctx.close()
 

@@ -39,7 +39,7 @@
   // 'updates' sits right after 'data-backup' (both are "look after this
   // installation"), but unlike every other id it is only LISTED when the update
   // channel is switched on -- see sections() and refreshUpdatesStatus().
-  const SECTION_ORDER = ['shop-receipt', 'tax', 'credit', 'tills', 'extras', 'hardware', 'display', 'team', 'data-backup', 'updates', 'plan-devices'];
+  const SECTION_ORDER = ['shop-receipt', 'tax', 'credit', 'tills', 'extras', 'hardware', 'display', 'team', 'branches', 'data-backup', 'updates', 'plan-devices'];
 
   // ── who is asking ──────────────────────────────────────────────────────────
   // Same two axes _renderAdminCenter uses. `!window.SubsystemApp` fails OPEN,
@@ -1914,16 +1914,43 @@
       else host.innerHTML = '';
     } else if (id === 'team') {
       if (window.RetailEmployees && typeof RetailEmployees.render === 'function') await RetailEmployees.render(host);
+    } else if (id === 'branches') {
+      // UI-3b: the Branches screen (list + Add Branch), rendered into the pane. It was a
+      // gear-menu row (a separate page) and the palette claimed "Team" covered it -- it
+      // did not: Team lists staff, not shops, and nothing in the hub could create a branch.
+      await R()._renderBranches(host);
     } else if (id === 'data-backup') {
       await R()._renderBackupExport(host);
     } else if (id === 'updates') {
       await renderUpdatesPane(host, token);
     } else if (id === 'plan-devices') {
-      if (window.PlanDevices && typeof PlanDevices.render === 'function') await PlanDevices.render(host);
-      else host.innerHTML = '';
+      if (isOwner()) {
+        if (window.PlanDevices && typeof PlanDevices.render === 'function') await PlanDevices.render(host);
+        else host.innerHTML = '';
+      } else {
+        // A delegated manager (retail.employees, not the owner) used to reach the licence
+        // page through the gear menu; with that menu gone this pane is their door. It does
+        // not re-implement Plan & devices (owner routes) -- it opens the same page the menu did.
+        host.innerHTML = planDevicesDoor();
+      }
     }
     if (!alive()) return;
     refreshBar();
+  }
+
+  // The non-owner "Plan & devices" pane: two honest buttons, each doing exactly what the
+  // old gear-menu row did (open the licence page; claim the main computer when the server
+  // says nobody has).
+  function planDevicesDoor() {
+    const canClaim = !!(window.SubsystemApp && SubsystemApp.canClaimAdminDevice);
+    return `<div class="sub-chart-card" id="sh-plan-door">
+        <h3 class="sh-card-title">${esc(t('Plan & devices'))}</h3>
+        <p class="sh-card-lead">${esc(t('See your plan and the computers and phones using this shop.'))}</p>
+        <div class="sh-inline-actions">
+          <button type="button" class="ret-btn ret-btn-primary" data-sh-licence="1">${esc(t('License & devices'))}</button>
+          ${canClaim ? `<button type="button" class="ret-btn ret-btn-ghost" data-sh-claim="1">${esc(t('Make this the main computer'))}</button>` : ''}
+        </div>
+      </div>`;
   }
 
   function showSection(id) {
@@ -2191,11 +2218,16 @@
       // the shop's data), so it is offered to everyone who can open Settings.
       { id: 'display', label: t('Display'), visible: dev },
       { id: 'team', label: t('Team'), visible: dev },
+      // UI-3b: Branches is a hub section now (the gear menu that used to hold it is gone).
+      // Same gate as the nav entry it replaces: retail.employees, i.e. canDevice().
+      { id: 'branches', label: t('Branches'), visible: dev },
       { id: 'data-backup', label: t('Data & backup'), visible: owner },
       // Not merely invisible: absent from the list unless the update channel is
       // on, so the palette and the nav never mention a section that cannot work.
       { id: 'updates', label: t('Updates'), visible: owner && !!S.updates },
-      { id: 'plan-devices', label: t('Plan & devices'), visible: owner && !!window.PlanDevices },
+      // UI-3b: also offered to a delegated manager (the old gear menu's "License & devices" row
+      // went to everyone who could see the gear), as a small door pane -- see buildPane.
+      { id: 'plan-devices', label: t('Plan & devices'), visible: owner ? !!window.PlanDevices : dev },
     ];
     return SECTION_ORDER.map((id) => list.find((s) => s.id === id)).filter((s) => s.id !== 'updates' || s.visible);
   }
@@ -2351,6 +2383,8 @@
       S.root.querySelectorAll('[data-ui-scale]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.uiScale === el.dataset.uiScale)));
       return;
     }
+    if (el.dataset.shLicence) { if (window.SubsystemApp) SubsystemApp.openLicensing(); return; }
+    if (el.dataset.shClaim) { if (window.SubsystemApp && SubsystemApp._claimAdminDeviceFromMenu) SubsystemApp._claimAdminDeviceFromMenu(); return; }
     if (el.dataset.upd) { updatesAction(el.dataset.upd); return; }
     if (el.dataset.sh) { showSection(el.dataset.sh); return; }
     if (el.dataset.shGoto) { showSection(el.dataset.shGoto); return; }
