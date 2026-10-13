@@ -8138,3 +8138,6 @@ Audit: every refusal writes `DISCOUNT_APPROVAL_PIN_REFUSED` (approver uid, cashi
 **OPEN, recorded not fixed (returns code, pre-existing rounding):** partial returns of a cart-discounted line can refund 1–3 fils LESS than was paid — measured 33 of 156 fuzzed sales returned in parts (each part re-priced at the stored odd % and rounded). UI-3a amplifies it by putting a non-round % on every discounted line. Over-refunds are already capped by the tender cap. Needs a returns-side fix (refund the stored line_total pro rata, not a re-priced %).
 
 - Full run after the fix round: `run_all_tests.py retail commercial_runtime sync -j 6` = 509 files, 509 passed, 0 failed (log kept with the job).
+
+## 2026-10-13 — Owner Alembic revision after c7a4f2d8e613 CLAIMED (SYNC-BOOT Phase 1: per-stream cursors, pruned_through)
+Single-writer resource: the Owner Alembic chain head. `alembic heads` was `c7a4f2d8e613` when this was claimed. Revision A (SYNC-BOOT Phase 1) adds `stream`/`last_pulled_at`/`caps` to `owner_sync_device_cursors` (PK becomes (installation_id, stream)) and creates `owner_sync_license_state` (pruned_through_seq). Any other Owner revision must chain after it. Retail schema is NOT touched in Phase 1 (v55 is MONEY-5's); the hub-side prune state and per-stream hub cursors wait for Phase 2 under v56+.
