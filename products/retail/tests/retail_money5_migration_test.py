@@ -79,8 +79,8 @@ def _cols(conn, table):
 def test_a_fresh_install_has_both_columns_and_is_stamped_55(get_conn):
     conn = get_conn()
     try:
-        assert schema.RETAIL_SCHEMA_VERSION == 55
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 55
+        assert schema.RETAIL_SCHEMA_VERSION == 56  # v56 UPDATE: head moved 55 -> 56 (SYNC-BOOT Phase 2); v56's own shape is pinned by retail_site_stream_cursors_migration_test.
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 56  # v56 UPDATE: same exact pin.
         for table, col in NEW_COLS:
             assert col in _cols(conn, table), (table, col)
     finally:
