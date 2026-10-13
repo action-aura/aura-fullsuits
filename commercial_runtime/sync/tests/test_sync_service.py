@@ -216,6 +216,11 @@ CREATE TABLE sales (
     -- column above; W2a verify: this was missed, 11 tests here failed on
     -- "no column named points_earned". NULL = a legacy sale, like the real column.
     points_earned REAL,
+    -- UI-3a (retail schema v54): the sale apply binds why a cart-level / over-limit discount was given
+    -- and which manager approved it. Same fixture-follows-schema rule as points_earned above. NULL =
+    -- unknown (a sale from before v54, or from a v53 sender), never '' and never 0.
+    discount_reason TEXT,
+    discount_approved_by TEXT,
     status TEXT DEFAULT 'completed',
     idempotency_key TEXT UNIQUE,
     notes TEXT,
@@ -244,6 +249,8 @@ CREATE TABLE sale_items (
     -- reached the `sale_item` one. Fixing only the two that were visibly red
     -- would have left it to resurface later as a fresh, confusing failure.
     unit_cost REAL DEFAULT 0,
+    -- UI-3a (retail schema v54): the sell_price snapshot at sale time. NULL = unknown.
+    list_price REAL,
     uid TEXT,
     FOREIGN KEY (sale_id) REFERENCES sales(id),
     -- The real schema (products/retail/backend/database/schema.py) declares

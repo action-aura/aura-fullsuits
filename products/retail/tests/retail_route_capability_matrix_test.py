@@ -608,6 +608,12 @@ EXPECTED_READ_CAPABILITIES = {
     # PRINT-1 (2026-10-12): the receipt LAYOUT the till rasterises -- the same
     # data as printer_receipt_payload in a drawable shape, so the same gate.
     'printer_receipt_model': CAP_SELL,
+    # UI-3a (2026-10-13): GET /discount/approvers -- who the till may offer in its 'ask a manager'
+    # dialog. CAP_SELL, because the person asking is a CASHIER mid-sale who cannot list employees
+    # (that is Settings > Team, owner-only); the route answers with {ref, label} only -- no e-mail,
+    # role or hash -- for active people who hold retail.discount, have a PIN, and are not the asker
+    # (retail_ui3a_authority_test.py proves exactly that shape and exclusion).
+    'list_discount_approvers': CAP_SELL,
 
     # ── Diagnostics export (retail-hardware-viewports) ────────────────────────
     # `diagnostics_export` (GET /diagnostics/export) builds a support bundle

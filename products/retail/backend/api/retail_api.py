@@ -34,6 +34,7 @@ from commercial_runtime.identity.user_accounts import (
     CAP_SELL, CAP_REFUND, CAP_DISCOUNT, CAP_STOCK_ADJUST, CAP_REPORTS,
     CAP_CASH_CLOSE, CAP_CASH_APPROVE, CAP_EMPLOYEES, normalize_role,
     CAP_BOOKS_VIEW, CAP_BOOKS_RECORD,
+    user_has_capability as _user_has_capability, verify_user_pin as _verify_user_pin,
     # The ONE format every *_at_utc column in this suite is written in --
     # timezone-aware '...+00:00', never `datetime.utcnow()`'s naive string.
     # Imported rather than re-spelled inline so retail's `created_at_utc` and
@@ -156,6 +157,10 @@ from core.retail import doc_series
 from core.retail import returns_settlement
 from core.retail import return_legs  # MONEY-3 M1: refund a split-paid sale through several methods
 from core.retail import tenders as tender_engine
+# UI-3a (schema v54): cart-level amount discounts / "make the total X" (pure, exact in
+# minor units) and the failure throttle behind a manager-PIN approval.
+from core.retail import cart_discount as cart_disc
+from core.retail import pin_throttle as _pin_throttle
 # Schema v38, ROADMAP.md's "retail schema v38 CLAIMED: a real general
 # ledger" entry -- the double-entry posting core. UNLIKE returns_settlement
 # above, this one DOES take a connection and write (the reorder_hook.py /
@@ -1192,6 +1197,128 @@ def _this_terminal_open_session_id(conn, cid):
         return row['id'] if row else None
     except Exception:
         return None
+
+#: UI-3a. The capability that lets a session set its own price on a line. The design asks
+#: for a NEW code `retail.price_override`; adding one to the identity registry needs a
+#: registry schema bump + backfill (commercial_runtime/identity, outside this wave's file
+#: set -- see ROADMAP "UI-3a CASHED IN"), and a registry code with no backfilled row reads
+#: as DENIED for every existing account, owners included. Until that lands the authority is
+#: the same one that grants a discount: a price below list IS a discount. ONE name, so the
+#: day the new code exists it is a one-line change here.
+CAP_PRICE_OVERRIDE = CAP_DISCOUNT
+
+#: Free-text cap for `discount_reason` (a chip label or a typed reason).
+DISCOUNT_REASON_MAX_LEN = 120
+
+
+_BIDI_CONTROLS = frozenset('\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069')
+_LINE_BREAKS = re.compile('[\r\n\x0b\x0c\x85\u2028\u2029]+')
+
+
+def _clean_discount_reason(raw):
+    """The reason text as it is stored and printed (verifier L2). A newline becomes a space, every
+    other control character and every bidi override / isolate (U+202A-202E, U+2066-2069) is dropped,
+    then trimmed. Not HTML-escaped here: the screens escape on output; this keeps the paper and the
+    ESC/POS receipt (which do not) from being steered by an invisible character."""
+    import unicodedata
+    text = _LINE_BREAKS.sub(' ', str(raw if raw is not None else ''))
+    text = ''.join(ch for ch in text if ch not in _BIDI_CONTROLS and unicodedata.category(ch) != 'Cc')
+    return text.strip()
+
+
+def _approval_error(status, code, message, **data):
+    body = {'status': 'error', 'code': code, 'message': message}
+    if data:
+        body['data'] = data
+    return jsonify(body), status
+
+
+def _audit_pin_event(action, approver_uid, why):
+    """One audit row for a refused / locked manager-PIN approval, on its OWN connection and
+    committed at once (the sale that asked is refused, so nothing else would commit it). It
+    names the approver and the cashier and NEVER the PIN."""
+    aconn = get_retail_conn()
+    try:
+        _audit(aconn, action, 'discount_approval', approver_uid,
+               'approver=%s cashier=%s reason=%s' % (approver_uid, _uid(), why))
+        aconn.commit()
+    except Exception:
+        log.exception('PIN audit row could not be written: action=%r', action)
+    finally:
+        aconn.close()
+
+
+def _verify_discount_approver(cid, approval):
+    """Verify a manager's PIN for a discount / price override the cashier may not give alone.
+
+    `approval` is `{approver: <employee uid, id, login e-mail or employee id>, pin: "<4 digits>"}`.
+    Returns `(approver, None)` with `approver = {'id', 'uid'}` on success, else
+    `(None, (response, status))` already shaped for `return`.
+
+    ORDER matters and is deliberate (verifier round 2026-10-13, HIGH-1 + LOW "PIN oracle"):
+      1. resolve the approver (company-scoped) and judge everything that is NOT the PIN --
+         exists, same company, active, holds the authority;
+      2. the cashier cannot approve themselves (refused, not counted, says nothing about PINs);
+      3. COUNT the attempt first (`reserve_attempt`, one BEGIN IMMEDIATE on the retail DB) --
+         a locked approver is refused 429 with no PIN verified, even a correct one;
+      4. only then verify the PIN, outside any transaction (the KDF is slow);
+      5. a success undoes its own one increment; a failure leaves it counted.
+    "Wrong PIN", "no such approver" and "approver not allowed" all return the SAME 403
+    APPROVAL_REJECTED, so the response can never confirm that a PIN was correct. Every refusal
+    writes a DISCOUNT_APPROVAL_PIN_REFUSED audit row; the attempt that locks an approver writes
+    DISCOUNT_APPROVAL_LOCKED. The PIN is never written anywhere.
+    """
+    if not isinstance(approval, dict):
+        return None, _approval_error(400, 'APPROVAL_INVALID', 'The manager approval is malformed.')
+    ref = str(approval.get('approver') or '').strip()
+    pin = str(approval.get('pin') or '').strip()
+    if not ref or not pin:
+        return None, _approval_error(400, 'APPROVAL_INVALID', 'Pick a manager and enter their PIN.')
+    reg = _registry_conn()
+    try:
+        row = reg.execute(
+            "SELECT id, uid, role, status FROM users WHERE company_id=? AND "
+            "(id=? OR uid=? OR lower(email)=lower(?) OR lower(employee_id)=lower(?)) LIMIT 1",
+            (cid, ref, ref, ref, ref)).fetchone()
+        approver_id = row['id'] if row else None
+        if approver_id and approver_id == session.get('mt_user_id'):
+            return None, _approval_error(
+                403, 'APPROVER_IS_CASHIER', 'A different person must approve this. Pick a manager.')
+        allowed = bool(
+            row and str(row['status'] or '').lower() == 'active'
+            and (str(row['role'] or '') == 'admin' or _user_has_capability(reg, approver_id, CAP_DISCOUNT)))
+        bucket = (row['uid'] or approver_id) if row else _pin_throttle.UNKNOWN_APPROVER
+        tconn = get_retail_conn()
+        try:
+            _pin_throttle.ensure_table(tconn)
+            tconn.commit()
+            counted, retry_after, just_locked = _pin_throttle.reserve_attempt(tconn, cid, bucket)
+        finally:
+            tconn.close()
+        if not counted:
+            return None, _approval_error(
+                429, 'PIN_LOCKED',
+                'Too many wrong PINs for this manager. Try again in a few minutes.',
+                retry_after_seconds=retry_after)
+        if just_locked:
+            _audit_pin_event('DISCOUNT_APPROVAL_LOCKED', bucket, 'too_many_wrong_pins')
+        refused = _approval_error(403, 'APPROVAL_REJECTED', 'That manager PIN was not accepted.')
+        # A not-allowed (or unknown) approver is refused WITHOUT looking at the PIN's value, but a
+        # known one still pays for one KDF run so the two refusals take the same time.
+        pin_ok = _verify_user_pin(reg, approver_id, pin) if approver_id else False
+        if not allowed or not pin_ok:
+            _audit_pin_event('DISCOUNT_APPROVAL_PIN_REFUSED', bucket,
+                             'wrong_pin' if allowed else 'approver_not_allowed')
+            return None, refused
+        tconn = get_retail_conn()
+        try:
+            _pin_throttle.release_attempt(tconn, cid, bucket)
+        finally:
+            tconn.close()
+        return {'id': approver_id, 'uid': (row['uid'] or approver_id)}, None
+    finally:
+        reg.close()
+
 
 def _cashier_discount_limit_pct(conn, cid):
     """The owner-set ceiling (percent) on a discount from a session that lacks
@@ -8009,6 +8136,40 @@ def _resolve_quotation_for_conversion(conn, cid, qid):
 
 # ── POS / Sales ───────────────────────────────────────────────────────────────
 
+@retail_bp.route('/discount/approvers', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_SELL)
+def list_discount_approvers():
+    """Who can the till offer in the "ask a manager" dialog (UI-3a)?
+
+    People who could approve a discount BY PIN right now: active, in THIS company, hold retail.discount
+    (or are the admin), have a PIN set, and are not the person asking. A cashier cannot list employees
+    (that is Settings > Team, owner-only), so this narrow read exists -- and it answers with a `ref` the
+    approval accepts and a display `label` ONLY: no e-mail, no role, no hash, nothing that identifies
+    whether a PIN exists beyond the person being in the list at all.
+    """
+    cid = _cid()
+    me = session.get('mt_user_id')
+    reg = _registry_conn()
+    try:
+        rows = reg.execute(
+            "SELECT id, uid, role, employee_id, display_name FROM users "
+            "WHERE company_id=? AND status='active' AND pin_hash IS NOT NULL AND pin_hash != '' "
+            "ORDER BY COALESCE(NULLIF(display_name,''), employee_id)", (cid,)).fetchall()
+        out = []
+        for r in rows:
+            if r['id'] == me:
+                continue
+            if not (str(r['role'] or '') == 'admin' or _user_has_capability(reg, r['id'], CAP_DISCOUNT)):
+                continue
+            out.append({'ref': r['uid'] or r['id'],
+                        'label': (r['display_name'] or '').strip() or r['employee_id']})
+    finally:
+        reg.close()
+    return jsonify({'status': 'success', 'data': out})
+
+
 @retail_bp.route('/sales', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -8090,6 +8251,44 @@ def create_sale():
             tax_engine.clamp_discount_pct(item.get('discount_pct', 0)) > 0
             for item in items_in if isinstance(item, dict)
         )
+        # ── UI-3a: amount discount / "make the total X" / price override / approval ──
+        # All four are INTENT, judged here only for SHAPE and AMBIGUITY (cheap, before the
+        # write lock). The money they mean -- how many fils, which lines, whether it is over
+        # the cashier's limit -- needs the priced cart and is decided inside the transaction.
+        cart_discount_amount = data.get('cart_discount_amount')
+        cart_target_total = data.get('cart_target_total')
+        wants_amount_discount = cart_discount_amount is not None or cart_target_total is not None
+        wants_override = any(isinstance(i, dict) and i.get('unit_price_override') is not None
+                             for i in items_in)
+        discount_reason = _clean_discount_reason(data.get('discount_reason'))
+        if cart_discount_amount is not None and cart_target_total is not None:
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'DISCOUNT_AMBIGUOUS', 'message': (
+                'Send either a discount amount or a target total, not both.')}), 400
+        if wants_amount_discount and (wants_discount or quotation_id):
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'DISCOUNT_COMBINATION_NOT_ALLOWED', 'message': (
+                'A cart discount cannot be combined with a per-item discount or a quotation. '
+                'Remove one of them.')}), 400
+        if len(discount_reason) > DISCOUNT_REASON_MAX_LEN:
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'DISCOUNT_REASON_TOO_LONG', 'message': (
+                f'The reason can be at most {DISCOUNT_REASON_MAX_LEN} characters.')}), 400
+        # Whether THIS session may discount / re-price on its own (retail.discount). Read once;
+        # every refusal below consumes this verdict so the AST capability ratchet sees it gate.
+        session_may_discount = session_has_capability(CAP_DISCOUNT)
+        session_may_override_price = session_has_capability(CAP_PRICE_OVERRIDE)
+        # A manager's PIN, when the cashier brought one. Verified HERE, before BEGIN IMMEDIATE:
+        # the KDF behind it costs a few hundred milliseconds and must never be spent holding
+        # the write lock. Ignored (not even checked) for a session that can act alone -- an
+        # approval nobody needed must not be able to fail, or lock, a manager's own sale.
+        approver = None
+        approval_in = data.get('approval')
+        if approval_in is not None and (wants_discount or wants_amount_discount or wants_override)                 and not (session_may_discount and (session_may_override_price or not wants_override)):
+            approver, approver_err = _verify_discount_approver(cid, approval_in)
+            if approver_err:
+                conn.close()
+                return approver_err
         # Owner-set cashier limit: a session WITHOUT retail.discount may still
         # discount up to `cashier_discount_limit_pct` (default 0 = refused, the
         # old behaviour, with the SAME message and no new code). Per-line
@@ -8098,20 +8297,33 @@ def create_sale():
         # check's own scope above). Loyalty redemption and the quotation
         # discount/expiry overrides still need CAP_DISCOUNT -- they are not
         # covered by this limit.
+        #
+        # UI-3a: a verified manager `approver` lifts the limit for this one sale (the cashier
+        # asked for more than their ceiling, or have none). The approval is RECORDED on the
+        # sale (`discount_approved_by`) and a reason is then mandatory -- an override with no
+        # why is the thing the manager PIN exists to make visible.
         cashier_discount = None
-        if wants_discount and not session_has_capability(CAP_DISCOUNT):
+        pct_discount_approved = False
+        if wants_discount and not session_may_discount:
             limit_pct = _cashier_discount_limit_pct(conn, cid)
             asked_pct = max(tax_engine.clamp_discount_pct(i.get('discount_pct', 0))
                             for i in items_in if isinstance(i, dict))
-            if limit_pct <= 0:
+            if limit_pct <= 0 and not approver:
                 conn.close()
                 return jsonify({'status': 'error', 'message': DISCOUNT_DENIED_MESSAGE}), 403
-            if asked_pct > limit_pct + 1e-9:
+            if asked_pct > limit_pct + 1e-9 and not approver:
                 conn.close()
                 return jsonify({'status': 'error', 'code': 'DISCOUNT_OVER_LIMIT',
                                 'message': f'You can give at most {_pct_text(limit_pct)}% discount. Ask a manager for more.',
                                 'data': {'limit_pct': limit_pct, 'requested_pct': asked_pct}}), 403
+            pct_discount_approved = bool(approver) and (limit_pct <= 0 or asked_pct > limit_pct + 1e-9)
             cashier_discount = (asked_pct, limit_pct)
+        # A price override needs a reason whoever approves it (verifier MEDIUM-1: with a PIN and no
+        # reason a 3.500 line was given away at 0.000 and only the list_price column showed it).
+        if (pct_discount_approved or wants_amount_discount or wants_override) and not discount_reason:
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'DISCOUNT_REASON_REQUIRED', 'message': (
+                'Say why this discount is given (for example Damaged, Loyal customer, Round down).')}), 400
 
         # ── Split tender: validate the SHAPE of `tenders` before any write ────
         # A sale may be paid by several methods ({'tenders': [{'method':
@@ -8325,6 +8537,8 @@ def create_sale():
         # comment for why the gate is SALE-level, not per-line).
         sale_oversold_past_recorded_stock = False
         subtotal = discount = tax = total = Decimal('0')
+        # UI-3a: (name, list price, charged price, needed a manager) per overridden line, for the audit trail.
+        override_lines = []
         # Quotation conversion only (§C design point (g)): the QUOTED side's
         # own total, using each line's LIVE tax rate for an apples-to-apples
         # comparison against the sale's own final `total` below. Stays at
@@ -8545,6 +8759,35 @@ def create_sale():
             )
             unit_price = float(product['sell_price'])
             tax_rate = float(product['tax_rate'])
+            # UI-3a (schema v54): the LIST price, snapshotted for every line at the instant
+            # of sale. `list_base` here is the product's sell_price before any override; the
+            # stored `list_price` is settled below, after the modifier extras are known. "Sold below list" is then a plain comparison of
+            # two columns on the row, never a join to a product price that has since moved.
+            list_base = unit_price
+            # UI-3a: per-line price override. The client sends an INTENT (a number); the
+            # server decides whether this session may set it. It replaces the product's
+            # sell_price as the line's base price and then goes through the normal pricing
+            # path (modifier deltas still add on top, tax and discount apply as for any line).
+            price_override = item.get('unit_price_override')
+            if price_override is not None:
+                try:
+                    override_value = cart_disc.parse_amount(
+                        price_override, tax_engine.currency_quantum(currency),
+                        code='PRICE_OVERRIDE_INVALID', what='price')
+                    if override_value < 0:
+                        raise cart_disc.CartDiscountError(
+                            'PRICE_OVERRIDE_INVALID', 'The price cannot be negative.')
+                except cart_disc.CartDiscountError as pe:
+                    conn.rollback(); conn.close()
+                    return jsonify({'status': 'error', 'code': pe.code, 'message': pe.message}), 400
+                if not session_may_override_price and not approver:
+                    conn.rollback(); conn.close()
+                    return jsonify({'status': 'error', 'code': 'PRICE_OVERRIDE_DENIED', 'message': (
+                        'You are not allowed to change a price. Ask a manager to approve it.')}), 403
+                if float(override_value) != unit_price:
+                    unit_price = float(override_value)
+                    override_lines.append(
+                        (product['name'], list_base, unit_price, bool(approver and not session_may_override_price)))
 
             # Schema v39 (cost basis for COGS): SNAPSHOT the product's cost
             # basis AT THIS INSTANT, inside this sale's own BEGIN IMMEDIATE
@@ -8623,6 +8866,7 @@ def create_sale():
             # never silently dropped: a "no peanuts" modifier the server
             # could not resolve is a safety bug, not a pricing one.
             product_modifier_groups = modifier_engine.load_product_modifier_groups(conn, cid, pid)
+            price_before_extras = unit_price
             try:
                 unit_price, modifier_snapshots = modifier_engine.resolve_line_modifiers(
                     unit_price, product_modifier_groups, item.get('modifier_option_ids')
@@ -8630,6 +8874,18 @@ def create_sale():
             except modifier_engine.ModifierValidationError as mve:
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'message': mve.message}), 400
+            # UI-3a (verifier HIGH-2): the LIST price is the line's full list unit price INCLUDING
+            # the paid extras, snapshotted AFTER they are applied -- list base + extras, with the
+            # override (if any) left out of it. It used to be snapshotted before the extras, so a
+            # plain 1.000 bread with a +0.500 extra stored list 1.000 / charged 1.500 and every
+            # such receipt printed a false "was 1.000, now 1.500" strike-through. With no override
+            # the line is sold AT list, so the two are the same number by construction (no float
+            # drift between "list" and "charged"); with one, the extras are added to the list base.
+            was_overridden = price_override is not None and float(override_value) != list_base
+            if was_overridden:
+                list_price = _money(list_base + (unit_price - price_before_extras), currency)
+            else:
+                list_price = unit_price
 
             # `effective_discount_pct`, not the raw manual value -- this is
             # the ONLY place a promotion actually changes what a sale
@@ -8710,6 +8966,8 @@ def create_sale():
                 # missing name; it never needs a missing label handled
                 # specially.
                 'name': product['name'], 'variant_label': product['variant_label'],
+                # UI-3a (schema v54): list price at sale time (see where it is read).
+                'list_price': list_price,
                 # Schema v39: the cost-basis snapshot resolved above,
                 # BEFORE any quotation price-winner logic runs -- cost basis
                 # is independent of which side (quoted vs. live) wins this
@@ -8731,6 +8989,76 @@ def create_sale():
             discount += Decimal(str(calc['discount_amount']))
             tax      += Decimal(str(calc['tax']))
             total    += Decimal(str(calc['total']))
+
+        # ── UI-3a: cart-level amount discount / "make the total X" ──────────────────────
+        # Runs on the PRICED cart (every line already through calculate_line), because only
+        # then do the real gross, tax and rounding exist. core/retail/cart_discount.py spreads
+        # the amount over the lines in minor units and asserts the lines' real discount_amounts
+        # sum to exactly what was asked; the per-line `discount_pct` it hands back is what is
+        # stored, so every downstream reader (return, receipt, report, sync) is untouched.
+        cart_discount_applied = None
+        if wants_amount_discount:
+            if any(l['discount_pct'] > 0 for l in resolved_lines):
+                # A live promotion already discounts a line: stacking a cart amount on top
+                # would pick a winner nobody chose. Refuse and say so.
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'code': 'DISCOUNT_COMBINATION_NOT_ALLOWED', 'message': (
+                    'A cart discount cannot be combined with an item that already has a '
+                    'discount or promotion. Remove it first.')}), 400
+            _cd_quant = tax_engine.currency_quantum(currency)
+
+            def _calc_line(p_, q_, pct_, r_):
+                return tax_engine.calculate_line(p_, q_, pct_, r_, mode=mode, currency=currency)
+
+            _cd_lines = [(l['unit_price'], l['quantity'], l['tax_rate']) for l in resolved_lines]
+            try:
+                if cart_target_total is not None:
+                    _target = cart_disc.parse_amount(
+                        cart_target_total, _cd_quant, code=cart_disc.CODE_BAD_TARGET, what='new total')
+                    _cd_amount, _cd_pcts, _cd_calcs, _cd_shares = cart_disc.solve_target_total(
+                        _cd_lines, _target, _cd_quant, _calc_line)
+                else:
+                    _cd_amount = cart_disc.parse_amount(cart_discount_amount, _cd_quant)
+                    _cd_pcts, _cd_calcs, _cd_shares = cart_disc.apply_cart_discount(
+                        _cd_lines, _cd_amount, _cd_quant, _calc_line)
+            except cart_disc.CartDiscountError as cde:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'code': cde.code, 'message': cde.message,
+                                'data': cde.data}), 400
+            if _cd_calcs is not None:
+                _cd_pre = sum((Decimal(str(_calc_line(l['unit_price'], l['quantity'], 0, l['tax_rate'])['gross']))
+                               for l in resolved_lines), Decimal('0'))
+                _cd_eff_pct = float(_cd_amount / _cd_pre * 100) if _cd_pre > 0 else 0.0
+                # Authority. The amount counts as an effective % of the pre-discount
+                # subtotal against the SAME owner-set limit a per-line % is judged on;
+                # retail.discount holders are unlimited, as today.
+                _cd_needs_manager = False
+                if not session_may_discount:
+                    _cd_limit = _cashier_discount_limit_pct(conn, cid)
+                    if _cd_limit <= 0 or _cd_eff_pct > _cd_limit + 1e-9:
+                        if not approver:
+                            conn.rollback(); conn.close()
+                            return jsonify({'status': 'error', 'code': 'DISCOUNT_OVER_LIMIT',
+                                            'message': ('You can give at most '
+                                                        f'{_pct_text(_cd_limit)}% discount. Ask a manager for more.'),
+                                            'data': {'limit_pct': _cd_limit,
+                                                     'requested_pct': round(_cd_eff_pct, 4)}}), 403
+                        _cd_needs_manager = True
+                    cashier_discount = (_cd_eff_pct, _cd_limit)
+                resolved_lines = [dict(l, discount_pct=pct, line_total=c['taxable_amount'],
+                                       discount_amount=c['discount_amount'])
+                                  for l, pct, c in zip(resolved_lines, _cd_pcts, _cd_calcs)]
+                subtotal = sum((Decimal(str(c['gross'])) for c in _cd_calcs), Decimal('0'))
+                discount = sum((Decimal(str(c['discount_amount'])) for c in _cd_calcs), Decimal('0'))
+                tax = sum((Decimal(str(c['tax'])) for c in _cd_calcs), Decimal('0'))
+                total = sum((Decimal(str(c['total'])) for c in _cd_calcs), Decimal('0'))
+                cart_discount_applied = {
+                    'amount': float(_cd_amount), 'effective_pct': round(_cd_eff_pct, 4),
+                    'mode': 'target_total' if cart_target_total is not None else 'amount',
+                    'needed_manager': _cd_needs_manager,
+                }
+                if _cd_needs_manager:
+                    pct_discount_approved = True
 
         # Same currency the per-line pricing calls above already used
         # (`currency`, read once at ~line 4058). The per-line calc was
@@ -9037,6 +9365,15 @@ def create_sale():
         # below AND the sync_outbox event right after it need the SAME value
         # -- `entity_id` must equal the row's own `uid`, or the receiving
         # device could never resolve sale_items/payments back to this sale.
+        # UI-3a (schema v54): what the sale records about WHY it was discounted and WHO
+        # allowed it. The approver is recorded only when the approval was actually NEEDED
+        # (over the cashier's limit, or a price override the session could not make alone);
+        # a PIN that was supplied but not required leaves no claim on the sale.
+        _override_needed_manager = any(o[3] for o in override_lines)
+        sale_discount_approved_by = (approver['uid'] if approver
+                                     and (pct_discount_approved or _override_needed_manager) else None)
+        sale_discount_reason = (discount_reason or None) if (
+            cart_discount_applied or pct_discount_approved or override_lines) else None
         sale_uid = _new_uid()
         # W2a (schema v48): the points this sale grants, decided ONCE here so the
         # sales row, the sale's sync payload and the 'earn' ledger row below all
@@ -9058,13 +9395,31 @@ def create_sale():
             INSERT INTO sales (company_id,sale_number,branch_id,customer_id,cashier,
                                subtotal,discount_amount,tax_amount,total,amount_paid,
                                change_amount,points_redeemed_amount,payment_method,status,idempotency_key,notes,created_at,due_date,
-                               session_id,uid,actor_user_uid,terminal_id,created_at_utc,points_earned)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?,?,?)
+                               session_id,uid,actor_user_uid,terminal_id,created_at_utc,points_earned,
+                               discount_reason,discount_approved_by)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?,?,?,?,?)
         """, (cid, sale_number, bid, customer_id, data.get('cashier', _uid()),
               subtotal, discount, tax, total, paid, change, points_redeemed_amount,
               pm, idem, data.get('notes',''), now_local, due_date, cash_session_id,
-              sale_uid, actor, terminal, utc_now, points_earned))
+              sale_uid, actor, terminal, utc_now, points_earned,
+              sale_discount_reason, sale_discount_approved_by))
         sale_id = cur.lastrowid
+        # UI-3a audit trail. One row per fact a manager would later ask about: a cart discount
+        # (how much, how it was asked, why), the approval that allowed it (WHO approved --
+        # the audit row's own user_id is the cashier), and every re-priced line.
+        if cart_discount_applied:
+            _audit(conn, 'SALE_CART_DISCOUNT', 'sale', sale_id,
+                   f"{sale_number}: {cart_discount_applied['mode']} {cart_discount_applied['amount']} "
+                   f"({_pct_text(cart_discount_applied['effective_pct'])}% of subtotal), "
+                   f"reason: {sale_discount_reason}")
+        for _name, _list, _charged, _mgr in override_lines:
+            _audit(conn, 'SALE_PRICE_OVERRIDE', 'sale', sale_id,
+                   f'{sale_number}: {_name} list {_list} -> {_charged}'
+                   + (f' (approved by {approver["uid"]})' if _mgr else ''))
+        if sale_discount_approved_by:
+            _audit(conn, 'SALE_DISCOUNT_APPROVED', 'sale', sale_id,
+                   f'{sale_number}: manager {sale_discount_approved_by} approved by PIN'
+                   + (f', reason: {sale_discount_reason}' if sale_discount_reason else ''))
         if cashier_discount:
             _audit(conn, 'SALE_DISCOUNT_BY_CASHIER', 'sale', sale_id,
                    f'{sale_number}: {_pct_text(cashier_discount[0])}% '
@@ -9111,6 +9466,10 @@ def create_sale():
             'payment_method': pm, 'status': 'completed',
             'notes': data.get('notes', ''), 'created_at': now_local, 'due_date': due_date,
             'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+            # UI-3a (schema v54): why a cart-level / over-limit discount was given and who
+            # approved it. `sale` has no update event, so this payload is the only way another
+            # till ever learns them; a v53 receiver ignores unknown keys.
+            'discount_reason': sale_discount_reason, 'discount_approved_by': sale_discount_approved_by,
         })
 
         for line in resolved_lines:
@@ -9122,10 +9481,10 @@ def create_sale():
             # given a peer device several rows it could not tell apart.
             item_uid = _new_uid()
             cur.execute("""
-                INSERT INTO sale_items (sale_id,product_id,quantity,unit_price,discount_pct,tax_rate,line_total,unit_cost,uid)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                INSERT INTO sale_items (sale_id,product_id,quantity,unit_price,discount_pct,tax_rate,line_total,unit_cost,uid,list_price)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
             """, (sale_id, pid, qty, line['unit_price'], line['discount_pct'], line['tax_rate'],
-                  line['line_total'], line['unit_cost'], item_uid))
+                  line['line_total'], line['unit_cost'], item_uid, line['list_price']))
             # `cur.lastrowid` captured IMMEDIATELY after the INSERT it
             # describes and before any other `cur.execute()` runs -- same
             # discipline `_default_branch`'s own comment states in full:
@@ -9230,6 +9589,8 @@ def create_sale():
                 # column exists to kill, reappearing on every OTHER device
                 # in the shop even though the selling device got it right.
                 'unit_cost': line['unit_cost'],
+                # UI-3a (schema v54): the list price at sale time (None-safe on a v53 receiver).
+                'list_price': line['list_price'],
                 # W2b/W3a: the extras and the promotion this line was rung with
                 # (see the block above). A payload from an older computer has
                 # neither key; the receiver treats that as "nothing to add".
@@ -9645,6 +10006,11 @@ def create_sale():
             # subsystem-retail.js), not something this endpoint pre-filters.
             'employee_name': employee_name, 'customer_id': customer_id, 'customer_name': customer_name,
         }
+        if cart_discount_applied or sale_discount_reason:
+            # Only a discounted sale carries these keys (other responses stay byte-identical).
+            response_data['cart_discount'] = cart_discount_applied
+            response_data['discount_reason'] = sale_discount_reason
+            response_data['discount_approved_by'] = sale_discount_approved_by
         if split_tenders:
             # Only a sale paid in parts carries `tenders`: every other sale's
             # response stays byte-for-byte what it was (several regression
@@ -17061,7 +17427,8 @@ def _receipt_model_inputs(conn, cid, sale_id):
         return None
     sale = dict(sale)
     items = conn.execute("""
-        SELECT si.id, si.product_id, si.quantity, si.unit_price, si.line_total, p.name AS product_name
+        SELECT si.id, si.product_id, si.quantity, si.unit_price, si.line_total, si.list_price,
+               p.name AS product_name
         FROM sale_items si LEFT JOIN products p ON si.product_id=p.id
         WHERE si.sale_id=? ORDER BY si.id
     """, (sale_id,)).fetchall()
@@ -17071,6 +17438,7 @@ def _receipt_model_inputs(conn, cid, sale_id):
     lines = [{
         'name': i['product_name'] or f"#{i['product_id']}",
         'quantity': i['quantity'], 'unit_price': i['unit_price'], 'line_total': i['line_total'],
+        'list_price': i['list_price'],
         'modifiers': extras_by_item.get(i['id'], []),
         'applied_promotion': promo_by_item.get(i['id']),
     } for i in items]

@@ -200,8 +200,8 @@ def build_receipt_model(
 
     `sale`: sale_number, created_at, subtotal, discount_amount, tax_amount,
     total, amount_paid, change_amount, customer_id.
-    `items`: name, quantity, unit_price, modifiers [{name}], applied_promotion
-    (None, or {name, discount_amount}).
+    `items`: name, quantity, unit_price, list_price (None on pre-v54 sales), modifiers
+    [{name}], applied_promotion (None, or {name, discount_amount}).
     `branding`: the `branding_*` settings plus `business_name` (signup
     fallback). `tenders`: [{method, amount, tendered}] for a split sale.
     `einvoice`: None, or {'cleared': bool, 'qr_payload': str|None}.
@@ -263,8 +263,16 @@ def build_receipt_model(
         # LTR run at the line start and the name beside it, so every item line has
         # the quantity in the same place whatever the name script.
         qty_text = f"{_qty_text(qty)}\u00d7"
+        # UI-3a: a line sold at a price other than the product's LIST price (schema v54
+        # `list_price`, a snapshot taken at sale time) shows the list price struck through,
+        # exactly as a promotion does. NULL (a sale from before v54) shows nothing -- unknown
+        # is not "no override". A promotion, when present, keeps the strike for itself.
+        list_price = item.get("list_price")
+        list_gross = (round(float(list_price) * qty, 6) if list_price is not None else None)
         if discount > half:
             lines.append(_row(label, money(gross - discount), strike=money(gross), qty=qty_text))
+        elif list_gross is not None and abs(list_gross - gross) > half:
+            lines.append(_row(label, money(gross), strike=money(list_gross), qty=qty_text))
         else:
             lines.append(_row(label, money(gross), qty=qty_text))
         extras = [m.get("name") for m in (item.get("modifiers") or []) if m and m.get("name")]
@@ -285,7 +293,11 @@ def build_receipt_model(
     if promotions > half:
         lines.append(_row(tr("Promotions"), _negative(money(promotions))))
     if manual_discount > half:
-        lines.append(_row(tr("Discount"), _negative(money(manual_discount))))
+        # UI-3a: "Discount (Damaged)" -- the reason the cashier gave (schema v54
+        # `sales.discount_reason`) travels to the paper. Absent on older sales.
+        reason = str(sale.get("discount_reason") or "").strip()
+        label = f"{tr('Discount')} ({reason})" if reason else tr("Discount")
+        lines.append(_row(label, _negative(money(manual_discount))))
     tax = float(sale.get("tax_amount") or 0)
     if tax > 0:
         lines.append(_row(tr("Tax"), money(tax)))

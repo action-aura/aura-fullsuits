@@ -3411,8 +3411,9 @@ class SyncService:
                     "subtotal, discount_amount, tax_amount, total, amount_paid, change_amount, "
                     "points_redeemed_amount, "
                     "payment_method, status, idempotency_key, notes, created_at, due_date, session_id, "
-                    "uid, actor_user_uid, terminal_id, created_at_utc, points_earned) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,NULL,?,?,?,?,?) "
+                    "uid, actor_user_uid, terminal_id, created_at_utc, points_earned, "
+                    "discount_reason, discount_approved_by) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,NULL,?,?,?,?,?,?,?) "
                     "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                     (local_company_id, p.get("sale_number"), resolved_branch_id, p.get("customer_id"),
                      p.get("cashier", "POS"), p.get("subtotal", 0), p.get("discount_amount", 0),
@@ -3425,7 +3426,11 @@ class SyncService:
                      # computer can tell "the earn row has not arrived yet" from
                      # "this sale never earned". Absent (an older sender) stays
                      # NULL = unknown, which skips that guard.
-                     p.get("points_earned")),
+                     p.get("points_earned"),
+                     # UI-3a (schema v54): why a cart-level / over-limit discount
+                     # was given and which manager approved it. Absent (a v53
+                     # sender) stays NULL = unknown -- never defaulted to ''.
+                     p.get("discount_reason"), p.get("discount_approved_by")),
                 )
             except sqlite3.IntegrityError as exc:
                 # Aseel-parity wave A-PAR (schema v34), per-document-type
@@ -3504,11 +3509,13 @@ class SyncService:
             # cost of 0 for every line it did not ring itself.
             conn.execute(
                 "INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, discount_pct, "
-                "tax_rate, line_total, unit_cost, uid) VALUES (?,?,?,?,?,?,?,?,?) "
+                "tax_rate, line_total, unit_cost, uid, list_price) VALUES (?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                 (sale_local_id, p.get("product_id"), p.get("quantity"), p.get("unit_price"),
                  p.get("discount_pct", 0), p.get("tax_rate", 0), p.get("line_total"),
-                 p.get("unit_cost", 0), p.get("uid")),
+                 # UI-3a (schema v54): `list_price` is the sell_price snapshot at sale
+                 # time; absent from a v53 sender -> NULL (unknown), never 0.
+                 p.get("unit_cost", 0), p.get("uid"), p.get("list_price")),
             )
             # W2b/W3a (schema v50): the line's extras / promotion SNAPSHOTS.
             # Older payloads carry neither key and this is then a no-op.

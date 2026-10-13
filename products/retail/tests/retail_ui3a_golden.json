@@ -1,0 +1,2906 @@
+[
+{
+"expect": {
+"discount_minor": 33223,
+"ok": true,
+"shares": [
+3594,
+29629
+],
+"total_minor": 40341
+},
+"gross_minor": [
+7958,
+65606
+],
+"kind": "target",
+"rates": [
+0,
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 40341
+},
+{
+"expect": {
+"discount_minor": 492462,
+"ok": true,
+"shares": [
+95333,
+345469,
+23387,
+28273
+],
+"total_minor": 60052
+},
+"gross_minor": [
+106532,
+386050,
+26134,
+31594
+],
+"kind": "target",
+"rates": [
+4,
+4,
+0,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 60052
+},
+{
+"expect": {
+"discount_minor": 75865,
+"ok": true,
+"shares": [
+30638,
+45227
+],
+"total_minor": 34832
+},
+"gross_minor": [
+44164,
+65193
+],
+"kind": "target",
+"rates": [
+4,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 34832
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+1629,
+6340,
+8111,
+41698
+],
+"total_minor": 498757
+},
+"gross_minor": [
+14134,
+55024,
+70390,
+361865
+],
+"kind": "amount",
+"rates": [
+0,
+8,
+0,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 57778
+},
+{
+"expect": {
+"discount_minor": 43300,
+"ok": true,
+"shares": [
+43300
+],
+"total_minor": 59758
+},
+"gross_minor": [
+103058
+],
+"kind": "target",
+"rates": [
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 59758
+},
+{
+"expect": {
+"discount_minor": 11143,
+"ok": true,
+"shares": [
+3331,
+7812
+],
+"total_minor": 54958
+},
+"gross_minor": [
+18948,
+44439
+],
+"kind": "target",
+"rates": [
+8,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 54958
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+210374,
+7772
+],
+"total_minor": 2603
+},
+"gross_minor": [
+212884,
+7865
+],
+"kind": "amount",
+"rates": [
+0,
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 218146
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+219979,
+35433
+],
+"total_minor": 15597
+},
+"gross_minor": [
+231560,
+37298
+],
+"kind": "amount",
+"rates": [
+16,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 255412
+},
+{
+"expect": {
+"discount_minor": 658007,
+"ok": true,
+"shares": [
+45311,
+23531,
+189549,
+392608,
+7008
+],
+"total_minor": 46564
+},
+"gross_minor": [
+48330,
+25099,
+202179,
+418768,
+7475
+],
+"kind": "target",
+"rates": [
+16,
+8,
+0,
+8,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 46564
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+45356,
+90527,
+70188,
+200321
+],
+"total_minor": 27847
+},
+"gross_minor": [
+48274,
+96351,
+74703,
+213207
+],
+"kind": "amount",
+"rates": [
+16,
+0,
+16,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 406392
+},
+{
+"expect": {
+"code": "TARGET_NOT_REACHABLE",
+"nearest_above_minor": 44812,
+"nearest_below_minor": 44810,
+"ok": false
+},
+"gross_minor": [
+46137
+],
+"kind": "target",
+"rates": [
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 44811
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+82884,
+27404
+],
+"total_minor": 11003
+},
+"gross_minor": [
+90266,
+29844
+],
+"kind": "amount",
+"rates": [
+16,
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 110288
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+23907,
+10521,
+82759,
+24047,
+200596
+],
+"total_minor": 69409
+},
+"gross_minor": [
+28407,
+12501,
+98337,
+28574,
+238356
+],
+"kind": "amount",
+"rates": [
+4,
+8,
+16,
+16,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 341830
+},
+{
+"expect": {
+"discount_minor": 10171,
+"ok": true,
+"shares": [
+10171
+],
+"total_minor": 7075
+},
+"gross_minor": [
+17246
+],
+"kind": "target",
+"rates": [
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 7075
+},
+{
+"expect": {
+"discount_minor": 73549,
+"ok": true,
+"shares": [
+62825,
+10724
+],
+"total_minor": 47835
+},
+"gross_minor": [
+102753,
+17540
+],
+"kind": "target",
+"rates": [
+0,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 47835
+},
+{
+"expect": {
+"discount_minor": 65448,
+"ok": true,
+"shares": [
+65448
+],
+"total_minor": 62288
+},
+"gross_minor": [
+127736
+],
+"kind": "target",
+"rates": [
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 62288
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+13803,
+340910
+],
+"total_minor": 44190
+},
+"gross_minor": [
+15293,
+377720
+],
+"kind": "amount",
+"rates": [
+0,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 354713
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+2028,
+573,
+1841,
+517,
+1615
+],
+"total_minor": 60338
+},
+"gross_minor": [
+19054,
+5385,
+17297,
+4855,
+15174
+],
+"kind": "amount",
+"rates": [
+8,
+16,
+16,
+0,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 6574
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+25377,
+11199,
+30331,
+44940,
+25084
+],
+"total_minor": 164244
+},
+"gross_minor": [
+53809,
+23747,
+64314,
+95291,
+53189
+],
+"kind": "amount",
+"rates": [
+16,
+0,
+0,
+8,
+8
+],
+"tax_mode": "after_discount",
+"value_minor": 136931
+},
+{
+"expect": {
+"discount_minor": 739,
+"ok": true,
+"shares": [
+739
+],
+"total_minor": 4911
+},
+"gross_minor": [
+4973
+],
+"kind": "target",
+"rates": [
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 4911
+},
+{
+"expect": {
+"discount_minor": 16150,
+"ok": true,
+"shares": [
+9222,
+6928
+],
+"total_minor": 2209
+},
+"gross_minor": [
+10402,
+7815
+],
+"kind": "target",
+"rates": [
+0,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 2209
+},
+{
+"expect": {
+"discount_minor": 275077,
+"ok": true,
+"shares": [
+24840,
+4415,
+134261,
+53437,
+58124
+],
+"total_minor": 461421
+},
+"gross_minor": [
+62871,
+11175,
+339822,
+135252,
+147116
+],
+"kind": "target",
+"rates": [
+16,
+16,
+8,
+16,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 461421
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+16392,
+34240
+],
+"total_minor": 170458
+},
+"gross_minor": [
+68746,
+143596
+],
+"kind": "amount",
+"rates": [
+0,
+8
+],
+"tax_mode": "after_discount",
+"value_minor": 50632
+},
+{
+"expect": {
+"discount_minor": 111968,
+"ok": true,
+"shares": [
+89942,
+22026
+],
+"total_minor": 32310
+},
+"gross_minor": [
+115494,
+28283
+],
+"kind": "target",
+"rates": [
+0,
+8
+],
+"tax_mode": "after_discount",
+"value_minor": 32310
+},
+{
+"expect": {
+"discount_minor": 63157,
+"ok": true,
+"shares": [
+18705,
+44452
+],
+"total_minor": 48717
+},
+"gross_minor": [
+32364,
+76913
+],
+"kind": "target",
+"rates": [
+0,
+8
+],
+"tax_mode": "after_discount",
+"value_minor": 48717
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+15956,
+27201
+],
+"total_minor": 51589
+},
+"gross_minor": [
+34560,
+58917
+],
+"kind": "amount",
+"rates": [
+0,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 43157
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+3291
+],
+"total_minor": 27801
+},
+"gross_minor": [
+29033
+],
+"kind": "amount",
+"rates": [
+8
+],
+"tax_mode": "after_discount",
+"value_minor": 3291
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+163886,
+20808,
+7709
+],
+"total_minor": 215158
+},
+"gross_minor": [
+346570,
+44002,
+16302
+],
+"kind": "amount",
+"rates": [
+0,
+0,
+8
+],
+"tax_mode": "after_discount",
+"value_minor": 192403
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+65010,
+10681
+],
+"total_minor": 44812
+},
+"gross_minor": [
+101024,
+16598
+],
+"kind": "amount",
+"rates": [
+8,
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 75691
+},
+{
+"expect": {
+"discount_minor": 66199,
+"ok": true,
+"shares": [
+48370,
+17829
+],
+"total_minor": 82848
+},
+"gross_minor": [
+107628,
+39672
+],
+"kind": "target",
+"rates": [
+0,
+8
+],
+"tax_mode": "after_discount",
+"value_minor": 82848
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+109477,
+18594
+],
+"total_minor": 2937
+},
+"gross_minor": [
+111801,
+18989
+],
+"kind": "amount",
+"rates": [
+8,
+8
+],
+"tax_mode": "after_discount",
+"value_minor": 128071
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+116314,
+115812,
+441944
+],
+"total_minor": 13857
+},
+"gross_minor": [
+118580,
+118068,
+450555
+],
+"kind": "amount",
+"rates": [
+16,
+16,
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 674070
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+131716,
+4757
+],
+"total_minor": 126382
+},
+"gross_minor": [
+244804,
+8841
+],
+"kind": "amount",
+"rates": [
+8,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 136473
+},
+{
+"expect": {
+"discount_minor": 252382,
+"ok": true,
+"shares": [
+4595,
+196291,
+51496
+],
+"total_minor": 20210
+},
+"gross_minor": [
+4951,
+211491,
+55484
+],
+"kind": "target",
+"rates": [
+8,
+0,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 20210
+},
+{
+"expect": {
+"discount_minor": 20392,
+"ok": true,
+"shares": [
+5284,
+3426,
+2612,
+9070
+],
+"total_minor": 141891
+},
+"gross_minor": [
+40728,
+26407,
+20137,
+69916
+],
+"kind": "target",
+"rates": [
+4,
+16,
+0,
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 141891
+},
+{
+"expect": {
+"discount_minor": 22316,
+"ok": true,
+"shares": [
+15400,
+6916
+],
+"total_minor": 25021
+},
+"gross_minor": [
+32666,
+14671
+],
+"kind": "target",
+"rates": [
+0,
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 25021
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+34804,
+11778,
+217391,
+15693,
+44622
+],
+"total_minor": 142785
+},
+"gross_minor": [
+49051,
+16599,
+306376,
+22117,
+62888
+],
+"kind": "amount",
+"rates": [
+0,
+0,
+8,
+0,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 324288
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+11850,
+111498
+],
+"total_minor": 20261
+},
+"gross_minor": [
+13728,
+129174
+],
+"kind": "amount",
+"rates": [
+0,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 123348
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+17883,
+19658
+],
+"total_minor": 53427
+},
+"gross_minor": [
+39823,
+43776
+],
+"kind": "amount",
+"rates": [
+16,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 37541
+},
+{
+"expect": {
+"discount_minor": 211973,
+"ok": true,
+"shares": [
+106783,
+74084,
+31106
+],
+"total_minor": 27555
+},
+"gross_minor": [
+120084,
+83312,
+34980
+],
+"kind": "target",
+"rates": [
+4,
+0,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 27555
+},
+{
+"expect": {
+"discount_minor": 69872,
+"ok": true,
+"shares": [
+2695,
+7072,
+60105
+],
+"total_minor": 124314
+},
+"gross_minor": [
+7231,
+18978,
+161298
+],
+"kind": "target",
+"rates": [
+16,
+16,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 124314
+},
+{
+"expect": {
+"discount_minor": 26360,
+"ok": true,
+"shares": [
+11604,
+205,
+11399,
+3152
+],
+"total_minor": 122316
+},
+"gross_minor": [
+62646,
+1105,
+61537,
+17015
+],
+"kind": "target",
+"rates": [
+0,
+16,
+8,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 122316
+},
+{
+"expect": {
+"code": "TARGET_NOT_REACHABLE",
+"nearest_above_minor": 71525,
+"nearest_below_minor": 71523,
+"ok": false
+},
+"gross_minor": [
+128826,
+7926,
+13995
+],
+"kind": "target",
+"rates": [
+16,
+0,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 71524
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+15155,
+6432
+],
+"total_minor": 8049
+},
+"gross_minor": [
+20181,
+8566
+],
+"kind": "amount",
+"rates": [
+16,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 21587
+},
+{
+"expect": {
+"discount_minor": 325192,
+"ok": true,
+"shares": [
+89865,
+28368,
+63644,
+50473,
+92842
+],
+"total_minor": 44493
+},
+"gross_minor": [
+101241,
+31959,
+71701,
+56863,
+104595
+],
+"kind": "target",
+"rates": [
+8,
+16,
+8,
+4,
+8
+],
+"tax_mode": "after_discount",
+"value_minor": 44493
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+41314,
+38596,
+38306,
+45346
+],
+"total_minor": 142298
+},
+"gross_minor": [
+72849,
+68056,
+67545,
+79957
+],
+"kind": "amount",
+"rates": [
+8,
+16,
+16,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 163562
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+14530,
+182303
+],
+"total_minor": 174683
+},
+"gross_minor": [
+27350,
+343140
+],
+"kind": "amount",
+"rates": [
+8,
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 196833
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+40477
+],
+"total_minor": 33753
+},
+"gross_minor": [
+74230
+],
+"kind": "amount",
+"rates": [
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 40477
+},
+{
+"expect": {
+"discount_minor": 22336,
+"ok": true,
+"shares": [
+22336
+],
+"total_minor": 62014
+},
+"gross_minor": [
+84350
+],
+"kind": "target",
+"rates": [
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 62014
+},
+{
+"expect": {
+"code": "TARGET_NOT_REACHABLE",
+"nearest_above_minor": 139904,
+"nearest_below_minor": 139902,
+"ok": false
+},
+"gross_minor": [
+33011,
+152544
+],
+"kind": "target",
+"rates": [
+8,
+8
+],
+"tax_mode": "after_discount",
+"value_minor": 139903
+},
+{
+"expect": {
+"code": "TARGET_NOT_REACHABLE",
+"nearest_above_minor": 487216,
+"nearest_below_minor": 487214,
+"ok": false
+},
+"gross_minor": [
+18756,
+468307
+],
+"kind": "target",
+"rates": [
+4,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 487215
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+28499,
+34395,
+4354
+],
+"total_minor": 46712
+},
+"gross_minor": [
+46347,
+55936,
+7080
+],
+"kind": "amount",
+"rates": [
+4,
+16,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 67248
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+7737,
+16579,
+9600,
+17664
+],
+"total_minor": 245336
+},
+"gross_minor": [
+42288,
+90615,
+52469,
+96543
+],
+"kind": "amount",
+"rates": [
+0,
+16,
+0,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 51580
+},
+{
+"expect": {
+"code": "TARGET_NOT_REACHABLE",
+"nearest_above_minor": 35936,
+"nearest_below_minor": 35934,
+"ok": false
+},
+"gross_minor": [
+33538
+],
+"kind": "target",
+"rates": [
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 35935
+},
+{
+"expect": {
+"code": "TARGET_NOT_REACHABLE",
+"nearest_above_minor": 17854,
+"nearest_below_minor": 17852,
+"ok": false
+},
+"gross_minor": [
+5411,
+39337
+],
+"kind": "target",
+"rates": [
+8,
+8
+],
+"tax_mode": "after_discount",
+"value_minor": 17853
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+4869,
+16853
+],
+"total_minor": 118800
+},
+"gross_minor": [
+30575,
+105834
+],
+"kind": "amount",
+"rates": [
+16,
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 21722
+},
+{
+"expect": {
+"discount_minor": 178473,
+"ok": true,
+"shares": [
+38894,
+17108,
+122471
+],
+"total_minor": 177637
+},
+"gross_minor": [
+76982,
+33861,
+242403
+],
+"kind": "target",
+"rates": [
+4,
+8,
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 177637
+},
+{
+"expect": {
+"discount_minor": 148319,
+"ok": true,
+"shares": [
+55396,
+21823,
+71100
+],
+"total_minor": 105625
+},
+"gross_minor": [
+89405,
+35220,
+114750
+],
+"kind": "target",
+"rates": [
+16,
+16,
+16
+],
+"tax_mode": "after_discount",
+"value_minor": 105625
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+11075,
+5564,
+6331,
+7149,
+9377
+],
+"total_minor": 360277
+},
+"gross_minor": [
+108506,
+54510,
+62029,
+70044,
+91875
+],
+"kind": "amount",
+"rates": [
+4,
+0,
+16,
+0,
+0
+],
+"tax_mode": "after_discount",
+"value_minor": 39496
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+161316,
+12151,
+6195
+],
+"total_minor": 33100
+},
+"gross_minor": [
+188733,
+14216,
+7248
+],
+"kind": "amount",
+"rates": [
+8,
+16,
+4
+],
+"tax_mode": "after_discount",
+"value_minor": 179662
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+84904,
+10004,
+2971
+],
+"total_minor": 76315
+},
+"gross_minor": [
+132545,
+15618,
+4638
+],
+"kind": "amount",
+"rates": [
+16,
+0,
+4
+],
+"tax_mode": "before_discount",
+"value_minor": 97879
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+17861,
+3235,
+66406,
+23921,
+6545
+],
+"total_minor": 579589
+},
+"gross_minor": [
+103443,
+18738,
+384587,
+138542,
+37907
+],
+"kind": "amount",
+"rates": [
+8,
+0,
+0,
+0,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 117968
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+5506,
+53487,
+10673,
+32909,
+4518
+],
+"total_minor": 389249
+},
+"gross_minor": [
+24255,
+235613,
+47013,
+144966,
+19903
+],
+"kind": "amount",
+"rates": [
+16,
+0,
+16,
+8,
+8
+],
+"tax_mode": "before_discount",
+"value_minor": 107093
+},
+{
+"expect": {
+"discount_minor": 150050,
+"ok": true,
+"shares": [
+27841,
+81636,
+40573
+],
+"total_minor": 98295
+},
+"gross_minor": [
+40500,
+118758,
+59022
+],
+"kind": "target",
+"rates": [
+4,
+16,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 98295
+},
+{
+"expect": {
+"discount_minor": 327193,
+"ok": true,
+"shares": [
+38060,
+19008,
+251522,
+13160,
+5443
+],
+"total_minor": 222050
+},
+"gross_minor": [
+63279,
+31604,
+418187,
+21880,
+9050
+],
+"kind": "target",
+"rates": [
+4,
+4,
+0,
+0,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 222050
+},
+{
+"expect": {
+"discount_minor": 427114,
+"ok": true,
+"shares": [
+274737,
+144280,
+8097
+],
+"total_minor": 180418
+},
+"gross_minor": [
+353493,
+185640,
+10418
+],
+"kind": "target",
+"rates": [
+8,
+16,
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 180418
+},
+{
+"expect": {
+"discount_minor": 167099,
+"ok": true,
+"shares": [
+27016,
+23377,
+74236,
+42470
+],
+"total_minor": 128637
+},
+"gross_minor": [
+45603,
+39460,
+125310,
+71690
+],
+"kind": "target",
+"rates": [
+8,
+0,
+8,
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 128637
+},
+{
+"expect": {
+"discount_minor": 38811,
+"ok": true,
+"shares": [
+10109,
+2007,
+14060,
+1549,
+11086
+],
+"total_minor": 198112
+},
+"gross_minor": [
+61068,
+12125,
+84935,
+9356,
+66972
+],
+"kind": "target",
+"rates": [
+0,
+8,
+0,
+16,
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 198112
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+31394,
+164792,
+942,
+26831,
+604
+],
+"total_minor": 418758
+},
+"gross_minor": [
+80112,
+420525,
+2404,
+68468,
+1542
+],
+"kind": "amount",
+"rates": [
+0,
+16,
+0,
+4,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 224563
+},
+{
+"expect": {
+"discount_minor": 7339,
+"ok": true,
+"shares": [
+3979,
+3280,
+80
+],
+"total_minor": 172990
+},
+"gross_minor": [
+96050,
+79170,
+1942
+],
+"kind": "target",
+"rates": [
+0,
+4,
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 172990
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+43520,
+23904,
+19800,
+44333
+],
+"total_minor": 111434
+},
+"gross_minor": [
+72231,
+39673,
+32862,
+73581
+],
+"kind": "amount",
+"rates": [
+16,
+0,
+4,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 131557
+},
+{
+"expect": {
+"discount_minor": 86113,
+"ok": true,
+"shares": [
+37483,
+48630
+],
+"total_minor": 80343
+},
+"gross_minor": [
+71214,
+92393
+],
+"kind": "target",
+"rates": [
+4,
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 80343
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+12905,
+78319,
+59557,
+41696,
+147895
+],
+"total_minor": 117284
+},
+"gross_minor": [
+15747,
+95565,
+72672,
+50877,
+180462
+],
+"kind": "amount",
+"rates": [
+0,
+8,
+8,
+0,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 340372
+},
+{
+"expect": {
+"discount_minor": 203900,
+"ok": true,
+"shares": [
+125240,
+11698,
+64719,
+2243
+],
+"total_minor": 49705
+},
+"gross_minor": [
+147063,
+13737,
+75997,
+2634
+],
+"kind": "target",
+"rates": [
+8,
+16,
+0,
+8
+],
+"tax_mode": "before_discount",
+"value_minor": 49705
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+58416,
+2754,
+35433,
+3689
+],
+"total_minor": 165481
+},
+"gross_minor": [
+139680,
+6585,
+84725,
+8820
+],
+"kind": "amount",
+"rates": [
+8,
+8,
+16,
+8
+],
+"tax_mode": "before_discount",
+"value_minor": 100292
+},
+{
+"expect": {
+"discount_minor": 196233,
+"ok": true,
+"shares": [
+56540,
+8213,
+122134,
+9346
+],
+"total_minor": 37110
+},
+"gross_minor": [
+67008,
+9733,
+144747,
+11076
+],
+"kind": "target",
+"rates": [
+0,
+8,
+0,
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 37110
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+49263,
+46795,
+30750,
+4927,
+30537
+],
+"total_minor": 99977
+},
+"gross_minor": [
+74678,
+70936,
+46613,
+7469,
+46290
+],
+"kind": "amount",
+"rates": [
+16,
+0,
+4,
+8,
+4
+],
+"tax_mode": "before_discount",
+"value_minor": 162272
+},
+{
+"expect": {
+"discount_minor": 49004,
+"ok": true,
+"shares": [
+7313,
+5361,
+36330
+],
+"total_minor": 94956
+},
+"gross_minor": [
+18910,
+13863,
+93939
+],
+"kind": "target",
+"rates": [
+0,
+16,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 94956
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+426551,
+26591
+],
+"total_minor": 51463
+},
+"gross_minor": [
+470575,
+29336
+],
+"kind": "amount",
+"rates": [
+0,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 453142
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+17540,
+43921,
+7098,
+16158,
+48913
+],
+"total_minor": 181850
+},
+"gross_minor": [
+36654,
+91782,
+14833,
+33765,
+102216
+],
+"kind": "amount",
+"rates": [
+4,
+16,
+16,
+4,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 133630
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+58320,
+9445
+],
+"total_minor": 28934
+},
+"gross_minor": [
+71742,
+11619
+],
+"kind": "amount",
+"rates": [
+16,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 67765
+},
+{
+"expect": {
+"discount_minor": 121385,
+"ok": true,
+"shares": [
+75746,
+24030,
+21609
+],
+"total_minor": 24942
+},
+"gross_minor": [
+86129,
+27324,
+24571
+],
+"kind": "target",
+"rates": [
+0,
+16,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 24942
+},
+{
+"expect": {
+"discount_minor": 48134,
+"ok": true,
+"shares": [
+2061,
+3773,
+12533,
+29767
+],
+"total_minor": 786937
+},
+"gross_minor": [
+31739,
+58112,
+193038,
+458514
+],
+"kind": "target",
+"rates": [
+8,
+4,
+8,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 786937
+},
+{
+"expect": {
+"discount_minor": 104146,
+"ok": true,
+"shares": [
+3077,
+29702,
+12217,
+10080,
+49070
+],
+"total_minor": 574209
+},
+"gross_minor": [
+17311,
+167118,
+68742,
+56717,
+276094
+],
+"kind": "target",
+"rates": [
+8,
+16,
+16,
+16,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 574209
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+3459,
+19828,
+3205,
+3188,
+3712
+],
+"total_minor": 382702
+},
+"gross_minor": [
+41411,
+237405,
+38367,
+38164,
+44444
+],
+"kind": "amount",
+"rates": [
+0,
+0,
+16,
+8,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 33392
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+829,
+610,
+3761,
+904,
+832
+],
+"total_minor": 421824
+},
+"gross_minor": [
+47170,
+34696,
+213915,
+51417,
+47336
+],
+"kind": "amount",
+"rates": [
+0,
+0,
+16,
+0,
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 6936
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+12441,
+12506,
+120706,
+93108
+],
+"total_minor": 70570
+},
+"gross_minor": [
+14831,
+14908,
+143892,
+110992
+],
+"kind": "amount",
+"rates": [
+0,
+8,
+4,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 238761
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+72618,
+2551,
+1719
+],
+"total_minor": 467629
+},
+"gross_minor": [
+509747,
+17910,
+12064
+],
+"kind": "amount",
+"rates": [
+0,
+16,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 76888
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+119359,
+36090,
+1431
+],
+"total_minor": 9356
+},
+"gross_minor": [
+121902,
+36859,
+1461
+],
+"kind": "amount",
+"rates": [
+0,
+16,
+8
+],
+"tax_mode": "before_discount",
+"value_minor": 156880
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+37996,
+5309,
+7095,
+15429,
+1482
+],
+"total_minor": 429707
+},
+"gross_minor": [
+273770,
+38253,
+51123,
+111170,
+10678
+],
+"kind": "amount",
+"rates": [
+0,
+8,
+8,
+4,
+4
+],
+"tax_mode": "before_discount",
+"value_minor": 67311
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+22677
+],
+"total_minor": 43219
+},
+"gross_minor": [
+56807
+],
+"kind": "amount",
+"rates": [
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 22677
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+477,
+293
+],
+"total_minor": 15854
+},
+"gross_minor": [
+9999,
+6134
+],
+"kind": "amount",
+"rates": [
+0,
+8
+],
+"tax_mode": "before_discount",
+"value_minor": 770
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+85036,
+8379,
+63813
+],
+"total_minor": 73701
+},
+"gross_minor": [
+121878,
+12010,
+91461
+],
+"kind": "amount",
+"rates": [
+0,
+16,
+4
+],
+"tax_mode": "before_discount",
+"value_minor": 157228
+},
+{
+"expect": {
+"discount_minor": 165811,
+"ok": true,
+"shares": [
+70853,
+94958
+],
+"total_minor": 58306
+},
+"gross_minor": [
+90100,
+120753
+],
+"kind": "target",
+"rates": [
+4,
+8
+],
+"tax_mode": "before_discount",
+"value_minor": 58306
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+3688,
+3135
+],
+"total_minor": 5003
+},
+"gross_minor": [
+5954,
+5062
+],
+"kind": "amount",
+"rates": [
+0,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 6823
+},
+{
+"expect": {
+"discount_minor": 89893,
+"ok": true,
+"shares": [
+6998,
+82895
+],
+"total_minor": 46682
+},
+"gross_minor": [
+9215,
+109158
+],
+"kind": "target",
+"rates": [
+8,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 46682
+},
+{
+"expect": {
+"discount_minor": 103572,
+"ok": true,
+"shares": [
+32180,
+36980,
+34412
+],
+"total_minor": 14564
+},
+"gross_minor": [
+33281,
+38246,
+35590
+],
+"kind": "target",
+"rates": [
+16,
+0,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 14564
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+36690,
+167512
+],
+"total_minor": 230443
+},
+"gross_minor": [
+69034,
+315182
+],
+"kind": "amount",
+"rates": [
+0,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 204202
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+2058
+],
+"total_minor": 23170
+},
+"gross_minor": [
+24258
+],
+"kind": "amount",
+"rates": [
+4
+],
+"tax_mode": "before_discount",
+"value_minor": 2058
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+51313,
+55542,
+20798,
+38596
+],
+"total_minor": 44375
+},
+"gross_minor": [
+61172,
+66213,
+24794,
+46011
+],
+"kind": "amount",
+"rates": [
+0,
+16,
+0,
+4
+],
+"tax_mode": "before_discount",
+"value_minor": 166249
+},
+{
+"expect": {
+"discount_minor": 143700,
+"ok": true,
+"shares": [
+55974,
+7581,
+66854,
+11882,
+1409
+],
+"total_minor": 432949
+},
+"gross_minor": [
+202776,
+27464,
+242186,
+43046,
+5106
+],
+"kind": "target",
+"rates": [
+8,
+4,
+16,
+0,
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 432949
+},
+{
+"expect": {
+"discount_minor": 80049,
+"ok": true,
+"shares": [
+26954,
+33626,
+6103,
+13366
+],
+"total_minor": 157065
+},
+"gross_minor": [
+77762,
+97013,
+17607,
+38562
+],
+"kind": "target",
+"rates": [
+0,
+0,
+0,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 157065
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+91990,
+16021,
+8717,
+19937
+],
+"total_minor": 303113
+},
+"gross_minor": [
+280210,
+48803,
+26554,
+60732
+],
+"kind": "amount",
+"rates": [
+8,
+0,
+4,
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 136665
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+5161
+],
+"total_minor": 429
+},
+"gross_minor": [
+5590
+],
+"kind": "amount",
+"rates": [
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 5161
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+3506,
+4847
+],
+"total_minor": 81979
+},
+"gross_minor": [
+37910,
+52422
+],
+"kind": "amount",
+"rates": [
+0,
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 8353
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+9451
+],
+"total_minor": 5425
+},
+"gross_minor": [
+12824
+],
+"kind": "amount",
+"rates": [
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 9451
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+24529,
+67439,
+387692,
+6669
+],
+"total_minor": 116425
+},
+"gross_minor": [
+30335,
+83400,
+479451,
+8248
+],
+"kind": "amount",
+"rates": [
+0,
+0,
+0,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 486329
+},
+{
+"expect": {
+"discount_minor": 20285,
+"ok": true,
+"shares": [
+20285
+],
+"total_minor": 39555
+},
+"gross_minor": [
+59840
+],
+"kind": "target",
+"rates": [
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 39555
+},
+{
+"expect": {
+"discount_minor": 145391,
+"ok": true,
+"shares": [
+4148,
+48532,
+92711
+],
+"total_minor": 24898
+},
+"gross_minor": [
+4409,
+51581,
+98534
+],
+"kind": "target",
+"rates": [
+0,
+0,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 24898
+},
+{
+"expect": {
+"discount_minor": 72692,
+"ok": true,
+"shares": [
+2046,
+4751,
+26353,
+17717,
+21825
+],
+"total_minor": 472926
+},
+"gross_minor": [
+14418,
+33481,
+185717,
+124858,
+153804
+],
+"kind": "target",
+"rates": [
+4,
+16,
+4,
+16,
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 472926
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+39437,
+364525,
+99381
+],
+"total_minor": 291462
+},
+"gross_minor": [
+59641,
+551278,
+150296
+],
+"kind": "amount",
+"rates": [
+16,
+0,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 503343
+},
+{
+"expect": {
+"discount_minor": 34902,
+"ok": true,
+"shares": [
+34902
+],
+"total_minor": 123402
+},
+"gross_minor": [
+146578
+],
+"kind": "target",
+"rates": [
+8
+],
+"tax_mode": "before_discount",
+"value_minor": 123402
+},
+{
+"expect": {
+"discount_minor": 1452,
+"ok": true,
+"shares": [
+1452
+],
+"total_minor": 1736
+},
+"gross_minor": [
+3065
+],
+"kind": "target",
+"rates": [
+4
+],
+"tax_mode": "before_discount",
+"value_minor": 1736
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+71674,
+142620
+],
+"total_minor": 38727
+},
+"gross_minor": [
+72954,
+145167
+],
+"kind": "amount",
+"rates": [
+16,
+16
+],
+"tax_mode": "before_discount",
+"value_minor": 214294
+},
+{
+"expect": {
+"ok": true,
+"shares": [
+5326,
+19321,
+7980,
+10685,
+71292
+],
+"total_minor": 466558
+},
+"gross_minor": [
+25368,
+92026,
+38010,
+50892,
+339570
+],
+"kind": "amount",
+"rates": [
+16,
+0,
+0,
+8,
+8
+],
+"tax_mode": "before_discount",
+"value_minor": 114604
+},
+{
+"expect": {
+"discount_minor": 42628,
+"ok": true,
+"shares": [
+3006,
+36165,
+3457
+],
+"total_minor": 153243
+},
+"gross_minor": [
+13616,
+163793,
+15657
+],
+"kind": "target",
+"rates": [
+16,
+0,
+4
+],
+"tax_mode": "before_discount",
+"value_minor": 153243
+},
+{
+"expect": {
+"discount_minor": 27756,
+"ok": true,
+"shares": [
+4016,
+23740
+],
+"total_minor": 45656
+},
+"gross_minor": [
+10213,
+60375
+],
+"kind": "target",
+"rates": [
+4,
+4
+],
+"tax_mode": "before_discount",
+"value_minor": 45656
+},
+{
+"expect": {
+"discount_minor": 103330,
+"ok": true,
+"shares": [
+27261,
+76069
+],
+"total_minor": 197147
+},
+"gross_minor": [
+77636,
+216630
+],
+"kind": "target",
+"rates": [
+8,
+0
+],
+"tax_mode": "before_discount",
+"value_minor": 197147
+},
+{
+"expect": {
+"discount_minor": 74320,
+"ok": true,
+"shares": [
+74320
+],
+"total_minor": 10261
+},
+"gross_minor": [
+78316
+],
+"kind": "target",
+"rates": [
+8
+],
+"tax_mode": "before_discount",
+"value_minor": 10261
+},
+{
+"expect": {
+"discount_minor": 157893,
+"ok": true,
+"shares": [
+20076,
+5001,
+84541,
+5713,
+42562
+],
+"total_minor": 261767
+},
+"gross_minor": [
+52086,
+12975,
+219333,
+14823,
+110423
+],
+"kind": "target",
+"rates": [
+0,
+0,
+0,
+8,
+8
+],
+"tax_mode": "before_discount",
+"value_minor": 261767
+}
+]

@@ -839,6 +839,16 @@ def normalize_display_name(raw):
 # into a permission. There is no `pin_grants(...)` to call, so there is
 # nothing to misuse.
 #
+# ONE DELIBERATE, NARROW DEVIATION (UI-3a, 2026-10-13, decided by the owner of the product, recorded in
+# ROADMAP.md "UI-3a"): a manager's PIN AUTHORISES exactly one thing -- a discount / price override
+# that a cashier may not give alone, in `retail_api._verify_discount_approver`. Manager PIN approval
+# is the market norm for a till (Shopify POS, Square, Loyverse). It is allowed ONLY because that one
+# call site adds what a bare PIN lacks: the approver is named by the cashier (never looked up FROM
+# the PIN), their authority is checked BEFORE the PIN is, 5 wrong PINs in 15 minutes LOCK that
+# approver for 15 minutes (counted before the KDF runs, kept in the retail database so a restart
+# does not clear it), and every refusal and lockout is an audit row. Nothing else may treat a PIN as
+# a permission; there is still no `pin_grants(...)`.
+#
 # There is also deliberately NO "look up which user this PIN belongs to". Two
 # reasons: it would make the PIN a credential (type four digits, become
 # somebody) rather than a confirmation of a user the operator already picked
