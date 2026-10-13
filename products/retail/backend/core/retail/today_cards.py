@@ -31,11 +31,11 @@ MAX_CARD_ROWS = 3
 
 #: Tie-break for equal stakes, and the order of the all-clear rows.
 MONEY_KIND_ORDER = ('collect', 'cheques', 'restock', 'drawers')
-ALL_CLEAR_ORDER = MONEY_KIND_ORDER + ('tax', 'branches')
+ALL_CLEAR_ORDER = MONEY_KIND_ORDER + ('tax', 'branches', 'pin_locked', 'backup')
 
 #: Cards that belong to THIS computer only (cash sessions and the e-invoice
 #: outbox do not sync). Everything else is shop-wide.
-THIS_COMPUTER_KINDS = frozenset({'drawers', 'tax'})
+THIS_COMPUTER_KINDS = frozenset({'drawers', 'tax', 'pin_locked', 'backup'})
 
 
 def scope_of(kind):

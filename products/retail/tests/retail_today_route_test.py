@@ -532,7 +532,7 @@ def test_every_money_value_is_a_three_decimal_number_and_the_owner_sees_them(ful
 def test_server_timing_has_one_entry_per_section(full):
     r = _today(full['client'])
     sections = [p.split(';')[0].strip() for p in r.headers['Server-Timing'].split(',')]
-    assert sections == ['hero', 'trend', 'branches', 'collect', 'cheques', 'restock', 'drawers', 'tax', 'aura_did']
+    assert sections == ['hero', 'trend', 'branches', 'collect', 'cheques', 'restock', 'drawers', 'tax', 'pin_locked', 'backup', 'aura_did']
     assert all('dur=' in p for p in r.headers['Server-Timing'].split(','))
 
 
@@ -748,3 +748,81 @@ def test_query_count_does_not_grow_with_the_number_of_cheques():
         _cheque(cid, A, cust, 'in', 1 + (i % 5), 10.0)
     many = _count_queries(shop['client'])
     assert many == few, f"{few} statements with 3 cheques, {many} with 63: a per-cheque query has crept in"
+
+# ═════════════════════════════════════════════════════════════════════════════
+# POLISH-1: two cards for things the owner used to find only on other screens
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _lock_row(cid, cashier_id, approver_ref, stamp_utc):
+    conn = get_retail_conn()
+    conn.execute(
+        "INSERT INTO audit_log (company_id, user_id, action, entity, entity_id, details, timestamp) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (cid, cashier_id, 'DISCOUNT_APPROVAL_LOCKED', 'discount_approval', approver_ref,
+         f'approver={approver_ref} cashier={cashier_id} reason=too_many_wrong_pins', stamp_utc))
+    conn.commit(); conn.close()
+
+
+def test_pin_locked_card_names_who_and_when_inside_24_hours_only():
+    shop = _shop()
+    cid, client = shop['cid'], shop['client']
+    reg = registry_conn()
+    mgr = reg.execute("SELECT id, uid FROM users WHERE id=?", (shop['uid'],)).fetchone()
+    reg.execute("UPDATE users SET display_name=? WHERE id=?", ('Hala Manager', shop['uid']))
+    reg.commit(); reg.close()
+    assert 'pin_locked' not in [c['kind'] for c in _data(client)['cards']]
+    # 13:12 UTC "now": 10:00 UTC today is inside the window, yesterday 12:00 UTC is not
+    _lock_row(cid, 'cashier-1', mgr['uid'] or mgr['id'], '2026-10-04 12:00:00')
+    with _frozen():
+        assert 'pin_locked' not in [c['kind'] for c in _data(client)['cards']], 'a lock older than 24 h must not show'
+    _lock_row(cid, 'cashier-1', mgr['uid'] or mgr['id'], '2026-10-05 10:00:00')
+    with _frozen():
+        d = _data(client)
+    c = _card(d, 'pin_locked')
+    assert c['count'] == 1 and c['scope'] == 'this_computer' and c['stake'] is None
+    assert c['rows'][0]['approver_name'] == 'Hala Manager'
+    assert c['rows'][0]['at'] == '2026-10-05 13:00'           # 10:00 UTC on the Amman clock
+    assert d['needs_count'] == len(d['cards'])
+
+
+def test_pin_locked_card_is_company_scoped_and_unknown_approver_has_no_name():
+    mine, other = _shop(), _shop()
+    _lock_row(other['cid'], 'x', 'someone', '2026-10-05 10:00:00')
+    with _frozen():
+        assert 'pin_locked' not in [c['kind'] for c in _data(mine['client'])['cards']]
+    _lock_row(mine['cid'], 'x', '*unknown*', '2026-10-05 11:00:00')
+    with _frozen():
+        c = _card(_data(mine['client']), 'pin_locked')
+    assert c['rows'][0]['approver_name'] is None and c['rows'][0]['cashier_name'] is None
+
+
+def _backup_dir(monkeypatch, tmp_path, *stamps):
+    for st in stamps:
+        (tmp_path / f'aura-retail-backup-{st}-app1.0-schema54.aurabak.zip').write_bytes(b'x')
+    monkeypatch.setenv('AURA_BACKUP_DIR', str(tmp_path))
+
+
+def test_backup_card_appears_after_48_hours_and_not_before(monkeypatch, tmp_path):
+    shop = _shop()
+    _backup_dir(monkeypatch, tmp_path, '20251001T000000Z')            # a year before "now"
+    with _frozen():
+        d = _data(shop['client'])
+    c = _card(d, 'backup')
+    assert c['extra']['reason'] == 'no_recent_backup' and c['extra']['last_backup_at'].startswith('2025-10-01')
+    assert c['scope'] == 'this_computer' and c['stake'] is None
+    # a backup made 6 hours before "now" clears it (the other direction)
+    (tmp_path / 'aura-retail-backup-20261005T070000Z-app1.0-schema54.aurabak.zip').write_bytes(b'x')
+    with _frozen():
+        assert 'backup' not in [c['kind'] for c in _data(shop['client'])['cards']]
+
+
+def test_backup_card_agrees_with_the_settings_status_on_the_47h_and_49h_edge(monkeypatch, tmp_path):
+    shop = _shop()
+    _backup_dir(monkeypatch, tmp_path, '20261003T141200Z')            # 47 h before 2026-10-05 13:12
+    with _frozen():
+        assert 'backup' not in [c['kind'] for c in _data(shop['client'])['cards']]
+    for f in tmp_path.iterdir():
+        f.unlink()
+    _backup_dir(monkeypatch, tmp_path, '20261003T121200Z')            # 49 h before
+    with _frozen():
+        assert _card(_data(shop['client']), 'backup')['extra']['reason'] == 'no_recent_backup'
