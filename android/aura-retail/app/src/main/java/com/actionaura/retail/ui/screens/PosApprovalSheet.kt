@@ -61,7 +61,10 @@ internal fun ManagerApprovalSheet(
 ) {
     var chosen by remember { mutableStateOf(approvers.firstOrNull()?.ref) }
     var pin by remember { mutableStateOf("") }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    // Full height from the start: these sheets are taller than the half-height a sheet opens at,
+    // which hid the keypad and the Apply button (found on the emulator).
+    val sheet = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         Column(
             Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,

@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.ModifierGroup
 import com.actionaura.retail.net.Product
 import com.actionaura.retail.ui.i18n.fmtQty
+import com.actionaura.retail.ui.i18n.ltrIsolate
 import com.actionaura.retail.ui.i18n.money
 import com.actionaura.retail.ui.i18n.tr
 import com.actionaura.retail.ui.pos.GroupProblem
@@ -59,7 +60,10 @@ internal fun VariantPickerSheet(
     onOutOfStock: (Product) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    // Full height from the start: these sheets are taller than the half-height a sheet opens at,
+    // which hid the keypad and the Apply button (found on the emulator).
+    val sheet = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState())) {
             Text(tr("Choose a variant") + " — " + parentName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(12.dp))
@@ -105,7 +109,10 @@ internal fun ModifierSheet(
 ) {
     var selected by remember { mutableStateOf(defaultSelection(groups)) }
     val problems = selectionProblems(groups, selected)
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    // Full height from the start: these sheets are taller than the half-height a sheet opens at,
+    // which hid the keypad and the Apply button (found on the emulator).
+    val sheet = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState())) {
             Text(tr("Choose options") + " — " + (product.name ?: "—"), style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold)
@@ -135,7 +142,8 @@ internal fun ModifierSheet(
                         if (one) RadioButton(selected = on, onClick = null) else Checkbox(checked = on, onCheckedChange = null)
                         Text(o.name, modifier = Modifier.weight(1f).padding(start = 8.dp))
                         if (o.price_delta != 0.0) Text(
-                            (if (o.price_delta > 0) "+" else "−") + money(kotlin.math.abs(o.price_delta)),
+                            // a sign glued to an amount is one left-to-right token: unisolated, Arabic put the "+" after it
+                            ltrIsolate((if (o.price_delta > 0) "+" else "−") + money(kotlin.math.abs(o.price_delta))),
                             style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }

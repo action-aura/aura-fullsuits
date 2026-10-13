@@ -386,8 +386,10 @@ fun PosScreen(snackbar: SnackbarHostState) {
             customer = customers.firstOrNull { it.id == c.customerId }
             showHeld = false
             if (cartLines.isNotEmpty()) showCart = true
-            snackbar.showSnackbar(tr("Resumed") + " " + (c.holdNumber ?: ""))
+            // Before the snackbar: showSnackbar suspends until the message goes away, and the "Held n"
+            // pill kept counting the sale that had just been taken off the shelf until then.
             refreshHeld()
+            snackbar.showSnackbar(tr("Resumed") + " " + (c.holdNumber ?: ""))
         } catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)) }
     }
     suspend fun discardHeld(h: HeldSaleRow) {
@@ -851,7 +853,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
                 Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = { startCharge() },
-                    enabled = !charging && (!splitMode || (splitParts.size >= 2 && splitSummary.chargeable)),
+                    enabled = !charging && cartLines.isNotEmpty() && (!splitMode || (splitParts.size >= 2 && splitSummary.chargeable)),
                     modifier = Modifier.fillMaxWidth().height(54.dp),
                 ) {
                     if (charging) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
