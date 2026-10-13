@@ -308,6 +308,9 @@ def test_sale_response_is_unaffected_by_whatsapp_queueing(client, monkeypatch):
         'id', 'idempotency_key', 'lines',
         'oversold_past_recorded_stock',
         'points_redeemed', 'points_redeemed_amount',
+        # MONEY-5 (v55): every sale response now reports its signed cash-rounding
+        # delta. Unrelated to WhatsApp queueing; the set is still compared EXACTLY.
+        'rounding_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
     ])
 
