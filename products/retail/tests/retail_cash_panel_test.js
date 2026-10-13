@@ -240,8 +240,11 @@ function main() {
 
   mustFail('a note at or below the total becomes a chip',
     'const notes = ladder.filter((d) => d * unit > totalMinor);', 'const notes = ladder.filter((d) => d * unit >= 0);', testChips);
+  // UI-3a moved the pad's edit rules out of _cashPadKey into the shared pure _padEdit (the Discount
+  // sheet uses the same keypad). The guard is the same line, now `return v;` instead of a bare
+  // `return;`; this anchor follows it, and the mutation must still turn testPad red.
   mustFail('the pad stops capping decimals at _currencyDp()',
-    "if (dot !== -1 && next.length - dot - 1 > dp) return;", '', testPad);
+    "if (dot !== -1 && next.length - dot - 1 > dp) return v;", '', testPad);
   mustFail('change is computed against the total instead of what is due',
     "let due = cu.amountDue != null ? cu.amountDue : (cu.total || 0);", 'let due = cu.total || 0;', testFigure);
   mustFail('F1 / go-to-pay no longer opens the panel',

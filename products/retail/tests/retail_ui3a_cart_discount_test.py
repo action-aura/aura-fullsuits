@@ -252,3 +252,68 @@ def test_target_picks_the_smallest_discount_that_lands_exactly():
     # one fil LESS discount must not also land on 10.000
     _, calcs_less, _ = cd.apply_cart_discount(BRIEF_LINES, amount - QUANT, QUANT, calc)
     assert _total(calcs_less) != D('10.000')
+
+
+# ── golden vectors: the till's JS mirror is held to THIS module's output ─────────────────
+#
+# retail_ui3a_golden.json is generated from cart_discount.py + pricing.calculate_line (this test
+# regenerates it in memory and compares). retail_ui3a_till_test.js feeds the SAME file to the
+# till's JS (_cartDiscPlan) and demands identical shares / totals. Python drifts -> this test is
+# red; JS drifts -> the JS test is red; they cannot drift apart silently.
+
+import json  # noqa: E402
+
+GOLDEN_PATH = Path(__file__).resolve().parent / 'retail_ui3a_golden.json'
+
+
+def _minor(d):
+    return int((D(str(d)) / QUANT).to_integral_value())
+
+
+def golden_vectors():
+    rng = random.Random(20261015)
+    out = []
+    for mode in (pricing.TAX_AFTER_DISCOUNT, pricing.TAX_BEFORE_DISCOUNT):
+        calc = _calc(mode)
+        for _ in range(60):
+            lines = _random_cart(rng)
+            zero = [calc(p, q, 0, r) for p, q, r in lines]
+            gross_m = [_minor(c['gross']) for c in zero]
+            subtotal = sum(gross_m)
+            current_m = _minor(_total(zero))
+            rec = {'tax_mode': mode, 'rates': [r for _, _, r in lines], 'gross_minor': gross_m}
+            if rng.random() < 0.5:
+                want = max(1, int(subtotal * rng.uniform(0.001, 1.0)))
+                rec.update(kind='amount', value_minor=want)
+                try:
+                    _, calcs, shares = cd.apply_cart_discount(lines, D(want) * QUANT, QUANT, calc)
+                    rec['expect'] = {'ok': True, 'shares': shares, 'total_minor': _minor(_total(calcs))}
+                except cd.CartDiscountError as e:
+                    rec['expect'] = {'ok': False}
+            else:
+                target = max(1, int(current_m * rng.uniform(0.05, 0.999)))
+                rec.update(kind='target', value_minor=target)
+                try:
+                    amount, _, calcs, shares = cd.solve_target_total(lines, D(target) * QUANT, QUANT, calc)
+                    rec['expect'] = {'ok': True, 'shares': shares, 'total_minor': _minor(_total(calcs)),
+                                     'discount_minor': _minor(amount)}
+                except cd.CartDiscountError as e:
+                    nb, na = e.data.get('nearest_below'), e.data.get('nearest_above')
+                    rec['expect'] = {'ok': False, 'code': e.code,
+                                     'nearest_below_minor': None if nb is None else _minor(nb),
+                                     'nearest_above_minor': None if na is None else _minor(na)}
+            out.append(rec)
+    return out
+
+
+def test_golden_vectors_file_is_what_the_python_produces():
+    import os
+    fresh = golden_vectors()
+    if os.environ.get('UI3A_REGEN') == '1':
+        GOLDEN_PATH.write_text(json.dumps(fresh, indent=0, sort_keys=True) + '\n', encoding='utf8', newline='\n')
+    on_disk = json.loads(GOLDEN_PATH.read_text(encoding='utf8'))
+    assert on_disk == json.loads(json.dumps(fresh, sort_keys=True)), (
+        'retail_ui3a_golden.json is stale: the Python changed. Regenerate with UI3A_REGEN=1 and re-run '
+        'retail_ui3a_till_test.js -- if the JS now fails, the till preview has drifted from the server.')
+    kinds = {(r['kind'], r['expect']['ok']) for r in fresh}
+    assert {('amount', True), ('target', True), ('target', False)} <= kinds   # the file covers hit AND miss
