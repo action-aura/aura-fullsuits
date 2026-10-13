@@ -85,10 +85,20 @@ docstring for the specifics.
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 from typing import Callable, Protocol
 
 from commercial_runtime.sync.site_relay import store
+
+logger = logging.getLogger(__name__)
+
+#: Owner's answer to a pull below the range it has pruned (relay_client.RESYNC_REQUIRED). Spelled out
+#: here rather than imported: this module deliberately never imports the relay client (see above).
+RESYNC_REQUIRED = "RESYNC_REQUIRED"
+
+#: {"relay": <cloud base url>} once Owner refused this hub's cloud cursor; see `run_once`.
+_RESYNC_PARKED: dict = {}
 
 # Reuse store.py's own push-batch cap rather than redeclaring it -- see
 # that constant's own comment in store.py (`MAX_PUSH_BATCH`) for why a
@@ -442,9 +452,32 @@ def run_once(
     except Exception as exc:  # noqa: BLE001 -- deliberately broad, see docstring
         result["push_error"] = _error_label(exc)
 
+    # SYNC-BOOT Phase 2: PARK-AND-REPORT for Owner's RESYNC_REQUIRED, the same treatment SyncService
+    # gives it. Owner says this hub's `cloud_pull_seq` is below history it has already pruned;
+    # asking again with the same cursor can never succeed, and before this change every tick
+    # re-contacted Owner, got the same 409 and reported a FAILED tick. Now the first refusal is logged
+    # once, the hub stops pulling THAT relay (pushing is untouched: nothing it holds is lost), and
+    # every later tick reports the same reason without a network round trip. A different relay URL
+    # (the cloud address changed) lifts the parking, because a refusal from the old relay proves
+    # nothing about the new one. What gets the hub unstuck is a fresh copy of the shop (a bootstrap
+    # from Owner's mailbox, Phase 3); until then it is loud, not silent.
+    relay_key = getattr(cloud_client, "base_url", None)
+    if _RESYNC_PARKED and _RESYNC_PARKED.get("relay") != relay_key:
+        _RESYNC_PARKED.clear()
+    if _RESYNC_PARKED:
+        result["pull_error"] = RESYNC_REQUIRED
+        return result
+
     try:
         result["pulled"] = pull_down(conn, cloud_client, apply_pulled=apply_pulled)
     except Exception as exc:  # noqa: BLE001 -- deliberately broad, see docstring
         result["pull_error"] = _error_label(exc)
+        if result["pull_error"] == RESYNC_REQUIRED:
+            _RESYNC_PARKED["relay"] = relay_key
+            logger.error(
+                "Site relay forwarder: Owner's cloud relay has already pruned history this hub never "
+                "received (pruned through seq %s). The hub STOPS PULLING the cloud until it has a fresh "
+                "copy of the shop; pushing continues. Devices on this LAN are unaffected.",
+                (getattr(exc, "details", None) or {}).get("pruned_through"))
 
     return result

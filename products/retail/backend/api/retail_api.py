@@ -18723,6 +18723,27 @@ def reannounce_authority_events(conn, cid, *, is_main, terminal_uid):
             _queue_sync_event(cur, 'till_allocation', row['id'], 'update',
                               _till_allocation_sync_payload(row))
             queued += 1
+    # SYNC-BOOT Phase 2: branch aliases ("this old branch uid is the same branch as that one").
+    # A bootstrap copy drops `branch_uid_aliases` (authority is never copied), so a computer that
+    # takes a copy gets them back only if someone re-states them. The receiving rule
+    # (authority.authority_refusal, 'branch_alias') accepts an alias ONLY from the computer that
+    # recorded it as its origin, so each computer re-states the aliases IT originated -- the main
+    # cannot speak for another computer's, and an event it sent would be parked as
+    # alias_origin_mismatch. The one residual: an alias whose origin computer is gone is not
+    # recoverable by a new computer (ROADMAP "SYNC-BOOT Phase 2").
+    try:
+        aliases = cur.execute(
+            "SELECT alias_uid, canonical_uid, company_id, reason, created_at_utc, origin_terminal_uid "
+            "FROM branch_uid_aliases WHERE origin_terminal_uid=? AND CAST(company_id AS TEXT)=?",
+            (terminal_uid, str(cid))).fetchall()
+    except sqlite3.OperationalError:   # a database that never created the table
+        aliases = []
+    for row in aliases:
+        _queue_sync_event(cur, 'branch_alias', row['alias_uid'], 'create', {
+            'alias_uid': row['alias_uid'], 'canonical_uid': row['canonical_uid'],
+            'company_id': row['company_id'], 'reason': row['reason'],
+            'created_at_utc': row['created_at_utc'], 'origin_terminal_uid': row['origin_terminal_uid']})
+        queued += 1
     conn.commit()
     return queued
 
