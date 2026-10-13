@@ -238,3 +238,38 @@ def test_a_real_v53_receiver_takes_a_v54_senders_events(get_conn, tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM sale_items WHERE uid=?", (ITEM_UID,)).fetchone()[0] == 1
     finally:
         conn.close()
+
+
+def test_a_real_v53_receiver_WITH_the_skew_guard_parks_a_v54_sale_instead_of_dropping_its_fields(get_conn, tmp_path):
+    """The production arrangement: a v53 install runs the schema-version skew guard, which refuses
+    (parks, replayably) an event from a NEWER sender rather than applying it and silently losing the
+    columns it has never heard of. So a v53 till does not 'ignore' a v54 sale -- it holds it until it is
+    upgraded, then applies it whole. Proved against the real rc.11 sync_service.py."""
+    import importlib.util
+    import subprocess
+    try:
+        old_src = subprocess.run(
+            ["git", "show", "4db70a0b:commercial_runtime/sync/sync_service.py"],
+            cwd=str(_REPO_ROOT), capture_output=True, check=True).stdout
+    except Exception as exc:   # pragma: no cover
+        pytest.skip(f"rc.11 sync_service.py not available from git: {exc}")
+    old_path = tmp_path / "old_sync_service_v53_guarded.py"
+    old_path.write_bytes(old_src)
+    spec = importlib.util.spec_from_file_location("old_sync_service_v53_guarded", str(old_path))
+    old_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(old_mod)
+    svc = old_mod.SyncService(client_factory=lambda: None, get_conn=get_conn,
+                              local_company_id_provider=lambda: CID,
+                              local_schema_version_provider=lambda: 53)
+    ev = _sale_ev(SALE_UID, discount_reason="Round down", discount_approved_by="mgr-uid")
+    ev["payload"]["_sender_schema_version"] = 54
+    conn = get_conn()
+    try:
+        svc._apply_event(conn, ev, local_company_id=CID)
+        conn.commit()
+        assert conn.execute("SELECT COUNT(*) FROM sales WHERE uid=?", (SALE_UID,)).fetchone()[0] == 0, \
+            "a v53 receiver applied a v54 sale: the new fields would have been silently dropped"
+        reasons = [r[0] for r in conn.execute("SELECT reason FROM sync_apply_quarantine").fetchall()]
+        assert "schema_version_too_new" in reasons, reasons
+    finally:
+        conn.close()

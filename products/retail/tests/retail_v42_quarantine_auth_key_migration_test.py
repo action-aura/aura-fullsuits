@@ -129,7 +129,7 @@ def test_the_pre_migration_backup_still_holds_the_old_shape(tmp_path):
     sch = _rewound_install(tmp_path)
     sch.init_retail()
     bdir = os.path.join(sch.BASE_DIR, 'migration_backups')
-    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v53' in n)  # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v54' in n)  # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py | v54 UPDATE: head moved 53 -> 54 (UI-3a); same property, the backup name carries the head
     assert names, os.listdir(bdir)
     conn = sqlite3.connect(f'file:{os.path.join(bdir, names[-1])}?mode=ro', uri=True)
     try:

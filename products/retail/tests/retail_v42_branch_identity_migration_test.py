@@ -285,8 +285,8 @@ def _assert_money_neutral(before, after):
 
 def _assert_backup_is_the_pre_migration_state(sch, before_branches):
     bdir = os.path.join(sch.BASE_DIR, 'migration_backups')
-    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v53' in n)  # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
-    assert names, f'no v41-to-v53 backup in {os.listdir(bdir)}'  # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v54' in n)  # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py | v54 UPDATE: head moved 53 -> 54 (UI-3a); same property, the backup name carries the head
+    assert names, f'no v41-to-v54 backup in {os.listdir(bdir)}'  # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     conn = sqlite3.connect(f'file:{os.path.join(bdir, names[-1])}?mode=ro', uri=True)
     try:
         assert conn.execute('PRAGMA user_version').fetchone()[0] == 41
@@ -525,7 +525,7 @@ def test_census_copy_migrates_money_neutral(name, tmp_path):
     assert after['trial_balance'] == before['trial_balance']
     assert after['integrity'] == 'ok' and after['user_version'] == 54  # v54 UPDATE: head moved 53 -> 54 (UI-3a); v54's own shape is pinned by retail_ui3a_sync_migration_test. [earlier: v53 UPDATE: head moved 52 -> 53 (MONEY-4c); v53's own shape is pinned by retail_money4c_credit_inherit_test.py. (was:  head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py | prior: v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py)]
     assert [b[:4] for b in before['branches']] == [b[:4] for b in after['branches']]
-    assert any('v41-to-v53' in n for n in os.listdir(os.path.join(sch.BASE_DIR, 'migration_backups')))  # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
+    assert any('v41-to-v54' in n for n in os.listdir(os.path.join(sch.BASE_DIR, 'migration_backups')))  # v52 UPDATE: head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3) | prior v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py
     # At most one branch changed uid, and only to the licence-derived one.
     changed = [(b, a) for b, a in zip(before['branches'], after['branches']) if b[4] != a[4]]
     assert len(changed) <= 1

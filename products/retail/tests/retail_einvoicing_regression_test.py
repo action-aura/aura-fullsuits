@@ -215,6 +215,13 @@ SALES_TABLE_COLUMNS = [
     # column NAMED points_earned on sales -- the e-invoicing claim (v7 added
     # only new tables) is unaffected.
     'points_earned',
+    # UI-3a (schema v54, database/schema.py's _migrate_add_ui3a_discount_columns, claimed in ROADMAP.md
+    # before the work started): sales.discount_reason / sales.discount_approved_by -- why a cart-level or
+    # over-limit discount was given and which manager approved it. Same boot-time-migration category and
+    # position as points_earned above; nullable, no backfill, never read by e-invoicing (the invoice
+    # amounts come from the sale's own money columns, unchanged). What this can no longer catch: a stray
+    # column with either NAME on sales -- the claim (v7 added only new tables) is unaffected.
+    'discount_reason', 'discount_approved_by',
     'due_date',
 ]
 SALE_ITEMS_TABLE_COLUMNS = [
@@ -237,6 +244,10 @@ SALE_ITEMS_TABLE_COLUMNS = [
     # this column just did not exist yet the last time this literal was
     # captured live.
     'unit_cost',
+    # UI-3a (schema v54): sale_items.list_price -- the product's sell_price at the moment of sale, so
+    # 'sold below list' is reportable. Boot-time versioned migration, nullable, never read by
+    # e-invoicing (the invoice uses unit_price / line_total, unchanged).
+    'list_price',
 ]
 CUSTOMERS_TABLE_COLUMNS = [
     # 'status' and the created_at reorder are a real, expected shape change
