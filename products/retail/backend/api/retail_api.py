@@ -11068,6 +11068,9 @@ def create_return():
         # already claimed by earlier lines in THIS request per product_id and
         # subtract it from what remains returnable for later lines.
         claimed_this_request = {}
+        # MONEY-5 item 4: the money each line has been refunded so far WITHIN this request, keyed
+        # like `claimed_this_request` (two parts of one line in one payload must see each other).
+        claimed_value_this_request = {}
         for item in items:
             pid = item.get('product_id')
             try:
@@ -11141,6 +11144,12 @@ def create_return():
                     "WHERE r.sale_id=? AND ri.sale_item_id=? AND r.company_id=?",
                     (sale_id, sale_item_id, cid)
                 ).fetchone()[0]
+                refunded_value_before = cur.execute(
+                    "SELECT COALESCE(SUM(ri.line_total),0) FROM return_items ri "
+                    "JOIN returns r ON ri.return_id = r.id "
+                    "WHERE r.sale_id=? AND ri.sale_item_id=? AND r.company_id=?",
+                    (sale_id, sale_item_id, cid)
+                ).fetchone()[0]
                 claim_key = ('item', sale_item_id)
             else:
                 # `unit_cost` added, same reason as the sale_item_id branch
@@ -11178,6 +11187,12 @@ def create_return():
                     "WHERE r.sale_id=? AND ri.product_id=? AND r.company_id=?",
                     (sale_id, pid, cid)
                 ).fetchone()[0]
+                refunded_value_before = cur.execute(
+                    "SELECT COALESCE(SUM(ri.line_total),0) FROM return_items ri "
+                    "JOIN returns r ON ri.return_id = r.id "
+                    "WHERE r.sale_id=? AND ri.product_id=? AND r.company_id=?",
+                    (sale_id, pid, cid)
+                ).fetchone()[0]
                 claim_key = ('product', pid)
 
             already_claimed = claimed_this_request.get(claim_key, 0.0)
@@ -11193,11 +11208,35 @@ def create_return():
             calc = tax_engine.calculate_line(
                 float(sold['unit_price']), qty, float(sold['discount_pct'] or 0),
                 float(sold['tax_rate'] or 0), mode=mode, currency=currency)
+            # ── MONEY-5 item 4 -- A LINE RETURNED IN PARTS REFUNDS EXACTLY WHAT IT COST ────────
+            # Measured (UI-3a verifier, 33 of 156 fuzzed sales): each part used to be re-priced from
+            # the stored per-line % and rounded ON ITS OWN, so the parts of one line summed to 1-3
+            # fils LESS than the customer paid (an amount discount stores an odd % per line). Same
+            # idea as `returns.tax_refunded`: the part that brings the line to fully returned takes
+            # the REMAINDER -- what the line cost minus what earlier parts already refunded -- and a
+            # part that is not the last is capped at that remainder, so a rounded-up part can never
+            # over-refund. What the line cost is the sale's own pricing function over the WHOLE sold
+            # quantity: exactly what a one-piece return of the line has always refunded, so a line
+            # returned in one piece is unchanged.
+            _qtq = tax_engine.currency_quantum(currency)
+            _line_cost = Decimal(str(tax_engine.calculate_line(
+                float(sold['unit_price']), float(sold['quantity']), float(sold['discount_pct'] or 0),
+                float(sold['tax_rate'] or 0), mode=mode, currency=currency)['total']))
+            _value_before = (Decimal(str(refunded_value_before or 0))
+                             + claimed_value_this_request.get(claim_key, Decimal('0')))
+            _value_left = max(_line_cost - _value_before, Decimal('0'))
+            _completes_line = (float(already_returned or 0) + already_claimed + qty
+                               >= float(sold['quantity']) - 0.0001)
+            _part_value = Decimal(str(calc['total']))
+            _part_value = _value_left if _completes_line else min(_part_value, _value_left)
+            _part_value = _part_value.quantize(_qtq, rounding=ROUND_HALF_UP)
+            claimed_value_this_request[claim_key] = (
+                claimed_value_this_request.get(claim_key, Decimal('0')) + _part_value)
             resolved_items.append({
                 'product_id': pid, 'sale_item_id': sale_item_id, 'quantity': qty,
                 'unit_price': float(sold['unit_price']),
                 'discount_amount': calc['discount_amount'], 'tax_amount': calc['tax'],
-                'line_total': calc['total'],
+                'line_total': float(_part_value),
                 # Schema v39: the ORIGINAL SALE LINE'S cost-basis snapshot
                 # (`sold['unit_cost']`, just added to both SELECTs above),
                 # NEVER the product's `avg_cost`/`cost_price` as they stand
@@ -11212,7 +11251,7 @@ def create_return():
                 # free goods.
                 'unit_cost_snapshot': float(sold['unit_cost'] or 0),
             })
-            refund_total += Decimal(str(calc['total']))
+            refund_total += _part_value
 
         # Same currency-driven quantum as create_sale's identical sum-then-
         # quantize step above (see that comment) -- a hardcoded 2dp here
