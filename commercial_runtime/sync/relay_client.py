@@ -115,6 +115,10 @@ class SyncRelayClient:
     #: relay clients it drives (the LAN hub's LocalClient, test doubles) have
     #: no such parameter and the hub keeps one cursor per device (Phase 2).
     supports_stream = True
+    #: This client can send `caps` and `include_own` in its pull body and call a
+    #: hub's `/bootstrap` (SYNC-BOOT Phase 2). SyncService only passes those to a
+    #: client that says so, for the same reason it only passes `stream`.
+    supports_bootstrap = True
 
     def __init__(
         self,
@@ -162,17 +166,27 @@ class SyncRelayClient:
         self._raise_if_rejected(result)
         return result
 
-    def pull(self, since: int, stream: Optional[str] = None, caps: Optional[list] = None) -> dict:
-        """`stream` / `caps` (SYNC-BOOT) ride INSIDE the signed body, so a
-        captured request cannot be replayed under a different stream. Both are
-        omitted when None: an Owner that predates them verifies the signature
-        over the whole body and ignores unknown keys, and absence means
-        'legacy' to a new Owner -- an old caller is byte-for-byte unchanged."""
+    def pull(self, since: int, stream: Optional[str] = None, caps: Optional[list] = None,
+             include_own: bool = False) -> dict:
+        """`stream` / `caps` / `include_own` (SYNC-BOOT) ride INSIDE the signed
+        body, so a captured request cannot be replayed under a different stream.
+        All are omitted when unset: an Owner that predates them verifies the
+        signature over the whole body and ignores unknown keys, and absence means
+        'legacy' to a new Owner -- an old caller is byte-for-byte unchanged.
+
+        `include_own=True` asks the relay to send this device's OWN events too,
+        once, after a bootstrap install or a same-installation restore (the
+        relay normally excludes them, which loses whatever the device pushed
+        after the copy it now holds was taken). A relay that honours it echoes
+        `include_own: true` in the response; one that ignores it does not, and
+        the caller keeps the flag armed."""
         extra: dict = {"since": since}
         if stream is not None:
             extra["stream"] = stream
         if caps is not None:
             extra["caps"] = list(caps)
+        if include_own:
+            extra["include_own"] = True
         body = self._signed_body(extra)
         # POST, not GET -- see owner/app/sync/routes.py's pull() docstring
         # (2026-08-12): a frozen PyInstaller build of this exact client
@@ -183,6 +197,26 @@ class SyncRelayClient:
         result = self._request("POST", "/api/sync/v1/pull", body)
         self._raise_if_rejected(result)
         return result
+
+    def post_signed_raw(self, path: str, extra: dict, *, timeout_seconds: Optional[float] = None):
+        """POST a signed body and return the raw `requests.Response`, un-parsed.
+        For the one route whose success answer is a file, not JSON (the hub's
+        `/bootstrap`). No retries: a copy of a whole shop is not something to
+        re-request on a timeout without the caller deciding to, and each attempt
+        burns a nonce and builds a fresh copy on the hub. Transport failures
+        surface as `NetworkError` exactly like `_request`'s."""
+        body = self._signed_body(extra)
+        try:
+            return self._session.request(
+                "POST", self._config.base_url + path, json=body,
+                timeout=timeout_seconds or max(self._config.timeout_seconds, 120.0),
+                verify=self._config.verify_tls, headers={"Content-Type": "application/json"})
+        except requests.exceptions.SSLError as exc:
+            raise NetworkError("TLS_VERIFICATION_FAILED", str(exc)) from exc
+        except requests.exceptions.Timeout as exc:
+            raise NetworkError("REQUEST_TIMED_OUT", str(exc)) from exc
+        except requests.exceptions.RequestException as exc:
+            raise NetworkError("NETWORK_UNAVAILABLE", str(exc)) from exc
 
     def _signed_body(self, extra: dict) -> dict:
         # A fresh nonce and current timestamp on EVERY call -- never reused,
@@ -255,11 +289,19 @@ class SyncRelayClient:
         raise last_error or NetworkError("NETWORK_UNAVAILABLE", "Request failed with no captured error.")
 
 
-def pull_for_stream(client, since: int, stream: Optional[str]) -> dict:
+def pull_for_stream(client, since: int, stream: Optional[str], *,
+                    caps: Optional[list] = None, include_own: bool = False) -> dict:
     """Calls `client.pull`, adding the stream label only if the client
-    advertises `supports_stream`. Duck-typed on purpose (see SyncService's
+    advertises `supports_stream`, and `caps` / `include_own` only if it
+    advertises `supports_bootstrap`. Duck-typed on purpose (see SyncService's
     contract with its client): a double or a LAN-hub client built to the
     documented `.pull(since)` surface keeps working untouched."""
+    kwargs: dict = {}
     if stream is not None and getattr(client, "supports_stream", False):
-        return client.pull(since, stream=stream)
-    return client.pull(since)
+        kwargs["stream"] = stream
+    if getattr(client, "supports_bootstrap", False):
+        if caps:
+            kwargs["caps"] = list(caps)
+        if include_own:
+            kwargs["include_own"] = True
+    return client.pull(since, **kwargs) if kwargs else client.pull(since)

@@ -1409,6 +1409,9 @@ class SyncService:
         # {"pruned_through": int|None, "relay_url": str|None}. While set, the
         # stream stops pulling (push is untouched) and health says so.
         self._resync_required: Optional[dict] = None
+        # SYNC-BOOT Phase 2: see commercial_runtime/sync/bootstrap/hooks.py. None
+        # (every pre-existing caller) = no bootstrap behaviour at all.
+        self._bootstrap_hooks = None
         self._authority_unsigned_logged = False
         self._authority_env_cache = None
         self._local_freshness_store = local_freshness_store
@@ -1539,22 +1542,114 @@ class SyncService:
                 # single tick. Widening the client contract instead would have
                 # been the tail wagging the dog.
                 relay_url = getattr(client, "base_url", None)
-                if self.ensure_cursor_matches_relay(conn, relay_url):
-                    # A different relay has its own sequence space and its own
-                    # pruned range; a refusal from the old one proves nothing.
-                    self.clear_resync_required()
+                # (The return value is deliberately not used to lift a RESYNC_REQUIRED stop.
+                # `ensure_cursor_matches_relay` reports True for a cursor whose stored relay
+                # is NULL -- a device that has never completed a pull -- and that reset is rolled
+                # back when this pull is refused, so it reports True AGAIN on every tick. Treating
+                # that as "a different relay" cleared the stop each tick and made the device
+                # re-contact the relay, and re-run the bootstrap request hook, forever: found by
+                # SYNC-BOOT Phase 2's hook test, latent since Phase 1. A genuinely different relay
+                # is recognised by `_raise_if_resync_pending`, which compares the URL the refusal
+                # came from with the URL being pulled now.)
+                self.ensure_cursor_matches_relay(conn, relay_url)
                 self._raise_if_resync_pending(relay_url)
+                self._reapply_own_outbox_once(conn)
                 since = self.read_cursor(conn)
+                hooks = self._bootstrap_hooks
+                include_own = bool(self._hook(hooks, "include_own_once"))
                 try:
-                    result = pull_for_stream(client, since, self._stream_label)  # raises on failure
+                    result = pull_for_stream(  # raises on failure
+                        client, since, self._stream_label,
+                        caps=list(hooks.caps) if hooks is not None and hooks.caps else None,
+                        include_own=include_own)
                 except RelayRejected as exc:
                     if exc.reason_code == RESYNC_REQUIRED:
+                        if self._fast_forward_registry(conn, exc, relay_url):
+                            return
                         self._enter_resync_required(exc, relay_url)
+                        self._notify_resync_required(client, relay_url, exc)
                     raise
                 self.apply_pull_result(conn, result)
                 conn.commit()
+                self._after_pull(result, include_own)
             finally:
                 conn.close()
+
+    @staticmethod
+    def _hook(hooks, name: str, *args):
+        """Calls hook `name` if set; a hook that raises is logged and treated as
+        'nothing' -- see bootstrap/hooks.py."""
+        fn = getattr(hooks, name, None) if hooks is not None else None
+        if fn is None:
+            return None
+        try:
+            return fn(*args)
+        except Exception:  # noqa: BLE001 -- a bootstrap hook must never break a pull
+            logger.warning("SyncService: bootstrap hook %s failed (ignored)", name, exc_info=True)
+            return None
+
+    def set_bootstrap_hooks(self, hooks) -> None:
+        """Installs `bootstrap.hooks.BootstrapHooks` (SYNC-BOOT Phase 2)."""
+        self._bootstrap_hooks = hooks
+
+    def _after_pull(self, result: dict, include_own: bool) -> None:
+        """Post-commit bookkeeping of a successful pull: stop asking for own
+        events once a relay has HONOURED the request (it echoes `include_own`; one
+        that ignores the field does not, and we keep asking), and hand any
+        bootstrap requests a hub piggybacked to the product."""
+        hooks = self._bootstrap_hooks
+        if hooks is None or not isinstance(result, dict):
+            return
+        if include_own and result.get("include_own") is True:
+            self._hook(hooks, "include_own_done")
+        requests = result.get("bootstrap_requests")
+        if requests:
+            self._hook(hooks, "on_bootstrap_requests", list(requests))
+
+    def _reapply_own_outbox_once(self, conn) -> None:
+        """After a bootstrap install: the copy was taken before this device's
+        still-unpushed writes, and the relay never sends a device its own events,
+        so re-apply the outbox to the new database ONCE (the rows also stay in
+        the outbox and still get pushed). Idempotent: appliers are version-gated,
+        so a row already present is a no-op."""
+        hooks = self._bootstrap_hooks
+        if hooks is None or not self._hook(hooks, "reapply_outbox_pending"):
+            return
+        events = self.read_outbox(conn)
+        if events:
+            self.apply_pull_result(conn, {"events": events, "cursor": self.read_cursor(conn)})
+            conn.commit()
+            logger.info("SyncService: re-applied %d unpushed local event(s) after a bootstrap install.",
+                        len(events))
+        self._hook(hooks, "reapply_outbox_done")
+
+    def _fast_forward_registry(self, conn, exc: "RelayRejected", relay_url: Optional[str]) -> bool:
+        """The REGISTRY stream is never copied (authority is signed, not copied).
+        A relay that says RESYNC_REQUIRED for it and names where its log now ends
+        (`fast_forward_to`, the LAN hub does) lets the device skip the pruned
+        history: the cursor moves there and the MAIN computer's fresh signed
+        re-announce, which lands after that point, supplies the staff list. The
+        hub has already told the main (it noted the request when it refused the
+        pull). Returns True when it fast-forwarded; any other stream, or a relay
+        naming no point (Owner, until its mailbox exists in Phase 3), takes the
+        ordinary stop-and-report path."""
+        target = exc.details.get("fast_forward_to")
+        if self._stream_label != "registry" or not isinstance(target, int) or isinstance(target, bool) or target < 0:
+            return False
+        conn.execute("UPDATE sync_cursor SET last_seq = ? WHERE id = 1", (target,))
+        conn.commit()
+        self.clear_resync_required()
+        logger.warning(
+            "Sync (registry): the relay had pruned history this computer never received; skipped to "
+            "position %s. Staff, permissions and till numbers come from the main computer's fresh "
+            "signed re-announce, which the relay was asked for.", target)
+        return True
+
+    def _notify_resync_required(self, client, relay_url: Optional[str], exc: "RelayRejected") -> None:
+        hooks = self._bootstrap_hooks
+        staged = self._hook(hooks, "on_resync_required", self._stream_label, client, relay_url, dict(exc.details))
+        if staged and self._resync_required is not None:
+            self._resync_required["staged"] = True
 
     def _enter_resync_required(self, exc: "RelayRejected", relay_url: Optional[str]) -> None:
         """Owner says this stream's cursor is below what it has already pruned.
