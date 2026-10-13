@@ -10485,6 +10485,7 @@ const RetailSystem = {
                           ? Math.max(tendered, this._fromMinor(this._roundCashMinor(this._toMinor(amountDue))))   // MONEY-5: the coins due, not the fils
                         : (this._paymentMethod === 'credit' ? 0 : amountDue),
       payment_method:   this._paymentMethod,
+      cash_rounding_ack: true,   // MONEY-5 M4: this till shows/tenders rounded cash; the server rounds only for such a client
       // Loyalty redemption wave 1 (schema v27): an integer COUNT of points,
       // never a money amount -- create_sale (retail_api.py) resolves this
       // into money itself via the ledger balance and loyalty_point_value,
@@ -17481,7 +17482,7 @@ const RetailSystem = {
       const legsKey = JSON.stringify(items.map(i => [i.product_id, i.quantity]));
       if (this._returnLegsKey !== legsKey) {
         const pre = await this._post('/api/sub/retail/returns', {
-          sale_id: this._returnSaleId, items, dry_run: true });
+          sale_id: this._returnSaleId, items, dry_run: true, cash_rounding_ack: true });
         if (pre.status !== 'success') { SubsystemApp.showToast(pre.message||'Error','error'); return; }
         this._renderReturnLegs(pre.data, legsKey);
         SubsystemApp.showToast(t('Check how this refund is paid back, then press Refund again'),'success');
@@ -17505,6 +17506,7 @@ const RetailSystem = {
         items,
       };
       if (refundLegs) body.refund_legs = refundLegs; else body.refund_method = chosenMethod;
+      body.cash_rounding_ack = true;   // MONEY-5 M4: see the sale payload
       const d = await this._post('/api/sub/retail/returns', body);
       if (d.status==='success') {
         // DEFECT 1 fix: show the REAL payout (tender_refund_amount), not

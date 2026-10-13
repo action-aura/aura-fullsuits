@@ -67,6 +67,7 @@ def _sale(admin, pid, **body):
 
 
 def _ret(admin, sale_id, items, **kw):
+    kw.setdefault('cash_rounding_ack', True)       # M4: a rounding-aware client (the desktop till)
     return admin.post(f'{API}/returns', json={'sale_id': sale_id, 'items': items,
                                               'idempotency_key': str(uuid.uuid4()), **kw})
 
@@ -231,3 +232,63 @@ def test_l6_two_identifiers_that_together_stay_within_the_quantity_sold_are_stil
     assert _returned_qty(s['id']) == 2
     r = _ret(admin, s['id'], [{'product_id': pid, 'quantity': 1}], refund_method='cash')
     assert r.status_code == 400                                              # nothing left to return
+
+
+# ── M4: the server rounds ONLY for a client that says it is rounding-aware ───────────────────
+
+def _raw_sale(admin, pid, **body):
+    """A sale exactly as Android sends it today: no `cash_rounding_ack`."""
+    body.setdefault('items', [{'product_id': pid, 'quantity': 1}])
+    body.setdefault('idempotency_key', str(uuid.uuid4()))
+    r = admin.post(f'{API}/sales', json=body)
+    assert r.status_code == 200, r.get_json()
+    return r.get_json()['data']
+
+
+def _sale_pay(sale_id):
+    return _rows("SELECT method, amount FROM payments WHERE sale_id=? AND direction='in'", (sale_id,))
+
+
+@pytest.mark.parametrize('rule,expect_paid', [('up', 3.5), ('nearest', 3.45), ('down', 3.45)])
+def test_m4_with_the_ack_the_server_rounds_exactly_as_before(rule, expect_paid):
+    admin, cid, pid = H._new_shop(price=3.457)
+    _settings(admin, cash_rounding_interval='0.050', cash_rounding_rule=rule)
+    s = _sale(admin, pid, payment_method='cash')          # _sale sends cash_rounding_ack: true
+    assert s['amount_paid'] == expect_paid and s['rounding_amount'] is not None
+    assert [(m['method'], m['amount']) for m in _sale_pay(s['id'])] == [('cash', expect_paid)]
+
+
+@pytest.mark.parametrize('rule', ['up', 'nearest', 'down'])
+def test_m4_without_the_ack_the_phones_displayed_total_is_what_is_charged(rule):
+    """Android today: no ack, no amount_paid for cash. The server must NOT round: it records the
+    exact total the phone displayed (3.457), books no 4950 and stores no rounding."""
+    admin, cid, pid = H._new_shop(price=3.457)
+    _settings(admin, cash_rounding_interval='0.050', cash_rounding_rule=rule)
+    s = _raw_sale(admin, pid, payment_method='cash')
+    assert s['amount_paid'] == 3.457 and not s.get('rounding_amount'), s
+    assert [(m['method'], m['amount']) for m in _sale_pay(s['id'])] == [('cash', 3.457)]
+    assert _rows("SELECT rounding_amount FROM sales WHERE id=?", (s['id'],))[0]['rounding_amount'] in (None, 0, 0.0)
+    assert _bal(cid, '4950') == D(0) and _bal(cid, '1010') == D('3.457')
+
+
+def test_m4_a_false_or_garbage_ack_is_not_an_ack():
+    admin, cid, pid = H._new_shop(price=3.457)
+    _settings(admin, cash_rounding_interval='0.050', cash_rounding_rule='up')
+    for junk in (False, 0, 'false', 'no', None, 2, []):
+        s = _raw_sale(admin, pid, payment_method='cash', cash_rounding_ack=junk)
+        assert s['amount_paid'] == 3.457 and not s.get('rounding_amount'), (junk, s)
+
+
+def test_m4_a_return_without_the_ack_refunds_the_exact_cash_with_it_the_coin():
+    admin, cid, pid = H._new_shop(price=3.457)
+    _settings(admin, cash_rounding_interval='0.050', cash_rounding_rule='nearest')
+    a = _raw_sale(admin, pid, payment_method='cash')                 # not rounded: 3.457 taken
+    r = _ret(admin, a['id'], [{'product_id': pid, 'quantity': 1}], refund_method='cash',
+             cash_rounding_ack=False)
+    assert r.status_code == 200 and r.get_json()['data']['tender_refund_amount'] == 3.457
+    a2 = _raw_sale(admin, pid, payment_method='cash')
+    r = _ret(admin, a2['id'], [{'product_id': pid, 'quantity': 1}], refund_method='cash',
+             cash_rounding_ack=True)
+    d = r.get_json()['data']
+    assert r.status_code == 200 and d['tender_refund_amount'] == 3.45 and d['refund_amount'] == 3.457
+    assert _rows("SELECT rounding_amount FROM returns WHERE id=?", (d['id'],))[0]['rounding_amount'] == -0.007

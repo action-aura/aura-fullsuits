@@ -162,8 +162,25 @@ function mustFail(label, fn, src) {
   console.log(`PASS: mutation caught -- ${label}`);
 }
 
+// M4 (verifier): the server rounds only for a client that says it is rounding-aware, so the till
+// MUST send `cash_rounding_ack: true` with the sale, the return and the return preview -- otherwise
+// its own rounded display would be charged unrounded.
+function testAckIsSent(src) {
+  const saleAt = src.indexOf("idempotency_key: `pos_${Date.now()}`");
+  assert.ok(saleAt > 0, 'sale payload not found');
+  const salePayload = src.slice(saleAt, saleAt + 6000);
+  assert.ok(/cash_rounding_ack:\s*true/.test(salePayload), 'the sale payload must carry cash_rounding_ack: true');
+  assert.ok(/body\.cash_rounding_ack\s*=\s*true/.test(src), 'the return body must carry cash_rounding_ack');
+  assert.ok(/dry_run: true, cash_rounding_ack: true/.test(src), 'the return preview must carry cash_rounding_ack');
+}
+
 function main() {
   testTable(SRC);
+  testAckIsSent(SRC);
+  mustFail('the sale payload no longer says it is rounding-aware',
+    testAckIsSent, mutant(SRC, '      cash_rounding_ack: true,', '      /* removed */'));
+  mustFail('the return body no longer says it is rounding-aware',
+    testAckIsSent, mutant(SRC, 'body.cash_rounding_ack = true;', ''));
   testOnlyCashRounds(SRC);
   testChangeAgainstRoundedDue(SRC);
   testRoundingText(SRC);

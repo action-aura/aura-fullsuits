@@ -136,6 +136,7 @@ def _settings(admin, **kv):
 def _sale(admin, pid, **body):
     body.setdefault('items', [{'product_id': pid, 'quantity': 1}])
     body.setdefault('idempotency_key', str(uuid.uuid4()))
+    body.setdefault('cash_rounding_ack', True)    # M4: a rounding-aware client (the desktop till) says so
     r = admin.post(f'{API}/sales', json=body)
     assert r.status_code == 200, r.get_json()
     return r.get_json()['data']
@@ -351,7 +352,7 @@ def test_a_named_customer_paying_the_rounded_cash_amount_owes_nothing():
 def test_a_full_return_of_a_rounded_sale_pays_back_what_was_paid_and_leaves_no_profit_or_loss():
     admin, cid, pid = _shop(3.457, **NEAREST_05)
     sale = _sale(admin, pid, payment_method='cash', amount_paid=3.45)
-    r = admin.post(f'{API}/returns', json={'sale_id': sale['id'], 'items': [{'product_id': pid, 'quantity': 1}],
+    r = admin.post(f'{API}/returns', json={'cash_rounding_ack': True, 'sale_id': sale['id'], 'items': [{'product_id': pid, 'quantity': 1}],
                                            'idempotency_key': str(uuid.uuid4())})
     assert r.status_code == 200, r.get_json()
     d = r.get_json()['data']
@@ -374,7 +375,7 @@ def test_a_partial_return_re_rounds_its_own_cash_leg_and_books_the_difference():
     admin, cid, pid = _shop(5.017, **NEAREST_05)
     sale = _sale(admin, pid, items=[{'product_id': pid, 'quantity': 2}], payment_method='cash', amount_paid=10.05)
     assert _sale_row(sale['id'])['rounding_amount'] == 0.016            # 10.034 -> 10.050
-    r = admin.post(f'{API}/returns', json={'sale_id': sale['id'], 'items': [{'product_id': pid, 'quantity': 1}],
+    r = admin.post(f'{API}/returns', json={'cash_rounding_ack': True, 'sale_id': sale['id'], 'items': [{'product_id': pid, 'quantity': 1}],
                                            'idempotency_key': str(uuid.uuid4())})
     assert r.status_code == 200, r.get_json()
     d = r.get_json()['data']
@@ -388,7 +389,7 @@ def test_a_partial_return_re_rounds_its_own_cash_leg_and_books_the_difference():
 def test_with_rounding_off_a_return_is_not_rounded():
     admin, cid, pid = H._new_shop(price=5.017)
     sale = _sale(admin, pid, items=[{'product_id': pid, 'quantity': 2}], payment_method='cash', amount_paid=10.034)
-    r = admin.post(f'{API}/returns', json={'sale_id': sale['id'], 'items': [{'product_id': pid, 'quantity': 1}],
+    r = admin.post(f'{API}/returns', json={'cash_rounding_ack': True, 'sale_id': sale['id'], 'items': [{'product_id': pid, 'quantity': 1}],
                                            'idempotency_key': str(uuid.uuid4())})
     d = r.get_json()['data']
     assert d['tender_refund_amount'] == 5.017

@@ -9212,6 +9212,13 @@ def create_sale():
         # on the sale, carried on the wire, booked to GL 4950. `effective_due` is what the tenders
         # must now cover: the amount due plus that difference.
         _round_interval, _round_rule = cash_rounding_engine.config(_s)
+        # M4 (verifier): round ONLY for a client that says it knows about rounding. The desktop till
+        # sends `cash_rounding_ack: true`; Android (which shows the unrounded total and no Rounding
+        # line) does not yet, so a phone sale is charged exactly the total it displayed and the
+        # drawer is never short coins the cashier was never told to take. Android learning to round
+        # is a follow-up (ROADMAP, MONEY-5 verifier fix round).
+        if not _client_knows_cash_rounding(data):
+            _round_interval = Decimal('0')
         sale_rounding = 0.0
         effective_due = amount_due_after_points
         if split_tenders:
@@ -11697,6 +11704,8 @@ def create_return():
         # A card / mobile / transfer leg is never rounded. Off ('0') changes nothing.
         return_rounding = 0.0
         _rc_interval, _rc_rule = cash_rounding_engine.config(_s)
+        if not _client_knows_cash_rounding(data):
+            _rc_interval = Decimal('0')       # M4: same gate as create_sale -- see its comment
         if _rc_interval > 0 and not _needs_method:
             _cash_taken = next((Decimal(str(a)) for m, a in _sale_paid if m == 'cash'), None)
             _cash_back_before = Decimal(str(_already_by_method.get('cash') or 0))
@@ -15858,6 +15867,17 @@ def _money_for(currency=None):
 #: `currency=None` reproduces the historical 0.005 byte for byte, the same
 #: contract `_money` above carries and for the same reason: an unaudited
 #: caller keeps exactly the behaviour it had.
+def _client_knows_cash_rounding(data) -> bool:
+    """True when the request says its client displays and tenders ROUNDED cash
+    (`cash_rounding_ack: true`, sent by the desktop till). Server-side rounding is only safe for such
+    a client: one that does not know (Android today) would charge a total different from the one it
+    showed. Anything but an explicit true/1/'true'/'1' is False."""
+    v = (data or {}).get('cash_rounding_ack')
+    if isinstance(v, str):
+        return v.strip().lower() in ('1', 'true', 'yes')
+    return v is True or v == 1
+
+
 def _money_epsilon(currency=None):
     try:
         quant = tax_engine.currency_quantum(currency) if currency else Decimal('0.01')
