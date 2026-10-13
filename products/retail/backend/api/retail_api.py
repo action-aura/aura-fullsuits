@@ -3978,8 +3978,8 @@ def _classify_po_payments(cur, po, eps):
             "JOIN gl_journal_lines l ON l.journal_id = j.id "
             "JOIN gl_accounts a ON a.id = l.account_id AND a.company_id = j.company_id "
             "WHERE j.company_id=? AND j.source_type='purchase_order' AND j.source_id=? "
-            "AND j.reversed_journal_id IS NULL AND a.code=? AND l.credit > 0 ORDER BY l.id",
-            (cid, po['id'], gl.ACCOUNT_CASH)).fetchall()]
+            "AND j.reversed_journal_id IS NULL AND a.code IN (?,?,?,?,?) AND l.credit > 0 ORDER BY l.id",
+            (cid, po['id'], *gl.CASH_LIKE_CODES)).fetchall()]
     except sqlite3.OperationalError:
         cash_lines = []            # no books tables yet: nothing is provable
     local, sibling, unprovable = [], [], []
@@ -4406,7 +4406,8 @@ def create_purchase_order():
             # W4a-2 fix: reference = the payment's, as post_supplier_payment does.
             gl.post_po_prepayment(conn, cid, branch_id, po_id, bool(supplier_id),
                                   amount_paid, down_pay_uid, currency, reference=down_pay_ref,
-                                  business_date=_gl_business_date(conn, cid))
+                                  business_date=_gl_business_date(conn, cid),
+                                  method=data.get('method', 'cash'))
         # W4a: queue order + lines in THIS transaction, so the outbox rows and
         # the rows they describe land or roll back together.
         _po_stamp_and_queue_create(cur, po_id, None)
@@ -9850,10 +9851,21 @@ def create_sale():
         else:
             voucher_for_gl = (net_received if (str(pm).strip().lower() == gl.TENDER_VOUCHER
                                                and net_received > _eps) else 0.0)
+        # MONEY-5 / #8: hand the books the SAME per-method rows the `payments` table just got, so
+        # a split cash+card sale debits 1010 Cash in Drawer and 1030 Card Clearing separately
+        # (the voucher part still lands in 2300 via tender_account). The single-tender sale is one
+        # row of its method; 'credit' (on account) is AR below, never a tender row.
+        if split_settlement:
+            tender_parts_for_gl = [(_m, float(_a)) for _m, _a in split_settlement['rows']
+                                   if float(_a) > _eps]
+        elif net_received > _eps:
+            tender_parts_for_gl = [(pm if pm != 'credit' else 'cash', net_received)]
+        else:
+            tender_parts_for_gl = []
         gl.post_sale(conn, cid, bid, sale_id, sale_number, currency,
                      net_received, ar_amount_for_gl, points_redeemed_amount,
                      tax, revenue_amount, business_date=gl_business_date,
-                     voucher_amount=voucher_for_gl)
+                     voucher_amount=voucher_for_gl, tender_parts=tender_parts_for_gl)
 
         # Schema v39 (cost basis for COGS): Dr Cost of Goods Sold / Cr
         # Inventory for the cost basis of what actually left the shelf on
@@ -13599,7 +13611,7 @@ def create_expense():
              actor or str(_uid()), _now()))
         gl.post_expense(conn, cid, bid, euid, amount, account, currency,
                         business_date=business_date, reference=f'expense {euid[:8]}',
-                        memo=memo or None)
+                        memo=memo or None, paid_via=paid_via)
         _audit(conn, 'EXPENSE_RECORDED', 'expense', euid, f'{account} amount={amount} via={paid_via}')
         conn.commit()
         row = conn.execute("SELECT * FROM expenses WHERE uid=? AND company_id=?", (euid, cid)).fetchone()
@@ -20223,7 +20235,7 @@ def branding_logo_delete():
 @mt_require_subsystem('retail')
 def payment_methods_list():
     cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn); _seed_methods(conn, cid); conn.commit()
-    rows = conn.execute("SELECT id,name,type,is_active,sort_order FROM payment_methods "
+    rows = conn.execute("SELECT id,name,type,is_active,sort_order,gl_account_code FROM payment_methods "
                         "WHERE company_id=? AND is_active=1 ORDER BY sort_order,name", (cid,)).fetchall()
     conn.close()
     return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
@@ -20242,9 +20254,17 @@ def payment_methods_add():
     cid = _cid(); data = request.json or {}
     if not data.get('name'):
         return jsonify({'status': 'error', 'message': 'Method name required'}), 400
+    # MONEY-5 / #8: an OPTIONAL per-shop override of which GL account this method lands in. Only
+    # the cash-like accounts are allowed (the list the books treat as "cash and bank"): a method
+    # pointed at Sales or Receivables would let a till credit revenue by naming a code.
+    gl_code = str(data.get('gl_account_code') or '').strip() or None
+    if gl_code is not None and gl_code not in gl.CASH_LIKE_CODES:
+        return jsonify({'status': 'error', 'code': 'INVALID_GL_ACCOUNT',
+                        'message': f'gl_account_code must be one of {list(gl.CASH_LIKE_CODES)}.'}), 400
     conn = get_retail_conn(); _ensure_credit_schema(conn)
-    conn.execute("INSERT INTO payment_methods (company_id,name,type,is_active,sort_order) VALUES (?,?,?,1,?)",
-                 (cid, data['name'], data.get('type', 'other'), int(data.get('sort_order', 99))))
+    conn.execute("INSERT INTO payment_methods (company_id,name,type,is_active,sort_order,gl_account_code) "
+                 "VALUES (?,?,?,1,?,?)",
+                 (cid, data['name'], data.get('type', 'other'), int(data.get('sort_order', 99)), gl_code))
     conn.commit(); conn.close()
     return jsonify({'status': 'success'})
 
@@ -20960,7 +20980,8 @@ def customer_payment(cust_id):
         # terminal or a branch), so branch_id is None -- matches
         # gl_journals.branch_id's own nullable design.
         gl.post_customer_payment(conn, cid, None, ref, currency, amt, source_uid=pay_uid,
-                                 business_date=_gl_business_date(conn, cid))
+                                 business_date=_gl_business_date(conn, cid),
+                                 method=data.get('method', 'cash'))
         _audit(conn, 'CUSTOMER_PAYMENT', 'customer', cust_id, f'{ref} amount={amt}')
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -21319,7 +21340,7 @@ def supplier_payment(sid):
         # customer_payment's identical comment just above -- same
         # reasoning, no branch context on this route.
         gl.post_supplier_payment(conn, cid, None, ref, currency, amt, source_uid=pay_uid,
-                                 business_date=_gl_business_date(conn, cid))
+                                 business_date=_gl_business_date(conn, cid), method=method)
         _audit(conn, 'SUPPLIER_PAYMENT', 'supplier', sid, f'{ref} amount={amt}')
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -21420,7 +21441,7 @@ def pay_purchase_order(po_id):
             # the payment row are findable from each other by reference.
             gl.post_po_prepayment(conn, cid, po['branch_id'], po_id, bool(po['supplier_id']),
                                   amt, pay_uid, currency, reference=ref,
-                                  business_date=_gl_business_date(conn, cid))
+                                  business_date=_gl_business_date(conn, cid), method=po_method)
         elif po['supplier_id']:
             # v44: re-derived (the instalment is a 'po' payment row, which
             # the supplier formula counts), not moved by -amt.
@@ -21436,7 +21457,8 @@ def pay_purchase_order(po_id):
             gl.post_supplier_payment(conn, cid, None, ref, currency, amt,
                                       source_type='po_payment', source_id=po_id,
                                       source_uid=pay_uid,
-                                      business_date=_gl_business_date(conn, cid))
+                                      business_date=_gl_business_date(conn, cid),
+                                      method=po_method)
         _audit(conn, 'PO_PAYMENT', 'purchase_order', po_id, f"{ref} amount={amt}")
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -23168,7 +23190,8 @@ def _reverse_payment_journal(conn, cid, payment):
         cash = conn.execute(
             "SELECT COALESCE(SUM(l.debit),0) AS d, COALESCE(SUM(l.credit),0) AS c "
             "FROM gl_journal_lines l JOIN gl_accounts a ON a.id=l.account_id "
-            "WHERE l.journal_id=? AND a.code=?", (cand['id'], gl.ACCOUNT_CASH)).fetchone()
+            "WHERE l.journal_id=? AND a.code IN (?,?,?,?,?)",
+            (cand['id'], *gl.CASH_LIKE_CODES)).fetchone()
         if _money(cash['d'] or cash['c'], currency) == want:
             return gl.reverse_journal(conn, cid, cand['id'],
                                       memo=f"Void of payment {ref}",

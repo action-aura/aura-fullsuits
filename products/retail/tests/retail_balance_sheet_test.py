@@ -289,7 +289,7 @@ def test_cash_sale_increases_cash_and_the_sheet_balances_via_retained_earnings(c
     today = _today()
     data = _balance_sheet(cid, today)
     assert data['has_activity'] is True
-    cash = _account(data['assets'], gl.ACCOUNT_CASH)
+    cash = _account(data['assets'], gl.ACCOUNT_CASH_DRAWER)  # MONEY-5: a cash tender lands in 1010 Cash in Drawer
     assert cash is not None and cash['amount'] == 50.0
 
     # This product has NO period-close step -- gl_accounts 3000 (Owner's
@@ -323,7 +323,7 @@ def test_credit_sale_posts_to_receivable_not_cash_and_still_balances(client):
 
     data = _balance_sheet(cid, _today())
     ar = _account(data['assets'], gl.ACCOUNT_AR)
-    cash = _account(data['assets'], gl.ACCOUNT_CASH)
+    cash = _account(data['assets'], gl.ACCOUNT_CASH_DRAWER)  # MONEY-5: a cash tender lands in 1010 Cash in Drawer
     assert ar is not None and ar['amount'] == 30.0, 'the unpaid balance must sit in Accounts Receivable'
     assert cash is not None and cash['amount'] == 20.0, 'only the amount actually tendered is Cash'
     assert data['balance_check']['is_balanced'] is True
@@ -373,7 +373,7 @@ def test_purchase_on_credit_increases_inventory_and_payable_and_still_balances(c
     # so retained_earnings must still read exactly 0, and Cash must be
     # untouched.
     assert data['equity']['retained_earnings'] == 0.0
-    assert _account(data['assets'], gl.ACCOUNT_CASH) is None
+    assert all(_account(data['assets'], c) is None for c in gl.CASH_LIKE_CODES)  # MONEY-5: no cash-like account at all
     assert data['balance_check']['is_balanced'] is True
     assert data['balance_check']['difference'] == 0.0
 
@@ -396,7 +396,7 @@ def test_customer_payment_moves_value_from_receivable_to_cash_leaving_totals_unc
     today = _today()
     before = _balance_sheet(cid, today)
     assert _account(before['assets'], gl.ACCOUNT_AR)['amount'] == 100.0
-    assert _account(before['assets'], gl.ACCOUNT_CASH) is None
+    assert all(_account(before['assets'], c) is None for c in gl.CASH_LIKE_CODES)  # MONEY-5: no cash-like account at all
     assets_before = before['assets']['total']
     grand_total_before = before['total_liabilities_and_equity']
 
@@ -405,7 +405,7 @@ def test_customer_payment_moves_value_from_receivable_to_cash_leaving_totals_unc
 
     after = _balance_sheet(cid, today)
     ar_after = _account(after['assets'], gl.ACCOUNT_AR)
-    cash_after = _account(after['assets'], gl.ACCOUNT_CASH)
+    cash_after = _account(after['assets'], gl.ACCOUNT_CASH_DRAWER)  # MONEY-5: a cash tender lands in 1010 Cash in Drawer
     assert ar_after['amount'] == 60.0
     assert cash_after['amount'] == 40.0
     # An asset RECLASSIFICATION, not a new asset -- the assets total (and
@@ -556,7 +556,7 @@ def test_as_of_date_boundary_is_inclusive_of_that_date_and_excludes_the_day_afte
         assert r.status_code == 200, r.get_json()
 
     data = _balance_sheet(cid, as_of)
-    cash = _account(data['assets'], gl.ACCOUNT_CASH)
+    cash = _account(data['assets'], gl.ACCOUNT_CASH_DRAWER)  # MONEY-5: a cash tender lands in 1010 Cash in Drawer
     # 1200 (before the as-of date, included in a SNAPSHOT) + 50 (ON the
     # as-of date, included -- the boundary itself) = 1250. The 999 sale the
     # day AFTER must not appear at all.
@@ -603,7 +603,7 @@ def test_non_padded_as_of_date_still_excludes_the_day_after(client, monkeypatch)
     # The CALLER passes a non-padded single-digit month and day -- exactly
     # what `_parse_period_date` accepts without complaint.
     data = _balance_sheet(cid, '2026-9-5')
-    cash = _account(data['assets'], gl.ACCOUNT_CASH)
+    cash = _account(data['assets'], gl.ACCOUNT_CASH_DRAWER)  # MONEY-5: a cash tender lands in 1010 Cash in Drawer
     assert cash['amount'] == 75.0, (
         f"a non-padded as_of_date '2026-9-5' must exclude the {the_day_after} sale (500.0) -- "
         f"got cash={cash['amount']}, the exact 'more than it should' shape a TEXT-lexicographic "

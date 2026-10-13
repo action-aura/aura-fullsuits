@@ -2831,7 +2831,11 @@ def _migrate_add_money4b_expenses(conn):
                     conn, cid, r['branch_id'], r['id'], r['amount'], _gl.ACCOUNT_OTHER_EXPENSES,
                     currency_cache[cid], business_date=business_date,
                     reference='paid-out catch-up',
-                    memo='Paid out of the till before its purpose was recorded')
+                    memo='Paid out of the till before its purpose was recorded',
+                    # MONEY-5: the catch-up is for the LEGACY era -- the cash those old movements
+                    # left was booked to 1000 (every sale before v55 debited it), so the
+                    # catch-up credits 1000 too instead of driving the new 1010 negative.
+                    cash_account=_gl.ACCOUNT_CASH)
             else:
                 # Skips a movement that already has its journal (`_post_once` finds it by key),
                 # so a database that ran this step before posts nothing twice.
@@ -2839,7 +2843,8 @@ def _migrate_add_money4b_expenses(conn):
                     conn, cid, r['branch_id'], r['id'], r['amount'], _gl.ACCOUNT_OTHER_INCOME,
                     currency_cache[cid], business_date=business_date,
                     reference='paid-in catch-up',
-                    memo='Paid into the till before its source was recorded')
+                    memo='Paid into the till before its source was recorded',
+                    cash_account=_gl.ACCOUNT_CASH)
     finally:
         conn.row_factory = previous_factory
 

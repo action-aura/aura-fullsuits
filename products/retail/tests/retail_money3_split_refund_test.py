@@ -197,19 +197,21 @@ def test_full_refund_of_a_30_cash_70_card_sale_pays_back_30_cash_and_70_card(cli
     x = _x(client, sid)
     assert x['cash_refunds'] == 30.0, x                 # NOT 100: the card part never touched the drawer
     assert x['expected_cash'] == 100.0, x               # 100 float + 30 cash sale - 30 cash refund
-    # The books: one journal, a line per leg, every line in the account post_sale debits for
-    # every tender (there is no per-method clearing account), trial balance balanced.
+    # The books: one journal, a line per leg, trial balance balanced. MONEY-5: each leg credits
+    # the account ITS METHOD lands in (cash -> 1010, card -> 1030), the mirror of post_sale.
     # (a second 'return' journal exists: the COGS/Inventory reversal. The refund's own journal is
-    # the one that credits Cash and Bank.)
+    # the one that credits the cash-like accounts.)
     j = _rows("SELECT DISTINCT j.id AS id FROM gl_journals j JOIN gl_journal_lines l ON l.journal_id=j.id "
               "JOIN gl_accounts a ON a.id=l.account_id "
-              "WHERE j.source_type='return' AND j.source_id=? AND a.code='1000' AND l.credit>0", (d['id'],))
+              "WHERE j.source_type='return' AND j.source_id=? AND a.code IN ('1010','1030') AND l.credit>0", (d['id'],))
     assert len(j) == 1
     lines = _rows("SELECT a.code AS code, l.credit AS credit, l.debit AS debit, l.memo AS memo "
                   "FROM gl_journal_lines l JOIN gl_accounts a ON a.id=l.account_id WHERE l.journal_id=? "
                   "ORDER BY l.id", (j[0]['id'],))
-    cash_credits = sorted((ln['memo'], ln['credit']) for ln in lines if ln['code'] == '1000')
-    assert cash_credits == [('Refunded via card', 70.0), ('Refunded via cash', 30.0)], lines
+    cash_credits = sorted((ln['memo'], ln['code'], ln['credit']) for ln in lines
+                          if ln['code'] in ('1000', '1010', '1030'))
+    assert cash_credits == [('Refunded via card', '1030', 70.0),
+                            ('Refunded via cash', '1010', 30.0)], lines
     tot = (_tb(client).get('totals') or {})
     if tot:
         assert round(float(tot['debit']) - float(tot['credit']), 3) == 0

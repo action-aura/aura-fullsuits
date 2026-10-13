@@ -921,10 +921,15 @@ def _cash_balance(balance_sheet_result):
     "reuse balance_sheet, never a second cash derivation" design -- see this
     module's docstring section on the reconciliation.
     """
+    # MONEY-5 (v55): "cash" is no longer one account. Tenders land in 1010 Cash in Drawer / 1020
+    # Bank / 1030 Card Clearing / 1040 CliQ-Wallet, and the pre-v55 history stays in 1000, so the
+    # statement's cash is the SUM over `gl.CASH_LIKE_CODES`. Reading only 1000 would show a shop's
+    # closing cash as zero the day it upgraded.
+    total = Decimal('0')
     for account in balance_sheet_result['assets']['accounts']:
-        if account['code'] == gl.ACCOUNT_CASH:
-            return Decimal(str(account['amount']))
-    return Decimal('0')
+        if account['code'] in gl.CASH_LIKE_CODES:
+            total += Decimal(str(account['amount']))
+    return total
 
 
 def cash_flow(conn, cid, start_date, end_date, branch_id=None):
@@ -1054,7 +1059,9 @@ def cash_flow(conn, cid, start_date, end_date, branch_id=None):
     # income_statement/balance_sheet both use (see either's own docstring,
     # point 4) -- short aliases (`gj`/`gjl`/`a`) inside this query only.
     branch_sql = ''
-    period_params = [cid, gl.ACCOUNT_CASH, cid, start_date, end_date]
+    # MONEY-5 (v55): every cash-like account, not just 1000 (see `_cash_balance`).
+    _cash_marks = ','.join('?' for _ in gl.CASH_LIKE_CODES)
+    period_params = [cid, *gl.CASH_LIKE_CODES, cid, start_date, end_date]
     if branch_id is not None:
         branch_sql = ' AND (gj.branch_id IS NULL OR gj.branch_id = ?)'
         period_params.append(branch_id)
@@ -1073,7 +1080,7 @@ def cash_flow(conn, cid, start_date, end_date, branch_id=None):
         "FROM gl_journal_lines gjl "
         "JOIN gl_journals gj ON gj.id = gjl.journal_id "
         "JOIN gl_accounts a ON a.id = gjl.account_id "
-        "WHERE gj.company_id = ? AND a.code = ? AND a.company_id = ? "
+        "WHERE gj.company_id = ? AND a.code IN (" + _cash_marks + ") AND a.company_id = ? "
         "AND gj.business_date >= ? AND gj.business_date <= ?"
         + branch_sql +
         " GROUP BY gj.source_type ORDER BY gj.source_type",

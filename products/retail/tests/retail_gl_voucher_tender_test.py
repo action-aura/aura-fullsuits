@@ -105,7 +105,8 @@ def test_pure_voucher_sale_debits_vouchers_outstanding_not_cash():
     lines = _lines(cid, 'sale', sale['id'])
     assert lines['2300'] == (Decimal('50'), Decimal('0')), lines
     assert lines['4000'] == (Decimal('0'), Decimal('50')), lines
-    assert '1000' not in lines, f'a voucher sale must book no cash: {lines}'
+    # MONEY-5: "no cash" now means NO cash-like account at all (1000/1010/1020/1030/1040).
+    assert not any(c in lines for c in gl.CASH_LIKE_CODES), f'a voucher sale must book no cash: {lines}'
     assert _trial_balance(cid)['total_debit'] == pytest.approx(_trial_balance(cid)['total_credit'])
 
 
@@ -114,7 +115,8 @@ def test_mixed_cash_and_voucher_sale_splits_the_debit_exactly():
     sale = _sale(admin, pid, tenders=[{'method': 'cash', 'amount': 30},
                                       {'method': 'voucher', 'amount': 20}])
     lines = _lines(cid, 'sale', sale['id'])
-    assert lines['1000'][0] == Decimal('30'), lines
+    assert lines['1010'][0] == Decimal('30'), lines          # MONEY-5: cash lands in Cash in Drawer
+    assert '1000' not in lines, lines
     assert lines['2300'][0] == Decimal('20'), lines
     assert lines['4000'][1] == Decimal('50'), lines
     # debits == credits across the document, to the fil
@@ -130,7 +132,7 @@ def test_refunding_a_voucher_sale_by_voucher_credits_vouchers_outstanding():
     assert ret['refund_method'] == 'voucher', ret
     lines = _lines(cid, 'return', ret['id'])
     assert lines['2300'] == (Decimal('0'), Decimal('50')), lines
-    assert '1000' not in lines, f'giving a voucher back must not credit cash: {lines}'
+    assert not any(c in lines for c in gl.CASH_LIKE_CODES), f'giving a voucher back must not credit cash: {lines}'
     # sale + full return net the liability to zero and the books balance
     tb = _trial_balance(cid)
     acct = {a['code']: a for a in tb['accounts']}
@@ -146,7 +148,7 @@ def test_the_voucher_leg_of_a_split_refund_credits_vouchers_outstanding():
                                                   {'method': 'cash', 'amount': 30}])
     lines = _lines(cid, 'return', ret['id'])
     assert lines['2300'][1] == Decimal('20'), lines
-    assert lines['1000'][1] == Decimal('30'), lines
+    assert lines['1010'][1] == Decimal('30'), lines          # MONEY-5: the cash leg leaves the drawer account
     assert _trial_balance(cid)['is_balanced'] is True
 
 
@@ -155,16 +157,19 @@ def test_a_cash_only_sale_and_split_refund_are_unchanged():
     admin, cid, pid = H._new_shop(price=50.0)
     sale = _sale(admin, pid, tenders=[{'method': 'cash', 'amount': 30}, {'method': 'card', 'amount': 20}])
     lines = _lines(cid, 'sale', sale['id'])
-    assert lines['1000'][0] == Decimal('50'), lines
+    # MONEY-5: a split cash+card sale debits the drawer and the card clearing account separately.
+    assert lines['1010'][0] == Decimal('30') and lines['1030'][0] == Decimal('20'), lines
+    assert '1000' not in lines, lines
     assert '2300' not in lines, lines
     ret = _return(admin, sale, pid, refund_legs=[{'method': 'card', 'amount': 20},
                                                   {'method': 'cash', 'amount': 30}])
     rlines = _lines(cid, 'return', ret['id'])
-    assert rlines['1000'][1] == Decimal('50'), rlines
+    assert rlines['1010'][1] == Decimal('30') and rlines['1030'][1] == Decimal('20'), rlines
+    assert '1000' not in rlines, rlines
     assert '2300' not in rlines, rlines
     cash = _sale(admin, pid, payment_method='cash', amount_paid=50)
     clines = _lines(cid, 'sale', cash['id'])
-    assert clines['1000'][0] == Decimal('50') and '2300' not in clines, clines
+    assert clines['1010'][0] == Decimal('50') and '2300' not in clines, clines
 
 
 def test_vouchers_outstanding_is_a_seeded_credit_normal_liability_and_is_added_to_old_charts():

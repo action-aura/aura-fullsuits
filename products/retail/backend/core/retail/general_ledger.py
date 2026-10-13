@@ -234,6 +234,72 @@ TENDER_VOUCHER = 'voucher'
 def _is_voucher(method):
     return str(method or '').strip().lower() == TENDER_VOUCHER
 
+
+# ── MONEY-5 (retail v55) / review #8: ONE ACCOUNT PER WAY OF GETTING PAID ──────────────────────
+# Until v55 every tender landed in 1000 "Cash and Bank", so the balance sheet could not say how
+# much was in the drawer, how much the card company still owed the shop, or how much was at the
+# bank, and a bank reconciliation was impossible. Four new asset accounts split it. Codes are the
+# planned chart's (docs/launch-readiness/target-chart-of-accounts.md reserved 1010-1080); names
+# are frozen once released, like every row of DEFAULT_CHART.
+#
+# ONLY JOURNALS POSTED FROM NOW ON use them. 1000 keeps every historical balance and is still a
+# legitimate account (an unknown tender, cheques clearing at the bank, an office cash expense);
+# a one-time reclass of the old balance into 1010 is a data decision, NOT made here (ROADMAP).
+ACCOUNT_CASH_DRAWER = '1010'     # notes and coins in the till: cash sales, cash refunds, paid-outs
+ACCOUNT_BANK = '1020'            # money at the bank: transfers, bank-paid expenses
+ACCOUNT_CARD_CLEARING = '1030'   # card sales the card company has not yet paid into the bank
+ACCOUNT_WALLET = '1040'          # CliQ / mobile wallet takings
+#: Cash rounding (review #3): the difference between what a cash sale was worth and the coins
+#: that actually changed hands. Either sign (a revenue account whose balance may be debit or
+#: credit), so post_sale balances by construction instead of absorbing fils into the drawer.
+ACCOUNT_CASH_ROUNDING = '4950'
+
+#: Every account a tender can land in and that the cash-flow statement and the void-matching
+#: lookups must treat as "cash and bank". 1030 is included on purpose: the cash-flow statement
+#: counted card takings as cash before the split, and a statement that silently changed meaning
+#: the day the accounts were split would not reconcile with its own history.
+CASH_LIKE_CODES = (ACCOUNT_CASH, ACCOUNT_CASH_DRAWER, ACCOUNT_BANK, ACCOUNT_CARD_CLEARING,
+                   ACCOUNT_WALLET)
+
+#: tender method (lower-case, as the till sends it) -> account. A method not listed lands in
+#: 1000 "Cash and Bank" (the old behaviour), never in a revenue or receivable account.
+TENDER_ACCOUNTS = {
+    'cash': ACCOUNT_CASH_DRAWER,
+    'card': ACCOUNT_CARD_CLEARING,
+    'mobile': ACCOUNT_WALLET, 'cliq': ACCOUNT_WALLET, 'wallet': ACCOUNT_WALLET,
+    'transfer': ACCOUNT_BANK, 'bank': ACCOUNT_BANK,
+    TENDER_VOUCHER: ACCOUNT_VOUCHERS_OUTSTANDING,
+}
+#: What a shop may point a payment method at with `payment_methods.gl_account_code`. A voucher
+#: is a liability and is NOT overridable: a till that could name any code could credit Sales.
+_TENDER_OVERRIDE_CODES = CASH_LIKE_CODES
+
+
+def tender_account(conn, cid, method):
+    """The GL account a tender `method` lands in for company `cid`.
+
+    Order: (1) the shop's own override on the matching `payment_methods` row (matched by its name,
+    case-insensitively, and only when the override is one of `CASH_LIKE_CODES`); (2) the built-in
+    `TENDER_ACCOUNTS` map; (3) 1000. `method=None` (a caller that does not know the tender: the
+    historic unit-test calls) is 1000, so a call that never said how it was paid keeps its old
+    journal byte for byte. Never raises: a database without the column or the table simply has no
+    override."""
+    m = str(method or '').strip().lower()
+    if not m:
+        return ACCOUNT_CASH
+    if m != TENDER_VOUCHER and conn is not None:
+        try:
+            row = conn.execute(
+                "SELECT gl_account_code FROM payment_methods WHERE company_id=? "
+                "AND lower(name)=? AND COALESCE(is_active,1)=1 "
+                "AND gl_account_code IS NOT NULL AND gl_account_code != '' LIMIT 1",
+                (cid, m)).fetchone()
+            if row and str(row[0]).strip() in _TENDER_OVERRIDE_CODES:
+                return str(row[0]).strip()
+        except Exception:
+            pass   # no table / no column yet: no override
+    return TENDER_ACCOUNTS.get(m, ACCOUNT_CASH)
+
 #: (code, name, account_type, normal_balance, parent_code). Parents are
 #: listed before children -- `ensure_default_chart` inserts in this order
 #: and resolves `parent_code` -> `parent_id` by looking the parent up, so a
@@ -306,6 +372,12 @@ DEFAULT_CHART = (
     ('6400', 'Marketing', 'expense', 'debit', None),
     ('6500', 'Bank and Card Fees', 'expense', 'debit', None),
     ('6900', 'Other Expenses', 'expense', 'debit', None),
+    # MONEY-5 (v55): names frozen once released. 1010-1040 split the tender; 4950 books cash rounding.
+    ('1010', 'Cash in Drawer', 'asset', 'debit', None),
+    ('1020', 'Bank', 'asset', 'debit', None),
+    ('1030', 'Card Clearing', 'asset', 'debit', None),
+    ('1040', 'CliQ / Wallet', 'asset', 'debit', None),
+    ('4950', 'Cash Rounding', 'revenue', 'credit', None),
 )
 
 # MONEY-4b / review defect D2 (retail v52): money that leaves the shop WITHOUT being a sale, a
@@ -1860,7 +1932,7 @@ def subledger_tie(conn, cid, tb):
 def post_sale(conn, cid, branch_id, sale_id, sale_number, currency,
               cash_amount, ar_amount, loyalty_redeemed_amount,
               tax_amount, revenue_amount, business_date=None, posted_by=None,
-              voucher_amount=0):
+              voucher_amount=0, tender_parts=None, rounding_amount=0):
     """Dr Cash (tender retained) + Dr Accounts Receivable (credit extended,
     ONLY when the caller's own `is_credit and balance_due > _eps and
     customer_id` gate already fired -- `ar_amount` must be exactly the
@@ -1891,12 +1963,42 @@ def post_sale(conn, cid, branch_id, sale_id, sale_number, currency,
     debited to Vouchers Outstanding (2300), the rest to Cash (1000). The two debits sum to
     `cash_amount` exactly (the voucher part is capped at it), so the journal balances exactly
     as before and a cash-only sale (voucher_amount 0) is byte-for-byte unchanged.
+
+    MONEY-5 / review #8 -- ONE DEBIT LINE PER WAY OF GETTING PAID. `tender_parts` is the list of
+    (method, amount) the sale RETAINED -- the very `payments` rows it wrote (split settlement
+    rows, or the single retained tender) -- and each lands in its own account via
+    `tender_account` (cash -> 1010 Cash in Drawer, card -> 1030 Card Clearing, mobile/CliQ ->
+    1040, transfer -> 1020 Bank, voucher -> 2300, anything else -> 1000). The lines sum to
+    `cash_amount`, so the journal balances exactly as before; only WHERE the debit sits changes.
+    `tender_parts=None` is the historic single-debit shape (1000 + the voucher split above), which
+    is what callers that never said how the sale was paid still get.
+
+    MONEY-5 / review #3 -- CASH ROUNDING. `rounding_amount` is `sales.rounding_amount`, signed:
+    cash retained minus cash owed (3.457 settled with 3.450 is -0.007). The tender lines already
+    carry the rounded cash, so the credits (tax + revenue = the whole total) exceed the debits by
+    exactly the rounding; account 4950 takes the other side (Dr when negative, Cr when positive)
+    and the journal balances BY CONSTRUCTION instead of through the epsilon.
     """
     lines = []
     voucher_part = Decimal('0')
-    if voucher_amount and voucher_amount > 0 and cash_amount and cash_amount > 0:
+    if tender_parts is not None:
+        by_account = {}
+        for method, amount in tender_parts:
+            amt = Decimal(str(amount or 0))
+            if amt <= 0:
+                continue
+            code = tender_account(conn, cid, method)
+            kept = by_account.setdefault(code, [Decimal('0'), []])
+            kept[0] += amt
+            if str(method) not in kept[1]:
+                kept[1].append(str(method))
+        for code, (amt, methods) in by_account.items():
+            memo = ('Paid by voucher (not cash)' if code == ACCOUNT_VOUCHERS_OUTSTANDING
+                    else 'Tender retained (' + ', '.join(methods) + ')')
+            lines.append({'account_code': code, 'debit': amt, 'memo': memo})
+    elif voucher_amount and voucher_amount > 0 and cash_amount and cash_amount > 0:
         voucher_part = min(Decimal(str(voucher_amount)), Decimal(str(cash_amount)))
-    if cash_amount and cash_amount > 0:
+    if tender_parts is None and cash_amount and cash_amount > 0:
         cash_part = Decimal(str(cash_amount)) - voucher_part
         if cash_part > 0:
             lines.append({'account_code': ACCOUNT_CASH, 'debit': cash_part,
@@ -1910,6 +2012,13 @@ def post_sale(conn, cid, branch_id, sale_id, sale_number, currency,
     if loyalty_redeemed_amount and loyalty_redeemed_amount > 0:
         lines.append({'account_code': ACCOUNT_LOYALTY_EXPENSE, 'debit': loyalty_redeemed_amount,
                        'memo': 'Loyalty points redeemed'})
+    _rounding = Decimal(str(rounding_amount or 0))
+    if _rounding < 0:
+        lines.append({'account_code': ACCOUNT_CASH_ROUNDING, 'debit': -_rounding,
+                       'memo': 'Cash rounding (customer paid less than the total)'})
+    elif _rounding > 0:
+        lines.append({'account_code': ACCOUNT_CASH_ROUNDING, 'credit': _rounding,
+                       'memo': 'Cash rounding (customer paid more than the total)'})
     if tax_amount and tax_amount > 0:
         lines.append({'account_code': ACCOUNT_TAX_PAYABLE, 'credit': tax_amount,
                        'memo': 'Sales tax collected'})
@@ -1931,7 +2040,8 @@ def post_sale(conn, cid, branch_id, sale_id, sale_number, currency,
 
 def post_return(conn, cid, branch_id, return_id, return_number, currency,
                  tender_refund_amount, ar_credit_amount, business_date=None,
-                 posted_by=None, tax_refunded=0, points_restored_value=0, tender_legs=None):
+                 posted_by=None, tax_refunded=0, points_restored_value=0, tender_legs=None,
+                 rounding_amount=0):
     """Cr Cash (cash physically refunded) + Cr Accounts Receivable
     (`ar_forgiven_amount + store_credit_amount` combined -- both are, in
     `_adjust_credit` terms, the SAME `-amount` adjustment to
@@ -1988,18 +2098,24 @@ def post_return(conn, cid, branch_id, return_id, return_number, currency,
     legs_cover_refund = bool(legs) and abs(
         sum(Decimal(str(lg['amount'])) for lg in legs)
         - Decimal(str(tender_refund_amount or 0))) < Decimal('0.0005')
-    if legs_cover_refund and (len(legs) > 1 or any(_is_voucher(lg.get('method')) for lg in legs)):
-        # MONEY-3 M1: one line per refund leg. Every tender method lands in ACCOUNT_CASH -- the
-        # SAME account post_sale debits for all methods (there is no per-method clearing account
-        # in this chart) -- so the totals are unchanged; the memo says which method paid back.
-        # MONEY-4a / D3: EXCEPT a voucher leg, which gives the voucher's value back to the holder
-        # and so credits Vouchers Outstanding (2300), mirroring post_sale. A single non-voucher
-        # leg still takes the historic single-line path below.
+    if legs_cover_refund:
+        # MONEY-3 M1: one line per refund leg; the memo says which method paid back.
+        # MONEY-4a / D3: a voucher leg gives the voucher's value back to the holder and so credits
+        # Vouchers Outstanding (2300), mirroring post_sale.
+        # MONEY-5 / #8: every other leg credits the account its METHOD lands in -- the mirror of
+        # post_sale's per-tender debit, so refunding a card sale in card pays down 1030 and a cash
+        # refund pays down 1010. Two legs of one account are merged into one line. A caller that
+        # passes NO legs (the unit-test shape) keeps the historic single 1000 line below.
+        by_account = {}
         for lg in legs:
-            code = ACCOUNT_VOUCHERS_OUTSTANDING if _is_voucher(lg.get('method')) else ACCOUNT_CASH
-            lines.append({'account_code': code, 'credit': lg['amount'],
-                           'memo': f"Refunded via {lg['method']}"})
-            settled += Decimal(str(lg['amount']))
+            code = tender_account(conn, cid, lg.get('method'))
+            kept = by_account.setdefault(code, [Decimal('0'), []])
+            kept[0] += Decimal(str(lg['amount']))
+            kept[1].append(str(lg['method']))
+        for code, (amt, methods) in by_account.items():
+            lines.append({'account_code': code, 'credit': amt,
+                           'memo': 'Refunded via ' + ', '.join(methods)})
+            settled += amt
     elif tender_refund_amount and tender_refund_amount > 0:
         lines.append({'account_code': ACCOUNT_CASH, 'credit': tender_refund_amount,
                        'memo': 'Cash refunded'})
@@ -2021,21 +2137,33 @@ def post_return(conn, cid, branch_id, return_id, return_number, currency,
         # ledgers staying in sync, not a gap.
         return None
     quant = currency_quantum(currency or DEFAULT_BASE_CURRENCY)
+    # MONEY-5 / review #3: the cash leg may have been re-rounded to real coins. `rounding_amount`
+    # is the signed difference (cash handed back minus what the goods were worth): the goods
+    # value reversed is `settled - rounding`, and 4950 takes the other side, so a sale rounded
+    # down by 0.007 and then returned in full nets to zero on 4950. 0 changes nothing.
+    _rounding = Decimal(str(rounding_amount or 0))
+    goods_value = settled - _rounding
     # Defensive only: the caller already capped it at `settled`.
     tax_part = max(Decimal('0'), min(
-        Decimal(str(tax_refunded or 0)).quantize(quant, rounding=ROUND_HALF_UP), settled))
+        Decimal(str(tax_refunded or 0)).quantize(quant, rounding=ROUND_HALF_UP), goods_value))
     if tax_part > 0:
         lines.append({'account_code': ACCOUNT_TAX_PAYABLE, 'debit': tax_part,
                        'memo': f'Tax on return {return_number}'})
-    lines.append({'account_code': ACCOUNT_SALES_RETURNS, 'debit': settled - tax_part,
+    lines.append({'account_code': ACCOUNT_SALES_RETURNS, 'debit': goods_value - tax_part,
                    'memo': f'Return {return_number}'})
+    if _rounding < 0:
+        lines.append({'account_code': ACCOUNT_CASH_ROUNDING, 'credit': -_rounding,
+                       'memo': 'Cash rounding on refund (customer got back less than the goods)'})
+    elif _rounding > 0:
+        lines.append({'account_code': ACCOUNT_CASH_ROUNDING, 'debit': _rounding,
+                       'memo': 'Cash rounding on refund (customer got back more than the goods)'})
     return post_journal(conn, cid, branch_id, business_date or _today(),
                          'return', return_id, currency, lines,
                          reference=return_number, posted_by=posted_by)
 
 
 def post_customer_payment(conn, cid, branch_id, reference, currency, amount,
-                           business_date=None, posted_by=None, source_uid=None):
+                           business_date=None, posted_by=None, source_uid=None, method=None):
     """Dr Cash / Cr Accounts Receivable -- a customer paying down what they
     owe. `amount` must be the exact figure already passed to both
     `_record_payment` and `_adjust_credit` at the call site (customer_
@@ -2044,11 +2172,15 @@ def post_customer_payment(conn, cid, branch_id, reference, currency, amount,
     `source_uid` (F3b) is the PAYMENT ROW'S OWN `uid`. It is the source link
     a later void finds this journal by -- never by reference plus amount,
     because reference counters are per-device and collide across tills.
+
+    `method` (MONEY-5 / #8): how the customer paid; the debit lands in that method's account
+    (`tender_account`). None keeps the historic 1000.
     """
     if not amount or amount <= 0:
         return None
     lines = [
-        {'account_code': ACCOUNT_CASH, 'debit': amount, 'memo': 'Customer payment received'},
+        {'account_code': tender_account(conn, cid, method), 'debit': amount,
+         'memo': 'Customer payment received'},
         {'account_code': ACCOUNT_AR, 'credit': amount, 'memo': 'Accounts receivable settled'},
     ]
     return post_journal(conn, cid, branch_id, business_date or _today(),
@@ -2059,7 +2191,7 @@ def post_customer_payment(conn, cid, branch_id, reference, currency, amount,
 
 def post_supplier_payment(conn, cid, branch_id, reference, currency, amount,
                            source_type='supplier_payment', source_id=None,
-                           business_date=None, posted_by=None, source_uid=None):
+                           business_date=None, posted_by=None, source_uid=None, method=None):
     """Dr Accounts Payable / Cr Cash -- the shop paying down what it owes a
     supplier. ONE helper for BOTH `supplier_payment` (a direct account
     payment, `source_id=None`) and `pay_purchase_order` (an instalment
@@ -2072,12 +2204,15 @@ def post_supplier_payment(conn, cid, branch_id, reference, currency, amount,
     `source_uid` (F3b): the payment row's own `uid`, the source link a later
     void finds this journal by (`source_id` cannot be it: every instalment
     against one PO shares the PO's `source_id`).
+
+    `method` (MONEY-5 / #8): how the shop paid; the credit leaves that method's account.
     """
     if not amount or amount <= 0:
         return None
     lines = [
         {'account_code': ACCOUNT_AP, 'debit': amount, 'memo': 'Accounts payable settled'},
-        {'account_code': ACCOUNT_CASH, 'credit': amount, 'memo': 'Payment to supplier'},
+        {'account_code': tender_account(conn, cid, method), 'credit': amount,
+         'memo': 'Payment to supplier'},
     ]
     return post_journal(conn, cid, branch_id, business_date or _today(),
                          source_type, source_id, currency, lines,
@@ -2524,7 +2659,7 @@ def post_po_receipt_for(conn, cid, branch_id, po_row, receipt_uid, value, curren
 
 
 def post_po_prepayment(conn, cid, branch_id, po_id, has_supplier, amount, pay_uid, currency,
-                       reference=None, posted_by=None, business_date=None):
+                       reference=None, posted_by=None, business_date=None, method=None):
     """Cash paid against a 'receipt'-basis order (down payment at create, or a
     later instalment): Dr Accounts Payable (Dr Goods Ordered when the order has
     no supplier) / Cr Cash. A standalone journal, source_type 'po_payment',
@@ -2539,7 +2674,8 @@ def post_po_prepayment(conn, cid, branch_id, po_id, has_supplier, amount, pay_ui
     lines = [
         {'account_code': ACCOUNT_AP if has_supplier else ACCOUNT_GOODS_ORDERED, 'debit': amount,
          'memo': 'Paid to supplier on purchase order'},
-        {'account_code': ACCOUNT_CASH, 'credit': amount, 'memo': 'Payment to supplier'},
+        {'account_code': tender_account(conn, cid, method), 'credit': amount,
+         'memo': 'Payment to supplier'},
     ]
     return post_journal(conn, cid, branch_id, business_date or _today(), 'po_payment', po_id, currency, lines,
                         reference=reference, posted_by=posted_by, source_uid=pay_uid)
@@ -2861,7 +2997,8 @@ def expense_journal_uid(expense_uid):
 
 
 def _post_cash_out(conn, cid, uid, branch_id, amount, account_code, currency, business_date,
-                   source_type, source_uid, reference, memo, posted_by):
+                   source_type, source_uid, reference, memo, posted_by,
+                   cash_account=ACCOUNT_CASH_DRAWER):
     if account_code not in PAID_OUT_ACCOUNT_CODES:
         raise GeneralLedgerAccountError(
             f"{source_type} account {account_code!r} is not one of {PAID_OUT_ACCOUNT_CODES}")
@@ -2869,15 +3006,19 @@ def _post_cash_out(conn, cid, uid, branch_id, amount, account_code, currency, bu
     if amt <= _gl_epsilon(currency):
         return None
     jl = [{'account_code': account_code, 'debit': amt, 'memo': memo},
-          {'account_code': ACCOUNT_CASH, 'credit': amt, 'memo': memo}]
+          {'account_code': cash_account, 'credit': amt, 'memo': memo}]
     return _post_once(conn, cid, uid, branch_id, business_date or _today(), source_type, None,
                       currency, jl, reference=reference, memo=memo, posted_by=posted_by,
                       source_uid=str(source_uid))
 
 
 def post_drawer_paid_out(conn, cid, branch_id, movement_id, amount, account_code, currency,
-                         business_date=None, reference=None, memo=None, posted_by=None):
-    """A drawer paid-out reaches the books: Dr `account_code` / Cr 1000, ONCE.
+                         business_date=None, reference=None, memo=None, posted_by=None,
+                         cash_account=ACCOUNT_CASH_DRAWER):
+    """A drawer paid-out reaches the books: Dr `account_code` / Cr 1010 Cash in Drawer, ONCE
+    (MONEY-5: it was 1000 before the tender split; `cash_account=ACCOUNT_CASH` is the legacy era
+    and is what the v52 catch-up passes, so an old paid-out lands beside the old sales it left).
+
 
     Keyed on the MOVEMENT's id (cash_movements.id), so a retried request, the v52 catch-up and
     the live path can never book the same movement twice. `account_code` MUST be in
@@ -2887,12 +3028,14 @@ def post_drawer_paid_out(conn, cid, branch_id, movement_id, amount, account_code
     "Cash and Bank" combined, so the total does not change."""
     return _post_cash_out(conn, cid, cash_movement_journal_uid(movement_id), branch_id, amount,
                           account_code, currency, business_date, 'cash_movement', movement_id,
-                          reference, memo, posted_by)
+                          reference, memo, posted_by, cash_account=cash_account)
 
 
 def post_drawer_paid_in(conn, cid, branch_id, movement_id, amount, account_code, currency,
-                        business_date=None, reference=None, memo=None, posted_by=None):
-    """A drawer paid-in reaches the books: Dr 1000 / Cr `account_code`, ONCE, keyed on the
+                        business_date=None, reference=None, memo=None, posted_by=None,
+                        cash_account=ACCOUNT_CASH_DRAWER):
+    """A drawer paid-in reaches the books: Dr 1010 Cash in Drawer (MONEY-5; legacy 1000 via
+    `cash_account`) / Cr `account_code`, ONCE, keyed on the
     MOVEMENT's id (the same uid function as a paid-out: a movement is one type or the other, so
     the key cannot collide). `account_code` must be in PAID_IN_ACCOUNT_CODES; the caller
     validates and defaults it (an old build sends none: 4800). A supplier payment's cancellation
@@ -2904,7 +3047,7 @@ def post_drawer_paid_in(conn, cid, branch_id, movement_id, amount, account_code,
     amt = Decimal(str(amount))
     if amt <= _gl_epsilon(currency):
         return None
-    jl = [{'account_code': ACCOUNT_CASH, 'debit': amt, 'memo': memo},
+    jl = [{'account_code': cash_account, 'debit': amt, 'memo': memo},
           {'account_code': account_code, 'credit': amt, 'memo': memo}]
     return _post_once(conn, cid, cash_movement_journal_uid(movement_id), branch_id,
                       business_date or _today(), 'cash_movement', None, currency, jl,
@@ -2912,14 +3055,22 @@ def post_drawer_paid_in(conn, cid, branch_id, movement_id, amount, account_code,
                       source_uid=str(movement_id))
 
 
+#: MONEY-5 / #8: where an expense's money comes from. Office cash (a safe, an envelope) is NOT the
+#: till drawer, so it stays in 1000 "Cash and Bank" exactly as MONEY-4b booked it; money paid from
+#: the bank, or on the shop's bank-linked card, leaves 1020 Bank. (A card that settles later is not
+#: 1030: that account is what the card COMPANY owes the shop for card SALES.)
+EXPENSE_PAID_VIA_ACCOUNTS = {'cash_office': ACCOUNT_CASH, 'bank': ACCOUNT_BANK, 'card': ACCOUNT_BANK}
+
+
 def post_expense(conn, cid, branch_id, expense_uid, amount, account_code, currency,
-                 business_date=None, reference=None, memo=None, posted_by=None):
-    """An expense not paid from the drawer: Dr `account_code` / Cr 1000, once, keyed on the
-    expense's uid. `paid_via` (office cash, bank, card) does not change the entry: this chart has
-    ONE "Cash and Bank" account (see ACCOUNT_CASH)."""
+                 business_date=None, reference=None, memo=None, posted_by=None, paid_via=None):
+    """An expense not paid from the drawer: Dr `account_code` / Cr the account `paid_via` names
+    (`EXPENSE_PAID_VIA_ACCOUNTS`: bank/card -> 1020 Bank, office cash or unknown -> 1000), once,
+    keyed on the expense's uid."""
     return _post_cash_out(conn, cid, expense_journal_uid(expense_uid), branch_id, amount,
                           account_code, currency, business_date, 'expense', expense_uid,
-                          reference, memo, posted_by)
+                          reference, memo, posted_by,
+                          cash_account=EXPENSE_PAID_VIA_ACCOUNTS.get(str(paid_via or ''), ACCOUNT_CASH))
 
 
 def inventory_tie(conn, cid, tb):

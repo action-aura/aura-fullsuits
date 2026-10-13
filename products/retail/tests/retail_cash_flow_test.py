@@ -488,7 +488,8 @@ def test_reconciliation_holds_and_closing_agrees_with_balance_sheet(client):
     # is asserted here against a SEPARATE call, not against cash_flow's own
     # reconciliation block (which could theoretically lie about itself).
     bs = _balance_sheet(cid, today)
-    bs_cash = next(a['amount'] for a in bs['assets']['accounts'] if a['code'] == gl.ACCOUNT_CASH)
+    # MONEY-5: "cash" is the sum over every cash-like account (1000 history + 1010/1020/1030/1040).
+    bs_cash = round(sum(a['amount'] for a in bs['assets']['accounts'] if a['code'] in gl.CASH_LIKE_CODES), 3)
     assert bs_cash == cf['closing_cash']
 
 
@@ -547,7 +548,8 @@ def test_reconciliation_holds_across_a_multi_document_session(client):
     assert final['net_change_in_cash'] == 30.0
 
     bs = _balance_sheet(cid, today)
-    bs_cash = next(a['amount'] for a in bs['assets']['accounts'] if a['code'] == gl.ACCOUNT_CASH)
+    # MONEY-5: "cash" is the sum over every cash-like account (1000 history + 1010/1020/1030/1040).
+    bs_cash = round(sum(a['amount'] for a in bs['assets']['accounts'] if a['code'] in gl.CASH_LIKE_CODES), 3)
     assert bs_cash == final['closing_cash']
 
 
