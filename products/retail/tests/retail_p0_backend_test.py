@@ -1096,7 +1096,10 @@ def test_trial_balance_as_of_excludes_a_future_dated_sale_and_closings_are_equal
     data = filtered.get_json()['data']
     assert data['as_of'] == as_of
 
-    cash = next(a for a in data['accounts'] if a['code'] == gl.ACCOUNT_CASH)
+    # MONEY-5 (v55): a cash sale now debits 1010 Cash in Drawer, not the old combined
+    # 1000 Cash and Bank, so this trial-balance check reads the drawer account. The
+    # as_of/date-boundary behaviour it pins is unchanged.
+    cash = next(a for a in data['accounts'] if a['code'] == gl.ACCOUNT_CASH_DRAWER)
     # day-before (50) + on-the-day (50) = 100; day-after (50) excluded.
     assert cash['debit'] == 100.0, (
         f"expected 100.0 (day-before + on-the-day; day-after excluded), got {cash['debit']}")
@@ -1122,7 +1125,7 @@ def test_trial_balance_route_is_byte_compatible_when_as_of_is_omitted(client):
     data = r.get_json()['data']
     assert data['is_balanced'] is True
     assert data['as_of'] is None
-    cash = next(a for a in data['accounts'] if a['code'] == gl.ACCOUNT_CASH)
+    cash = next(a for a in data['accounts'] if a['code'] == gl.ACCOUNT_CASH_DRAWER)
     assert cash['debit'] == 20.0
 
 
@@ -1171,8 +1174,8 @@ def test_trial_balance_non_padded_as_of_matches_the_padded_one(client, monkeypat
     # reassignment, not merely a query that happens to still work.
     assert non_padded_data['as_of'] == '2026-09-01', non_padded_data['as_of']
 
-    padded_cash = next(a for a in padded_data['accounts'] if a['code'] == gl.ACCOUNT_CASH)['debit']
-    non_padded_cash = next(a for a in non_padded_data['accounts'] if a['code'] == gl.ACCOUNT_CASH)['debit']
+    padded_cash = next(a for a in padded_data['accounts'] if a['code'] == gl.ACCOUNT_CASH_DRAWER)['debit']
+    non_padded_cash = next(a for a in non_padded_data['accounts'] if a['code'] == gl.ACCOUNT_CASH_DRAWER)['debit']
     assert padded_cash == non_padded_cash == 30.0, (
         f"a non-padded as_of must return the SAME totals as the padded one, excluding the "
         f"Oct-15 sale in both: padded={padded_cash}, non_padded={non_padded_cash}")
@@ -1180,7 +1183,7 @@ def test_trial_balance_non_padded_as_of_matches_the_padded_one(client, monkeypat
     # Sanity: the Oct-15 sale is real and genuinely excluded, not merely
     # absent -- the all-time (no as_of) total must include both sales.
     no_filter = client.get(f'{API}/reports/trial-balance')
-    all_time_cash = next(a for a in no_filter.get_json()['data']['accounts'] if a['code'] == gl.ACCOUNT_CASH)['debit']
+    all_time_cash = next(a for a in no_filter.get_json()['data']['accounts'] if a['code'] == gl.ACCOUNT_CASH_DRAWER)['debit']
     assert all_time_cash == 60.0, all_time_cash
 
 
