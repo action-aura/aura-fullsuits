@@ -49,6 +49,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Optional
 
+from . import store
+
 # Kept deliberately modest. Pruning is housekeeping that runs beside real till
 # traffic on the same single-writer SQLite connection, so it takes the write
 # lock; a huge DELETE would hold it long enough to be felt at the counter.
@@ -122,25 +124,18 @@ def safe_prune_watermark(conn: sqlite3.Connection, *, extra_floors=()) -> int:
     if not installation_ids:
         watermark = max(0, forwarded_to)
     else:
-        placeholders = ",".join("?" for _ in installation_ids)
-        cursor_rows = conn.execute(
-            f"SELECT installation_id, last_seq FROM site_device_cursors "
-            f"WHERE installation_id IN ({placeholders})",
-            installation_ids,
-        ).fetchall()
-        by_id = {
-            (r["installation_id"] if isinstance(r, sqlite3.Row) else r[0]):
-            int(r["last_seq"] if isinstance(r, sqlite3.Row) else r[1])
-            for r in cursor_rows
-        }
-
         slowest = None
         for installation_id in installation_ids:
-            # .get(..., 0) is load-bearing, not defensive padding: a paired
-            # device with no cursor row is at 0, and that must pin the whole
-            # watermark to 0. Skipping such devices instead would prune away
-            # precisely the history a brand-new device has not collected yet.
-            position = by_id.get(installation_id, 0)
+            # `device_position` is 0 for a paired device with no cursor row,
+            # and that is load-bearing, not defensive padding: it must pin the
+            # whole watermark to 0. Skipping such devices instead would prune
+            # away precisely the history a brand-new device has not collected
+            # yet. Since v56 a device has one row PER STREAM and its position
+            # is min(retail, registry) with a missing stream = 0 (see
+            # `store.position_from_streams`): the old single-row MAX-by-upsert
+            # let the faster stream carry the watermark past events the slower
+            # stream had never applied, which is the silent-loss shape.
+            position = store.device_position(conn, installation_id)
             slowest = position if slowest is None else min(slowest, position)
 
         watermark = max(0, min(slowest, forwarded_to))
@@ -174,13 +169,30 @@ def prune_site_log(conn: sqlite3.Connection, *, batch=DEFAULT_PRUNE_BATCH,
     if watermark <= 0:
         return 0
 
+    # The highest seq this batch will REALLY delete, read before the DELETE so
+    # `pruned_through_seq` is raised to exactly what is gone and no further
+    # (SYNC-BOOT Phase 2). Never inferred from `watermark`: a watermark over an
+    # empty or already-pruned log deletes nothing, and recording it anyway would
+    # tell every device below it to resync for events that never existed -- the
+    # same over-claim Owner's first backfill made and had to remove. Same
+    # transaction as the DELETE (the caller commits both or neither), so a crash
+    # can never leave rows deleted with no record, or a record with rows intact.
+    top = conn.execute(
+        "SELECT MAX(seq) FROM ("
+        "  SELECT seq FROM site_sync_events WHERE seq <= ? ORDER BY seq LIMIT ?"
+        ")",
+        (watermark, batch),
+    ).fetchone()[0]
     cursor = conn.execute(
         "DELETE FROM site_sync_events WHERE seq IN ("
         "  SELECT seq FROM site_sync_events WHERE seq <= ? ORDER BY seq LIMIT ?"
         ")",
         (watermark, batch),
     )
-    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+    deleted = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+    if deleted and top is not None:
+        store.record_pruned_through(conn, int(top))
+    return deleted
 
 
 def prune_nonces_and_log(conn: sqlite3.Connection, *, nonce_ttl_seconds,

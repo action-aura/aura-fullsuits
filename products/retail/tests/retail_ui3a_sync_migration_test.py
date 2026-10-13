@@ -86,11 +86,16 @@ def _cols(conn, table):
     return {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
 
 
-def test_a_fresh_install_has_the_three_columns_and_is_stamped_54(get_conn):
+def test_a_fresh_install_has_the_three_columns_and_is_stamped_with_the_current_version(get_conn):
     conn = get_conn()
     try:
-        assert schema.RETAIL_SCHEMA_VERSION == 54
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 54
+        # SYNC-BOOT Phase 2 moved the constant 54 -> 56 on this branch (v55 is MONEY-5's, not merged
+        # here; at merge this becomes 56 either way). This test's job is the v54 COLUMNS, which the
+        # loop below still checks column by column; it never guarded the number 54 itself. What this
+        # edit can no longer catch: the stamp being exactly 54. The stamp is pinned (to 56) by
+        # retail_site_stream_cursors_migration_test.py::test_a_fresh_install_is_stamped_56.
+        assert schema.RETAIL_SCHEMA_VERSION >= 54
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == schema.RETAIL_SCHEMA_VERSION
         for table, col in NEW_COLS:
             assert col in _cols(conn, table), (table, col)
     finally:
