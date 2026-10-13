@@ -195,3 +195,56 @@ def run_if_due(reg: sqlite3.Connection, company_id: str, *, app_data_dir,
                        exc_info=True)
         report["why"] = "error"
         return report
+
+
+def force_main_reannounce(reg: sqlite3.Connection, company_id: str, *, app_data_dir,
+                          retail_emit: Optional[RetailEmitter] = None) -> dict:
+    """Re-announce the shop's authority state NOW, because a computer asked for a
+    bootstrap (SYNC-BOOT Phase 2). `run_if_due` answers "has this computer done
+    its once-per-epoch announce"; this answers "somebody joined or fell behind
+    and needs the CURRENT state, signed, after the point it fast-forwarded to".
+    It must therefore run every time it is asked: the new computer's registry
+    cursor was moved to the log's end at ITS request, so a re-announce made
+    earlier (even a moment earlier, for another computer) sits behind that cursor
+    and the new computer would never see it.
+
+    ONLY THE MAIN COMPUTER DOES ANYTHING. Everyone else is not entitled to speak
+    for the shop's staff or till numbers (`authority.authority_refusal` would
+    park what it sent), so a non-main computer that sees a request returns
+    `ran=False, why='not_main'` and sends nothing. A computer that cannot sign
+    sends nothing either: unsigned authority events are parked by every peer.
+
+    Same emitters, same versions, no bump -- a statement of what is already true,
+    exactly as `run_if_due`. Does NOT touch the once-per-epoch marker (that is
+    `run_if_due`'s record of its own, separate duty). NEVER raises."""
+    report = {"ran": False, "why": None, "registry_events": 0, "retail_events": 0}
+    try:
+        app = Path(app_data_dir)
+        device_id = authority._local_device_id(app)
+        if not device_id:
+            report["why"] = "no_local_device_id"
+            return report
+        from commercial_runtime.identity.device_registry import get_assignment
+        assignment = get_assignment(reg, company_id)
+        if not (assignment and str(assignment["device_id"]) == device_id):
+            report["why"] = "not_main"
+            return report
+        if authority.local_signer_or_none(app) is None:
+            report["why"] = "no_signer"
+            return report
+        report["registry_events"] = queue_registry_state(reg, company_id, device_id, is_main=True)
+        try:
+            if retail_emit is not None:
+                report["retail_events"] = int(retail_emit(True, device_id) or 0)
+            reg.commit()
+        except Exception:
+            reg.rollback()
+            raise
+        report["ran"] = True
+        logger.info("authority re-announce (bootstrap request): queued %d registry and %d retail events",
+                    report["registry_events"], report["retail_events"])
+        return report
+    except Exception:  # noqa: BLE001 -- see docstring: a till must keep running
+        logger.warning("forced authority re-announce failed; the requester will ask again", exc_info=True)
+        report["why"] = "error"
+        return report

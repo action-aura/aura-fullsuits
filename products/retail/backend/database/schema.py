@@ -1427,7 +1427,15 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # `ensure_default_chart`, like every account before them, so they need no schema step. Existing
 # journals are NOT rewritten: only journals posted from now on land in the new accounts.
 # Appended LAST and shape-gated.
-RETAIL_SCHEMA_VERSION = 55
+# v56 (2026-10-13, SYNC-BOOT Phase 2 -- claimed in ROADMAP.md "retail schema v56 CLAIMED"): the LAN hub can tell a
+# device it is too far behind. `site_device_cursors` is rebuilt with PRIMARY KEY (installation_id, stream) (the *_new
+# idiom; existing rows become stream 'legacy'), because a device runs TWO streams (retail + registry) over one hub log
+# and one cursor per device let the faster stream drive pruning past events the slower never applied. And
+# `site_prune_state (id=1, pruned_through_seq, site_log_floor)` records how far the site log has really been pruned
+# and from which seq it is complete: a pull below either is answered 409 RESYNC_REQUIRED instead of a silent partial
+# history. No other table; no data backfill (pruned_through 0 = nothing pruned yet, which is true of every hub that
+# ran with the SYNC-JOIN 0-floor stop-gap).
+RETAIL_SCHEMA_VERSION = 56
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1589,6 +1597,41 @@ def _is_standalone():
 
 def get_retail_conn():
     return _conn('retail')
+
+
+def migrate_retail_file(path):
+    """Bring the retail.db FILE at `path` up to this build's schema (SYNC-BOOT Phase 2: a bootstrap
+    copy taken from a computer on an OLDER build, staged for install).
+
+    The only machinery this codebase has for "migrate a retail database" is `init_retail`, which
+    works on the process-wide `BASE_DIR`/`SUBSYS_DIR`. So this copies the file into a private
+    directory, points those two globals at it for the duration, runs the REAL `init_retail`
+    (base DDL, `ensure_schema_version` with its backup and integrity checks, the boot-time
+    reconciliations), restores the globals, and copies the migrated file back. NOT thread-safe by
+    construction -- the globals are swapped -- which is why the installer calls it only at start-up
+    (`apply_staged`), before the app serves a request or starts a sync thread. A failure raises and
+    leaves the original file at `path` untouched."""
+    import shutil
+    import tempfile
+    global BASE_DIR, SUBSYS_DIR
+    saved = (BASE_DIR, SUBSYS_DIR)
+    with tempfile.TemporaryDirectory(prefix='aura-bootstrap-migrate-') as tmp:
+        sub = os.path.join(tmp, 'subsystems')
+        os.makedirs(sub)
+        work = os.path.join(sub, 'retail.db')
+        shutil.copyfile(path, work)
+        BASE_DIR, SUBSYS_DIR = tmp, sub
+        try:
+            init_retail()
+        finally:
+            BASE_DIR, SUBSYS_DIR = saved
+        conn = sqlite3.connect(work)
+        try:
+            conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            conn.execute('PRAGMA journal_mode = DELETE')
+        finally:
+            conn.close()
+        shutil.copyfile(work, path)
 
 
 def sub_create(conn_fn, table, data):
@@ -2631,6 +2674,72 @@ def _migrate_retail_schema(conn):
     # payment_methods.gl_account_code); nothing above derives from them. See the v55 comment on
     # RETAIL_SCHEMA_VERSION.
     _migrate_add_money5_tender_columns(conn)
+    # v54 -> v56 (SYNC-BOOT Phase 2; v55 is MONEY-5's, see the comment on RETAIL_SCHEMA_VERSION): the v56
+    # step has NO call of its own here. It touches only site_device_cursors / site_prune_state, and it is
+    # called from the END of `_migrate_add_site_relay` (the step that creates those tables, earlier in this
+    # chain, which runs on every upgrade): hub tests and tools build a hub database with that step alone and
+    # need the v56 shape from it, and a second call here could only ever be a no-op (shape-gated). A
+    # mutation that removed this second call survived for exactly that reason, so it was removed.
+
+
+def _migrate_add_site_stream_cursors_and_prune_state(conn):
+    """One-time migration (schema -> v56, SYNC-BOOT Phase 2). See the v56 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    1. `site_device_cursors` -> PRIMARY KEY (installation_id, stream), by the *_new idiom: build
+       `site_device_cursors_new`, copy every row across with stream 'legacy' (a row written before
+       this step has no stream, and 'legacy' is what a pull that names none still means), drop the
+       old table, rename. SQLite cannot change a primary key in place. Shape-gated: a table that
+       already has a `stream` column is left alone, so replaying the chain is byte-identical, and a
+       stray `_new` left by a crash mid-rebuild is dropped and rebuilt (the whole step runs in
+       ensure_schema_version's transaction, so this is belt-and-braces).
+    2. `site_prune_state` (single row, id=1): `pruned_through_seq` = highest site-log seq ever
+       deleted by housekeeping (0 = never pruned); `site_log_floor` = the lowest seq a device may
+       pull from without needing a fresh copy of the shop (0 = the log is complete from the
+       start). Seeded with 0/0: no hub has pruned yet under the SYNC-JOIN stop-gap, so claiming
+       anything else would tell every device to resync for nothing.
+
+    Queues no sync event: both tables are hub-local (site_* never travel)."""
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'site_device_cursors' in live:
+        cols = {row[1] for row in conn.execute('PRAGMA table_info(site_device_cursors)').fetchall()}
+        if 'stream' not in cols:
+            conn.execute('DROP TABLE IF EXISTS site_device_cursors_new')
+            conn.execute("""
+                CREATE TABLE site_device_cursors_new (
+                    installation_id TEXT NOT NULL,
+                    stream          TEXT NOT NULL DEFAULT 'legacy', -- retail | registry | all | legacy (a pull that named none)
+                    last_seq        INTEGER NOT NULL DEFAULT 0,      -- highest site_sync_events.seq this device has acked ON THIS STREAM
+                    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (installation_id, stream)
+                )
+            """)
+            conn.execute(
+                "INSERT INTO site_device_cursors_new (installation_id, stream, last_seq, updated_at) "
+                "SELECT installation_id, 'legacy', last_seq, updated_at FROM site_device_cursors")
+            conn.execute('DROP TABLE site_device_cursors')
+            conn.execute('ALTER TABLE site_device_cursors_new RENAME TO site_device_cursors')
+    else:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS site_device_cursors (
+                installation_id TEXT NOT NULL,
+                stream          TEXT NOT NULL DEFAULT 'legacy',
+                last_seq        INTEGER NOT NULL DEFAULT 0,
+                updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (installation_id, stream)
+            )
+        """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS site_prune_state (
+            id                 INTEGER PRIMARY KEY CHECK (id = 1), -- single-row idiom, matches sync_cursor
+            pruned_through_seq INTEGER NOT NULL DEFAULT 0,          -- highest site_sync_events.seq housekeeping has really deleted
+            site_log_floor     INTEGER NOT NULL DEFAULT 0,          -- a device whose cursor is below this needs a fresh copy of the shop
+            updated_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute(
+        'INSERT OR IGNORE INTO site_prune_state (id, pruned_through_seq, site_log_floor) VALUES (1, 0, 0)')
 
 
 def _migrate_credit_mode_inherit(conn):
@@ -8257,6 +8366,13 @@ def _migrate_add_site_relay(conn):
             verified_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP    -- this hub's own clock; diagnostic only
         )
     """)
+
+    # v56 (SYNC-BOOT Phase 2): the hub's per-stream cursors and prune state. Called from HERE as well
+    # as from the end of the chain because several hub tests (and any tool) build a hub database with
+    # this step alone; the hub code now reads `site_device_cursors.stream` and `site_prune_state`,
+    # and a database built by this step alone must have them. Shape-gated and idempotent, so the
+    # chain reaching it a second time (v56 proper) changes nothing.
+    _migrate_add_site_stream_cursors_and_prune_state(conn)
 
 
 def load_sync_freshness(conn) -> dict:

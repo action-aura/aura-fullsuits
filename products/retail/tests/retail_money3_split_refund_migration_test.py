@@ -256,7 +256,7 @@ def test_a_database_stamped_51_without_legs_is_not_repaired_by_the_chain(shop):
     # it caught before: the chain re-running steps on a DB whose stamp equals the head. What it
     # can no longer catch: a v51-stamped DB missing its legs being left unrepaired -- that is
     # now an ordinary 51 -> 52 upgrade, covered by the v51 steps' own replay tests.
-    conn = sqlite3.connect(db); conn.execute("PRAGMA user_version = 55"); conn.commit(); conn.close()  # v55 UPDATE: head moved 54 -> 55 (MONEY-5); v55's own shape is pinned by retail_money5_migration_test.py. | earlier: v54 UPDATE: head moved 53 -> 54 (UI-3a): 'a DB already AT the target version' is now stamped 54
+    conn = sqlite3.connect(db); conn.execute("PRAGMA user_version = 56"); conn.commit(); conn.close()  # v56 UPDATE: head moved 54 -> 56 (SYNC-BOOT Phase 2; v55 is MONEY-5's and is not on this line of history); v56's own shape is pinned by retail_site_stream_cursors_migration_test. Same exact-number pin as before.  # v54 UPDATE: head moved 53 -> 54 (UI-3a): 'a DB already AT the target version' is now stamped 54
     _migrate(db)
     conn = sqlite3.connect(db)
     try:

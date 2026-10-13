@@ -86,11 +86,11 @@ def _cols(conn, table):
     return {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
 
 
-def test_a_fresh_install_has_the_three_columns_and_is_stamped_54(get_conn):
+def test_a_fresh_install_has_the_three_columns_and_is_stamped_with_the_current_version(get_conn):
     conn = get_conn()
     try:
-        assert schema.RETAIL_SCHEMA_VERSION == 55  # v55 UPDATE: head moved 54 -> 55 (MONEY-5); v55's own shape is pinned by retail_money5_migration_test.py.
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 55  # v55 UPDATE: head moved 54 -> 55 (MONEY-5); v55's own shape is pinned by retail_money5_migration_test.py.
+        assert schema.RETAIL_SCHEMA_VERSION == 56  # v56 UPDATE: head moved 55 -> 56 (SYNC-BOOT Phase 2, after MONEY-5 v55). Kept an EXACT pin at the merge (the p2 branch had loosened it to >= 54).
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 56  # v56 UPDATE: same exact pin.
         for table, col in NEW_COLS:
             assert col in _cols(conn, table), (table, col)
     finally:

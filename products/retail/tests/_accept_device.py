@@ -76,6 +76,18 @@ SYNC-BOOT Phase 1 additions (also OPT-IN, owner_relay runs only):
     "pruned_through": N} and the CALLER decides. Silently treating it as "pulled
     nothing" is exactly the partial-history failure the answer exists to stop.
 
+SYNC-BOOT Phase 2 additions (OPT-IN, `hub` option only):
+
+  * `hub` -- {base_url, pin}: both streams talk to a REAL LAN hub over pinned TLS with the real
+    `SyncRelayClient`, signed by this computer's DPAPI device key, and both services carry the SAME
+    bootstrap hooks production wires (`app._retail_bootstrap_hooks` / `_registry_bootstrap_hooks`).
+    A RESYNC_REQUIRED from the hub therefore runs the real request-and-stage path.
+  * `hub_identity` -- this computer's installation id and device public key, for the test to pair it.
+  * `hub_join_record` -- writes the joined-hub sidecar the way autojoin does, so the production
+    "is this relay a LAN hub" test (`upstream.is_lan_hub_url`) recognises the test hub.
+  * `bootstrap_state` -- the pending/staged copy, the marker, and the stream health.
+  A device "restarts" by being run again: `init_app()` installs a staged copy before it opens a database.
+
 Run as a bare subprocess, same contract as its ancestors:
     python _accept_device.py <app_data_dir> <relay_db_path> <actions_path> <output_path> [<options_json>]
 """
@@ -250,10 +262,23 @@ def main() -> None:
 
         relay = SyncRelayClient(_owner_relay["base_url"], _RawKeySigner(),
                                 _owner_relay["installation_id"], max_retries=0)
+    elif options.get("hub"):
+        # SYNC-BOOT Phase 2: the real client over pinned TLS to a real hub (see module docstring).
+        from commercial_runtime.licensing_contracts.device_identity import WindowsDpapiDeviceIdentityProvider
+        from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+        from commercial_runtime.sync.relay_client import SyncRelayClient
+        from commercial_runtime.sync.site_relay.pinned_transport import pinned_session
+
+        _hub = options["hub"]
+        _dpapi = WindowsDpapiDeviceIdentityProvider(Path(app_data_dir) / "licensing")
+        _record = LicenseStateRepository(Path(app_data_dir) / "database" / "subsystems" / "licensing.db").load()
+        relay = SyncRelayClient(
+            _hub["base_url"], _dpapi, _record.owner_installation_id, timeout_seconds=60, verify_tls=False,
+            session=pinned_session(_hub["pin"]), max_retries=0)
     else:
         relay = FileRelay(relay_db_path)
     service_kwargs = {}
-    if options.get("stream_labels"):
+    if options.get("stream_labels") or options.get("hub"):
         service_kwargs["stream_label"] = "retail"
     if options.get("arm_provider"):
         from database.schema import RETAIL_SCHEMA_VERSION as _RSV
@@ -270,14 +295,16 @@ def main() -> None:
     # the main-computer assignment) -- built the way the real app builds it,
     # see the module docstring. Absent unless the caller asks for it.
     registry_service = None
-    if options.get("registry_relay") or options.get("registry_owner_relay"):
+    if options.get("registry_relay") or options.get("registry_owner_relay") or options.get("hub"):
         from commercial_runtime.sync.sync_service import REGISTRY_SYNC_ENTITY_TYPES
-        if options.get("registry_owner_relay"):
+        if options.get("hub"):
+            registry_relay = relay
+        elif options.get("registry_owner_relay"):
             assert options.get("owner_relay"), "registry_owner_relay needs owner_relay"
             registry_relay = relay
         else:
             registry_relay = FileRelay(options["registry_relay"])
-        registry_kwargs = {"stream_label": "registry"} if options.get("stream_labels") else {}
+        registry_kwargs = {"stream_label": "registry"} if (options.get("stream_labels") or options.get("hub")) else {}
         registry_service = SyncService(
             client_factory=lambda: registry_relay,
             get_conn=registry_conn,
@@ -285,6 +312,10 @@ def main() -> None:
             handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES,
             **registry_kwargs,
         )
+
+    if options.get("hub"):
+        service.set_bootstrap_hooks(_app_module._retail_bootstrap_hooks())
+        registry_service.set_bootstrap_hooks(_app_module._registry_bootstrap_hooks())
 
     API = "/api/sub/retail"
     client = flask_app.test_client()
@@ -841,6 +872,29 @@ def main() -> None:
             finally:
                 rconn.close()
             results.append({"rows": [dict(r) for r in rows]})
+
+        elif op == "hub_identity":
+            from commercial_runtime.licensing_contracts.device_identity import WindowsDpapiDeviceIdentityProvider
+            from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+            _dp = WindowsDpapiDeviceIdentityProvider(Path(app_data_dir) / "licensing")
+            _rec = LicenseStateRepository(Path(app_data_dir) / "database" / "subsystems" / "licensing.db").load()
+            results.append({"installation_id": _rec.owner_installation_id,
+                            "device_public_key": _dp.get_public_key_b64()})
+
+        elif op == "hub_join_record":
+            _app_module._joined_hub_store().save(
+                url=action["url"], spki_pin=action["pin"], hub_installation_id=action["hub_installation_id"])
+            results.append({"ok": True})
+
+        elif op == "bootstrap_state":
+            from commercial_runtime.sync.bootstrap import installer as _inst
+            _app_dir = Path(app_data_dir)
+            results.append({
+                "pending": _inst.pending(_app_dir),
+                "marker": _inst.read_marker(_app_dir),
+                "retail_health": service.get_health(),
+                "registry_health": registry_service.get_health() if registry_service else None,
+            })
 
         else:
             raise ValueError(f"unknown device action op: {op!r}")

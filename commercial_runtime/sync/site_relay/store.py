@@ -284,7 +284,7 @@ def append_events(conn: sqlite3.Connection, events: Iterable[dict], *, origin_de
     return inserted
 
 
-def read_events_since(conn: sqlite3.Connection, *, since: int, exclude_device_id: str,
+def read_events_since(conn: sqlite3.Connection, *, since: int, exclude_device_id: Optional[str],
                        limit: int = PULL_LIMIT) -> list:
     """Returns events with `seq > since`, EXCLUDING `exclude_device_id`'s
     own rows, oldest-first, capped at `limit`. Mirrors
@@ -309,18 +309,34 @@ def read_events_since(conn: sqlite3.Connection, *, since: int, exclude_device_id
     dict here, the mirror image of `append_events`'s `json.dumps` on the
     way in.
 
+    `exclude_device_id=None` (SYNC-BOOT Phase 2, `include_own_once`) returns
+    EVERY device's rows, the caller's own included. Only the pull route's
+    `include_own` path passes it, and only once after a bootstrap install or a
+    same-installation backup restore: the self-exclusion above assumes a
+    device already holds what it pushed, which is exactly what stops being
+    true when its database was replaced by a copy taken before its last
+    push reached the log. (`LocalSiteRelayClient.pull` refuses None itself --
+    see its comment on three-valued logic -- so this stays opt-in here.)
+
     Assumes `conn.row_factory is sqlite3.Row` (this module's stated
     convention, see module docstring) so `r["col"]` below is valid; a
     connection with the default tuple row factory would raise `TypeError`
     on the first indexed access."""
-    rows = conn.execute(
-        "SELECT seq, id, entity_type, entity_id, event_type, payload, created_at "
-        "FROM site_sync_events "
-        "WHERE seq > ? AND origin_device_id != ? "
-        "ORDER BY seq "
-        "LIMIT ?",
-        (since, exclude_device_id, limit),
-    ).fetchall()
+    if exclude_device_id is None:
+        rows = conn.execute(
+            "SELECT seq, id, entity_type, entity_id, event_type, payload, created_at "
+            "FROM site_sync_events WHERE seq > ? ORDER BY seq LIMIT ?",
+            (since, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT seq, id, entity_type, entity_id, event_type, payload, created_at "
+            "FROM site_sync_events "
+            "WHERE seq > ? AND origin_device_id != ? "
+            "ORDER BY seq "
+            "LIMIT ?",
+            (since, exclude_device_id, limit),
+        ).fetchall()
     return [
         {
             "id": row["id"],
@@ -403,9 +419,16 @@ def resolve_pull_cursor(conn: sqlite3.Connection, *, since: int, rows: list) -> 
     return min(since, max_event_seq(conn))
 
 
-def advance_device_cursor(conn: sqlite3.Connection, installation_id: str, seq: int) -> None:
-    """Upserts `site_device_cursors` for `installation_id`, never letting an
-    already-higher persisted `last_seq` regress -- the SQLite analogue of
+#: Streams a pull may name (same set as Owner's `SYNC_STREAMS`). A pull that
+#: names none is 'legacy' -- every client built before SYNC-BOOT.
+STREAMS = ("retail", "registry", "all")
+LEGACY_STREAM = "legacy"
+
+
+def advance_device_cursor(conn: sqlite3.Connection, installation_id: str, seq: int,
+                          stream: str = LEGACY_STREAM) -> None:
+    """Upserts `site_device_cursors` for (`installation_id`, `stream`), never
+    letting an already-higher persisted `last_seq` regress -- the SQLite analogue of
     Owner's `_advance_device_cursor` GREATEST-style guard, done in one
     upsert statement via `MAX(last_seq, excluded.last_seq)` rather than
     Owner's read-then-compare-in-Python approach (simpler here because
@@ -414,6 +437,12 @@ def advance_device_cursor(conn: sqlite3.Connection, installation_id: str, seq: i
     read-compare-write ever was, though SQLite's own single-writer
     serialization would have made that difference moot in practice either
     way).
+
+    One row per (device, stream) since schema v56: a device runs two streams
+    (retail + registry) over this one log, and a single per-device cursor let
+    the faster stream carry the pruning watermark past events the slower one
+    never applied. `stream` defaults to 'legacy' so every pre-v56 caller (and
+    a client that names no stream) behaves exactly as before.
 
     This guard matters for exactly the reason Owner's docstring states:
     nonce/timestamp replay protection stops a CAPTURED request from being
@@ -427,24 +456,128 @@ def advance_device_cursor(conn: sqlite3.Connection, installation_id: str, seq: i
     value move backward closes that off entirely; the caller can always
     still catch up by pulling forward again on its next attempt."""
     conn.execute(
-        "INSERT INTO site_device_cursors (installation_id, last_seq, updated_at) "
-        "VALUES (?, ?, CURRENT_TIMESTAMP) "
-        "ON CONFLICT(installation_id) DO UPDATE SET "
+        "INSERT INTO site_device_cursors (installation_id, stream, last_seq, updated_at) "
+        "VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(installation_id, stream) DO UPDATE SET "
         "last_seq = MAX(site_device_cursors.last_seq, excluded.last_seq), "
         "updated_at = CURRENT_TIMESTAMP",
-        (installation_id, seq),
+        (installation_id, stream, seq),
     )
 
 
-def read_device_cursor(conn: sqlite3.Connection, installation_id: str) -> int:
-    """Returns `installation_id`'s currently persisted `last_seq`, or 0 if
-    this device has never been recorded (mirrors `sync_service.py::
-    read_cursor`'s own "no row yet means 0" default for `sync_cursor`)."""
-    row = conn.execute(
-        "SELECT last_seq FROM site_device_cursors WHERE installation_id = ?",
+def set_device_cursor(conn: sqlite3.Connection, installation_id: str, seq: int, stream: str) -> None:
+    """Sets (`installation_id`, `stream`) to EXACTLY `seq`, moving it down as
+    readily as up. The one caller is the hub's `/bootstrap` route, and the
+    reason it must not use `advance_device_cursor`'s never-regress guard is the
+    whole point of a bootstrap: the device is being handed a copy of the shop
+    complete up to `seq`, so `seq` -- not whatever stale number the device left
+    here before it fell behind -- is the truth about what it holds. Set BEFORE
+    the copy is returned, so the instant the device owns the data the hub also
+    knows how far it has; a hub that waited for the device's next pull would
+    leave a paired device with no cursor row (position 0) pinning pruning at 0
+    for as long as the device took to install."""
+    conn.execute(
+        "INSERT INTO site_device_cursors (installation_id, stream, last_seq, updated_at) "
+        "VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(installation_id, stream) DO UPDATE SET "
+        "last_seq = excluded.last_seq, updated_at = CURRENT_TIMESTAMP",
+        (installation_id, stream, seq),
+    )
+
+
+def _device_stream_positions(conn: sqlite3.Connection, installation_id: str) -> dict:
+    rows = conn.execute(
+        "SELECT stream, last_seq FROM site_device_cursors WHERE installation_id = ?",
         (installation_id,),
-    ).fetchone()
-    return row["last_seq"] if row is not None else 0
+    ).fetchall()
+    return {r[0]: int(r[1]) for r in rows}
+
+
+def position_from_streams(positions: dict) -> int:
+    """The one number pruning may treat as "this device has consumed up to
+    here", from its per-stream cursor rows. The SAME rule as Owner's
+    `_installation_position` (owner/app/sync/pruning.py), so the hub and the
+    cloud cannot disagree about when a device is behind:
+
+      * any retail/registry row exists -> `min(retail, registry)`, and a
+        stream with no row counts as 0. A device that has only ever been seen
+        pulling ONE stream has proved nothing about the other, and treating the
+        missing stream as "caught up" is precisely the silent-loss shape this
+        change exists to remove;
+      * else an 'all' row (the hub's own forwarder);
+      * else a 'legacy' row (a client that names no stream: today's behaviour);
+      * else 0."""
+    if "retail" in positions or "registry" in positions:
+        return min(positions.get("retail", 0), positions.get("registry", 0))
+    if "all" in positions:
+        return positions["all"]
+    return positions.get(LEGACY_STREAM, 0)
+
+
+def device_position(conn: sqlite3.Connection, installation_id: str) -> int:
+    return position_from_streams(_device_stream_positions(conn, installation_id))
+
+
+def read_device_cursor(conn: sqlite3.Connection, installation_id: str,
+                       stream: Optional[str] = None) -> int:
+    """Returns `installation_id`'s persisted `last_seq`, or 0 if this device has
+    never been recorded (mirrors `sync_service.py::read_cursor`'s own "no row
+    yet means 0" default for `sync_cursor`).
+
+    `stream=None` is the device's POSITION (`position_from_streams`) -- for a
+    legacy-only device exactly the single number this function always
+    returned; a named stream returns that stream's own row (0 if absent)."""
+    positions = _device_stream_positions(conn, installation_id)
+    if stream is None:
+        return position_from_streams(positions)
+    return positions.get(stream, 0)
+
+
+def read_prune_state(conn: sqlite3.Connection) -> tuple:
+    """`(pruned_through_seq, site_log_floor)` from `site_prune_state`, (0, 0)
+    for a hub that has neither pruned nor started on a till with history. A
+    missing table or row (a database built before v56) reads as (0, 0) rather
+    than raising: this is on the hot path of every pull, and "nothing recorded"
+    is the honest reading of a table that does not exist yet."""
+    try:
+        row = conn.execute(
+            "SELECT pruned_through_seq, site_log_floor FROM site_prune_state WHERE id = 1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return (0, 0)
+    if row is None:
+        return (0, 0)
+    return (int(row[0]), int(row[1]))
+
+
+def resync_boundary(conn: sqlite3.Connection) -> int:
+    """The seq a pull's `since` must reach to be served from this log: events
+    at or below it are either deleted (`pruned_through_seq`) or were never in
+    the log at all (`site_log_floor`, set when a hub starts serving a till that
+    already had history). A `since` below it would be answered with a
+    gap-free-looking partial history -- the failure RESYNC_REQUIRED exists to
+    make loud."""
+    pruned_through, floor = read_prune_state(conn)
+    return max(pruned_through, floor)
+
+
+def record_pruned_through(conn: sqlite3.Connection, seq: int) -> None:
+    """Raises `pruned_through_seq` to `seq` (never lowers it). Called by the
+    prune itself, in the same transaction as the DELETE, with the highest seq it
+    REALLY deleted -- never inferred from a watermark, because a watermark that
+    deleted nothing (an empty log, a batch limit) must not tell devices they are
+    behind."""
+    conn.execute(
+        "UPDATE site_prune_state SET pruned_through_seq = MAX(pruned_through_seq, ?), "
+        "updated_at = CURRENT_TIMESTAMP WHERE id = 1", (int(seq),))
+
+
+def set_site_log_floor(conn: sqlite3.Connection, seq: int) -> None:
+    """Raises `site_log_floor` to `seq` (never lowers it): this log is complete
+    only from `seq` on, so a device that has consumed less needs a copy."""
+    conn.execute(
+        "UPDATE site_prune_state SET site_log_floor = MAX(site_log_floor, ?), "
+        "updated_at = CURRENT_TIMESTAMP WHERE id = 1", (int(seq),))
 
 
 def lookup_paired_device(conn: sqlite3.Connection, installation_id: str) -> Optional[dict]:

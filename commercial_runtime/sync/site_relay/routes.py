@@ -71,8 +71,10 @@ import binascii
 import logging
 from datetime import datetime, timezone
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
+from commercial_runtime.sync.bootstrap.board import BootstrapBoard
+from commercial_runtime.sync.bootstrap.errors import BootstrapError
 from commercial_runtime.sync.site_relay import auth as site_auth
 from commercial_runtime.sync.site_relay import join as site_join
 from commercial_runtime.sync.site_relay import pairing as site_pairing
@@ -106,6 +108,9 @@ def make_site_relay_blueprint(
     hub_identity_provider=None,
     license_public_id_provider=None,
     trust_store_provider=None,
+    bootstrap_provider=None,
+    bootstrap_board: "BootstrapBoard | None" = None,
+    on_bootstrap_requested=None,
 ) -> Blueprint:
     """`blueprint_name`/`url_prefix` default to exactly Owner's own route
     prefix (`/api/sync/v1`) so `SyncRelayClient`'s hardcoded `/api/sync/v1/
@@ -157,6 +162,25 @@ def make_site_relay_blueprint(
     real behaviour to anything probing it.
     """
     bp = Blueprint(blueprint_name, __name__, url_prefix=url_prefix)
+    # SYNC-BOOT Phase 2. `bootstrap_provider(requester_installation_id,
+    # requester_schema_version) -> BootstrapOffer` builds a scrubbed copy of THIS
+    # hub's database (None = this hub cannot bootstrap anyone: `/bootstrap`
+    # refuses with BOOTSTRAP_UNAVAILABLE, before touching the database).
+    # `bootstrap_board` holds devices asking the MAIN computer to re-announce the
+    # shop's authority state; `on_bootstrap_requested(requester, stream)` lets the
+    # hub's own computer answer at once when IT is the main. Both are best-effort
+    # hints: nothing here may fail a pull because a nudge failed.
+    board = bootstrap_board if bootstrap_board is not None else BootstrapBoard()
+    bp.bootstrap_board = board
+
+    def _note_bootstrap_request(requester: str, stream: str) -> None:
+        try:
+            board.add(requester, stream)
+            if on_bootstrap_requested is not None:
+                on_bootstrap_requested(requester, stream)
+        except Exception:
+            logger.warning("Site relay: could not record a bootstrap request from %s (%s).",
+                           requester, stream, exc_info=True)
 
     @bp.route("/push", methods=["POST"])
     def push():
@@ -267,8 +291,48 @@ def make_site_relay_blueprint(
             except (KeyError, TypeError, ValueError):
                 return _error("INVALID_SINCE", 400)
 
+            # SYNC-BOOT: `stream` / `caps` / `include_own` ride INSIDE the signed
+            # body (a captured request cannot be replayed under another stream).
+            # Absent `stream` is 'legacy' -- every client built before per-stream
+            # cursors. Present-but-unknown is refused, not coerced: a typo
+            # silently landing in 'legacy' would hide a stream from the prune
+            # position (Owner's `_requested_stream` has the identical rule).
+            stream = body.get("stream")
+            if stream is None:
+                cursor_stream = store.LEGACY_STREAM
+            elif isinstance(stream, str) and stream in store.STREAMS:
+                cursor_stream = stream
+            else:
+                return _error("INVALID_STREAM", 400)
+            caps = body.get("caps")
+            if caps is not None and (
+                    not isinstance(caps, list) or len(caps) > 16
+                    or not all(isinstance(c, str) and 0 < len(c) <= 48 for c in caps)):
+                return _error("INVALID_CAPS", 400)
+            include_own = body.get("include_own") is True
+
+            # RESYNC_REQUIRED: this log cannot serve `since` any more (deleted by
+            # housekeeping) or never could (a hub that started on a till with
+            # history). The cursor is NOT written -- recording a position the
+            # device does not actually hold is what pins pruning at the wrong
+            # number -- and the device stops pulling this stream until it has a
+            # fresh copy of the shop. 409, not 400: the request was well formed.
+            boundary = store.resync_boundary(conn)
+            if since < boundary:
+                extra = {"pruned_through": boundary}
+                if cursor_stream == "registry":
+                    # The registry stream is never copied (authority is signed, not
+                    # copied): the device fast-forwards to the log's current end and
+                    # the main computer re-announces the staff list SIGNED from
+                    # there. The hub's own max is the end of what the device could
+                    # ever have pulled; everything the main re-announces lands after.
+                    extra["fast_forward_to"] = store.max_event_seq(conn)
+                    _note_bootstrap_request(installation_id, "registry")
+                return _error("RESYNC_REQUIRED", 409, **extra)
+
             try:
-                rows = store.read_events_since(conn, since=since, exclude_device_id=installation_id)
+                rows = store.read_events_since(
+                    conn, since=since, exclude_device_id=None if include_own else installation_id)
                 cursor = store.resolve_pull_cursor(conn, since=since, rows=rows)
                 # Advanced even when `rows` is empty -- a device that pulls
                 # and catches itself up to a `since` with nothing new to
@@ -278,14 +342,96 @@ def make_site_relay_blueprint(
                 # can never consider events up to that point safe to delete.
                 # See `store.advance_device_cursor`'s own docstring for the
                 # never-regresses guard this relies on.
-                store.advance_device_cursor(conn, installation_id, cursor)
+                store.advance_device_cursor(conn, installation_id, cursor, cursor_stream)
                 conn.commit()
             except Exception:
                 conn.rollback()
                 logger.exception("Internal failure during site relay pull.")
                 return _error("INTERNAL_ERROR", 500)
 
-            return jsonify({"events": rows, "cursor": cursor}), 200
+            response = {"events": rows, "cursor": cursor}
+            if include_own:
+                # Echoed so the device clears its one-shot `include_own_once`
+                # only when the relay REALLY honoured it (an Owner that predates
+                # the field ignores it and would otherwise get the flag cleared
+                # for nothing).
+                response["include_own"] = True
+            if caps and "bootstrap_producer_v1" in caps:
+                open_requests = [r for r in board.open_requests() if r["requester"] != installation_id]
+                if open_requests:
+                    response["bootstrap_requests"] = open_requests
+            return jsonify(response), 200
+        finally:
+            conn.close()
+
+    @bp.route("/bootstrap", methods=["POST"])
+    def bootstrap():
+        """A paired device that was told RESYNC_REQUIRED asks for a fresh copy of
+        the shop, built from THIS hub's own database (SYNC-BOOT Phase 2, plan 2.3).
+        Authenticated and signed exactly like `/pull` (own nonce scope), over the
+        same pinned TLS; the response is the zip itself (octet-stream), with the
+        relay position it is complete up to in `X-Aura-As-Of`.
+
+        ORDER, each step gating the next:
+          1. no `bootstrap_provider` -> BOOTSTRAP_UNAVAILABLE, before the body or
+             the database is touched (a hub that cannot build a copy must not
+             reveal anything by being probed);
+          2. authenticate (`sync_bootstrap` nonce scope); then the body shape;
+          3. build the copy. A `BootstrapError` is a normal refusal and is
+             returned with its reason code (409: the request was well formed, the
+             hub cannot serve it right now);
+          4. SET the requester's cursor rows to the copy's `as_of` and COMMIT,
+             BEFORE answering. Once the device holds the copy the hub must
+             already know how far it holds; leaving the row for the device's next
+             pull would let a paired device with no cursor row (position 0) pin
+             pruning at 0 for as long as the install takes, or worse, leave a
+             stale high row that lets pruning delete what the new copy still
+             needs. The registry row is set to the log's current end for the
+             same reason (the registry stream fast-forwards there);
+          5. note the request for the MAIN computer (board + callback) so it
+             re-announces the authority state a copy never carries;
+          6. return the bytes.
+        """
+        if bootstrap_provider is None:
+            return _error("BOOTSTRAP_UNAVAILABLE", 400)
+        body = request.get_json(silent=True)
+        conn = get_conn()
+        try:
+            try:
+                installation_id = site_auth.authenticate(
+                    conn, body or {}, nonce_scope="sync_bootstrap",
+                    skew_seconds=skew_seconds, nonce_ttl_seconds=nonce_ttl_seconds,
+                )
+            except site_auth.SiteAuthError as exc:
+                return _error(exc.reason_code, 400)
+            schema_version = body.get("schema_version")
+            if schema_version is not None and (
+                    not isinstance(schema_version, int) or isinstance(schema_version, bool)):
+                return _error("INVALID_REQUEST", 400)
+            if body.get("stream", "retail") != "retail":
+                # Only the retail database is ever copied; the registry stream
+                # fast-forwards instead (see /pull's RESYNC_REQUIRED branch).
+                return _error("INVALID_STREAM", 400)
+            try:
+                offer = bootstrap_provider(installation_id, schema_version)
+            except BootstrapError as exc:
+                return _error(exc.reason_code, 409, message=exc.message)
+            except Exception:
+                logger.exception("Internal failure while building a bootstrap copy.")
+                return _error("INTERNAL_ERROR", 500)
+            try:
+                store.set_device_cursor(conn, installation_id, offer.as_of, "retail")
+                store.set_device_cursor(conn, installation_id, offer.registry_fast_forward, "registry")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                logger.exception("Internal failure recording a bootstrap cursor.")
+                return _error("INTERNAL_ERROR", 500)
+            _note_bootstrap_request(installation_id, "registry")
+            return Response(
+                offer.data, status=200, mimetype="application/octet-stream",
+                headers={"X-Aura-As-Of": str(offer.as_of),
+                         "X-Aura-Registry-Fast-Forward": str(offer.registry_fast_forward)})
         finally:
             conn.close()
 
