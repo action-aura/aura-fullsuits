@@ -274,7 +274,7 @@ def test_paid_in_to_other_income_posts_dr_cash_cr_4800_on_the_business_day():
     # it shows up as revenue, and cash is up by the same amount
     _at(12, 0)
     pl = admin.get(f'{API}/reports/profit-and-loss?start_date={PREV}&end_date={PREV}').get_json()['data']
-    assert {a['code']: a['amount'] for a in pl['revenue_accounts']}.get('4800') == 15.0, pl['revenue_accounts']
+    assert {a['code']: a['amount'] for a in pl['other_income']['accounts']}.get('4800') == 15.0, pl['other_income']['accounts']
     assert _cash_balance(_balance_sheet(admin, SAME)) == 15.0
     assert _trial_balance(admin)['is_balanced'] is True
 

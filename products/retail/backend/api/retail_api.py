@@ -13657,6 +13657,13 @@ def list_expenses():
     today = _gl_business_date(conn, cid)
     conn.close()
     names = _resolve_actor_identities(cid, [r['created_by'] for r in rows])
+    # POLISH-1: "Recorded by" is the person's display name; the e-mail is only the fallback for a
+    # person who has none (the shared identity lookup carries the e-mail, never the name).
+    display = _actor_display_names(cid, [r['created_by'] for r in rows])
+    names = {k: dict(v, employee_name=display.get(str(k)) or v.get('employee_name'))
+             for k, v in names.items()}
+    for ref, name in display.items():
+        names.setdefault(ref, {'employee_id': None, 'email': None, 'employee_name': name})
     items = [_expense_public(r, names, account_names) for r in rows]
     live_total = sum(i['amount'] for i in items if not i['voided'])
     return jsonify({'status': 'success', 'data': {
@@ -22643,6 +22650,107 @@ def _today_tax(conn, cid, today_date, boundary, sales_today):
     return None, rows, 0
 
 
+def _actor_display_names(cid, refs):
+    """`{ref: display_name}` for the staff whose `users.display_name` is set, where `ref` is
+    EITHER their `users.uid` or `users.id` (audit rows hold one, stamped columns the other).
+    Only people who HAVE a name appear -- a caller falls back to the e-mail itself, never to an
+    invented label. Company-scoped; never raises (a failed lookup is just "no names")."""
+    wanted = sorted({str(r) for r in refs if r not in (None, '')})
+    out = {}
+    if not wanted:
+        return out
+    try:
+        reg = _registry_conn()
+        try:
+            for i in range(0, len(wanted), _ACTOR_UID_CHUNK):
+                chunk = wanted[i:i + _ACTOR_UID_CHUNK]
+                marks = ','.join('?' * len(chunk))
+                for row in reg.execute(
+                        "SELECT id, uid, display_name FROM users WHERE company_id=? "
+                        "AND (uid IN (%s) OR id IN (%s))" % (marks, marks), [cid, *chunk, *chunk]).fetchall():
+                    name = str(row['display_name'] or '').strip()
+                    if name:
+                        for key in (row['uid'], row['id']):
+                            if key:
+                                out[str(key)] = name
+        finally:
+            reg.close()
+    except Exception:
+        log.exception('display-name lookup failed (company %r)', cid)
+        return {}
+    return out
+
+
+#: How far back a manager-PIN lockout still earns a card on Today.
+_TODAY_PIN_LOCK_WINDOW = timedelta(hours=24)
+
+
+def _today_pin_locked(conn, cid, now, boundary):
+    """UI-3a: a manager whose approval PIN was locked (too many wrong tries) in the last 24 hours,
+    from the DISCOUNT_APPROVAL_LOCKED audit rows `_verify_discount_approver` writes. Each row is
+    `{approver_name, cashier_name, at}` (`at` = the shop's wall clock, 'YYYY-MM-DD HH:MM'), newest
+    first. Both names are the person's display name, or their e-mail when they have none, or None
+    (an unknown "manager" the cashier typed): the screen words that case itself. Returns
+    `(rows, count)`."""
+    since = (now - _TODAY_PIN_LOCK_WINDOW).strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        found = conn.execute(
+            "SELECT timestamp, user_id, entity_id, details FROM audit_log "
+            "WHERE company_id=? AND action='DISCOUNT_APPROVAL_LOCKED' AND timestamp >= ? "
+            "ORDER BY timestamp DESC, id DESC", (cid, since)).fetchall()
+    except sqlite3.OperationalError:
+        return [], 0
+    if not found:
+        return [], 0
+    approvers = [str(r['entity_id']) for r in found if str(r['entity_id']) != _pin_throttle.UNKNOWN_APPROVER]
+    refs = approvers + [r['user_id'] for r in found]
+    names = _actor_display_names(cid, refs)
+    emails = {}
+    try:
+        reg = _registry_conn()
+        try:
+            for row in reg.execute("SELECT id, uid, email FROM users WHERE company_id=?", (cid,)).fetchall():
+                for key in (row['uid'], row['id']):
+                    if key:
+                        emails[str(key)] = row['email']
+        finally:
+            reg.close()
+    except Exception:
+        log.exception('e-mail lookup for the PIN-lock card failed (company %r)', cid)
+
+    def who(ref):
+        ref = None if ref in (None, '') else str(ref)
+        if ref is None or ref == _pin_throttle.UNKNOWN_APPROVER:
+            return None
+        return names.get(ref) or emails.get(ref)
+
+    rows = []
+    for r in found:
+        wall = _today_wall(r['timestamp'], boundary)
+        rows.append({'approver_name': who(r['entity_id']), 'cashier_name': who(r['user_id']),
+                     'at': wall.strftime('%Y-%m-%d %H:%M') if wall else None})
+    return rows, len(rows)
+
+
+def _today_backup_stale(now):
+    """BACKUP-1's 48-hour rule, lifted onto Today: `None` while a recent backup exists (or this
+    install is still inside its first 48 hours), else `{reason, last_backup_at}` -- the very
+    figures Settings -> Data & backup shows, from the same `build_status`, so the two cannot
+    disagree about whether the shop is protected."""
+    try:
+        from commercial_runtime.backup import schedule as _bk
+        app_data = os.path.dirname(DATABASE_DIR)
+        backup_dir = os.environ.get('AURA_BACKUP_DIR') or os.path.join(app_data, 'backups')
+        st = _bk.build_status('retail', backup_dir, _bk.BackupSettings(app_data),
+                              _bk.BackupStatus(app_data), now=now)
+    except Exception:
+        log.exception('backup status could not be read for Today')
+        return None
+    if not st.get('warning'):
+        return None
+    return {'reason': st.get('warning_reason'), 'last_backup_at': st.get('last_backup_at')}
+
+
 def _today_aura_did(conn, cid, boundary, today_date, branch_id):
     """What the app did on its own today, from the logs that already exist.
     Only kinds with a count. Reorder suggestions are the shop's; everything
@@ -22782,6 +22890,14 @@ def report_today():
                 open_cards.append(today_cards.build_card('branches', len(quiet), quiet))
             else:
                 resolved['branches'] = {'trading': sum(1 for b in branches if b['transactions'] > 0)}
+
+        # POLISH-1: two things the owner would otherwise only find by opening other screens.
+        lock_rows, lock_count = timed('pin_locked', _today_pin_locked, conn, cid, now, boundary)
+        if lock_count:
+            open_cards.append(today_cards.build_card('pin_locked', lock_count, lock_rows))
+        stale = timed('backup', _today_backup_stale, now)
+        if stale:
+            open_cards.append(today_cards.build_card('backup', 1, [], extra=stale))
 
         cards = today_cards.order_cards(open_cards)
         branch_name = None

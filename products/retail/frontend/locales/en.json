@@ -2848,5 +2848,21 @@
   "You are not allowed to change a price. Ask a manager to approve it.": "You are not allowed to change a price. Ask a manager to approve it.",
   "Damaged": "Damaged",
   "Loyal customer": "Loyal customer",
-  "Round down": "Round down"
+  "Round down": "Round down",
+  "Not a sale, so it is not in the gross margin.": "Not a sale, so it is not in the gross margin.",
+  "Someone who is not on your staff": "Someone who is not on your staff",
+  "At the till: {name}": "At the till: {name}",
+  "Manager PIN": "Manager PIN",
+  "Locked": "Locked",
+  "A manager PIN was locked in the last 24 hours": "A manager PIN was locked in the last 24 hours",
+  "{count} manager PIN lockouts in the last 24 hours": "{count} manager PIN lockouts in the last 24 hours",
+  "Someone entered the wrong PIN too many times. If it was not you or your manager, ask who was trying to approve a discount.": "Someone entered the wrong PIN too many times. If it was not you or your manager, ask who was trying to approve a discount.",
+  "Open employees": "Open employees",
+  "Backup": "Backup",
+  "No backup has been made yet": "No backup has been made yet",
+  "No backup in 2 days": "No backup in 2 days",
+  "If this computer breaks, your sales and stock go with it. Make a backup now.": "If this computer breaks, your sales and stock go with it. Make a backup now.",
+  "Only the owner can make a backup.": "Only the owner can make a backup.",
+  "Open backups": "Open backups",
+  "Other Income": "Other Income"
 }
