@@ -1,5 +1,6 @@
 package com.actionaura.retail.ui.pos
 
+import com.actionaura.retail.net.ApprovalReq
 import com.actionaura.retail.net.CreateSaleRequest
 import com.actionaura.retail.net.SaleItemReq
 
@@ -37,6 +38,11 @@ fun buildCreateSaleRequest(
     creditDownPayment: Double?,
     splitParts: List<TenderPartMinor>,
     dp: Int,
+    // ANDROID-3 (UI-3a): a sale-level discount and who approved it, as intent (see CartDiscount.kt).
+    // All default to "none", so every earlier caller and request is unchanged.
+    cartDiscount: CartDiscount? = null,
+    discountReason: String? = null,
+    approval: ApprovalReq? = null,
 ): CreateSaleRequest =
     if (splitParts.size >= 2) {
         CreateSaleRequest(
@@ -47,6 +53,8 @@ fun buildCreateSaleRequest(
             customer_id = customerId,
             points_redeemed = pointsRedeemed,
             tenders = toWireTenders(splitParts, dp),
+            cart_discount_amount = discountAmount(cartDiscount, dp), cart_target_total = targetTotal(cartDiscount, dp),
+            discount_reason = discountReason, approval = approval,
         )
     } else {
         CreateSaleRequest(
@@ -56,5 +64,15 @@ fun buildCreateSaleRequest(
             idempotency_key = idempotencyKey,
             customer_id = customerId,
             points_redeemed = pointsRedeemed,
+            cart_discount_amount = discountAmount(cartDiscount, dp), cart_target_total = targetTotal(cartDiscount, dp),
+            discount_reason = discountReason, approval = approval,
         )
     }
+
+// Exactly one of the two is ever non-null (the server refuses both: DISCOUNT_AMBIGUOUS), and the
+// number sent is the cashier's own, in the currency's decimals -- not a computed figure.
+private fun discountAmount(d: CartDiscount?, dp: Int): Double? =
+    d?.takeIf { it.kind == CartDiscountKind.AMOUNT }?.let { fromMinor(it.minor, dp) }
+
+private fun targetTotal(d: CartDiscount?, dp: Int): Double? =
+    d?.takeIf { it.kind == CartDiscountKind.TARGET }?.let { fromMinor(it.minor, dp) }

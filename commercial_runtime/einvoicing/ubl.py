@@ -130,3 +130,19 @@ def to_ubl_xml(document: EInvoiceDocument) -> str:
 
 def document_sha256(xml: str) -> str:
     return hashlib.sha256(xml.encode('utf-8')).hexdigest()
+
+
+def render_document_xml(document: EInvoiceDocument) -> str:
+    """The one entry point the worker uses. Dispatches on document.profile:
+    the ISTD profile (istd_ubl.to_istd_xml) when the adapter asked for it,
+    otherwise the generic profile above, byte-for-byte as before -- so every
+    install and test that never opts into the ISTD profile is unchanged.
+
+    A credit note has no generic form (the generic profile is deliberately
+    ISTD-agnostic and carries no BillingReference), so it must be ISTD."""
+    from .istd_ubl import PROFILE_ID_ISTD, to_istd_xml
+    if document.profile == PROFILE_ID_ISTD:
+        return to_istd_xml(document)
+    if document.document_kind != 'invoice':
+        raise ValueError("A credit note can only be rendered with the ISTD profile.")
+    return to_ubl_xml(document)

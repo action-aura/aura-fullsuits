@@ -71,18 +71,25 @@ fun effectiveLinePct(lineOwnPct: Double?, salePct: Double): Double =
     clampDiscountPct(lineOwnPct ?: salePct)
 
 /**
- * The `items` array of a sale request. Product id, quantity and `discount_pct`
- * only -- the server resolves price and tax from the product row
- * (Wave 0 financial-authority contract), so no price field is ever sent.
- * Under [DiscountAccess.None] every line goes out at 0 whatever the state
- * holds.
+ * The `items` array of a sale request. Product id, quantity, `discount_pct`, and (ANDROID-3) the
+ * picked `modifier_option_ids` and a line's own `unit_price_override` -- all INTENT, the desktop's
+ * names. The server resolves price and tax from the product row and the option ids (Wave 0
+ * financial-authority contract), so no computed money is ever sent: an override is a price the
+ * cashier chose, and the server demands a reason and, below the cashier's authority, a manager.
+ * Under [DiscountAccess.None] every line goes out at 0% whatever the state holds. While a
+ * sale-level amount / target discount is on ([cartDiscountOn]) every line goes at 0% too: the
+ * server refuses the pair, and the desktop sends the same.
  */
 fun buildSaleItems(
-    cart: Map<String, Double>,
-    lineDiscounts: Map<String, Double>,
+    lines: List<CartLine>,
     salePct: Double,
     access: DiscountAccess,
-): List<SaleItemReq> = cart.entries.map { (id, qty) ->
-    val pct = if (access == DiscountAccess.None) 0.0 else effectiveLinePct(lineDiscounts[id], salePct)
-    SaleItemReq(product_id = id, quantity = qty, discount_pct = pct)
+    cartDiscountOn: Boolean = false,
+): List<SaleItemReq> = lines.map { l ->
+    val pct = if (access == DiscountAccess.None || cartDiscountOn) 0.0 else effectiveLinePct(l.ownPct, salePct)
+    SaleItemReq(
+        product_id = l.productId, quantity = l.quantity, discount_pct = pct,
+        modifier_option_ids = l.modifierOptionIds.takeIf { it.isNotEmpty() },
+        unit_price_override = l.unitPriceOverride,
+    )
 }

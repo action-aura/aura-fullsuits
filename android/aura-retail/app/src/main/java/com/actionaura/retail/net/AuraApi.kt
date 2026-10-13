@@ -147,6 +147,16 @@ interface AuraApi {
     @POST("api/sub/retail/products/{id}/stock-adjust")
     suspend fun adjustStock(@Path("id") id: String, @Body body: AdjustStockRequest): StockAdjustResponse
 
+    // ANDROID-3: the extras a product can carry, the variants of a parent, and who a cashier may ask for a PIN.
+    @GET("api/sub/retail/products/{id}/modifier-groups")
+    suspend fun productModifierGroups(@Path("id") id: String): ModifierGroupsResponse
+
+    @GET("api/sub/retail/products/{id}/variants")
+    suspend fun productVariants(@Path("id") id: String): VariantsResponse
+
+    @GET("api/sub/retail/discount/approvers")
+    suspend fun discountApprovers(): ApproversResponse
+
     @POST("api/sub/retail/sales")
     suspend fun createSale(@Body body: CreateSaleRequest): SaleResponse
 

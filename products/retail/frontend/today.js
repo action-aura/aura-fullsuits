@@ -292,6 +292,8 @@
       case 'restock': go('purchases'); break;
       case 'stock': go('products'); break;
       case 'branches': go('reports'); break;
+      case 'pin_locked': go('employees'); break;
+      case 'backup': go('backup-export'); break;
       case 'drawers':
         if (window.CashDrawer && typeof window.CashDrawer.openHistoryModal === 'function') window.CashDrawer.openHistoryModal();
         else go('pos');
@@ -538,6 +540,35 @@
         rows: rows.join(''),
         notes: owner ? '' : noteP(esc(tr('Only the owner can connect this.'))),
         primary: owner ? ['Open e-invoicing', 'tax'] : null, link: null,
+      };
+    },
+    // POLISH-1: a manager's approval PIN was locked after too many wrong tries (UI-3a). Names
+    // come from the server (display name, else e-mail); an unknown "manager" a cashier typed has
+    // none and is said plainly rather than shown as a blank.
+    pin_locked(c) {
+      const rows = (c.rows || []).map((r) => row(
+        r.approver_name ? bidi(r.approver_name) : esc(tr('Someone who is not on your staff')),
+        r.cashier_name ? S('At the till: {name}', { name: bidi(r.cashier_name) }) : '',
+        r.at ? bidi(shortDate(r.at.slice(0, 10)) + ' ' + r.at.slice(11)) : '', 'is-plain'));
+      return {
+        icon: 'shield', tone: 'risk', kind: 'Manager PIN', tag: 'Locked',
+        head: plural(c.count, 'A manager PIN was locked in the last 24 hours', '{count} manager PIN lockouts in the last 24 hours', { count: num(c.count) }),
+        body: 'Someone entered the wrong PIN too many times. If it was not you or your manager, ask who was trying to approve a discount.',
+        rows: rows.join(''), notes: moreNote(c),
+        primary: isOwner() ? ['Open employees', 'pin_locked'] : null, link: null,
+      };
+    },
+    // POLISH-1: BACKUP-1's 48-hour warning, lifted off the Settings screen.
+    backup(c) {
+      const x = c.extra || {};
+      const last = x.last_backup_at ? bidi(shortDate(String(x.last_backup_at).slice(0, 10))) : null;
+      return {
+        icon: 'note', tone: 'risk', kind: 'Backup', tag: 'Needs attention',
+        headText: x.reason === 'never_backed_up' ? 'No backup has been made yet' : 'No backup in 2 days',
+        body: 'If this computer breaks, your sales and stock go with it. Make a backup now.',
+        rows: last ? row(esc(tr('Last backup')), '', last, 'is-plain') : '',
+        notes: isOwner() ? '' : noteP(esc(tr('Only the owner can make a backup.'))),
+        primary: isOwner() ? ['Open backups', 'backup'] : null, link: null,
       };
     },
     branches(c) {

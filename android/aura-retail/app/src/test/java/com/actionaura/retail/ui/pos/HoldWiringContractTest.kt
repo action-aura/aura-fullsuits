@@ -44,7 +44,7 @@ class HoldWiringContractTest {
     @Test
     fun replacing_a_non_empty_cart_asks_first() {
         // The resume button must go through the confirm dialog when the cart has lines.
-        assertThat(pos).contains("if (cart.isNotEmpty()) pendingResume = h else scope.launch { resumeHeld(h) }")
+        assertThat(pos).contains("if (cartLines.isNotEmpty()) pendingResume = h else scope.launch { resumeHeld(h) }")
         assertThat(pos).contains("pendingResume = null; scope.launch { resumeHeld(h) }")
     }
 

@@ -2027,10 +2027,12 @@ def post_sale(conn, cid, branch_id, sale_id, sale_number, currency,
                        'memo': f'Sale {sale_number}'})
     if not lines:
         # A sale whose total is genuinely zero (every line fully
-        # discounted away) has nothing for the GL to say. Not reachable
-        # through create_sale today (a zero-total sale is not something
-        # the till can ring), but a defensive no-op is cheaper than a
-        # GeneralLedgerImbalanceError for a case that is a legitimate
+        # discounted away) has nothing for the GL to say. REACHABLE since
+        # UI-3a: a price override to 0, or a cart discount equal to the
+        # subtotal, rings a zero-total sale (measured by the UI-3a
+        # verifier; there is simply no money to book). This
+        # no-op is the intended handling, not a defensive afterthought --
+        # cheaper than a GeneralLedgerImbalanceError for a legitimate
         # "nothing happened" rather than a defect.
         return None
     return post_journal(conn, cid, branch_id, business_date or _today(),

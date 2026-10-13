@@ -197,8 +197,8 @@ android {
         // 10: the update-channel build shipped with code ten via an init script
         // (2026-10-10); the tracked value is bumped to match so a rebuild from
         // source is not older than the APK already on devices.
-        versionCode 13
-        versionName "1.0.0-rc.11"
+        versionCode 14
+        versionName "1.0.0-rc.12"
 
         // PRINT-2: androidTest/ renders the receipt on a real Android text stack.
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
@@ -441,6 +441,8 @@ dependencies {
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.ui:ui-graphics'
     implementation 'androidx.compose.material3:material3'
+    // ANDROID-3: Material 3 WindowSizeClass (compact / medium / expanded) for the tablet layout.
+    implementation 'androidx.compose.material3:material3-window-size-class'
     implementation 'androidx.compose.material:material-icons-extended'
     implementation 'androidx.navigation:navigation-compose:2.8.3'
     implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.8.6'

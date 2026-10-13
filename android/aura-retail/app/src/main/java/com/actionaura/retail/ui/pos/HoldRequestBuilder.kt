@@ -26,9 +26,8 @@ const val HOLD_LABEL_MAX = 200
  * a blank price on it.
  */
 fun buildHoldRequest(
-    cart: Map<String, Double>,
+    lines: List<CartLine>,
     products: Map<String, Product>,
-    lineDiscounts: Map<String, Double>,
     salePct: Double,
     access: DiscountAccess,
     customerId: String?,
@@ -38,20 +37,26 @@ fun buildHoldRequest(
     dp: Int,
 ): HoldSaleRequest {
     var subtotalMinor = 0L
-    val lines = cart.entries.map { (id, qty) ->
-        val p = products[id]
-        val price = p?.sell_price ?: 0.0
-        val pct = if (access == DiscountAccess.None) 0.0 else effectiveLinePct(lineDiscounts[id], salePct)
-        val grossMinor = toMinor(price * qty, dp)
-        subtotalMinor += grossMinor
-        val lineMinor = toMinor(price * qty * (1.0 - pct / 100.0), dp)
+    val held = lines.map { l ->
+        val p = products[l.productId]
+        val price = lineUnitPrice(p?.sell_price ?: 0.0, l)
+        val pct = if (access == DiscountAccess.None) 0.0 else effectiveLinePct(l.ownPct, salePct)
+        subtotalMinor += toMinor(price * l.quantity, dp)
+        val lineMinor = toMinor(price * l.quantity * (1.0 - pct / 100.0), dp)
         HeldLine(
-            product_id = id, name = p?.name, quantity = qty, discount_pct = pct,
+            product_id = l.productId, name = displayName(p), quantity = l.quantity, discount_pct = pct,
             unit_price = price, line_total = fromMinor(lineMinor, dp),
+            // The line's own state, in the desktop's names (see HeldLine): without these a held
+            // sale lost every extra and every price of its own the moment it was parked.
+            disc_pct = if (access == DiscountAccess.None) null else l.ownPct,
+            modifier_option_ids = l.modifierOptionIds.takeIf { it.isNotEmpty() },
+            modifiers = l.modifiers.takeIf { it.isNotEmpty() },
+            unit_price_override = l.unitPriceOverride,
+            price_reason = l.unitPriceOverride?.let { l.priceReason },
         )
     }
     return HoldSaleRequest(
-        items = lines,
+        items = held,
         customer_id = customerId,
         label = label.trim().take(HOLD_LABEL_MAX),
         discount_pct = if (access == DiscountAccess.None) 0.0 else clampDiscountPct(salePct),

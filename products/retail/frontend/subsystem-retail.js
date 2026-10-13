@@ -22536,6 +22536,22 @@ const RetailSystem = {
             </tbody></table>`
         : `<div style="color:var(--text-muted);padding:8px 0">${t('No operating expenses recorded in this period.')}</div>`;
 
+      // POLISH-1: income that is not a sale (4800) sits BELOW the operating expenses and above
+      // net profit -- it is outside gross profit and the margin, inside net profit. Hidden when
+      // there is none, so a shop without it sees the statement it always saw.
+      const otherIncome = data.other_income || { total: 0, accounts: [] };
+      const otherIncomeBlock = (otherIncome.accounts && otherIncome.accounts.length)
+        ? `<div style="margin:20px 0 8px;font-weight:600;color:var(--text-primary)">${t('Other income')}
+             <span style="font-weight:400;font-size:12px;color:var(--text-muted)"> ${t('Not a sale, so it is not in the gross margin.')}</span></div>
+           <table class="ret-table"><thead><tr><th>${t('Code')}</th><th>${t('Account')}</th><th>${t('Amount')}</th></tr></thead>
+            <tbody>${otherIncome.accounts.map(a => `<tr>
+              <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(a.code)}</td>
+              <td style="font-weight:600">${this._esc(a.name)}</td>
+              <td>${this._fmt(a.amount)}</td></tr>`).join('')}
+              <tr style="font-weight:700;background:var(--surface-active)"><td colspan="2">${t('Total')}</td><td>${this._fmt(otherIncome.total)}</td></tr>
+            </tbody></table>`
+        : '';
+
       // Statement order, top to bottom, the order an accountant reads one:
       // revenue (its gross/returns components shown, then the net figure a
       // trial-balance-style dashed rule sets off), cost of goods sold, gross
@@ -22570,6 +22586,7 @@ const RetailSystem = {
         </div>
         <div style="margin:20px 0 8px;font-weight:600;color:var(--text-primary)">${t('Operating Expenses')}</div>
         ${opexBlock}
+        ${otherIncomeBlock}
         <div style="display:flex;justify-content:space-between;align-items:center;padding:16px;margin-top:16px;border-top:2px solid var(--border-default);border-radius:8px;background:var(--surface-active);font-size:20px;font-weight:800">
           <span style="color:var(--text-primary)">${t('Net Profit')}</span>
           <span>${this._money(data.net_profit, data.net_profit > 0 ? 'money--positive' : '')}</span>

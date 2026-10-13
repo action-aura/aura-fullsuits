@@ -362,8 +362,13 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
     Returns a dict:
         currency               -- this company's base currency code
         period                 -- {start_date, end_date, branch_id} echoed back
-        revenue                -- NET of returns (gross_revenue - sales_returns)
-        gross_revenue          -- revenue before returns
+        revenue                -- SALES revenue, NET of returns (gross_revenue - sales_returns).
+                                   Does NOT include other_income (POLISH-1).
+        gross_revenue          -- sales revenue before returns
+        revenue_accounts       -- the sales-revenue lines behind gross_revenue
+        other_income           -- {total, accounts: [{code, name, amount}]}: revenue that is not
+                                   a sale (4800). Outside gross_profit/gross_margin, inside
+                                   net_profit
         sales_returns          -- the contra-revenue total (a positive number)
         cost_of_goods_sold     -- the ledger's own gl.ACCOUNT_COGS balance
         gross_profit           -- revenue - cost_of_goods_sold
@@ -376,7 +381,7 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
                                    derived generically (see module docstring
                                    point 1) -- zero-activity accounts in this
                                    period are omitted, not listed at 0
-        net_profit             -- gross_profit - operating_expenses['total']
+        net_profit             -- gross_profit - operating_expenses['total'] + other_income['total']
         has_activity           -- False when NOT ONE revenue/expense-type
                                    account moved in this period -- lets a
                                    presentation layer say "nothing was
@@ -466,6 +471,8 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
     gross_revenue = Decimal('0')
     sales_returns = Decimal('0')
     revenue_net = Decimal('0')
+    other_income_total = Decimal('0')
+    other_income_accounts = []
     cogs = Decimal('0')
     opex_total = Decimal('0')
     opex_accounts = []
@@ -485,14 +492,26 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
         net = (credit - debit) if canonical == 'credit' else (debit - credit)
 
         if acct_type == 'revenue':
+            if r['normal_balance'] == canonical and r['code'] != gl.ACCOUNT_SALES_REVENUE:
+                # POLISH-1: income that is NOT a sale (4800 Other Income -- a supplier's refund,
+                # a found note) is reported on its own and kept OUT of revenue, gross profit and
+                # the margin. Folded into revenue it made the margin look better than the
+                # shop's trading really was. It still counts in net profit (added below).
+                other_income_total += net
+                # A line that nets to 0.000 (income posted, then reversed) is not shown.
+                if net.quantize(quant, rounding=ROUND_HALF_UP) != 0:
+                    other_income_accounts.append({
+                        'code': r['code'],
+                        'name': r['name'],
+                        'amount': float(net.quantize(quant, rounding=ROUND_HALF_UP)),
+                    })
+                continue
             revenue_net += net
             if r['normal_balance'] == canonical:
                 # A "gross" revenue line (normal_balance agrees with the
                 # type's own canonical direction) -- its type-canonical net
                 # IS its own face value.
                 gross_revenue += net
-                # MONEY-4b: itemised, so income that is not a sale (4800 Other Income) is
-                # visible on its own line rather than only folded into the total.
                 revenue_accounts.append({
                     'code': r['code'],
                     'name': r['name'],
@@ -508,14 +527,18 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
                 cogs += net
             else:
                 opex_total += net
-                opex_accounts.append({
-                    'code': r['code'],
-                    'name': r['name'],
-                    'amount': float(net.quantize(quant, rounding=ROUND_HALF_UP)),
-                })
+                # POLISH-1: a VOIDED expense posts a reversing journal, so its account has
+                # activity (debit == credit > 0) yet nets to 0.000. Listing "Rent  0.000" tells the
+                # owner nothing; the total is unaffected either way.
+                if net.quantize(quant, rounding=ROUND_HALF_UP) != 0:
+                    opex_accounts.append({
+                        'code': r['code'],
+                        'name': r['name'],
+                        'amount': float(net.quantize(quant, rounding=ROUND_HALF_UP)),
+                    })
 
     gross_profit = revenue_net - cogs
-    net_profit = gross_profit - opex_total
+    net_profit = gross_profit - opex_total + other_income_total
     # None, never 0.0, when revenue is not meaningfully nonzero -- a 0.0
     # margin reads as "the shop broke even on every unit sold", which is a
     # completely different claim from "there was no revenue to measure a
@@ -561,6 +584,10 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
         'cost_of_goods_sold': float(cogs.quantize(quant, rounding=ROUND_HALF_UP)),
         'gross_profit': float(gross_profit.quantize(quant, rounding=ROUND_HALF_UP)),
         'gross_margin': gross_margin,
+        'other_income': {
+            'total': float(other_income_total.quantize(quant, rounding=ROUND_HALF_UP)),
+            'accounts': other_income_accounts,
+        },
         'operating_expenses': {
             'total': float(opex_total.quantize(quant, rounding=ROUND_HALF_UP)),
             'accounts': opex_accounts,

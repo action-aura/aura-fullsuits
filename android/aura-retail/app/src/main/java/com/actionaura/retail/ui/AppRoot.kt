@@ -22,6 +22,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
+import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -491,6 +493,10 @@ private fun BooksHomeScreen(onNavigate: (String) -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MainShell(onLogout: () -> Unit) {
+    // ANDROID-3: the window decides the shape (ui/AdaptiveLayout.kt). Compact = today's phone layout.
+    val activity = LocalContext.current as? android.app.Activity
+    @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
+    val wide = activity?.let { usesWideLayout(calculateWindowSizeClass(it).widthSizeClass) } ?: false
     val booksOnly = RetailSession.isBooksOnly
     val tabs = if (booksOnly) booksOnlyTabs else retailTabs
     val nav = rememberNavController()
@@ -574,7 +580,7 @@ private fun MainShell(onLogout: () -> Unit) {
                 // too) -- the 0.86-alpha frosted look it had only made sense
                 // over the old nebula gradient, and translucent-over-flat is
                 // just a slightly wrong colour.
-                if (isTopLevel) NavigationBar(
+                if (isTopLevel && !wide) NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,
                     tonalElevation = 0.dp,
                 ) {
@@ -596,10 +602,27 @@ private fun MainShell(onLogout: () -> Unit) {
             containerColor = Color.Transparent,
             contentColor = MaterialTheme.colorScheme.onBackground,
         ) { padding ->
+            Row(Modifier.padding(padding).fillMaxSize()) {
+            // The same destinations as the bottom bar, down the start edge (right in Arabic).
+            if (isTopLevel && wide) NavigationRail(containerColor = MaterialTheme.colorScheme.surface) {
+                tabs.forEach { d ->
+                    NavigationRailItem(
+                        selected = route == d.route,
+                        onClick = {
+                            nav.navigate(d.route) {
+                                popUpTo(nav.graph.startDestinationId) { saveState = true }
+                                launchSingleTop = true; restoreState = true
+                            }
+                        },
+                        icon = { Icon(d.icon, tr(d.label)) }, label = { Text(tr(d.label)) },
+                    )
+                }
+            }
+            CompositionLocalProvider(LocalWideLayout provides wide) {
             NavHost(
                 navController = nav,
                 startDestination = homeRouteFor(booksOnly),
-                modifier = Modifier.padding(padding).fillMaxSize(),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
                 enterTransition = { fadeIn(tween(260)) + slideInHorizontally(tween(260)) { it / 14 } },
                 exitTransition = { fadeOut(tween(180)) },
                 popEnterTransition = { fadeIn(tween(260)) },
@@ -615,6 +638,8 @@ private fun MainShell(onLogout: () -> Unit) {
                         onLogout()
                     }
                 })
+            }
+            }
             }
         }
 

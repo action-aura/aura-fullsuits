@@ -2861,5 +2861,21 @@
   "Selling more than the recorded stock": "البيع بأكثر من المخزون المسجّل",
   "Not allowed": "غير مسموح",
   "Allowed, and flagged": "مسموح مع تعليمه",
-  "Rounding": "التقريب"
+  "Rounding": "التقريب",
+  "Not a sale, so it is not in the gross margin.": "ليست من المبيعات، لذلك لا تدخل في هامش الربح الإجمالي.",
+  "Someone who is not on your staff": "شخص ليس ضمن موظفيك",
+  "At the till: {name}": "على الصندوق: {name}",
+  "Manager PIN": "رمز المدير",
+  "Locked": "مقفل",
+  "A manager PIN was locked in the last 24 hours": "تم قفل رمز مدير خلال آخر 24 ساعة",
+  "{count} manager PIN lockouts in the last 24 hours": "{count} حالات قفل لرمز المدير خلال آخر 24 ساعة",
+  "Someone entered the wrong PIN too many times. If it was not you or your manager, ask who was trying to approve a discount.": "تم إدخال رمز خاطئ مرات كثيرة. إذا لم يكن ذلك أنت أو مديرك، اسأل من كان يحاول الموافقة على خصم.",
+  "Open employees": "فتح الموظفين",
+  "Backup": "النسخ الاحتياطي",
+  "No backup has been made yet": "لم يتم إنشاء أي نسخة احتياطية بعد",
+  "No backup in 2 days": "لا توجد نسخة احتياطية منذ يومين",
+  "If this computer breaks, your sales and stock go with it. Make a backup now.": "إذا تعطل هذا الجهاز، تضيع مبيعاتك ومخزونك معه. أنشئ نسخة احتياطية الآن.",
+  "Only the owner can make a backup.": "المالك وحده يستطيع إنشاء نسخة احتياطية.",
+  "Open backups": "فتح النسخ الاحتياطية",
+  "Other Income": "دخل آخر"
 }

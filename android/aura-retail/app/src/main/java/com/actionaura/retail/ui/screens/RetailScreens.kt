@@ -48,7 +48,9 @@ import com.actionaura.retail.printer.ReceiptPrintService
 import com.actionaura.retail.printer.PrinterPrefs
 import com.actionaura.retail.ui.CAP_DISCOUNT
 import com.actionaura.retail.ui.CAP_STOCK_ADJUST
+import com.actionaura.retail.ui.LocalWideLayout
 import com.actionaura.retail.ui.RetailSession
+import com.actionaura.retail.ui.pos.*
 import com.actionaura.retail.ui.components.EmptyState
 import com.actionaura.retail.ui.components.TillCard
 import com.actionaura.retail.ui.theme.CategoryPalette
@@ -122,7 +124,10 @@ fun PosScreen(snackbar: SnackbarHostState) {
     var loading by remember { mutableStateOf(true) }
     var query by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("All") }
-    val cart = remember { mutableStateMapOf<String, Double>() } // productId -> qty
+    // ANDROID-3: the cart is a list of LINES (ui/pos/CartLines.kt), not a product -> qty map: a line
+    // carries its modifier choice, its own price and its own percentage.
+    var cartLines by remember { mutableStateOf<List<CartLine>>(emptyList()) }
+    val wide = LocalWideLayout.current
     var showCart by remember { mutableStateOf(false) }
     var charging by remember { mutableStateOf(false) }
     // Wave 1B (Part O): holds the full authoritative SaleResult (not just its
@@ -169,8 +174,18 @@ fun PosScreen(snackbar: SnackbarHostState) {
     // owner's limit for a cashier who does not hold retail.discount (0 = none).
     var cashierLimitPct by remember { mutableStateOf(0.0) }
     var salePctText by remember { mutableStateOf("") }
-    val lineDiscounts = remember { mutableStateMapOf<String, Double>() }
-    var discountLineId by remember { mutableStateOf<String?>(null) }
+    var lineMenuKey by remember { mutableStateOf<String?>(null) }
+    // -- Sale-level discount (ANDROID-3, the desktop's UI-3a): an amount off or a wanted total, with a
+    // reason (ui/pos/CartDiscount.kt). `cartDisc` is INTENT; the server spreads it and answers the total.
+    var cartDisc by remember { mutableStateOf<CartDiscount?>(null) }
+    var showDiscountSheet by remember { mutableStateOf(false) }
+    // Non-null = the "Ask a manager" sheet is open with these people to choose from.
+    var approvers by remember { mutableStateOf<List<Approver>?>(null) }
+    // -- Variant and modifier pickers (ANDROID-3).
+    var variantParent by remember { mutableStateOf<Product?>(null) }
+    var variantList by remember { mutableStateOf<List<Product>?>(null) }
+    var modifierFor by remember { mutableStateOf<Pair<Product, List<ModifierGroup>>?>(null) }
+    val modifierCache = remember { HashMap<String, List<ModifierGroup>>() }
     // -- Split tender (ANDROID-2a; ui/pos/SplitTender.kt is the rulebook). `splitParts` are exact
     // minor units; the amount box is text. The payment chips choose the method of the NEXT part.
     var splitMode by remember { mutableStateOf(false) }
@@ -222,16 +237,58 @@ fun PosScreen(snackbar: SnackbarHostState) {
     // rendering gate here; the server re-gates the sale itself.
     val access = discountAccess(RetailSession.capabilities, cashierLimitPct)
     val salePct = clampDiscountPct(parseNum(salePctText))
-    val total = cart.entries.sumOf { (id, qty) -> (byId[id]?.sell_price ?: 0.0) * qty }
-    val count = cart.values.sumOf { it }.toInt()
+    val dpPlaces = Currency.decimals
+    fun listPriceOf(l: CartLine) = byId[l.productId]?.sell_price ?: 0.0
+    fun unitPriceOf(l: CartLine) = lineUnitPrice(listPriceOf(l), l)
+    val total = cartLines.sumOf { unitPriceOf(it) * it.quantity }
+    val count = cartItemCount(cartLines)
+    // A discount worked out for one cart is only good for that cart: it goes the moment the lines,
+    // quantities or prices change. `activeDisc` is what every later line reads, so a stale one can
+    // never ride into a sale even for the instant before the effect below clears it.
+    val cartSig = cartSignature(cartLines)
+    val activeDisc = cartDisc?.takeIf { it.sig == cartSig }
+    LaunchedEffect(cartSig) {
+        val d = cartDisc
+        if (d != null && d.sig != cartSig) {
+            cartDisc = null
+            snackbar.showSnackbar(tr("Discount cleared — the cart changed"))
+        }
+    }
 
-    // Stock guard: never let the cart exceed what's actually on hand. Returns false
-    // (and adds nothing) when the next unit would oversell.
-    fun addOne(p: Product): Boolean {
-        val current = cart[p.id] ?: 0.0
-        if (current + 1 > p.total_stock) return false
-        cart[p.id] = current + 1
-        return true
+    // ── Choosing a product (grid tap, HID scan, camera scan all come through here) ──────────
+    // A parent with variants opens the variant picker; a product with extras opens the modifier
+    // sheet; anything else goes straight in. Nothing reaches the cart through a picker it needs
+    // not to have gone through (the desktop's rule: no line to undo afterwards).
+    fun addPlain(p: Product, optionIds: List<String>, picks: List<ModifierPick>): Boolean {
+        val out = addToCart(cartLines, p.id, p.total_stock, 1.0, optionIds, picks)
+        if (out.accepted) cartLines = out.lines
+        return out.accepted
+    }
+    fun openVariants(parent: Product) {
+        variantParent = parent
+        val local = products.filter { it.parent_product_id == parent.id }
+        variantList = local.takeIf { it.isNotEmpty() }
+        // The parent matched but its children are not in the loaded list (a narrow search):
+        // ask the server rather than open an empty picker.
+        if (local.isEmpty()) scope.launch {
+            variantList = try { ApiClient.get().productVariants(parent.id).data } catch (e: Exception) { emptyList() }
+        }
+    }
+    fun openModifiers(p: Product) {
+        modifierCache[p.id]?.let { modifierFor = p to it; return }
+        scope.launch {
+            val groups = try { ApiClient.get().productModifierGroups(p.id).data }
+            catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)); return@launch }
+            modifierCache[p.id] = groups
+            if (groups.isEmpty()) {
+                if (!addPlain(p, emptyList(), emptyList())) snackbar.showSnackbar(tr("Only %s in stock").format(fmtQty(p.total_stock)))
+            } else modifierFor = p to groups
+        }
+    }
+    fun choose(p: Product): Chosen {
+        if (p.has_variants == 1 || products.any { it.parent_product_id == p.id }) { openVariants(p); return Chosen.PICKER }
+        if (p.has_modifiers == 1) { openModifiers(p); return Chosen.PICKER }
+        return if (addPlain(p, emptyList(), emptyList())) Chosen.ADDED else Chosen.NO_STOCK
     }
 
     // Wave 1B (Part L/M): a completed USB/Bluetooth HID scan (MainActivity's
@@ -266,8 +323,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
         when (val result = com.actionaura.retail.barcode.lookupProductByCode(ApiClient.get(), event.code)) {
             is com.actionaura.retail.barcode.ProductLookupResult.Found -> {
                 val p = result.product
-                lastScanned = if (addOne(p)) "✓ ${p.name}"
-                              else "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))
+                lastScanned = scanStatus(p, choose(p))
             }
             is com.actionaura.retail.barcode.ProductLookupResult.NotFound ->
                 lastScanned = "✗ " + tr("Not found:") + " ${event.code}"
@@ -289,7 +345,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
         if (rows != null) heldCount = rows.size
     }
     fun clearSaleState() {
-        cart.clear(); lineDiscounts.clear(); salePctText = ""
+        cartLines = emptyList(); cartDisc = null; salePctText = ""
         downPayment = ""; loyaltyRedeemInput = ""; customer = null; paymentMethod = "cash"
     }
     LaunchedEffect(Unit) { refreshHeld() }
@@ -297,16 +353,20 @@ fun PosScreen(snackbar: SnackbarHostState) {
     // Park the cart. The hold body is built in ui/pos/HoldRequestBuilder.kt (the desktop's
     // `_saveHold` shape); subtotal/total in it are display-only, the server re-prices at checkout.
     suspend fun holdCurrent(label: String) {
-        if (cart.isEmpty()) return
+        if (cartLines.isEmpty()) return
+        val heldDiscount = activeDisc != null
         holdBusy = true
         try {
             val r = ApiClient.get().holdSale(buildHoldRequest(
-                cart = cart.toMap(), products = byId, lineDiscounts = lineDiscounts.toMap(), salePct = salePct,
+                lines = cartLines, products = byId, salePct = salePct,
                 access = access, customerId = customer?.id, label = label, singleMethod = paymentMethod,
                 displayTotal = total, dp = Currency.decimals))
             if (r.status == "success") {
                 clearSaleState(); showHoldDialog = false; showCart = false
-                snackbar.showSnackbar(tr("Sale held") + " \u2014 " + (r.data?.hold_number ?: ""))
+                // The held snapshot keeps the lines (extras, prices, percentages) but not a sale-level
+                // amount / target discount - the desktop's hold has no field for it either.
+                snackbar.showSnackbar(tr("Sale held") + " \u2014 " + (r.data?.hold_number ?: "") +
+                    (if (heldDiscount) " · " + tr("The sale discount is not kept with a held sale.") else ""))
                 refreshHeld()
             } else snackbar.showSnackbar(r.message ?: tr("Could not hold sale"))
         } catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)) }
@@ -320,14 +380,16 @@ fun PosScreen(snackbar: SnackbarHostState) {
             if (r.status != "success") { snackbar.showSnackbar(r.message ?: tr("Could not resume sale")); return }
             val c = parseResumedCart(r.data)
             clearSaleState()
-            cart.putAll(c.quantities); lineDiscounts.putAll(c.lineDiscounts)
+            cartLines = c.lines
             salePctText = if (c.salePct > 0.0) pctText(c.salePct) else ""
             paymentMethod = c.paymentMethod.takeIf { it != "split" } ?: "cash"
             customer = customers.firstOrNull { it.id == c.customerId }
             showHeld = false
-            if (cart.isNotEmpty()) showCart = true
-            snackbar.showSnackbar(tr("Resumed") + " " + (c.holdNumber ?: ""))
+            if (cartLines.isNotEmpty()) showCart = true
+            // Before the snackbar: showSnackbar suspends until the message goes away, and the "Held n"
+            // pill kept counting the sale that had just been taken off the shelf until then.
             refreshHeld()
+            snackbar.showSnackbar(tr("Resumed") + " " + (c.holdNumber ?: ""))
         } catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)) }
     }
     suspend fun discardHeld(h: HeldSaleRow) {
@@ -341,7 +403,10 @@ fun PosScreen(snackbar: SnackbarHostState) {
     val categories = remember(products) {
         listOf("All") + products.mapNotNull { it.category_name?.takeIf { c -> c.isNotBlank() } }.distinct()
     }
+    // A variant is reached through its parent's picker, not as a tile of its own (the desktop's grid).
+    val variantCounts = remember(products) { products.mapNotNull { it.parent_product_id }.groupingBy { it }.eachCount() }
     val filtered = products.filter {
+        it.parent_product_id.isNullOrBlank() &&
         (category == "All" || it.category_name == category) &&
             (query.isBlank() || (it.name ?: "").contains(query, true) || (it.sku ?: "").contains(query, true))
     }
@@ -369,123 +434,108 @@ fun PosScreen(snackbar: SnackbarHostState) {
     val loyaltyPointsToSend = kotlin.math.min(loyaltyRequestedPoints, loyaltyMaxRedeemable)
     val loyaltyValue = if (loyaltyPointsToSend > 0) kotlin.math.min(loyaltyPointsToSend * loyaltyPointValue, total) else 0.0
 
-    // DISPLAY-ONLY estimate of the amount due, for the split screen's Remaining (see
-    // SaleEstimate.kt for its limits). The server prices the sale and settles the parts against ITS
-    // figure; nothing sent is derived from this.
-    val dpPlaces = Currency.decimals
-    val estimateMinor = estimateDueMinor(cart.entries.map { (id, q) ->
-        val pr = byId[id]
-        EstimateLine(pr?.sell_price ?: 0.0, q,
-            if (access is DiscountAccess.None) 0.0 else effectiveLinePct(lineDiscounts[id], salePct), pr?.tax_rate ?: 0.0)
-    }, dpPlaces)
+    // DISPLAY-ONLY estimate of the amount due (see SaleEstimate.kt / CartDiscount.kt for its limits): the
+    // split screen's Remaining, the discount sheet's preview and the "Estimated total" row. The server
+    // prices the sale and settles the parts against ITS figure; nothing sent is derived from this.
+    val estLines = cartLines.map { l ->
+        EstimateLine(unitPriceOf(l), l.quantity,
+            if (access is DiscountAccess.None || activeDisc != null) 0.0 else effectiveLinePct(l.ownPct, salePct),
+            byId[l.productId]?.tax_rate ?: 0.0)
+    }
+    val baseTotalMinor = estimateDueMinor(estLines, dpPlaces)
+    val grossMinor = grossSubtotalMinor(estLines, dpPlaces)
+    val estimateMinor = estimateWithDiscountMinor(estLines, activeDisc, dpPlaces)
     val dueMinor = (estimateMinor - toMinor(loyaltyValue, dpPlaces)).coerceAtLeast(0L)
+    // Will the shop ask for a manager's PIN? A prediction from the estimate; a server refusal that says
+    // "ask a manager" opens the same sheet (apiFailure.needsManager).
+    val needsManager = managerApprovalNeeded(
+        holdsDiscountCapability = RetailSession.hasCapability(CAP_DISCOUNT), cashierLimitPct = cashierLimitPct,
+        discount = activeDisc,
+        effectivePct = activeDisc?.let { effectiveDiscountPct(it, grossMinor, baseTotalMinor) } ?: 0.0,
+        hasPriceOverride = cartLines.any { it.unitPriceOverride != null })
     val splitSummary = summarizeSplit(dueMinor, splitParts, customer != null)
 
-    Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedTextField(
-                    value = query, onValueChange = { query = it },
-                    placeholder = { Text(tr("Search products")) },
-                    leadingIcon = { Icon(Icons.Default.Search, null) },
-                    singleLine = true, shape = RoundedCornerShape(28.dp),
-                    modifier = Modifier.weight(1f),
-                )
-                // Optional camera scan — manual search above always remains available.
-                FilledTonalIconButton(
-                    onClick = { showScanner = true }, modifier = Modifier.size(52.dp),
-                ) { Icon(Icons.Default.QrCodeScanner, contentDescription = tr("Scan barcode")) }
-                if (heldCount > 0) {
-                    FilledTonalButton(onClick = { showHeld = true; scope.launch { refreshHeld() } }) {
-                        Text(tr("Held") + " $heldCount")
+    // ── Charge ───────────────────────────────────────────────────────────────────────────
+    // Asking a manager: the people the shop offers (GET discount/approvers - a reference and a name,
+    // nothing else), then the PIN sheet. Reached when the estimate says a PIN will be needed, or when
+    // the server refuses a sale with "ask a manager".
+    suspend fun askManager() {
+        val list = try { ApiClient.get().discountApprovers().data }
+        catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)); return }
+        if (list.isEmpty()) snackbar.showSnackbar(tr("No manager has a PIN set up. Ask the owner to set one in Settings > Team."))
+        else approvers = list
+    }
+    // `total` below is a local, pre-tax, pre-discount PREVIEW only (Phase 4D classification A) - used
+    // to clamp the optional credit down-payment and nothing else. It is never sent as an authoritative
+    // financial field and never shown as the sale's total; only the backend's response is.
+    suspend fun submitSale(approval: ApprovalReq?) {
+        val pm = paymentMethod
+        val cust = customer
+        charging = true
+        try {
+            // MOB-001: for anything other than an explicit credit down-payment, amount_paid is omitted so
+            // the server defaults it to its own computed total (a pre-tax figure here read as an
+            // under-payment on every taxed product).
+            val paidNow: Double? = if (pm == "credit" && !splitMode) (parseNum(downPayment)?.coerceIn(0.0, total) ?: 0.0) else null
+            // product_id + quantity + discount_pct per line, plus the extras' option ids and a line's own
+            // price (ANDROID-3) - exactly the desktop's shape; unit_price / tax / totals are never sent.
+            val items = buildSaleItems(cartLines, salePct, access, cartDiscountOn = activeDisc != null)
+            val r = ApiClient.get().createSale(buildCreateSaleRequest(
+                items = items, customerId = cust?.id, idempotencyKey = UUID.randomUUID().toString(),
+                pointsRedeemed = loyaltyPointsToSend, singleMethod = pm, creditDownPayment = paidNow,
+                splitParts = if (splitMode) splitParts else emptyList(), dp = dpPlaces,
+                cartDiscount = activeDisc, discountReason = saleDiscountReason(activeDisc, cartLines), approval = approval))
+            if (r.status == "success") {
+                // Authoritative result: the backend's own response, never the local preview.
+                val estimated = fromMinor(estimateMinor, dpPlaces)
+                val hadDiscount = activeDisc != null && loyaltyPointsToSend == 0
+                cartLines = emptyList(); cartDisc = null; showCart = false; successSale = r.data
+                paymentMethod = "cash"; customer = null; downPayment = ""; loyaltyRedeemInput = ""
+                salePctText = ""
+                splitMode = false; splitParts = emptyList(); splitAmountText = ""
+                r.data?.warning?.takeIf { it.isNotBlank() }?.let { snackbar.showSnackbar(it) }
+                // The estimate was the phone's guess; say plainly when the shop charged something else.
+                r.data?.let { sale ->
+                    if (hadDiscount && kotlin.math.abs(sale.total - estimated) > halfMinorUnit(dpPlaces)) {
+                        snackbar.showSnackbar(tr("The total charged is %s").format(money(sale.total)))
                     }
                 }
-            }
-            if (categories.size > 1) {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(categories) { c ->
-                        FilterChip(selected = category == c, onClick = { category = c }, label = { Text(c) })
+                // Auto-print (Settings toggle, default off): fire-and-forget, no blocking, no error
+                // dialog - a print failure must never read as the sale having failed.
+                r.data?.id?.let { saleId ->
+                    if (PrinterPrefs.getAutoPrint(ctx)) {
+                        scope.launch { printReceipt(ctx, saleId, snackbar, isAutoPrint = true) }
                     }
                 }
-                Spacer(Modifier.height(8.dp))
-            }
-
-            when {
-                loading -> SkeletonGrid()
-                filtered.isEmpty() -> EmptyState(
-                    icon = Icons.Default.Inventory2,
-                    title = if (products.isEmpty()) tr("No products yet") else tr("No matches"),
-                    subtitle = if (products.isEmpty()) tr("Add products to start selling.")
-                               else tr("Try another search or category."),
-                )
-                else -> LazyVerticalGrid(
-                    columns = GridCells.Adaptive(160.dp),
-                    contentPadding = PaddingValues(12.dp, 0.dp, 12.dp, 110.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    items(filtered, key = { it.id }) { p ->
-                        ProductTile(p, inCart = (cart[p.id] ?: 0.0).toInt(),
-                            onAdd = { if (!addOne(p)) scope.launch { snackbar.showSnackbar(tr("Only %s in stock").format(fmtQty(p.total_stock))) } })
-                    }
-                }
-            }
+                load(); loadCustomers()   // refresh stock + customer balances
+            } else snackbar.showSnackbar(r.message ?: tr("Sale failed"))
+        // apiFailure (net/ApiErrors.kt): a licensing 403 must say the subscription blocked the sale,
+        // never "server unreachable"; a 403 "ask a manager" opens the PIN sheet instead of a toast.
+        } catch (e: Exception) {
+            val f = apiFailure(e)
+            if (f.needsManager && approval == null) askManager() else snackbar.showSnackbar(f.message)
         }
-
-        // Animated floating cart bar
-        AnimatedVisibility(
-            visible = count > 0,
-            enter = slideInVertically(tween(280)) { it } + fadeIn(),
-            exit = slideOutVertically(tween(220)) { it } + fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter),
-        ) {
-            // Quiet neutral elevation instead of the old infinite pulseGlow
-            // animation -- a floating bar earns its lift with a shadow, not by
-            // breathing forever (and the pulse kept this screen recomposing
-            // whenever the cart had an item; see Components.kt's header note).
-            Surface(
-                color = MaterialTheme.colorScheme.primary, shadowElevation = 6.dp,
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                shape = MaterialTheme.shapes.large,
-                onClick = { showCart = true },
-            ) {
-                Row(Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.ShoppingCart, null, tint = MaterialTheme.colorScheme.onPrimary)
-                        Surface(color = MaterialTheme.colorScheme.onPrimary, shape = CircleShape,
-                            modifier = Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp)) {
-                            Text("$count", color = MaterialTheme.colorScheme.primary,
-                                style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp))
-                        }
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Text(tr("View cart"), color = MaterialTheme.colorScheme.onPrimary,
-                        fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                    Text(money(total), color = MaterialTheme.colorScheme.onPrimary,
-                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-
-        // Payment success overlay
-        AnimatedVisibility(successSale != null, enter = fadeIn(), exit = fadeOut()) {
-            PaymentSuccess(sale = successSale ?: com.actionaura.retail.net.SaleResult(), onNewSale = { successSale = null }, snackbar = snackbar)
+        finally { charging = false }
+    }
+    fun startCharge() {
+        val pm = paymentMethod
+        val cust = customer
+        val overLim = (listOf(salePct) + cartLines.mapNotNull { it.ownPct }).mapNotNull { overLimit(it, access) }.firstOrNull()
+        if (!splitMode && pm == "credit" && cust == null) {
+            scope.launch { snackbar.showSnackbar(tr("Select a customer for credit sales (walk-in not allowed)")) }
+        } else if (access !is DiscountAccess.None && overLim != null) {
+            // Courtesy only: the server refuses an over-limit discount itself (403 DISCOUNT_OVER_LIMIT).
+            scope.launch { snackbar.showSnackbar(tr("You can give at most %s%% discount. Ask a manager for more.").format(pctText(overLim))) }
+        } else if (needsManager) {
+            scope.launch { askManager() }
+        } else {
+            scope.launch { submitSale(null) }
         }
     }
 
-    if (showCart) {
-        val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(onDismissRequest = { showCart = false }, sheetState = sheet) {
+    // The cart panel: the bottom sheet on a phone, the persistent right-hand pane on a tablet.
+    val cartContent: @Composable () -> Unit = {
+        run {
             // imePadding() so the redeem-points and down-payment fields --
             // and the Charge button below them -- stay reachable above the
             // keyboard instead of being covered by it. ModalBottomSheet's
@@ -621,13 +671,35 @@ fun PosScreen(snackbar: SnackbarHostState) {
                 }
                 if (access !is DiscountAccess.None) {
                     Spacer(Modifier.height(12.dp))
-                    SaleDiscountField(access = access, text = salePctText, onChange = { salePctText = it })
+                    SaleDiscountField(access = access, text = salePctText, onChange = {
+                        salePctText = it
+                        // a % beside an amount / target discount is refused by the server: keep the newer intention
+                        if (cartDisc != null && clampDiscountPct(parseNum(it)) > 0.0) {
+                            cartDisc = null
+                            scope.launch { snackbar.showSnackbar(tr("Discount cleared — it cannot be combined with an item discount or promotion")) }
+                        }
+                    })
+                }
+                // ANDROID-3 (UI-3a): an amount off / "make the total X" with a reason. Offered to everyone who
+                // can sell - a cashier past their limit is asked for a manager's PIN at Charge, not hidden.
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = { showDiscountSheet = true }, enabled = cartLines.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                ) {
+                    Text(
+                        if (activeDisc == null) tr("Discount") + " / " + tr("New total")
+                        else tr("Discount") + ": " + money(fromMinor(
+                            if (activeDisc.kind == CartDiscountKind.AMOUNT) activeDisc.minor else (baseTotalMinor - activeDisc.minor), dpPlaces)) +
+                            " (" + activeDisc.reason + ")",
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 Spacer(Modifier.height(12.dp))
                 LazyColumn(Modifier.heightIn(max = 340.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(cart.keys.toList()) { id ->
-                        val p = byId[id] ?: return@items
-                        val qty = cart[id] ?: 0.0
+                    items(cartLines, key = { it.key }) { l ->
+                        val p = byId[l.productId] ?: return@items
+                        val unit = unitPriceOf(l)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(40.dp).clip(RoundedCornerShape(10.dp))
                                 .background(catColor(p.category_name).copy(alpha = 0.18f)),
@@ -637,34 +709,45 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             }
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(p.name ?: "—", fontWeight = FontWeight.Medium, maxLines = 1,
+                                Text(displayName(p), fontWeight = FontWeight.Medium, maxLines = 1,
                                     overflow = TextOverflow.Ellipsis)
-                                Text(money(p.sell_price), style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                if (access !is DiscountAccess.None) {
-                                    // Tap to give THIS line its own percentage (it wins over the
-                                    // whole-sale one for this line; the two never stack).
-                                    val own = lineDiscounts[id]
-                                    Text(
-                                        if (own != null) "−" + pctText(own) + "%  " + tr("Discount") else "+ " + tr("Discount"),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.clickable(role = Role.Button) { discountLineId = id }.padding(vertical = 6.dp),
-                                    )
+                                if (l.modifiers.isNotEmpty()) {
+                                    Text(l.modifiers.joinToString(", ") { it.name }, style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 }
+                                Text(
+                                    money(unit) + (if (l.unitPriceOverride != null) "  ·  " + tr("was") + " " + money(lineListPrice(p.sell_price, l)) else ""),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                // Tap for THIS line's own percentage and price (ANDROID-3 line menu). Offered to
+                                // everyone who can sell; the % box inside it is gated by `access`.
+                                val tag = buildList {
+                                    l.ownPct?.let { add("−" + pctText(it) + "%") }
+                                    if (l.unitPriceOverride != null) add(tr("Price changed"))
+                                }.joinToString(" · ").ifEmpty {
+                                    "+ " + (if (access is DiscountAccess.None) tr("Price") else tr("Discount / price"))
+                                }
+                                Text(
+                                    tag,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.clickable(role = Role.Button) { lineMenuKey = l.key }.padding(vertical = 6.dp),
+                                )
                             }
                             // No Modifier.size(34.dp) override -- 34dp sits below Material3's
                             // own ~48dp default and the 44dp accessibility floor the desktop
                             // client enforces (--touch-target-min). The cart is the
                             // highest-frequency tap surface in the app; every other icon
                             // button here already relies on the Material default.
-                            FilledTonalIconButton(onClick = {
-                                val n = qty - 1; if (n <= 0) cart.remove(id) else cart[id] = n
-                            }) { Icon(Icons.Default.Remove, tr("Decrease quantity")) }
-                            Text(fmtQty(qty), fontWeight = FontWeight.Bold,
+                            FilledTonalIconButton(onClick = { cartLines = decrementLine(cartLines, l.key) }) {
+                                Icon(Icons.Default.Remove, tr("Decrease quantity"))
+                            }
+                            Text(fmtQty(l.quantity), fontWeight = FontWeight.Bold,
                                 modifier = Modifier.widthIn(min = 28.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                             FilledTonalIconButton(onClick = {
-                                if (!addOne(p)) scope.launch { snackbar.showSnackbar(tr("Max stock: %s").format(fmtQty(p.total_stock))) }
+                                val out = incrementLine(cartLines, l.key, p.total_stock)
+                                if (out.accepted) cartLines = out.lines
+                                else scope.launch { snackbar.showSnackbar(tr("Max stock: %s").format(fmtQty(p.total_stock))) }
                             }) { Icon(Icons.Default.Add, tr("Increase quantity")) }
                         }
                     }
@@ -700,6 +783,18 @@ fun PosScreen(snackbar: SnackbarHostState) {
                 Text(tr("Tax and discounts are applied at checkout"),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (activeDisc != null) {
+                    // The phone's guess at what the shop will charge, labelled as one; the real total
+                    // comes back with the sale (and replaces this the moment it does).
+                    Spacer(Modifier.height(8.dp))
+                    Row {
+                        Text(tr("Estimated total"), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        Text(money(fromMinor(estimateMinor, dpPlaces)), style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold)
+                    }
+                    Text(tr("An estimate. The shop confirms the real total when you charge."),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 Spacer(Modifier.height(14.dp))
                 Text(tr("Payment method"), style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -757,93 +852,8 @@ fun PosScreen(snackbar: SnackbarHostState) {
                     modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(tr("Hold sale (park for later)")) }
                 Spacer(Modifier.height(8.dp))
                 Button(
-                    onClick = {
-                        val pm = paymentMethod
-                        val cust = customer
-                        val overLim = (listOf(salePct) + lineDiscounts.values).mapNotNull { overLimit(it, access) }.firstOrNull()
-                        if (!splitMode && pm == "credit" && cust == null) {
-                            scope.launch { snackbar.showSnackbar(tr("Select a customer for credit sales (walk-in not allowed)")) }
-                        } else if (access !is DiscountAccess.None && overLim != null) {
-                            // Courtesy only: the server refuses an over-limit discount itself
-                            // (403 DISCOUNT_OVER_LIMIT) and its limit is shown the same way.
-                            scope.launch { snackbar.showSnackbar(tr("You can give at most %s%% discount. Ask a manager for more.").format(pctText(overLim))) }
-                        } else {
-                            charging = true
-                            // `total` here is a local, pre-tax, pre-discount PREVIEW only
-                            // (Phase 4D classification A) -- used to clamp the optional
-                            // credit down-payment and nothing else. It is never sent as
-                            // an authoritative financial field and never persisted/
-                            // displayed as the sale's actual total; only the backend's
-                            // response (r.data.total below) is.
-                            val previewTotal = total
-                            // MOB-001 fix: for anything other than an explicit credit
-                            // down-payment, amount_paid must be omitted (null), not
-                            // previewTotal -- previewTotal is pre-tax/pre-discount, so
-                            // sending it as "amount paid" on a taxed sale always
-                            // under-reports the tender, which the server correctly
-                            // read as a partial payment and rejected as an implicit
-                            // credit sale requiring a customer (reproduced on a real
-                            // device: every taxed product's "cash" checkout failed this
-                            // way). Omitting it lets the server default amount_paid to
-                            // its own computed, authoritative total -- guaranteeing a
-                            // "pay in full" sale is always recorded as fully paid.
-                            val paidNow: Double? = if (pm == "credit" && !splitMode) (parseNum(downPayment)?.coerceIn(0.0, previewTotal) ?: 0.0) else null
-                            // Commercial intent only: product_id + quantity per line (no
-                            // discount-entry UI exists in this source, so discount_pct
-                            // stays at its default of 0). unit_price/tax_rate/subtotal/
-                            // discount_amount/tax_amount/total are never sent -- the
-                            // server always resolves/computes them from the product row
-                            // and ignores any client-submitted equivalent (Wave 0,
-                            // AUDIT-002/003). See docs/architecture/financial-authority-contracts.md.
-                            // ANDROID-2a: product_id + quantity + discount_pct per line, exactly the
-                            // desktop's shape (the whole-sale % goes on every line without its own).
-                            // Under DiscountAccess.None every line goes out at 0 whatever state holds.
-                            val items = buildSaleItems(cart.toMap(), lineDiscounts.toMap(), salePct, access)
-                            scope.launch {
-                                try {
-                                    // ui/pos/SaleRequestBuilder.kt: a single-method sale is byte for byte what it
-                                    // always was; two or more parts become the desktop's split shape
-                                    // (payment_method "split" + tenders, no amount_paid). Loyalty points
-                                    // are the locally-clamped preview, the server re-clamps (see
-                                    // `loyaltyPointsToSend`).
-                                    val r = ApiClient.get().createSale(buildCreateSaleRequest(
-                                        items = items, customerId = cust?.id, idempotencyKey = UUID.randomUUID().toString(),
-                                        pointsRedeemed = loyaltyPointsToSend, singleMethod = pm, creditDownPayment = paidNow,
-                                        splitParts = if (splitMode) splitParts else emptyList(), dp = dpPlaces))
-                                    if (r.status == "success") {
-                                        // Authoritative result: always the backend's own
-                                        // response, never the local preview above -- this is
-                                        // what fixes the historical Android zero-tax defect
-                                        // (AUDIT-002), since previewTotal never included tax
-                                        // or a server-validated discount at all.
-                                        cart.clear(); showCart = false; successSale = r.data
-                                        paymentMethod = "cash"; customer = null; downPayment = ""; loyaltyRedeemInput = ""
-                                        salePctText = ""; lineDiscounts.clear()
-                                        splitMode = false; splitParts = emptyList(); splitAmountText = ""
-                                        r.data?.warning?.takeIf { it.isNotBlank() }?.let { snackbar.showSnackbar(it) }
-                                        // Auto-print (Settings toggle, default off): fire-and-
-                                        // forget, no blocking, no error dialog -- printReceipt's
-                                        // own doc comment covers why a print failure must never
-                                        // read as the sale having failed. A separate coroutine
-                                        // (not the one this success handling already runs in)
-                                        // so a slow/unreachable printer can never delay
-                                        // load()/loadCustomers() below.
-                                        r.data?.id?.let { saleId ->
-                                            if (PrinterPrefs.getAutoPrint(ctx)) {
-                                                scope.launch { printReceipt(ctx, saleId, snackbar, isAutoPrint = true) }
-                                            }
-                                        }
-                                        load(); loadCustomers()   // refresh stock + customer balances
-                                    } else snackbar.showSnackbar(r.message ?: tr("Sale failed"))
-                                // apiErrorMessage (net/ApiErrors.kt): a licensing
-                                // 403 on checkout must say the subscription
-                                // blocked the sale, never "server unreachable".
-                                } catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)) }
-                                finally { charging = false }
-                            }
-                        }
-                    },
-                    enabled = !charging && (!splitMode || (splitParts.size >= 2 && splitSummary.chargeable)),
+                    onClick = { startCharge() },
+                    enabled = !charging && cartLines.isNotEmpty() && (!splitMode || (splitParts.size >= 2 && splitSummary.chargeable)),
                     modifier = Modifier.fillMaxWidth().height(54.dp),
                 ) {
                     if (charging) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
@@ -867,18 +877,186 @@ fun PosScreen(snackbar: SnackbarHostState) {
                     // "Charge" and never "Total". CartTotalHonestyContractTest
                     // pins that distinction.
                     else Text(tr("Charge") + "  " + (if (splitMode) money(fromMinor(splitSummary.enteredMinor - splitSummary.changeMinor, dpPlaces))
-                                                        else money((total - loyaltyValue).coerceAtLeast(0.0))),
+                                                        else money(((if (activeDisc != null) fromMinor(estimateMinor, dpPlaces) else total) - loyaltyValue).coerceAtLeast(0.0))),
                         style = MaterialTheme.typography.labelLarge)
                 }
             }
         }
     }
 
-    discountLineId?.let { lid ->
-        LineDiscountDialog(
-            productName = byId[lid]?.name ?: "—", current = lineDiscounts[lid], access = access,
-            onSet = { v -> if (v == null) lineDiscounts.remove(lid) else lineDiscounts[lid] = v; discountLineId = null },
-            onDismiss = { discountLineId = null },
+    Box(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxSize()) {
+        Column(Modifier.weight(1f).fillMaxHeight()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = query, onValueChange = { query = it },
+                    placeholder = { Text(tr("Search products")) },
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    singleLine = true, shape = RoundedCornerShape(28.dp),
+                    modifier = Modifier.weight(1f),
+                )
+                // Optional camera scan — manual search above always remains available.
+                FilledTonalIconButton(
+                    onClick = { showScanner = true }, modifier = Modifier.size(52.dp),
+                ) { Icon(Icons.Default.QrCodeScanner, contentDescription = tr("Scan barcode")) }
+                if (heldCount > 0) {
+                    FilledTonalButton(onClick = { showHeld = true; scope.launch { refreshHeld() } }) {
+                        Text(tr("Held") + " $heldCount")
+                    }
+                }
+            }
+            if (categories.size > 1) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(categories) { c ->
+                        FilterChip(selected = category == c, onClick = { category = c }, label = { Text(c) })
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            when {
+                loading -> SkeletonGrid()
+                filtered.isEmpty() -> EmptyState(
+                    icon = Icons.Default.Inventory2,
+                    title = if (products.isEmpty()) tr("No products yet") else tr("No matches"),
+                    subtitle = if (products.isEmpty()) tr("Add products to start selling.")
+                               else tr("Try another search or category."),
+                )
+                else -> LazyVerticalGrid(
+                    columns = GridCells.Adaptive(160.dp),
+                    contentPadding = PaddingValues(12.dp, 0.dp, 12.dp, if (wide) 12.dp else 110.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    items(filtered, key = { it.id }) { p ->
+                        ProductTile(p,
+                            inCart = cartLines.filter { it.productId == p.id || byId[it.productId]?.parent_product_id == p.id }.sumOf { it.quantity }.toInt(),
+                            variantCount = variantCounts[p.id] ?: 0,
+                            onAdd = { if (choose(p) == Chosen.NO_STOCK) scope.launch { snackbar.showSnackbar(tr("Only %s in stock").format(fmtQty(p.total_stock))) } })
+                    }
+                }
+            }
+        }
+        // Tablet / large window: the cart and Charge stay on screen beside the products.
+        if (wide) {
+            VerticalDivider()
+            Surface(Modifier.width(400.dp).fillMaxHeight(), color = MaterialTheme.colorScheme.surface) { cartContent() }
+        }
+        }
+
+        // Animated floating cart bar (phone only: on a tablet the cart pane is always there)
+        AnimatedVisibility(
+            visible = count > 0 && !wide,
+            enter = slideInVertically(tween(280)) { it } + fadeIn(),
+            exit = slideOutVertically(tween(220)) { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            // Quiet neutral elevation instead of the old infinite pulseGlow
+            // animation -- a floating bar earns its lift with a shadow, not by
+            // breathing forever (and the pulse kept this screen recomposing
+            // whenever the cart had an item; see Components.kt's header note).
+            Surface(
+                color = MaterialTheme.colorScheme.primary, shadowElevation = 6.dp,
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                shape = MaterialTheme.shapes.large,
+                onClick = { showCart = true },
+            ) {
+                Row(Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.ShoppingCart, null, tint = MaterialTheme.colorScheme.onPrimary)
+                        Surface(color = MaterialTheme.colorScheme.onPrimary, shape = CircleShape,
+                            modifier = Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp)) {
+                            Text("$count", color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp))
+                        }
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Text(tr("View cart"), color = MaterialTheme.colorScheme.onPrimary,
+                        fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Text(money(total), color = MaterialTheme.colorScheme.onPrimary,
+                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        // Payment success overlay
+        AnimatedVisibility(successSale != null, enter = fadeIn(), exit = fadeOut()) {
+            PaymentSuccess(sale = successSale ?: com.actionaura.retail.net.SaleResult(), onNewSale = { successSale = null }, snackbar = snackbar)
+        }
+    }
+
+    if (showCart && !wide) {
+        val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(onDismissRequest = { showCart = false }, sheetState = sheet) { cartContent() }
+    }
+
+    lineMenuKey?.let { key ->
+        val line = cartLines.firstOrNull { it.key == key }
+        if (line == null) lineMenuKey = null else LineMenuDialog(
+            productName = displayName(byId[line.productId]), line = line, listPrice = listPriceOf(line),
+            access = access, holdsDiscountCapability = RetailSession.hasCapability(CAP_DISCOUNT), dp = dpPlaces,
+            onApply = { out ->
+                cartLines = setPriceOverride(setOwnPct(cartLines, key, out.ownPct), key, out.unitPriceOverride, out.priceReason)
+                // an own % or price beside an amount / target discount is refused by the server
+                if (cartDisc != null && (out.ownPct != null)) {
+                    cartDisc = null
+                    scope.launch { snackbar.showSnackbar(tr("Discount cleared — it cannot be combined with an item discount or promotion")) }
+                }
+                lineMenuKey = null
+            },
+            onDismiss = { lineMenuKey = null },
+        )
+    }
+
+    if (showDiscountSheet) {
+        CartDiscountSheet(
+            estimateLines = estLines, grossSubtotalMinor = grossMinor, baseTotalMinor = baseTotalMinor, dp = dpPlaces,
+            current = activeDisc,
+            blockedBy = if (salePct > 0.0 || cartLines.any { it.ownPct != null }) tr("Remove the item discounts and promotions first") else null,
+            onApply = { kind, minor, reason -> cartDisc = CartDiscount(kind, minor, reason, cartSig); showDiscountSheet = false },
+            onRemove = { cartDisc = null; showDiscountSheet = false },
+            onDismiss = { showDiscountSheet = false },
+        )
+    }
+
+    approvers?.let { list ->
+        ManagerApprovalSheet(
+            approvers = list,
+            onApprove = { req -> approvers = null; scope.launch { submitSale(req) } },
+            onDismiss = { approvers = null },
+        )
+    }
+
+    variantParent?.let { parent ->
+        VariantPickerSheet(
+            parentName = parent.name ?: "—", variants = variantList,
+            onPick = { v ->
+                variantParent = null; variantList = null
+                if (choose(v) == Chosen.NO_STOCK) scope.launch { snackbar.showSnackbar(tr("Only %s in stock").format(fmtQty(v.total_stock))) }
+            },
+            onOutOfStock = { scope.launch { snackbar.showSnackbar(tr("Out of stock")) } },
+            onDismiss = { variantParent = null; variantList = null },
+        )
+    }
+
+    modifierFor?.let { (product, groups) ->
+        ModifierSheet(
+            product = product, groups = groups,
+            onAdd = { ids, picks ->
+                modifierFor = null
+                if (!addPlain(product, ids, picks)) scope.launch { snackbar.showSnackbar(tr("Only %s in stock").format(fmtQty(product.total_stock))) }
+            },
+            onDismiss = { modifierFor = null },
         )
     }
 
@@ -888,7 +1066,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
     if (showHeld) {
         HeldSalesSheet(
             rows = heldRows,
-            onResume = { h -> if (cart.isNotEmpty()) pendingResume = h else scope.launch { resumeHeld(h) } },
+            onResume = { h -> if (cartLines.isNotEmpty()) pendingResume = h else scope.launch { resumeHeld(h) } },
             onDiscard = { h -> pendingDiscard = h },
             onDismiss = { showHeld = false },
         )
@@ -930,8 +1108,10 @@ fun PosScreen(snackbar: SnackbarHostState) {
                     when (val result = com.actionaura.retail.barcode.lookupProductByCode(ApiClient.get(), code)) {
                         is com.actionaura.retail.barcode.ProductLookupResult.Found -> {
                             val p = result.product
-                            lastScanned = if (addOne(p)) "✓ ${p.name}"
-                                          else "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))
+                            val c = choose(p)
+                            lastScanned = scanStatus(p, c)
+                            // A picker is a sheet in the main window, behind the camera: close the camera so it can be seen.
+                            if (c == Chosen.PICKER) { showScanner = false; lastScanned = null }
                         }
                         is com.actionaura.retail.barcode.ProductLookupResult.NotFound ->
                             lastScanned = "✗ " + tr("Not found:") + " $code"
@@ -949,8 +1129,20 @@ fun PosScreen(snackbar: SnackbarHostState) {
     }
 }
 
+/** What choosing a product did: it went in, the stock guard refused it, or a picker opened first. */
+private enum class Chosen { ADDED, NO_STOCK, PICKER }
+
+private fun scanStatus(p: Product, c: Chosen): String = when (c) {
+    Chosen.ADDED -> "✓ ${p.name}"
+    Chosen.NO_STOCK -> "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))
+    Chosen.PICKER -> "… ${p.name}"
+}
+
+/** Half of the currency's smallest unit: the difference below which two amounts are the same amount. */
+private fun halfMinorUnit(dp: Int): Double = 0.5 / Math.pow(10.0, dp.toDouble())
+
 @Composable
-private fun ProductTile(p: Product, inCart: Int, onAdd: () -> Unit) {
+private fun ProductTile(p: Product, inCart: Int, variantCount: Int, onAdd: () -> Unit) {
     val accent = catColor(p.category_name)
     val stock = p.total_stock
 
@@ -970,7 +1162,14 @@ private fun ProductTile(p: Product, inCart: Int, onAdd: () -> Unit) {
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
                 }
             }
-            StockBadge(stock, Modifier.align(Alignment.BottomStart).padding(6.dp))
+            if (variantCount > 0) {
+                // A parent's own stock says nothing; what the cashier needs to know is that it opens a picker.
+                Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.align(Alignment.BottomStart).padding(6.dp)) {
+                    Text(tr("%d variants").format(variantCount), style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+                }
+            } else StockBadge(stock, Modifier.align(Alignment.BottomStart).padding(6.dp))
         }
         Column(Modifier.padding(12.dp)) {
             if (!p.category_name.isNullOrBlank()) {
