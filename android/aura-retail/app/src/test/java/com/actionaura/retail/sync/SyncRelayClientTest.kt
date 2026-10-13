@@ -2,6 +2,9 @@ package com.actionaura.retail.sync
 
 import com.actionaura.retail.licensing.DeviceIdentity
 import com.actionaura.retail.licensing.KeyWrapper
+import com.actionaura.retail.licensing.canonicalizeBytes
+import com.actionaura.retail.licensing.verifySignature
+import com.google.gson.JsonParser
 import com.google.common.truth.Truth.assertThat
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -263,6 +266,56 @@ class SyncRelayClientTest {
     }
 
     @Test
+    fun `pull without a stream sends the old body exactly (an old caller is unchanged)`() {
+        val fake = startFakeServer()
+        fake.enqueueJson(200, """{"events":[],"cursor":0}""")
+
+        client("http://127.0.0.1:${fake.port}").pull(7L)
+
+        assertThat(fake.requests[0].body).doesNotContain("\"stream\"")
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    @Test
+    fun `pull sends the stream INSIDE the signed body - the signature covers it`() {
+        val fake = startFakeServer()
+        fake.enqueueJson(200, """{"events":[],"cursor":0}""")
+
+        client("http://127.0.0.1:${fake.port}").pull(7L, stream = "registry")
+
+        val sent = JsonParser.parseString(fake.requests[0].body).asJsonObject
+        assertThat(sent.get("stream").asString).isEqualTo("registry")
+        // Re-derive what Owner's verifier derives: canonical bytes of the body
+        // MINUS its signature. If `stream` were appended after signing (or
+        // dropped from the signed set) this verification would fail, and a
+        // captured request could be replayed under another stream.
+        val signature = java.util.Base64.getDecoder().decode(sent.get("signature").asString)
+        val unsigned = jsonToCanonical(sent) as LinkedHashMap<String, Any?>
+        unsigned.remove("signature")
+        val publicKey = java.util.Base64.getDecoder().decode(identity.getPublicKeyB64())
+        assertThat(verifySignature(publicKey, canonicalizeBytes(unsigned), signature)).isTrue()
+        // ...and tampering with the stream breaks it (the check can fail).
+        unsigned["stream"] = "retail"
+        assertThat(verifySignature(publicKey, canonicalizeBytes(unsigned), signature)).isFalse()
+    }
+
+    @Test
+    fun `pull 409 RESYNC_REQUIRED throws SyncResyncRequired with prunedThrough and is not retried`() {
+        val fake = startFakeServer()
+        fake.enqueueJson(409, """{"reason_code":"RESYNC_REQUIRED","pruned_through":41}""")
+
+        try {
+            client("http://127.0.0.1:${fake.port}").pull(3L, stream = "retail")
+            throw AssertionError("expected SyncResyncRequired")
+        } catch (exc: SyncResyncRequired) {
+            assertThat(exc.reasonCode).isEqualTo("RESYNC_REQUIRED")
+            assertThat(exc.prunedThrough).isEqualTo(41L)
+            assertThat(exc.repeat).isFalse()
+        }
+        assertThat(fake.requestCount).isEqualTo(1)
+    }
+
+    @Test
     fun `pull 400 with reason_code throws SyncRelayRejected and is not retried`() {
         val fake = startFakeServer()
         fake.enqueueJson(400, """{"result":"REJECTED","reason_code":"NONCE_REUSED"}""")
@@ -464,6 +517,7 @@ private class FakeSyncServer(sslContext: SSLContext? = null) {
     private fun reasonPhrase(status: Int): String = when (status) {
         200 -> "OK"
         400 -> "Bad Request"
+        409 -> "Conflict"
         503 -> "Service Unavailable"
         else -> "Unknown"
     }

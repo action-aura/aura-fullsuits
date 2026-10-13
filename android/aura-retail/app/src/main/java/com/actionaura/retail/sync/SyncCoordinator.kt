@@ -102,6 +102,12 @@ data class SyncHealth(
     val push: SyncHalfHealth,
     val pull: SyncHalfHealth,
     val pendingCount: Int = 0,
+    /** SYNC-BOOT: labels of the streams Owner refused with RESYNC_REQUIRED
+     *  (their cursor is below what Owner has pruned). Those streams have
+     *  STOPPED pulling -- so they cannot show a silently partial history --
+     *  while pushing continues. Empty in the normal case. Defaulted so every
+     *  existing constructor call is untouched. */
+    val resyncRequiredStreams: Set<String> = emptySet(),
 ) {
     val healthy: Boolean get() = push.healthy && pull.healthy
 }
@@ -185,6 +191,21 @@ object SyncCoordinator {
     @Volatile private var running = false
     @Volatile private var pushHealth = SyncHalfHealth()
     @Volatile private var pullHealth = SyncHalfHealth()
+
+    /** Where a stream was told RESYNC_REQUIRED, remembered with the relay it
+     *  was told by: a different relay (cloud <-> hub switch, re-point) has its
+     *  own pruned range, so the refusal proves nothing about it. */
+    internal data class ResyncState(val relayBaseUrl: String, val spkiPin: String, val prunedThrough: Long?)
+
+    /** Streams currently refused with RESYNC_REQUIRED, keyed by [SyncStream.label]. */
+    @Volatile private var resyncRequired: Map<String, ResyncState> = emptyMap()
+
+    /** Leaves the 'resync required' state for [streamLabel] (all streams when
+     *  null). Called when the relay target changes; Phase 3's completed
+     *  bootstrap will call it too. */
+    internal fun clearResyncRequired(streamLabel: String? = null) = synchronized(lock) {
+        resyncRequired = if (streamLabel == null) emptyMap() else resyncRequired - streamLabel
+    }
 
     /** The relay this coordinator is (or was) running against, published as
      *  one atomic (url, pin) pair -- see [RelayTarget]'s own class doc for
@@ -637,6 +658,14 @@ object SyncCoordinator {
         else        pullHealth = pullHealth.copy(healthy = true, consecutiveFailures = 0, lastSuccessAtMillis = now)
     }
 
+    /** Health for a pull parked on RESYNC_REQUIRED -- see [runOnce]. */
+    private fun recordResyncPull(streamLabel: String) = synchronized(lock) {
+        pullHealth = pullHealth.copy(
+            healthy = false, consecutiveFailures = 1,
+            lastFailureAtMillis = System.currentTimeMillis(), lastFailureReason = "$streamLabel:RESYNC_REQUIRED",
+        )
+    }
+
     /** Returns the new consecutive-failure count so the caller's Log.e line
      *  can name it. [streamLabel] is baked directly into [SyncHalfHealth
      *  .lastFailureReason] (e.g. "registry:HTTP_403") -- the ONLY way this
@@ -680,6 +709,7 @@ object SyncCoordinator {
         configured = BuildConfig.OWNER_SYNC_BASE_URL.isNotBlank() || target.baseUrl.isNotBlank(),
         running = running, push = pushHealth, pull = pullHealth,
         pendingCount = pendingByStream.values.sum(),
+        resyncRequiredStreams = resyncRequired.keys,
     )
 
     private fun nextDelayMillis(): Long {
@@ -826,9 +856,19 @@ object SyncCoordinator {
             recordSuccess(isPush = false)
         } else {
             val (streamLabel, exc) = pullFailure
-            val n = recordFailure(isPush = false, streamLabel = streamLabel, exc = exc)
-            logError("Sync pull FAILED this tick (first failing stream=$streamLabel, reason=" +
-                     "${reasonOf(exc)}, consecutive pull failures=$n); retried on the next tick.", exc)
+            if (exc is SyncResyncRequired) {
+                // Not transient: pin consecutiveFailures at 1 so the shared
+                // backoff (which also paces PUSH) does not stretch to 5 minutes.
+                recordResyncPull(streamLabel)
+                if (!exc.repeat) {
+                    logError("Sync pull REQUIRES A RESYNC (stream=$streamLabel, relay pruned through " +
+                             "${exc.prunedThrough}); this stream stopped pulling, pushing continues.", exc)
+                }
+            } else {
+                val n = recordFailure(isPush = false, streamLabel = streamLabel, exc = exc)
+                logError("Sync pull FAILED this tick (first failing stream=$streamLabel, reason=" +
+                         "${reasonOf(exc)}, consecutive pull failures=$n); retried on the next tick.", exc)
+            }
         }
 
         // Cloud "caught up" bookkeeping for [readyToJoinHub] -- see that
@@ -904,8 +944,12 @@ object SyncCoordinator {
             try {
                 block(stream)
             } catch (exc: Exception) {
-                logError("Sync $opLabel (${stream.label}) FAILED (reason=${reasonOf(exc)}); this " +
-                         "stream's own outbox/cursor was left untouched and will be retried.", exc)
+                // A repeat RESYNC_REQUIRED skip is logged once, on the real
+                // refusal -- not every tick (see SyncResyncRequired.repeat).
+                if (!(exc is SyncResyncRequired && exc.repeat)) {
+                    logError("Sync $opLabel (${stream.label}) FAILED (reason=${reasonOf(exc)}); this " +
+                             "stream's own outbox/cursor was left untouched and will be retried.", exc)
+                }
                 if (firstFailure == null) firstFailure = stream.label to exc
             }
         }
@@ -1055,7 +1099,26 @@ object SyncCoordinator {
         val installationId = cursor.stringOrNull("installation_id") ?: return null
         val since = cursor.get("since")?.asLong ?: 0L
 
-        val result = relayClient(installationId, relayBaseUrl, identity, spkiPin).pull(since) // raises on failure
+        // SYNC-BOOT: a stream already told RESYNC_REQUIRED by THIS relay stops
+        // pulling -- asking again with the same cursor can never succeed, and
+        // applying anything newer would build on a partial history. Skipped
+        // without contacting the relay; a different relay clears the state.
+        val pending = resyncRequired[stream.label]
+        if (pending != null) {
+            if (pending.relayBaseUrl == relayBaseUrl && pending.spkiPin == spkiPin) {
+                throw SyncResyncRequired(pending.prunedThrough, "Stream ${stream.label} is waiting for a resync (pull skipped).", repeat = true)
+            }
+            clearResyncRequired(stream.label)
+        }
+
+        val result = try {
+            relayClient(installationId, relayBaseUrl, identity, spkiPin).pull(since, stream.label) // raises on failure
+        } catch (exc: SyncResyncRequired) {
+            synchronized(lock) {
+                resyncRequired = resyncRequired + (stream.label to ResyncState(relayBaseUrl, spkiPin, exc.prunedThrough))
+            }
+            throw exc
+        }
         // Forwarded verbatim (result.toString() re-serializes Gson's own
         // JsonElement tree, which preserves the original int/float text --
         // see jsonToCanonical()'s doc comment on why a generic Map<String,
