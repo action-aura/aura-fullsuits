@@ -2863,5 +2863,6 @@
   "No backup in 2 days": "لا توجد نسخة احتياطية منذ يومين",
   "If this computer breaks, your sales and stock go with it. Make a backup now.": "إذا تعطل هذا الجهاز، تضيع مبيعاتك ومخزونك معه. أنشئ نسخة احتياطية الآن.",
   "Only the owner can make a backup.": "المالك وحده يستطيع إنشاء نسخة احتياطية.",
-  "Open backups": "فتح النسخ الاحتياطية"
+  "Open backups": "فتح النسخ الاحتياطية",
+  "Other Income": "دخل آخر"
 }
