@@ -382,7 +382,10 @@ def test_p5_down_payment_before_delivery_is_an_advance_and_a_void_reverses_it(cl
 
     # Nothing arrived, 15.000 went out: the supplier owes the shop 15.000.
     assert _supplier_balance(client, sid) == -15.0
-    assert _bal(cid, gl.ACCOUNT_AP) == -15.0 and _bal(cid, gl.ACCOUNT_CASH) == -15.0
+    # MONEY-5 (v55): the down payment (no method named = cash) now leaves 1010 Cash in
+    # Drawer, not the old combined 1000 Cash and Bank -- and nothing touches 1000.
+    assert _bal(cid, gl.ACCOUNT_AP) == -15.0 and _bal(cid, gl.ACCOUNT_CASH_DRAWER) == -15.0
+    assert _bal(cid, gl.ACCOUNT_CASH) == 0.0
     assert _ap_ties(cid)
     assert _po(po_id)['amount_paid'] == 15.0
 
