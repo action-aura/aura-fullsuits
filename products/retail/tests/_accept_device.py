@@ -201,7 +201,28 @@ def main() -> None:
     _handler.setLevel(logging.WARNING)
     _sync_logger.addHandler(_handler)
 
-    relay = FileRelay(relay_db_path)
+    if options.get("owner_relay"):
+        # SYNC-JOIN proof (owner/tests/test_sync_late_join_after_prune_cross_stack.py):
+        # the REAL transport -- SyncRelayClient, signed exactly as the shipped
+        # client signs -- against a REAL Owner relay the test serves over HTTP on
+        # 127.0.0.1. The device key and installation id are the ones the test
+        # activated through Owner's real activation route; nothing on the wire is
+        # faked. `relay_db_path` is unused on this path.
+        import base64 as _b64
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey as _Ed
+        from commercial_runtime.sync.relay_client import SyncRelayClient
+
+        _owner_relay = options["owner_relay"]
+        _device_key = _Ed.from_private_bytes(_b64.b64decode(_owner_relay["device_key_b64"]))
+
+        class _RawKeySigner:
+            def sign(self, canonical_bytes: bytes) -> str:
+                return _b64.b64encode(_device_key.sign(canonical_bytes)).decode("ascii")
+
+        relay = SyncRelayClient(_owner_relay["base_url"], _RawKeySigner(),
+                                _owner_relay["installation_id"], max_retries=0)
+    else:
+        relay = FileRelay(relay_db_path)
     service_kwargs = {}
     if options.get("arm_provider"):
         from database.schema import RETAIL_SCHEMA_VERSION as _RSV
