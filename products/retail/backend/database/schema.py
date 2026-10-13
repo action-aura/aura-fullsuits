@@ -2725,6 +2725,10 @@ def _migrate_add_money5_tender_columns(conn):
         "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     for table, column, ddl in (
             ('sales', 'rounding_amount', 'REAL'),
+            # Verifier-fix round: the signed cash rounding of ONE return (cash handed back minus the
+            # goods' exact cash value), so a later return of the same sale can round the RUNNING
+            # TOTAL instead of each part on its own. NULL = 0 (pre-v55 return, or none applied).
+            ('returns', 'rounding_amount', 'REAL'),
             ('payment_methods', 'gl_account_code', 'TEXT')):
         if table not in live:
             continue

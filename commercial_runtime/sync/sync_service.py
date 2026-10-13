@@ -3602,15 +3602,16 @@ class SyncService:
                     "INSERT INTO returns (company_id, return_number, sale_id, branch_id, cashier, reason, "
                     "refund_method, refund_amount, status, idempotency_key, created_at, session_id, "
                     "uid, actor_user_uid, terminal_id, created_at_utc, "
-                    "tender_refund_amount, ar_forgiven_amount, store_credit_amount, tax_refunded) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,NULL,?,NULL,?,?,?,?,?,?,?,?) "
+                    "tender_refund_amount, ar_forgiven_amount, store_credit_amount, tax_refunded, "
+                    "rounding_amount) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,NULL,?,NULL,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                     (local_company_id, p.get("return_number"), sale_local_id, resolved_branch_id,
                      p.get("cashier", "POS"), p.get("reason", ""), p.get("refund_method", "cash"),
                      p.get("refund_amount", 0), p.get("status", "completed"), p.get("created_at"),
                      p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc"),
                      _tender_refund_amount, _ar_forgiven_amount, _store_credit_amount,
-                     _tax_refunded),
+                     _tax_refunded, p.get("rounding_amount")),   # MONEY-5: NULL from an older till
                 )
             except sqlite3.IntegrityError as exc:
                 # Aseel-parity wave A-PAR (schema v34) -- identical

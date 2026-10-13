@@ -11673,34 +11673,67 @@ def create_return():
         elif _legs_mode or _needs_method:
             refund_method = refund_legs[0]['method']
 
-        # ── MONEY-5 / review #3: RE-ROUND THE CASH LEG ─────────────────────────────────────────
+        # ── MONEY-5 / review #3: RE-ROUND THE CASH LEG -- ON THE RUNNING TOTAL ──────────────────
         # The refund of the GOODS stays exact (`refund`, the legs' sum before this block) -- the
         # customer is owed what the goods were worth. Only the CASH that physically leaves the
         # drawer is in coins, so the cash leg is rounded by the same shop rule a cash sale uses and
         # the difference (`return_rounding`, signed: cash handed back minus what the goods were
-        # worth) is booked to 4950 by post_return -- the mirror of the sale's own rounding, so a
-        # rounded sale returned in full nets 4950 to zero. Never more than the sale's cash that has
-        # not yet gone back (`_leg_remainders`): rounding up can not invent cash the drawer never
-        # took. A card / mobile / transfer leg is never rounded. Off ('0') changes nothing.
+        # worth) is booked to 4950 by post_return.
+        #
+        # THE ROUNDING IS ON THE CUMULATIVE CASH OF THE SALE, NOT PER RETURN. Rounding each return
+        # on its own let a customer return 1 unit at a time and be paid one whole coin per return:
+        # measured (verifier H1) 50 x 0.010 sold for 0.500 cash, 'up' to 0.050, 10 single-unit
+        # returns (goods worth 0.100) had paid ALL 0.500 back. So this return's cash is
+        #     round(exact cash value of every return of this sale so far, INCLUDING this one)
+        #       - cash already handed back for the sale,
+        # held to [0, cash the sale took]. A piece-by-piece return is therefore never ahead of the
+        # goods by more than one coin interval, and once everything is back the cash handed back is
+        # exactly what the sale took, so 4950 nets the sale's own rounding to zero for ANY rule.
+        # `returns.rounding_amount` (this block's `return_rounding`, stored below) is what lets a
+        # later return recover the EXACT cash value of the earlier ones: exact = leg - rounding.
+        # A card / mobile / transfer leg is never rounded. Off ('0') changes nothing.
         return_rounding = 0.0
         _rc_interval, _rc_rule = cash_rounding_engine.config(_s)
         if _rc_interval > 0 and not _needs_method:
-            _cash_left = next((Decimal(str(a)) for m, a in _leg_remainders if m == 'cash'), None)
+            _cash_taken = next((Decimal(str(a)) for m, a in _sale_paid if m == 'cash'), None)
+            _cash_back_before = Decimal(str(_already_by_method.get('cash') or 0))
+            _prev_round = Decimal(str(cur.execute(
+                "SELECT COALESCE(SUM(COALESCE(r.rounding_amount,0)),0) FROM returns r "
+                "WHERE r.sale_id=? AND r.company_id=? AND r.status='completed'",
+                (sale_id, cid)).fetchone()[0] or 0))
+            # Floats come back from SQLite: 0.14 + 0.01 must be 0.15 to the fil, or an 'up' rule
+            # would read 0.15000000000000002 as just past a coin and hand back one more.
+            _exact_before = (_cash_back_before - _prev_round).quantize(_tq, rounding=ROUND_HALF_UP)
+            # The goods this return is worth but the settlement could not pay: the sale took LESS
+            # cash than its total (it was rounded down), so the pool `tender_available` is a few fils
+            # short of the goods. That gap is the sale's own rounding coming back, not a debt and not
+            # a loss -- it is added to the exact cash value (so the cash comes out the same coin) and
+            # booked to 4950 with the rest, so a full return nets the sale's rounding to ZERO.
+            # Bounded by the rounding of this sale that earlier returns have not yet reversed.
+            _sale_round = Decimal(str(sale['rounding_amount'] or 0))
+            _short_allowed = max(_prev_round - _sale_round, Decimal('0'))
+            _unsettled = max(Decimal(str(_refund_to_settle)) - Decimal(str(tender_refund))
+                             - Decimal(str(ar_forgiven + store_credit)), Decimal('0'))
+            _short = min(_unsettled, _short_allowed) if _unsettled > Decimal(str(_eps)) else Decimal('0')
+            _cash_change = Decimal('0')
             for _lg in refund_legs:
-                if str(_lg['method']).strip().lower() != 'cash' or _cash_left is None:
+                if str(_lg['method']).strip().lower() != 'cash' or _cash_taken is None:
                     continue
-                _exact = Decimal(str(_lg['amount']))
+                _leg_amt = Decimal(str(_lg['amount'])).quantize(_tq, rounding=ROUND_HALF_UP)
+                _exact = _leg_amt + _short
                 if _exact <= Decimal(str(_eps)):
                     continue
-                _rounded = cash_rounding_engine.round_cash(_exact, _rc_interval, _rc_rule, _tq)
-                if _rounded > _cash_left:
-                    _rounded = max(_cash_left, Decimal('0'))
-                _delta = float(_rounded - _exact)
-                if abs(_delta) > 0:
+                _target = cash_rounding_engine.round_cash(
+                    _exact_before + _exact, _rc_interval, _rc_rule, _tq)
+                _rounded = min(_target, _cash_taken) - _cash_back_before
+                _rounded = max(_rounded, Decimal('0')).quantize(_tq, rounding=ROUND_HALF_UP)
+                if _rounded != _leg_amt:
+                    _cash_change += _rounded - _leg_amt
                     _lg['amount'] = float(_rounded)
-                    return_rounding += _delta
-            if abs(return_rounding) > 0:
-                tender_refund = float(Decimal(str(tender_refund)) + Decimal(str(return_rounding)))
+                return_rounding += float(_rounded - _exact)
+                _short = Decimal('0')
+            if abs(_cash_change) > 0:
+                tender_refund = float(Decimal(str(tender_refund)) + _cash_change)
 
         if data.get('dry_run'):
             conn.rollback(); conn.close()
@@ -11758,13 +11791,13 @@ def create_return():
                                  tender_refund_amount,ar_forgiven_amount,store_credit_amount,
                                  status,idempotency_key,created_at,
                                  session_id,uid,actor_user_uid,terminal_id,created_at_utc,
-                                 tax_refunded)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?)
+                                 tax_refunded, rounding_amount)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?,?)
         """, (cid, ret_num, sale_id, bid, _uid(),
               data.get('reason','Customer return'), refund_method, refund,
               tender_refund, ar_forgiven, store_credit, idem, now_local,
               cash_session_id, ret_uid, actor, terminal, utc_now,
-              return_tax_refunded))
+              return_tax_refunded, (return_rounding if abs(return_rounding) > 0 else None)))
         ret_id = cur.lastrowid
 
         # MONEY-3 M1: the legs, written in the same transaction and shipped INSIDE the return's
@@ -11801,6 +11834,7 @@ def create_return():
             # unlike cash_session_id -- the receiving device's tax report must
             # read the same figure this device's books did.
             'tax_refunded': return_tax_refunded,
+            'rounding_amount': (return_rounding if abs(return_rounding) > 0 else None),   # MONEY-5
             # MONEY-3 M1: the refund legs (see the INSERT above). A sender without this key
             # (older till) is read by the receiver as ONE legacy leg of `refund_method`.
             'legs': _leg_payload,
@@ -16249,6 +16283,7 @@ def _ensure_credit_schema(conn):
     # file creates itself, `payment_methods`) never re-enters the migration chain. Idempotent with
     # database/schema.py's _migrate_add_money5_tender_columns: whichever runs first wins.
     addcol('sales', 'rounding_amount', "REAL")
+    addcol('returns', 'rounding_amount', "REAL")
     addcol('payment_methods', 'gl_account_code', "TEXT")
     # schema v29 (ROADMAP.md's "CLAIMED: retail v29" entry,
     # database/schema.py's _migrate_add_loyalty_return_id). Same lazy-guard

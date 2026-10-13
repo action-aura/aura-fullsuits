@@ -8199,8 +8199,11 @@ is a table the route layer creates, so the column is added by `_ensure_credit_sc
   * 'card' expenses (`paid_via='card'`) leave 1020, not 1030 (1030 is what the card COMPANY owes the shop).
   * Round-up with an API client that sends the exact unrounded amount (Android does until it learns rounding): the
     cash does not cover the rounded amount, so that sale is simply not rounded (balance 0, rounding NULL).
-  * Per-return rounding: a sale refunded in several returns re-rounds each cash leg, so the customer can get back a
-    coin's worth less/more than the sale took; the shop's gain/loss is booked to 4950 exactly.
+  * Return rounding (CORRECTED in the verifier-fix round; this line used to understate it): the first cut rounded each
+    return's cash leg on its own, so 50 returns of one 0.010 piece paid back a whole coin each (all 0.500 after 10
+    pieces worth 0.100). The cash is now rounded on the RUNNING TOTAL of the sale's cash refunds (see "MONEY-5
+    verifier fix round" below): never ahead of the goods by more than one coin, exactly the cash taken after a full
+    return, and 4950 nets the sale's own rounding to zero.
   * Arabic strings for the new Settings card and "Rounding" need a native reader (same standing note as LOYALTY-EARN).
   * Android is untouched: it ignores `rounding_amount` and sends the unrounded amount.
 

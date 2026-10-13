@@ -2130,7 +2130,11 @@ def post_return(conn, cid, branch_id, return_id, return_number, currency,
         lines.append({'account_code': ACCOUNT_LOYALTY_EXPENSE, 'credit': points_restored_value,
                        'memo': 'Loyalty points given back'})
         settled += Decimal(str(points_restored_value))
-    if settled <= 0:
+    # MONEY-5: a return whose cash leg rounded DOWN TO ZERO (the running total of the sale's cash has
+    # not reached the next coin yet) settles nothing, yet the goods came back: Dr Sales Returns /
+    # Cr 4950 for their value. So "nothing settled" is judged on the goods value, not on `settled`.
+    _rounding = Decimal(str(rounding_amount or 0))
+    if settled - _rounding <= 0:
         # Nothing was actually settled against this return (the DEFECT-1B
         # edge case, or a return the caller should not have posted at
         # all). Correct to no-op: create_return itself calls neither
@@ -2143,7 +2147,6 @@ def post_return(conn, cid, branch_id, return_id, return_number, currency,
     # is the signed difference (cash handed back minus what the goods were worth): the goods
     # value reversed is `settled - rounding`, and 4950 takes the other side, so a sale rounded
     # down by 0.007 and then returned in full nets to zero on 4950. 0 changes nothing.
-    _rounding = Decimal(str(rounding_amount or 0))
     goods_value = settled - _rounding
     # Defensive only: the caller already capped it at `settled`.
     tax_part = max(Decimal('0'), min(

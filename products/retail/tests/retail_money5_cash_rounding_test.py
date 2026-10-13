@@ -358,12 +358,16 @@ def test_a_full_return_of_a_rounded_sale_pays_back_what_was_paid_and_leaves_no_p
     assert d['refund_amount'] == 3.457 and d['tender_refund_amount'] == 3.45     # the goods vs the coins
     tb = _tb(cid)
     assert tb['is_balanced'] is True
-    # The drawer account is back to zero; the sale's 0.007 shortfall (Dr 4950) is exactly the 0.007
-    # of revenue the 3.450 refund left standing (4000 Cr 3.457 - 4900 Dr 3.450): net profit 0.
+    # The drawer account is back to zero. Verifier-fix round: a FULL return now reverses the sale's
+    # rounding too -- Dr Sales Returns takes the whole 3.457 of goods and Cr 4950 hands back the 0.007
+    # the sale had given away (this test used to pin 4950 == -0.007 left standing, which the verifier
+    # showed contradicted the code's own comment; profit still netted to 0 either way, so the
+    # profit line below is unchanged). What it can no longer catch: nothing -- it is strictly
+    # stricter (4900 and 4950 are now pinned to the figures that make a full return leave no trace).
     assert _bal(tb, '1010') == 0.0
     assert round(_bal(tb, '4000') - _bal(tb, '4900') + _bal(tb, '4950'), 3) == 0.0, (   # balances are on each account's own normal side
         _bal(tb, '4000'), _bal(tb, '4900'), _bal(tb, '4950'))
-    assert _bal(tb, '4950') == -0.007
+    assert _bal(tb, '4900') == 3.457 and _bal(tb, '4950') == 0.0
 
 
 def test_a_partial_return_re_rounds_its_own_cash_leg_and_books_the_difference():

@@ -309,6 +309,7 @@ CREATE TABLE returns (
     -- reconcile), so the fixture is fixed, not sync_service made to sniff
     -- the table's shape.
     tax_refunded REAL,
+    rounding_amount REAL,   -- MONEY-5 (v55): the return's own signed cash rounding
     FOREIGN KEY (sale_id) REFERENCES sales(id)
 );
 CREATE UNIQUE INDEX idx_returns_uid ON returns(uid) WHERE uid IS NOT NULL;
