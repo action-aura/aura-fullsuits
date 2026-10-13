@@ -187,7 +187,8 @@ def test_the_books_hold_exactly_the_sales_that_are_present(world, who):
         who,
         "SELECT "
         " COALESCE(SUM(CASE WHEN a.code = '4000' THEN l.credit - l.debit END),0) AS revenue, "
-        " COALESCE(SUM(CASE WHEN a.code = '1000' THEN l.debit - l.credit END),0) AS cash "
+        # MONEY-5 (v55): a cash sale debits 1010 Cash in Drawer (was 1000 Cash and Bank).
+        " COALESCE(SUM(CASE WHEN a.code = '1010' THEN l.debit - l.credit END),0) AS cash "
         "FROM gl_journal_lines l JOIN gl_accounts a ON a.id = l.account_id "
         "JOIN gl_journals j ON j.id = l.journal_id WHERE j.source_type = 'sale'")
     assert gl["revenue"] == pytest.approx(sales["total"]), (
