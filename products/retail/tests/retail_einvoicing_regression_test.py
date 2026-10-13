@@ -310,6 +310,11 @@ RETURNS_TABLE_COLUMNS = [
     # lazy idempotency_key. This test still catches what it exists for -- an
     # e-invoicing migration touching a Retail table -- for every other column.
     'tax_refunded',
+    # MONEY-5 verifier fix round (schema v55 extension, 2026-10-13):
+    # returns.rounding_amount, the cash-rounding share a return reversed (the
+    # running-total rule). Same category as tax_refunded: boot-time chain, so it
+    # precedes the lazy idempotency_key; unrelated to e-invoicing.
+    'rounding_amount',
     'idempotency_key',
 ]
 BASELINE_THREAD_NAMES = {'MainThread'}

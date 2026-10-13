@@ -275,6 +275,10 @@ def test_sale_response_is_unaffected_by_email_queueing(client, monkeypatch):
         'id', 'idempotency_key', 'lines',
         'oversold_past_recorded_stock',
         'points_redeemed', 'points_redeemed_amount',
+        # MONEY-5 (v55): every sale response now reports its signed cash-rounding
+        # delta (0 when rounding is off). Unrelated to email queueing; the set is
+        # still compared EXACTLY, so a key email queueing added would still fail.
+        'rounding_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
     ])
 
