@@ -168,14 +168,17 @@ def palette_page_ids(page):
 def sidebar_enabled_ids(page):
     """Every sidebar entry a person can actually use: in the DOM (the shell
     already dropped 'hidden' ones), not the greyed 'main-only' kind."""
-    # Sidebar rows PLUS the Settings gear menu: employees / branches / backup /
-    # admin-center are UNGROUPED BY DESIGN and live only in that menu (their
-    # only click path -- see the gear-menu comment in app-shell.js). Both are
-    # "what the person can click", which is what the palette must not exceed.
+    # Sidebar rows PLUS the Reports & Books TAB bar. UI-3b: the settings gear MENU is gone (the gear is a
+    # sidebar button whose data-section is admin-center, so it is already a `.sub-nav-item`), and the five
+    # Books/Expenses rows are tabs of the 'reports' row. Both are "what the person can click", which is
+    # what the palette must not exceed. The bar only exists for the screen being shown, so the reports
+    # row's tabs are read by opening Reports first.
+    page.evaluate("() => { const r = document.querySelector('.sub-nav-item[data-section=\"reports\"]'); if (r) r.click(); }")
+    page.wait_for_timeout(500)
     return sorted(set(page.evaluate(
-        """() => [...document.querySelectorAll('.sub-nav-item[data-section], #sub-settings-menu [data-section]')]
+        """() => [...document.querySelectorAll('.sub-nav-item[data-section], #sub-section-tabs [data-tab-section]')]
              .filter(e => !e.classList.contains('is-main-only') && e.getAttribute('aria-disabled') !== 'true')
-             .map(e => e.dataset.section)""")))
+             .map(e => e.dataset.section || e.dataset.tabSection)""")))
 
 
 def main() -> int:

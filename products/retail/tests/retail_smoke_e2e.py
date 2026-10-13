@@ -657,10 +657,10 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
         gear_btn = page.locator("#sub-settings-gear-btn")
         gear_btn.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
         _human_click(page, gear_btn, label="Settings gear button")
-        settings_entry = page.locator('#sub-settings-menu .sub-identity-menu-item[data-section="admin-center"]')
-        settings_entry.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
-        assert settings_entry.count() == 1, (
-            "Settings was NOT reachable through the gear menu on the signup computer "
+        # UI-3b: the gear opens the settings hub directly -- one click, no menu row to find.
+        page.locator("#sh-root").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+        assert page.evaluate("() => SubsystemApp.currentSection") == "admin-center", (
+            "Settings was NOT reachable through the gear on the signup computer "
             "-- P1a item 1 says an owner sees Settings because they hold "
             "retail.employees by default, independent of any device claim"
         )
@@ -801,10 +801,10 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             gear_btn = joined_page.locator("#sub-settings-gear-btn")
             gear_btn.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
             _human_click(joined_page, gear_btn, label="Settings gear button (joined computer)")
-            settings_entry = joined_page.locator('#sub-settings-menu .sub-identity-menu-item[data-section="admin-center"]')
-            settings_entry.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
-            assert settings_entry.count() == 1, (
-                "Settings was NOT reachable through the gear menu on the JOINED "
+            # UI-3b: the gear opens the hub directly.
+            joined_page.locator("#sh-root").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+            assert joined_page.evaluate("() => SubsystemApp.currentSection") == "admin-center", (
+                "Settings was NOT reachable through the gear on the JOINED "
                 "computer (is_admin_device=0) -- P1a item 1 says Settings follows "
                 "the PERSON (retail.employees, which this owner holds), not the "
                 "device claim."
@@ -871,10 +871,8 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
                 # title_text, screenshot) is identical to every other screen.
                 gear_btn = page.locator("#sub-settings-gear-btn")
                 assert gear_btn.count() == 1, "the footer gear button is not in the sidebar"
+                # UI-3b: the gear opens the hub directly (the gear menu and its Settings row are gone).
                 _human_click(page, gear_btn, label="Settings gear button")
-                settings_row = page.locator('#sub-settings-menu .sub-identity-menu-item[data-section="admin-center"]')
-                assert settings_row.count() == 1, "Settings row not found in the gear menu"
-                _human_click(page, settings_row, label="Settings row in the gear menu")
             else:
                 nav_item = page.locator(f'.sub-nav-item[data-section="{section_id}"]')
                 assert nav_item.count() == 1, f"nav item for '{section_id}' not found in the sidebar"

@@ -2878,7 +2878,7 @@ button.sub-nav-group-label .sub-nav-group-label-stack .sub-nav-status { margin-i
    override, so it composes with the phone rail without conflict (a phone
    never shows this class' effects -- the sidebar itself is display:none
    there). Logical `inline-size`, not `width`, per retail_design_rtl_test.js. */
-.sub-sidebar.sub-sidebar-rail { inline-size: 64px; }
+.sub-sidebar.sub-sidebar-rail { inline-size: 96px; }
 /* Rail brand row: the 18px side padding + a 40px mark + a 32px button cannot
    share 64px, so stack them: mark, then the expand button, both centred. */
 .sub-sidebar.sub-sidebar-rail .sub-sidebar-brand {
@@ -2892,8 +2892,7 @@ button.sub-nav-group-label .sub-nav-group-label-stack .sub-nav-status { margin-i
   background: var(--border-hairline);
 }
 .sub-sidebar.sub-sidebar-rail .sub-brand-text,
-.sub-sidebar.sub-sidebar-rail .sub-nav-label,
-.sub-sidebar.sub-sidebar-rail .sub-nav-text,
+.sub-sidebar.sub-sidebar-rail .sub-nav-hint,
 .sub-sidebar.sub-sidebar-rail .sub-nav-group-label-text,
 .sub-sidebar.sub-sidebar-rail .sub-nav-group-chevron,
 .sub-sidebar.sub-sidebar-rail .sub-nav-status,
@@ -2904,6 +2903,28 @@ button.sub-nav-group-label .sub-nav-group-label-stack .sub-nav-status { margin-i
 .sub-sidebar.sub-sidebar-rail button.sub-nav-group-label {
   justify-content: center;
 }
+/* UI-3b item 3: the rail shows a SHORT LABEL under each icon (10.5px, at most two lines,
+   centred). 64px of bare icons left a touch user guessing what each glyph was and a
+   tooltip (`title`) never shows on touch. 96px is the width the phone tab bar's own
+   label-under-icon cells already prove readable. Width only -- the rail's HEIGHT is its
+   own scroll box (.sub-nav is overflow-y:auto), so the till's Charge button cannot be
+   pushed down by taller rows. The status dots of Connected services stay hidden: a word
+   under a label would be a third line. */
+.sub-sidebar.sub-sidebar-rail .sub-nav-item {
+  flex-direction: column; gap: 2px; padding: 6px 4px; min-block-size: 46px;
+  border-inline-start-width: 0;
+}
+/* The list's own 10px side padding and its stable scrollbar gutter (8px) left a long word like "Quotations"
+   only ~68px: it broke mid-word ("Quotation / s") in the first screenshot. On the rail the list gets 4px and no
+   reserved gutter, so a label has ~80px and breaks only between words. */
+.sub-sidebar.sub-sidebar-rail .sub-nav { padding-inline: 4px; scrollbar-gutter: auto; }
+.sub-sidebar.sub-sidebar-rail .sub-nav-text { display: block; min-inline-size: 0; text-align: center; }
+.sub-sidebar.sub-sidebar-rail .sub-nav-item .sub-nav-label {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+  overflow: hidden; max-inline-size: 100%; text-align: center; overflow-wrap: break-word;
+  font-size: 10.5px; line-height: 1.15; font-weight: 600; color: var(--text-secondary);
+}
+.sub-sidebar.sub-sidebar-rail .sub-nav-item.active .sub-nav-label { color: var(--text-primary); }
 /* A closed group's items are already `hidden` by _toggleSidebarGroup's own
    attribute; the rail forces every group OPEN (all icons visible, no
    accordion) since there is no room for a group header's text to explain
@@ -3197,6 +3218,29 @@ button.sub-nav-item.sub-settings-gear:focus-visible { outline: var(--focus-ring-
   transition: background 0.2s;
 }
 .sub-header-btn:hover { background: var(--surface-hover); }
+/* UI-3b item 4: "EN | ع" -- wider than the 36px square the single-letter button used. The
+   current language is the strong one; the other is dimmed but still plainly a word. */
+.sub-header-btn.sub-lang-btn {
+  width: auto; padding-inline: 10px; gap: 6px; font-size: 13px; font-weight: 700; white-space: nowrap;
+}
+.sub-lang-opt { color: var(--text-tertiary); font-weight: 600; }
+.sub-lang-opt.is-current { color: var(--text-primary); font-weight: 800; }
+.sub-lang-sep { color: var(--border-strong, var(--text-tertiary)); font-weight: 400; }
+/* UI-3b item 1: tabs of a multi-screen entry (Reports & Books). A quiet underline bar between
+   the header and the screen; scrolls sideways on a phone instead of wrapping. */
+.sub-section-tabs {
+  display: flex; gap: 4px; flex: 0 0 auto; overflow-x: auto; scrollbar-width: none;
+  padding-inline: 20px; border-block-end: 1px solid var(--border-hairline, var(--border-default));
+}
+.sub-section-tabs[hidden] { display: none; }
+.sub-section-tab {
+  background: transparent; border: 0; border-block-end: 2px solid transparent; border-radius: 0;
+  padding: 10px 14px; min-block-size: 40px; white-space: nowrap; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--text-tertiary);
+}
+.sub-section-tab:hover { color: var(--text-primary); }
+.sub-section-tab.is-active { color: var(--text-primary); border-block-end-color: var(--sub-accent); }
+.sub-section-tab:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: -2px; }
 /* Smallest control in this set (36x36) -- the tighter end of the 0.96-0.99
    range reads as a real press at this size where 0.97-0.99 would barely
    register. */
@@ -5684,3 +5728,30 @@ html.ui-xlarge .sub-content:not([data-section="pos"]) :is(td, th, label, input, 
 html.ui-xlarge .ret-modal :is(td, th, label, input, select, textarea, .ret-btn) { font-size: 17px; line-height: 26px; }
 html.ui-xlarge .sub-content:not([data-section="pos"]) :is(td, th, label),
 html.ui-xlarge .ret-modal :is(td, th, label) { line-height: 28px; }
+
+/* UI-3b item 5: a dialog starts BELOW any top banner. The licence / sync banners are
+   position:fixed at top:0 and stack ABOVE the dialogs, so a full-screen overlay that is
+   `inset:0` centres its box in the whole viewport and the dialog's title slides under the
+   banner (the Help dialog in Arabic: its heading was unreadable behind the yellow licence
+   banner). --top-banner-inset is the measured banner height (app-shell _reflowTopBanners),
+   0px when there is none -- so with no banner nothing moves by a pixel. NOT the command palette:
+   its field is anchored near the top and already clears the banner (retail_p1b_palette_fix_e2e F2), and
+   that crew's contract is that its scrim DIMS the banner rather than leaving it bright. `html` raises
+   specificity above the overlays whose own rules are injected later by their scripts
+   (ret-modal-overlay, iw-, sg-).
+   Two more halves of the same rule, both found by measuring in a real browser: (1) a dialog
+   TALLER than the space below the banner centres itself and overflows upward, so its title is
+   under the banner again -- its max-height must be the space below the banner, not 88vh;
+   (2) the AI panel is position:absolute against the viewport (sub-ai.js appends it to <body>,
+   NOT inside #page-subsystem), so it also needs the inset as its own `top`. */
+html .ret-modal-overlay, html .sub-modal-overlay, html .sub-confirm-overlay,
+html .modal, html .modal-overlay, html .theme-picker-backdrop,
+html .iw-overlay, html .sg-overlay {
+  inset-block-start: var(--top-banner-inset, 0px);
+}
+html .ret-modal { max-height: min(88vh, calc(100vh - var(--top-banner-inset, 0px) - 24px)); }
+html .sub-modal { max-height: min(90vh, calc(100vh - var(--top-banner-inset, 0px) - 24px)); }
+/* position:fixed, not just a top: an absolute box is anchored to the DOCUMENT, and a banner that is
+   sticky in the flow makes the document scrollable by its own height -- measured, the panel's top then
+   sat at y=0 (under the banner) although its computed top was the inset. Fixed is anchored to the screen. */
+html .ai-panel, html .sub-ai-panel { position: fixed; top: var(--top-banner-inset, 0px); }

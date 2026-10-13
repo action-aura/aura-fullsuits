@@ -730,8 +730,22 @@ def main() -> int:
 
             check("keyboard nav (Escape/ArrowUp/ArrowDown/Tab-out) on the identity chip menu",
                   lambda: _keyboard_nav_on_menu("sub-identity-chip-btn", "sub-identity-menu", "identity"))
-            check("keyboard nav (Escape/ArrowUp/ArrowDown/Tab-out) on the settings gear menu",
-                  lambda: _keyboard_nav_on_menu("sub-settings-gear-btn", "sub-settings-menu", "settings gear"))
+            # UI-3b: the settings gear no longer has a menu, so there is no Escape/Arrow/Tab-out
+            # contract left to prove for it. What this can no longer catch: a broken keyboard
+            # contract on a gear menu (none exists). What replaces it: the gear is a real <button>
+            # a keyboard user can operate, and Enter lands on the hub.
+            def gear_is_a_keyboard_operable_button_opening_the_hub():
+                assert owner_page.locator("#sub-settings-menu").count() == 0, "a gear MENU is rendered again"
+                owner_page.evaluate("() => document.getElementById('sub-settings-gear-btn').focus()")
+                owner_page.keyboard.press("Enter")
+                owner_page.wait_for_selector("#sh-root", timeout=DEFAULT_WAIT_MS)
+                section = owner_page.evaluate("() => SubsystemApp.currentSection")
+                assert section == "admin-center", f"Enter on the gear landed on {section!r}, expected the hub (admin-center)"
+                owner_page.evaluate("() => SubsystemApp._navigate('dashboard')")
+                owner_page.wait_for_timeout(300)
+
+            check("the settings gear is a keyboard-operable button that opens the hub directly (no menu)",
+                  gear_is_a_keyboard_operable_button_opening_the_hub)
 
             # ================================================================
             # M3 (fix round) -- till rail items carry a non-empty aria-label
@@ -819,15 +833,18 @@ def main() -> int:
                     f"take, or GET /api/devices/me is not re-deriving can_claim_admin from the cleared row"
                 )
 
+                # UI-3b: the gear opens the hub; the claim action lives in its Plan & devices section.
                 human_click(owner_page, "#sub-settings-gear-btn", "settings gear")
-                owner_page.wait_for_timeout(200)
-                claim_row = owner_page.locator("#sub-settings-menu .sub-identity-menu-item", has_text="Make this the main computer")
+                owner_page.wait_for_selector("#sh-root", timeout=DEFAULT_WAIT_MS)
+                human_click(owner_page, '[data-sh="plan-devices"]', "hub: Plan & devices")
+                owner_page.wait_for_selector('[data-pd="claim-main"]', timeout=DEFAULT_WAIT_MS)
+                claim_row = owner_page.locator('[data-pd="claim-main"]', has_text="Make this the main computer")
                 assert claim_row.count() == 1, (
-                    "canClaimAdminDevice is true but the 'Make this the main computer' row is not in the "
-                    "settings gear menu"
+                    "canClaimAdminDevice is true but the 'Make this the main computer' button is not in the "
+                    "hub's Plan & devices section"
                 )
 
-                human_click(owner_page, "#sub-settings-menu .sub-identity-menu-item", "claim row",
+                human_click(owner_page, '[data-pd="claim-main"]', "claim button",
                             text="Make this the main computer")
                 owner_page.wait_for_timeout(500)
                 is_admin_now = owner_page.evaluate("() => SubsystemApp.isAdminDevice")
@@ -841,6 +858,12 @@ def main() -> int:
                     "stay offered forever"
                 )
                 owner_page.screenshot(path=str(shots / "05_owner_claims_admin_device.png"), full_page=False)
+                # UI-3b item 2: the last screen is now REMEMBERED per user (across a re-login or reload), so a
+                # check that leaves the owner in the hub changes where the NEXT checks start (the home-routing
+                # check expects the owner to start on Today, and the hub adds two status requests that broke the
+                # exactly-4 poll count). The old gear-menu path ended on the dashboard; restore that state.
+                owner_page.evaluate("() => SubsystemApp._navigate('dashboard')")
+                owner_page.wait_for_timeout(500)
 
             check("no-admin-device state reproduced directly, and 'Make this the main computer' genuinely claims it",
                   claim_admin_device_entry_appears_and_works_when_unclaimed)
@@ -972,71 +995,56 @@ def main() -> int:
             BASE = backend.base_url
             DESKTOP_SIZES = [(1366, 768), (1280, 720), (1024, 600)]
 
-            # ---- CRITICAL 1: the settings gear menu opens fully on screen ----
-            def gear_menu_is_fully_on_screen(width, height, lang, coarse=False):
+            # ---- CRITICAL 1 (UI-3b: REWRITTEN) -- the settings gear opens the hub DIRECTLY ----
+            # It used to prove a five-row gear MENU opened fully on screen, upward, anchored to the
+            # inline-start edge. That menu is gone (the hub already holds every row as a section), so
+            # those geometry claims have nothing left to measure. What this can no longer catch:
+            # a gear menu spilling off screen (there is none). What it proves instead, per size and
+            # language: the gear is reachable, ONE real click lands on the hub, no menu element
+            # exists, and the sections the old menu held (Team, Branches, Data & backup, Plan &
+            # devices) are real, clickable hub sections.
+            def gear_opens_the_hub_directly(width, height, lang, coarse=False):
                 with session(browser, BASE, {"width": width, "height": height}, lang=lang, coarse=coarse) as pg:
                     tag = f"{width}x{height} {lang}{' coarse' if coarse else ''}"
-                    gear = assert_reachable(pg, "#sub-settings-gear-btn", f"[{tag}] settings gear")
+                    assert_reachable(pg, "#sub-settings-gear-btn", f"[{tag}] settings gear")
                     human_click(pg, "#sub-settings-gear-btn", f"[{tag}] settings gear")
-                    pg.wait_for_timeout(200)
-                    assert pg.locator("#sub-settings-menu").is_visible(), f"[{tag}] the gear menu did not open"
-                    menu = assert_reachable(pg, "#sub-settings-menu", f"[{tag}] settings menu (whole box)")
-                    assert menu["bottom"] <= gear["top"] + 1, (
-                        f"[{tag}] the menu (y {menu['top']:.0f}..{menu['bottom']:.0f}) is not ABOVE the gear "
-                        f"(top y={gear['top']:.0f}) -- it must open upward from the sidebar footer"
-                    )
-                    if lang == "ar":
-                        assert abs(menu["right"] - gear["right"]) <= 3, (
-                            f"[{tag}] in Arabic the menu must hang from the gear's right (inline-start) edge: "
-                            f"menu right={menu['right']:.0f}, gear right={gear['right']:.0f}"
-                        )
-                    else:
-                        assert abs(menu["left"] - gear["left"]) <= 3, (
-                            f"[{tag}] in English the menu must hang from the gear's left (inline-start) edge: "
-                            f"menu left={menu['left']:.0f}, gear left={gear['left']:.0f}"
-                        )
-                    rows = pg.evaluate("() => document.querySelectorAll('#sub-settings-menu .sub-identity-menu-item').length")
-                    assert rows >= 3, f"[{tag}] only {rows} row(s) in the gear menu"
-                    for i in range(rows):
-                        assert_reachable(pg, "#sub-settings-menu .sub-identity-menu-item", f"[{tag}] gear menu row {i}", nth=i)
-                    # A real click on a real row lands on its screen.
-                    human_click(pg, '#sub-settings-menu .sub-identity-menu-item[onclick*="backup-export"]',
-                                f"[{tag}] Backup & Export row")
-                    pg.wait_for_timeout(300)
+                    pg.wait_for_selector("#sh-root", timeout=DEFAULT_WAIT_MS)
                     section = pg.evaluate("() => SubsystemApp.currentSection")
-                    assert section == "backup-export", f"[{tag}] clicking the Backup & Export row landed on {section!r}"
-                    assert pg.locator("#sub-settings-menu").is_hidden(), f"[{tag}] the menu stayed open after a row was chosen"
+                    assert section == "admin-center", f"[{tag}] the gear landed on {section!r}, not the hub"
+                    assert pg.locator("#sub-settings-menu").count() == 0, f"[{tag}] a gear MENU is still rendered"
+                    for sec in ("team", "branches", "data-backup", "plan-devices"):
+                        loc = pg.locator(f'[data-sh="{sec}"]')
+                        assert loc.count() == 1, f"[{tag}] hub section {sec!r} is missing (the old gear menu row has no home)"
+                        loc.scroll_into_view_if_needed()
+                    human_click(pg, '[data-sh="data-backup"]', f"[{tag}] hub: Data & backup")
+                    pg.wait_for_timeout(300)
+                    assert pg.locator('[data-sh-pane="data-backup"]').is_visible(), f"[{tag}] Data & backup pane did not show"
                     if (width, height) == (1366, 768):
-                        pg.screenshot(path=str(shots / f"10_gear_menu_open_{lang}{'_coarse' if coarse else ''}.png"), full_page=False)
+                        pg.screenshot(path=str(shots / f"10_gear_opens_hub_{lang}{'_coarse' if coarse else ''}.png"), full_page=False)
 
             for (w, h) in DESKTOP_SIZES:
                 for lg in ("en", "ar"):
-                    check(f"gear menu opens fully on screen, upward, anchored to the inline-start edge ({w}x{h} {lg})",
-                          lambda w=w, h=h, lg=lg: gear_menu_is_fully_on_screen(w, h, lg))
+                    check(f"the gear opens the settings hub in one click ({w}x{h} {lg})",
+                          lambda w=w, h=h, lg=lg: gear_opens_the_hub_directly(w, h, lg))
 
-            # ---- LOW: only one dropdown open at a time (both directions) ----
-            def one_dropdown_at_a_time():
+            # ---- LOW (UI-3b: REWRITTEN) -- the identity menu is the only dropdown left ----
+            def identity_menu_is_the_only_dropdown():
                 with session(browser, BASE, VIEWPORT) as pg:
-                    def open_state():
-                        return pg.evaluate(
-                            "() => [!document.getElementById('sub-identity-menu').hidden, "
-                            "!document.getElementById('sub-settings-menu').hidden]"
-                        )
+                    def identity_open():
+                        return pg.evaluate("() => !document.getElementById('sub-identity-menu').hidden")
                     human_click(pg, "#sub-identity-chip-btn", "identity chip")
                     pg.wait_for_timeout(150)
-                    assert open_state() == [True, False], f"identity chip click: identity/settings open = {open_state()}"
+                    assert identity_open() is True, "the identity chip did not open its menu"
                     human_click(pg, "#sub-settings-gear-btn", "settings gear")
-                    pg.wait_for_timeout(150)
-                    assert open_state() == [False, True], (
-                        f"opening the gear menu must close the identity menu: identity/settings open = {open_state()}"
-                    )
+                    pg.wait_for_timeout(300)
+                    assert pg.locator("#sub-settings-menu").count() == 0, "the gear opened a menu"
+                    assert identity_open() is False, "clicking the gear left the identity menu open"
                     human_click(pg, "#sub-identity-chip-btn", "identity chip (second)")
                     pg.wait_for_timeout(150)
-                    assert open_state() == [True, False], (
-                        f"opening the identity menu must close the gear menu: identity/settings open = {open_state()}"
-                    )
+                    assert identity_open() is True, "the identity menu did not reopen after the gear"
 
-            check("only one header/footer dropdown is open at a time (both directions, real clicks)", one_dropdown_at_a_time)
+            check("the identity menu is the only dropdown: the gear opens no menu and closes it (real clicks)",
+                  identity_menu_is_the_only_dropdown)
 
             # ---- HIGH 2: the brand logo and the phone Home tab, per role ----
             def logo_routes_by_role():
@@ -1223,8 +1231,8 @@ def main() -> int:
             for lg in ("en", "ar"):
                 check(f"touch screen 1366x768: nav rows >= 44px, every group header reachable with each group open ({lg})",
                       lambda lg=lg: coarse_targets_and_reach(lg))
-                check(f"touch screen 1366x768: gear menu opens fully on screen ({lg})",
-                      lambda lg=lg: gear_menu_is_fully_on_screen(1366, 768, lg, coarse=True))
+                check(f"touch screen 1366x768: the gear opens the hub in one tap ({lg})",
+                      lambda lg=lg: gear_opens_the_hub_directly(1366, 768, lg, coarse=True))
 
             # ---- M5: with a MOUSE the rows are the 40px the height budget assumes (not 44) ----
             def mouse_rows_are_38px(lang):

@@ -157,12 +157,14 @@ async function hubSections(src, { statusBody, role = 'admin' }) {
 }
 
 async function testHubSections(src) {
-  const LEGACY = ['shop-receipt', 'tax', 'credit', 'tills', 'extras', 'hardware', 'display', 'team', 'data-backup', 'plan-devices'];
+  // UI-3b: 'branches' joined the hub right after 'team' (the gear menu that used to hold Branches is gone).
+  // Exact-equality is kept on purpose: this still fails if any section is dropped, added or reordered.
+  const LEGACY = ['shop-receipt', 'tax', 'credit', 'tills', 'extras', 'hardware', 'display', 'team', 'branches', 'data-backup', 'plan-devices'];
   let r = await hubSections(src, { statusBody: { enabled: false, reason_disabled: 'OWNER_NOT_CONFIGURED' } });
   assert.deepStrictEqual(r.gets, ['/api/updates/status']);       // the status was asked for
   assert.deepStrictEqual(r.ids, LEGACY, 'a disabled channel must leave the section list exactly as it was');
   r = await hubSections(src, { statusBody: ENABLED() });
-  assert.deepStrictEqual(r.ids, ['shop-receipt', 'tax', 'credit', 'tills', 'extras', 'hardware', 'display', 'team', 'data-backup', 'updates', 'plan-devices']);
+  assert.deepStrictEqual(r.ids, ['shop-receipt', 'tax', 'credit', 'tills', 'extras', 'hardware', 'display', 'team', 'branches', 'data-backup', 'updates', 'plan-devices']);
   r = await hubSections(src, { statusBody: ENABLED(), role: 'manager' });
   assert.ok(!r.ids.includes('updates'), 'a non-owner must not be offered Updates');
   console.log('PASS: Updates is listed only when enabled, only for the owner, right after Data & backup');

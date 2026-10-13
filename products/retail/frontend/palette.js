@@ -42,7 +42,9 @@ const AuraPalette = {
   // one destination twice, so the page entry steps aside -- but only while the
   // hub section is really offered; if the hub is absent the page entry stays
   // and the palette loses nothing.
-  SUPERSEDED_BY_HUB: { employees: 'team', branches: 'team', 'backup-export': 'data-backup' },
+  // UI-3b: 'branches' now has a hub section of its own (it used to be folded into 'team',
+  // which only lists staff -- so "Branches" in the palette landed on the wrong room).
+  SUPERSEDED_BY_HUB: { employees: 'team', branches: 'branches', 'backup-export': 'data-backup' },
 
   _overlay: null,
   _input: null,
