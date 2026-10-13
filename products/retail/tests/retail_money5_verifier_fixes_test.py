@@ -339,3 +339,51 @@ def test_low_b_a_split_sale_whose_cash_part_would_round_to_zero_is_charged_one_c
 
 def _sale_pay_rows(sale_id):
     return _rows("SELECT method, amount FROM payments WHERE sale_id=? AND direction='in' ORDER BY id", (sale_id,))
+
+
+# ── LOW (a): 4950 Cash Rounding is a SALES adjustment on the P&L, not "Other income" ─────────
+
+def _pnl(cid):
+    from core.retail import financial_statements as fs
+    from datetime import date
+    today = date.today().isoformat()
+    conn = H.get_retail_conn()
+    try:
+        return fs.income_statement(conn, cid, today, today)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize('rule,paid,rounding', [('nearest', '3.450', '-0.007'), ('up', '3.500', '0.043')])
+def test_low_a_cash_rounding_sits_inside_sales_not_in_other_income(rule, paid, rounding):
+    admin, cid, pid = H._new_shop(price=3.457)
+    _settings(admin, cash_rounding_interval='0.050', cash_rounding_rule=rule)
+    _sale(admin, pid, payment_method='cash')
+    p = _pnl(cid)
+    # the sale itself is whole (3.457); rounding is the signed line inside sales -> net sales == cash taken
+    assert p['other_income'] == {'total': 0.0, 'accounts': []}, p['other_income']
+    assert p['cash_rounding'] == float(rounding)
+    assert D(str(p['revenue'])) == D(paid) and D(str(p['gross_revenue'])) == D(paid)
+    lines = {a['code']: a['amount'] for a in p['revenue_accounts']}
+    assert lines == {'4000': 3.457, '4950': float(rounding)}, lines
+    # gross profit (and so the margin) sees the rounding; net profit is the same number either way
+    assert D(str(p['gross_profit'])) == D(paid) - D(str(p['cost_of_goods_sold']))
+    assert D(str(p['net_profit'])) == D(str(p['gross_profit']))
+
+
+def test_low_a_real_other_income_is_still_other_income_and_an_unrounded_shop_is_unchanged():
+    admin, cid, pid = H._new_shop(price=10.0)
+    _sale(admin, pid, payment_method='cash', amount_paid=10.0)
+    from datetime import date
+    today = date.today().isoformat()
+    conn = H.get_retail_conn()
+    try:
+        gl.post_journal(conn, cid, None, today, 'cash_movement', None, 'JOD',
+                        [{'account_code': '1000', 'debit': 7.0}, {'account_code': '4800', 'credit': 7.0}],
+                        reference='low-a-paid-in')
+        conn.commit()
+    finally:
+        conn.close()
+    p = _pnl(cid)
+    assert p['cash_rounding'] == 0.0 and [a['code'] for a in p['revenue_accounts']] == ['4000']
+    assert p['other_income']['total'] == 7.0 and [a['code'] for a in p['other_income']['accounts']] == ['4800']

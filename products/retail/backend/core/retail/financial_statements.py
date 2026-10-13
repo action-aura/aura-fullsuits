@@ -366,6 +366,7 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
                                    Does NOT include other_income (POLISH-1).
         gross_revenue          -- sales revenue before returns
         revenue_accounts       -- the sales-revenue lines behind gross_revenue
+        cash_rounding          -- signed 4950 Cash Rounding net, INSIDE gross_revenue (not other_income)
         other_income           -- {total, accounts: [{code, name, amount}]}: revenue that is not
                                    a sale (4800). Outside gross_profit/gross_margin, inside
                                    net_profit
@@ -473,6 +474,7 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
     revenue_net = Decimal('0')
     other_income_total = Decimal('0')
     other_income_accounts = []
+    cash_rounding_net = Decimal('0')
     cogs = Decimal('0')
     opex_total = Decimal('0')
     opex_accounts = []
@@ -492,7 +494,8 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
         net = (credit - debit) if canonical == 'credit' else (debit - credit)
 
         if acct_type == 'revenue':
-            if r['normal_balance'] == canonical and r['code'] != gl.ACCOUNT_SALES_REVENUE:
+            if (r['normal_balance'] == canonical and r['code'] != gl.ACCOUNT_SALES_REVENUE
+                    and r['code'] != gl.ACCOUNT_CASH_ROUNDING):
                 # POLISH-1: income that is NOT a sale (4800 Other Income -- a supplier's refund,
                 # a found note) is reported on its own and kept OUT of revenue, gross profit and
                 # the margin. Folded into revenue it made the margin look better than the
@@ -507,6 +510,20 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
                     })
                 continue
             revenue_net += net
+            if r['code'] == gl.ACCOUNT_CASH_ROUNDING:
+                # MONEY-5 verifier LOW: 4950 Cash Rounding is a SALES adjustment (the coin the shop
+                # gave up or took on the sale itself, and on its refunds), not "Other income": it
+                # belongs inside net sales so gross profit and the margin see it. Signed: a shop
+                # that rounds down shows a NEGATIVE line. It also stays visible on its own below.
+                cash_rounding_net += net
+                gross_revenue += net
+                if net.quantize(quant, rounding=ROUND_HALF_UP) != 0:
+                    revenue_accounts.append({
+                        'code': r['code'],
+                        'name': r['name'],
+                        'amount': float(net.quantize(quant, rounding=ROUND_HALF_UP)),
+                    })
+                continue
             if r['normal_balance'] == canonical:
                 # A "gross" revenue line (normal_balance agrees with the
                 # type's own canonical direction) -- its type-canonical net
@@ -580,6 +597,9 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
         'revenue': float(revenue_net.quantize(quant, rounding=ROUND_HALF_UP)),
         'gross_revenue': float(gross_revenue.quantize(quant, rounding=ROUND_HALF_UP)),
         'revenue_accounts': revenue_accounts,
+        # The signed 4950 Cash Rounding net, already INSIDE gross_revenue / revenue (0.0 when the shop
+        # does not round).
+        'cash_rounding': float(cash_rounding_net.quantize(quant, rounding=ROUND_HALF_UP)),
         'sales_returns': float(sales_returns.quantize(quant, rounding=ROUND_HALF_UP)),
         'cost_of_goods_sold': float(cogs.quantize(quant, rounding=ROUND_HALF_UP)),
         'gross_profit': float(gross_profit.quantize(quant, rounding=ROUND_HALF_UP)),
