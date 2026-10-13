@@ -41,6 +41,8 @@ def test_apply_calls_each_function_exactly_once(app, calls):
     assert json.loads(result.output) == {
         "dry_run": False, "quotes_expired": 1, "nonces_purged": 2,
         "idempotency_records_purged": 3, "rate_limit_counters_purged": 4,
+        # SEC-09: real (unstubbed) privacy rules over an empty database.
+        "email_bodies_cleared": 0, "login_attempts_purged": 0,
     }
 
 
@@ -50,7 +52,8 @@ def test_dry_run_calls_no_deleting_path_and_reports_counts(app, calls):
     assert calls == []
     report = json.loads(result.output)
     assert report["dry_run"] is True
-    assert set(report) == {"dry_run", "quotes_expired", "nonces_purged", "idempotency_records_purged", "rate_limit_counters_purged"}
+    assert set(report) == {"dry_run", "quotes_expired", "nonces_purged", "idempotency_records_purged", "rate_limit_counters_purged",
+                         "email_bodies_cleared", "login_attempts_purged"}
 
 
 def test_dry_run_counts_are_real_and_nothing_is_deleted(app):

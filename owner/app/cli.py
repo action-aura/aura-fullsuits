@@ -434,6 +434,7 @@ def register_cli(app: Flask) -> None:
         reports what --apply would touch and calls none of the deleting paths."""
         from datetime import datetime, timezone
 
+        from app import privacy_retention
         from app.commercial_sales import quotes
         from app.licensing_service import idempotency, ratelimit, replay
         from app.models.commercial_sales import Quote
@@ -449,6 +450,9 @@ def register_cli(app: Flask) -> None:
                 "nonces_purged": replay.purge_expired_nonces(),
                 "idempotency_records_purged": idempotency.purge_expired(),
                 "rate_limit_counters_purged": ratelimit.purge_old_counters(older_than=counter_cutoff),
+                # SEC-09 (privacy): see app/privacy_retention.py.
+                "email_bodies_cleared": privacy_retention.clear_old_email_bodies(),
+                "login_attempts_purged": privacy_retention.purge_old_login_attempts(),
             }
         else:
             def _count(model, *conditions) -> int:
@@ -462,6 +466,8 @@ def register_cli(app: Flask) -> None:
                 "nonces_purged": _count(SecurityNonceRecord, SecurityNonceRecord.expires_at < now),
                 "idempotency_records_purged": _count(ExternalIdempotencyRecord, ExternalIdempotencyRecord.expires_at < now),
                 "rate_limit_counters_purged": _count(RateLimitCounter, RateLimitCounter.window_start < counter_cutoff),
+                "email_bodies_cleared": privacy_retention.count_email_bodies_to_clear(),
+                "login_attempts_purged": privacy_retention.count_login_attempts_to_purge(),
             }
         click.echo(json.dumps(result, indent=2))
 
