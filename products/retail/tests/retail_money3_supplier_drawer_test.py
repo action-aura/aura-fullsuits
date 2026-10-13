@@ -362,10 +362,10 @@ def test_v51_shape_and_the_step_replays_as_a_no_op():
     the supplier-drawer step adds exactly two nullable columns, leaves history NULL, and a replay
     changes nothing."""
     import database.schema as sch
-    assert sch.RETAIL_SCHEMA_VERSION == 54  # v54 UPDATE: head moved 53 -> 54 (UI-3a); v54's own shape is pinned by retail_ui3a_sync_migration_test. [earlier: v53 UPDATE: head moved 52 -> 53 (MONEY-4c); v53's own shape is pinned by retail_money4c_credit_inherit_test.py. (was:  head moved 51 -> 52 (MONEY-4b); the head tripwire now lives in retail_money4b_migration_test.py)]
+    assert sch.RETAIL_SCHEMA_VERSION == 55  # v55 UPDATE: head moved 54 -> 55 (MONEY-5); v55's own shape is pinned by retail_money5_migration_test.py. | earlier: v54 UPDATE: head moved 53 -> 54 (UI-3a); v54's own shape is pinned by retail_ui3a_sync_migration_test. [earlier: v53 UPDATE: head moved 52 -> 53 (MONEY-4c); v53's own shape is pinned by retail_money4c_credit_inherit_test.py. (was:  head moved 51 -> 52 (MONEY-4b); the head tripwire now lives in retail_money4b_migration_test.py)]
     conn = get_retail_conn()
     try:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 54  # v54 UPDATE: head moved 53 -> 54 (UI-3a); v54's own shape is pinned by retail_ui3a_sync_migration_test. [earlier: v53 UPDATE: head moved 52 -> 53 (MONEY-4c); v53's own shape is pinned by retail_money4c_credit_inherit_test.py. (was:  head moved 51 -> 52 (MONEY-4b); the head tripwire now lives in retail_money4b_migration_test.py)]
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 55  # v55 UPDATE: head moved 54 -> 55 (MONEY-5); v55's own shape is pinned by retail_money5_migration_test.py. | earlier: v54 UPDATE: head moved 53 -> 54 (UI-3a); v54's own shape is pinned by retail_ui3a_sync_migration_test. [earlier: v53 UPDATE: head moved 52 -> 53 (MONEY-4c); v53's own shape is pinned by retail_money4c_credit_inherit_test.py. (was:  head moved 51 -> 52 (MONEY-4b); the head tripwire now lives in retail_money4b_migration_test.py)]
         pay = {r[1]: r for r in conn.execute('PRAGMA table_info(payments)').fetchall()}
         mov = {r[1]: r for r in conn.execute('PRAGMA table_info(cash_movements)').fetchall()}
         assert 'paid_from' in pay and pay['paid_from'][2] == 'TEXT' and pay['paid_from'][3] == 0

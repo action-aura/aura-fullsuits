@@ -1416,7 +1416,18 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # an amount discount is converted to it, so no new money column exists. Plus one
 # local-only table, `pin_approval_attempts (company_id, approver_uid, window_start, failures,
 # locked_until)`: the persistent manager-PIN lockout (never synced). Appended LAST.
-RETAIL_SCHEMA_VERSION = 54
+#
+# v55 (2026-10-13, MONEY-5 -- claimed in ROADMAP.md "retail schema v55 CLAIMED"): per-tender
+# books and cash rounding. Two additive, nullable columns and nothing else:
+# `payment_methods.gl_account_code` (an OPTIONAL per-shop override of which GL account a tender
+# method lands in; the default map lives in core/retail/general_ledger.py) and
+# `sales.rounding_amount` (the signed cash-rounding delta of the sale: cash retained minus cash
+# owed, e.g. -0.007 when 3.457 is settled with 3.450; NULL on every legacy sale = unknown = no
+# rounding). The new GL accounts (1010 / 1020 / 1030 / 1040 / 4950) are seeded lazily by
+# `ensure_default_chart`, like every account before them, so they need no schema step. Existing
+# journals are NOT rewritten: only journals posted from now on land in the new accounts.
+# Appended LAST and shape-gated.
+RETAIL_SCHEMA_VERSION = 55
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2616,6 +2627,10 @@ def _migrate_retail_schema(conn):
     # v53 -> v54 (UI-3a): appended LAST. Three nullable columns on sales / sale_items; nothing above
     # derives from them. See the v54 comment on RETAIL_SCHEMA_VERSION.
     _migrate_add_ui3a_discount_columns(conn)
+    # v54 -> v55 (MONEY-5): appended LAST. Two nullable columns (sales.rounding_amount,
+    # payment_methods.gl_account_code); nothing above derives from them. See the v55 comment on
+    # RETAIL_SCHEMA_VERSION.
+    _migrate_add_money5_tender_columns(conn)
 
 
 def _migrate_credit_mode_inherit(conn):
@@ -2687,6 +2702,35 @@ def _migrate_add_ui3a_discount_columns(conn):
         "company_id TEXT NOT NULL, approver_uid TEXT NOT NULL, window_start TEXT, "
         "failures INTEGER NOT NULL DEFAULT 0, locked_until TEXT, "
         "PRIMARY KEY (company_id, approver_uid))")
+
+
+def _migrate_add_money5_tender_columns(conn):
+    """One-time migration (schema v54 -> v55, MONEY-5). See the v55 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    Shape-gated per table and per column (PRAGMA table_info, then ALTER only what is missing), so
+    the whole chain replaying is byte-identical. TWO details specific to this step:
+
+    * `payment_methods` is NOT created by this file: retail_api._ensure_credit_schema creates it
+      lazily at runtime (like `retail_settings`). A database that never reached that code has no
+      such table, so the column is added only when the table exists, and the runtime ensure adds
+      it for the rest (same column, same declaration) -- the two paths cannot disagree.
+    * NO backfill, on purpose. `sales.rounding_amount` NULL means "no rounding was applied or it
+      was not recorded": every reader must treat NULL as 0. `payment_methods.gl_account_code` NULL
+      means "use the built-in tender map". And NO existing journal is touched: the cash already
+      booked to 1000 Cash and Bank stays there (a one-time reclass to 1010 is a data decision, not
+      made here). Queues no sync event: both are columns of rows that sync already carries (the
+      sale payload gains `rounding_amount` at write time), never a row of their own."""
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    for table, column, ddl in (
+            ('sales', 'rounding_amount', 'REAL'),
+            ('payment_methods', 'gl_account_code', 'TEXT')):
+        if table not in live:
+            continue
+        cols = {row[1] for row in conn.execute('PRAGMA table_info("%s")' % table).fetchall()}
+        if column not in cols:
+            conn.execute('ALTER TABLE "%s" ADD COLUMN %s %s' % (table, column, ddl))
 
 
 def _migrate_add_money4b_expenses(conn):

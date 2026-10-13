@@ -89,8 +89,8 @@ def _cols(conn, table):
 def test_a_fresh_install_has_the_three_columns_and_is_stamped_54(get_conn):
     conn = get_conn()
     try:
-        assert schema.RETAIL_SCHEMA_VERSION == 54
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 54
+        assert schema.RETAIL_SCHEMA_VERSION == 55  # v55 UPDATE: head moved 54 -> 55 (MONEY-5); v55's own shape is pinned by retail_money5_migration_test.py.
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 55  # v55 UPDATE: head moved 54 -> 55 (MONEY-5); v55's own shape is pinned by retail_money5_migration_test.py.
         for table, col in NEW_COLS:
             assert col in _cols(conn, table), (table, col)
     finally:

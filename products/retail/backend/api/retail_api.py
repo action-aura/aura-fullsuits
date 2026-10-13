@@ -16096,6 +16096,12 @@ def _ensure_credit_schema(conn):
     # no-op, same "whichever of the two sites runs first" contract this
     # function's own idx_payments_party comment above already documents.
     addcol('sales', 'points_redeemed_amount', "REAL DEFAULT 0")
+    # MONEY-5 (schema v55): the same lazy safety net for the two v55 columns, for the same reason
+    # as the one above -- a database stamped 55 by an earlier build of this branch (or a table this
+    # file creates itself, `payment_methods`) never re-enters the migration chain. Idempotent with
+    # database/schema.py's _migrate_add_money5_tender_columns: whichever runs first wins.
+    addcol('sales', 'rounding_amount', "REAL")
+    addcol('payment_methods', 'gl_account_code', "TEXT")
     # schema v29 (ROADMAP.md's "CLAIMED: retail v29" entry,
     # database/schema.py's _migrate_add_loyalty_return_id). Same lazy-guard
     # shape as `points_redeemed_amount` immediately above -- a SECOND,
