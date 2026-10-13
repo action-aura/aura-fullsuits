@@ -136,7 +136,15 @@ def build_document(conn, outbox_row) -> EInvoiceDocument:
     # loop -- reused here rather than queried a second time.
     seller_name = settings.get_setting(conn, company_id, 'seller_name') or 'Aura Retail Merchant'
     seller_tin = settings.get_setting(conn, company_id, 'seller_tin')
-    payment_type = derive_payment_type(sale['payment_method'], float(sale['amount_paid']), float(sale['total']))
+    # MONEY-5: a cash sale of 3.457 settled with 3.450 (rounding_amount -0.007) is PAID IN FULL. The
+    # shared rule `amount_paid + 0.005 < total` would call it a credit sale; adding back the fils
+    # the shop conceded keeps cash cash. (Rounding up never needs it: paid >= total already.)
+    try:
+        _conceded = max(0.0, -float(sale['rounding_amount'] or 0))
+    except (KeyError, IndexError, TypeError, ValueError):
+        _conceded = 0.0
+    payment_type = derive_payment_type(sale['payment_method'], float(sale['amount_paid']) + _conceded,
+                                       float(sale['total']))
 
     return EInvoiceDocument(
         company_id=company_id,

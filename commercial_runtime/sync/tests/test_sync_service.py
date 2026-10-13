@@ -221,6 +221,9 @@ CREATE TABLE sales (
     -- unknown (a sale from before v54, or from a v53 sender), never '' and never 0.
     discount_reason TEXT,
     discount_approved_by TEXT,
+    -- MONEY-5 (retail schema v55): the sale apply binds the signed cash rounding. Same
+    -- fixture-follows-schema rule as the columns above. NULL = none recorded (an older sender).
+    rounding_amount REAL,
     status TEXT DEFAULT 'completed',
     idempotency_key TEXT UNIQUE,
     notes TEXT,

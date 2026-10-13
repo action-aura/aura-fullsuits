@@ -61,6 +61,7 @@ AR_LABELS = {
     "Tax": "الضريبة",
     "Total": "الإجمالي",
     "Paid": "المدفوع",
+    "Rounding": "التقريب",
     "Change due": "الباقي",
     "Thank you": "شكراً لكم",
     "Cashier": "أمين صندوق",
@@ -302,6 +303,11 @@ def build_receipt_model(
     if tax > 0:
         lines.append(_row(tr("Tax"), money(tax)))
     lines.append(_row(tr("Total"), money(sale.get("total")), bold=True))
+    # MONEY-5: the cash rounding, signed ("Rounding -JD 0.007"). NULL / 0 prints nothing -- an old
+    # sale, a card sale and a shop with rounding off look exactly as before.
+    rounding = float(sale.get("rounding_amount") or 0)
+    if abs(rounding) > half:
+        lines.append(_row(tr("Rounding"), _negative(money(abs(rounding))) if rounding < 0 else money(rounding)))
 
     if tenders and len(tenders) >= 2:
         for t in tenders:

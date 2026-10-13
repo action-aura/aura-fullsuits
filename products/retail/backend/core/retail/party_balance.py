@@ -200,7 +200,11 @@ def _customer_minor(conn, cid, currency, ids):
     total = {}
     if _has(conn, 'sales', 'customer_id', 'total', 'amount_paid'):
         pts = "COALESCE(points_redeemed_amount,0)" if _has(conn, 'sales', 'points_redeemed_amount') else "0"
-        net = "(total - %s - amount_paid)" % pts
+        # MONEY-5: + the cash rounding (signed, NULL = none). A sale of 3.457 settled in coins
+        # with 3.450 owes nothing; without this term every named cash sale would leave a phantom
+        # debt of the rounded fils on the customer's account.
+        rnd = "COALESCE(rounding_amount,0)" if _has(conn, 'sales', 'rounding_amount') else "0"
+        net = "(total - %s - amount_paid + %s)" % (pts, rnd)
         _merge(total, _grouped(
             conn,
             "SELECT customer_id, SUM(CAST(ROUND(%s * %d) AS INTEGER)) FROM sales "

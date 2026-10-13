@@ -349,6 +349,12 @@ def render_receipt(
     out += _ascii(_row("Total", money_format.format_money(sale.get("total", 0), currency), width_chars)) + b"\n"
     out += ESC + b"E\x00"  # emphasis off
 
+    # MONEY-5: the signed cash rounding under the total (omitted when the sale had none).
+    rounding = sale.get("rounding_amount") or 0
+    if abs(rounding) > 0:
+        shown = ("-" if rounding < 0 else "") + money_format.format_money(abs(rounding), currency)
+        out += _ascii(_row("Rounding", shown, width_chars)) + b"\n"
+
     out += _ascii(_row("Paid", money_format.format_money(sale.get("amount_paid", 0), currency), width_chars)) + b"\n"
 
     change = sale.get("change") or 0

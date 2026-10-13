@@ -5026,6 +5026,7 @@ const RetailSystem = {
         .pos-cp-top { display:flex;align-items:center;gap:8px;flex-shrink:0; }
         /* no colour here: both children set their own (.pos-cp-lbl muted, .money from main.css), so a colour on the container paints nothing -- retail_design_contrast_test.js "no colour semantic is silently overridden" caught exactly that. */
         .pos-cp-status { flex:1;min-inline-size:0;display:flex;flex-direction:column;gap:0; }
+        .pos-cp-rounding { display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-top:2px; }
         .pos-cp-lbl { font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted); }
         /* 30px, not var(--text-size-display): that token resolves to 32px in the
            live stylesheet, which is exactly where a short till's total is
@@ -6270,6 +6271,15 @@ const RetailSystem = {
       // is 0 = no discount, matching the server (it fails closed too).
       const _cdl = parseFloat(creditSettings && creditSettings.data && creditSettings.data.cashier_discount_limit_pct);
       this._cashierDiscountLimit = Number.isFinite(_cdl) ? Math.min(100, Math.max(0, _cdl)) : 0;
+      // MONEY-5: cash rounding. DISPLAY ONLY -- the server rounds and is the authority; this
+      // mirror just lets the till show the coins to take and the change against them. Anything
+      // unreadable is OFF (interval 0), exactly the server's reading.
+      const _cs = (creditSettings && creditSettings.data) || {};
+      const _ri = parseFloat(_cs.cash_rounding_interval);
+      this._cashRounding = {
+        interval: [0.005, 0.01, 0.05, 0.1].some((v) => Math.abs(v - _ri) < 1e-9) ? _ri : 0,
+        rule: ['down', 'up'].includes(_cs.cash_rounding_rule) ? _cs.cash_rounding_rule : 'nearest',
+      };
       this._syncDiscountControl();
       // P1a item #3 ("Credit greys out and shows its reason"): the SAME
       // fallback create_sale (retail_api.py) applies server-side --
@@ -8340,6 +8350,15 @@ const RetailSystem = {
     this._recalc();
   },
 
+  // MONEY-5: the receipt's "Rounding" amount as text ('−0.007' / '+0.043'), or '' when the sale
+  // had none (NULL on a sale from before v55 means "none recorded", never an error). Sign always
+  // shown so a customer can see which way the coin went.
+  _roundingText(saleData) {
+    const v = Number(saleData && saleData.rounding_amount);
+    if (!Number.isFinite(v) || Math.abs(v) < 0.5 / Math.pow(10, this._currencyDp())) return '';
+    return (v < 0 ? '−' : '+') + Math.abs(v).toFixed(this._currencyDp());
+  },
+
   _calcChange() {
     const tendered   = parseFloat(document.getElementById('pos-tendered')?.value || 0);
     // Loyalty redemption wave 1: change is owed against what still has to be
@@ -8350,6 +8369,7 @@ const RetailSystem = {
     // behaviour whenever no redemption is in play.
     let amountDue = this._currentTotals.amountDue != null ? this._currentTotals.amountDue : (this._currentTotals.total || 0);
     if (this._tenderParts && this._tenderParts.length) amountDue = this._fromMinor(this._remainingMinor());
+    amountDue = this._fromMinor(this._roundCashMinor(this._toMinor(amountDue)));   // MONEY-5: coins, not fils
     const changeRow = document.getElementById('pos-change-row');
     const changeEl  = document.getElementById('pos-change');
     if (this._paymentMethod === 'cash' && tendered > 0 && tendered >= amountDue) {
@@ -8403,10 +8423,35 @@ const RetailSystem = {
   // _calcChange() compares the tendered amount against (loyalty redemption and
   // already-taken part payments both lower it).
   _cashDueMinor() {
+    return this._roundCashMinor(this._cashDueExactMinor());
+  },
+
+  // The amount due BEFORE any cash rounding, in minor units (the server's `amount_due_after_points`
+  // less part payments already taken).
+  _cashDueExactMinor() {
     const cu = this._currentTotals || {};
     let due = cu.amountDue != null ? cu.amountDue : (cu.total || 0);
     if (this._tenderParts && this._tenderParts.length) due = this._fromMinor(this._remainingMinor());
     return this._toMinor(due);
+  },
+
+  // MONEY-5: the cash part rounded to the shop's coin, in minor units (integers, so no float
+  // drift). Mirrors core/retail/cash_rounding.py: 'nearest' ties go UP, 'down'/'up' are floor /
+  // ceiling. Only when the method is cash; off (interval 0) returns the input untouched.
+  _roundCashMinor(minor) {
+    const r = this._cashRounding;
+    if (!r || !(r.interval > 0) || this._paymentMethod !== 'cash' || !(minor > 0)) return minor;
+    const step = Math.round(r.interval * Math.pow(10, this._currencyDp()));
+    if (!(step > 1)) return minor;
+    const q = minor / step;
+    const units = r.rule === 'down' ? Math.floor(q + 1e-9) : r.rule === 'up' ? Math.ceil(q - 1e-9) : Math.floor(q + 0.5 + 1e-9);
+    return Math.max(0, units * step);
+  },
+
+  // The signed rounding the cash part gets right now (rounded - exact), in minor units; 0 = none.
+  _cashRoundingMinor() {
+    const exact = this._cashDueExactMinor();
+    return this._roundCashMinor(exact) - exact;
   },
 
   _cashPanelHtml() {
@@ -8417,6 +8462,7 @@ const RetailSystem = {
           <div class="pos-cp-status" id="pos-cp-status" data-state="due" aria-live="polite">
             <span class="pos-cp-lbl" id="pos-cp-lbl">${t('Amount due')}</span>
             <span class="pos-cp-fig money" id="pos-cp-fig"></span>
+            <span class="pos-cp-rounding" id="pos-cp-rounding" dir="ltr" hidden></span>
           </div>
           <button type="button" class="pos-cp-key pos-cp-back" id="pos-cp-back" aria-label="${this._esc(t('Delete last digit'))}" onmousedown="event.preventDefault()" dir="ltr" onclick="RetailSystem._cashPadKey('back')">←</button>
           <button type="button" class="pos-cp-key pos-cp-close" id="pos-cp-close" aria-label="${this._esc(t('Close'))}" onmousedown="event.preventDefault()" onclick="RetailSystem._closeCashPanel(true)">✕</button>
@@ -8510,6 +8556,12 @@ const RetailSystem = {
     let shownMinor = dueMinor;
     if (typedMinor > 0 && typedMinor >= dueMinor) { state = 'change'; shownMinor = typedMinor - dueMinor; }
     else if (typedMinor > 0) { state = 'short'; shownMinor = dueMinor - typedMinor; }
+    const roundEl = document.getElementById('pos-cp-rounding');
+    if (roundEl) {
+      const rm = this._cashRoundingMinor();
+      roundEl.hidden = rm === 0;
+      roundEl.textContent = rm === 0 ? '' : `${t('Rounding')} ${rm < 0 ? '−' : '+'}${this._fromMinor(Math.abs(rm)).toFixed(dp)}`;
+    }
     const status = document.getElementById('pos-cp-status');
     const lbl = document.getElementById('pos-cp-lbl');
     const fig = document.getElementById('pos-cp-fig');
@@ -10426,7 +10478,8 @@ const RetailSystem = {
       // upfront-deposit field, so nothing was handed over. Sending amountDue
       // here made the server compute balance_due = 0: the customer was
       // charged nothing and the "payment" landed in the drawer as cash.
-      amount_paid:      this._paymentMethod === 'cash' ? Math.max(tendered, amountDue)
+      amount_paid:      this._paymentMethod === 'cash'
+                          ? Math.max(tendered, this._fromMinor(this._roundCashMinor(this._toMinor(amountDue))))   // MONEY-5: the coins due, not the fils
                         : (this._paymentMethod === 'credit' ? 0 : amountDue),
       payment_method:   this._paymentMethod,
       // Loyalty redemption wave 1 (schema v27): an integer COUNT of points,
@@ -10664,6 +10717,7 @@ const RetailSystem = {
         discount_amount: sale.discount_amount, tax_amount: sale.tax_amount,
         discount_reason: sale.discount_reason,
         amount_paid: sale.amount_paid, change: sale.change_amount,
+        rounding_amount: sale.rounding_amount,   // MONEY-5: cash rounding, signed (NULL on older sales)
         tenders: sale.tenders,
         points_redeemed_amount: sale.points_redeemed_amount,
         // `name` intentionally left as bare `product_name` (no id fallback
@@ -10976,6 +11030,9 @@ const RetailSystem = {
             <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
               <span style="color:var(--text-secondary)">Total</span><span style="color:var(--text-money);font-weight:700;white-space:nowrap">${this._fmt(saleData.total)}</span>
             </div>
+            ${this._roundingText(saleData) ? `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+              <span style="color:var(--text-secondary)">${t('Rounding')}</span><span dir="ltr" style="color:var(--text-money);white-space:nowrap">${this._roundingText(saleData)}</span>
+            </div>` : ''}
             <!-- Loyalty redemption wave 1 (schema v27). saleData's own
                  points_redeemed_amount field is ALWAYS present on a real
                  sale response (0 for the overwhelming majority that never
@@ -11590,6 +11647,7 @@ const RetailSystem = {
       ${printDiscBreakdown.discount > printHalfMinorUnit ? `<div class="rcpt-line"><span>${this._discountLabelHtml(saleData, rt)}</span><span>-${this._fmt(printDiscBreakdown.discount)}</span></div>` : ''}
       ${saleData.tax_amount > 0 ? `<div class="rcpt-line"><span>${rt('Tax')}</span><span>${this._fmt(saleData.tax_amount)}</span></div>` : ''}
       <div class="rcpt-line rcpt-bold"><span>${rt('Total')}</span><span>${this._fmt(saleData.total)}</span></div>
+      ${this._roundingText(saleData) ? `<div class="rcpt-line"><span>${rt('Rounding')}</span><span dir="ltr">${this._roundingText(saleData)}</span></div>` : ''}
       ${printTenderHtml || `<div class="rcpt-line"><span>${rt('Paid')}</span><span>${this._fmt(saleData.amount_paid)}</span></div>`}
       ${saleData.change > 0 ? `<div class="rcpt-line"><span>${rt('Change due')}</span><span>${this._fmt(saleData.change)}</span></div>` : ''}
       <div class="rcpt-hr"></div>
@@ -17863,6 +17921,7 @@ const RetailSystem = {
               ${sale.discount_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--text-muted)">${this._discountLabelHtml(sale, (s) => s)}</span><span style="color:var(--text-money-negative)">-${this._fmt(sale.discount_amount)}</span></div>`:''}
               ${sale.tax_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--text-muted)">Tax</span><span style="color:var(--text-money)">${this._fmt(sale.tax_amount)}</span></div>`:''}
               <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:700;border-top:1px dashed var(--border-default);padding-top:8px;margin-top:4px"><span style="color:var(--text-primary)">Total</span><span style="color:var(--text-money)">${this._fmt(sale.total)}</span></div>
+              ${this._roundingText(sale) ? `<div style="display:flex;justify-content:space-between;font-size:13px;margin-top:6px"><span style="color:var(--text-muted)">${t('Rounding')}</span><span dir="ltr" style="color:var(--text-money)">${this._roundingText(sale)}</span></div>` : ''}
               <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:6px"><span style="color:var(--text-muted)">Paid</span><span style="color:var(--text-money)">${this._fmt(sale.amount_paid)}</span></div>
               ${(this._receiptTenderRows(sale, t) || []).map(r => `<div style="display:flex;justify-content:space-between;font-size:12px;margin-inline-start:12px"><span style="color:var(--text-muted)">${this._esc(r.label)}</span><span style="color:var(--text-money)">${this._fmt(r.amount)}</span></div>`).join('')}
               ${sale.change_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-muted)">${t('Change due')}</span><span style="color:var(--text-money-positive)">${this._fmt(sale.change_amount)}</span></div>`:''}
@@ -17907,6 +17966,7 @@ const RetailSystem = {
       total:           sale.total,
       amount_paid:     sale.amount_paid,
       change:          sale.change_amount,
+      rounding_amount: sale.rounding_amount,   // MONEY-5
       tenders:         sale.tenders,
       // employee_name/customer_id/customer_name: GET /sales/<id> already
       // resolves both (see get_sale's own docstring) -- POST /sales's

@@ -116,6 +116,8 @@ SALE_RESPONSE_KEYS = [
     'customer_id', 'customer_name', 'discount_amount', 'employee_name',
     'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
     'points_redeemed', 'points_redeemed_amount',
+    # MONEY-5 (v55): signed cash rounding, null when none -- see retail_einvoicing_regression_test.py.
+    'rounding_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
 # DEFECT 1 fix (launch-readiness money-reconciliation pass) added FOUR keys

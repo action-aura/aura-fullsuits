@@ -29,6 +29,7 @@ from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 import re
 
 from core.retail import pricing as tax_engine
+from core.retail import cash_rounding as cash_rounding_engine
 
 MAX_TENDERS = 6
 _METHOD_RE = re.compile(r'^[a-z][a-z0-9 _-]{0,31}$')
@@ -74,11 +75,20 @@ def normalize_tenders(raw):
     return out, None, None
 
 
-def settle_tenders(tenders, amount_due, currency=None):
+def settle_tenders(tenders, amount_due, currency=None, cash_rounding=None):
     """Work out what a normalised `tenders` list is worth against `amount_due`.
 
-    Returns a dict {'ok': True, 'paid', 'change', 'balance_due', 'rows'} (all
+    Returns a dict {'ok': True, 'paid', 'change', 'balance_due', 'rows', 'rounding'} (all
     Decimal; rows = [(method, retained)]) or {'ok': False, 'code', 'message'}.
+
+    `cash_rounding` (MONEY-5, review #3) is None (OFF -- every figure below is exactly what it was
+    before the feature) or (interval, rule) from core/retail/cash_rounding.py. It rounds ONE
+    thing: the CASH part that settles what is left after the other methods -- never a card or
+    mobile amount (those are charged for exactly what they are) and never when part of the sale is
+    left on account (the debt, not the coin, settles the remainder). It applies only when the cash
+    handed over COVERS the rounded amount; otherwise the sale behaves exactly as without rounding.
+    `rounding` in the result is the signed difference (cash retained minus cash owed: 3.457 owed,
+    3.450 retained -> -0.007), 0 when nothing was rounded.
     """
     quant = tax_engine.currency_quantum(currency) if currency else _FALLBACK_QUANTUM
     eps = quant / 2
@@ -102,11 +112,24 @@ def settle_tenders(tenders, amount_due, currency=None):
     paid = cash + other_sum
     total_in = paid + credit
 
-    if total_in < due - eps:
-        short = due - total_in
+    # MONEY-5: cash rounding. `due` stays the TRUE amount owed (the invoice is whole); what changes
+    # is `effective_due`, the amount the tenders must now cover once the cash part is in coins.
+    rounding = Decimal(0)
+    effective_due = due
+    if cash_rounding and credit == 0 and cash > 0:
+        interval, rule = cash_rounding
+        remainder = due - other_sum
+        if interval > 0 and remainder > eps:
+            rounded = cash_rounding_engine.round_cash(remainder, interval, rule, quant)
+            if cash >= rounded - eps:
+                rounding = rounded - remainder
+                effective_due = due + rounding
+
+    if total_in < effective_due - eps:
+        short = effective_due - total_in
         return {'ok': False, 'code': 'TENDERS_SHORT',
-                'message': f'The parts add up to {total_in} but {due} is due. {short} is still missing.'}
-    over = total_in - due
+                'message': f'The parts add up to {total_in} but {effective_due} is due. {short} is still missing.'}
+    over = total_in - effective_due
     if credit > 0 and over > eps:
         return {'ok': False, 'code': 'TENDER_CREDIT_OVERPAID',
                 'message': 'The part on account is more than what is left to pay.'}
@@ -129,6 +152,6 @@ def settle_tenders(tenders, amount_due, currency=None):
             rows.append(('cash', cash - change))
         else:
             rows.append((m, t['amount'].quantize(quant, rounding=ROUND_HALF_UP)))
-    balance_due = max(Decimal(0), due - paid)
+    balance_due = max(Decimal(0), effective_due - paid)
     return {'ok': True, 'paid': paid, 'change': change,
-            'balance_due': balance_due, 'rows': rows}
+            'balance_due': balance_due, 'rows': rows, 'rounding': rounding}

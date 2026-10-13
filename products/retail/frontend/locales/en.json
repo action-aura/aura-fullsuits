@@ -2848,5 +2848,18 @@
   "You are not allowed to change a price. Ask a manager to approve it.": "You are not allowed to change a price. Ask a manager to approve it.",
   "Damaged": "Damaged",
   "Loyal customer": "Loyal customer",
-  "Round down": "Round down"
+  "Round down": "Round down",
+  "Cash and stock": "Cash and stock",
+  "Round the cash a customer pays to the smallest coin you really have. Cards are never rounded. The sale and its tax stay exact; the few fils difference is kept in your books as cash rounding.": "Round the cash a customer pays to the smallest coin you really have. Cards are never rounded. The sale and its tax stay exact; the few fils difference is kept in your books as cash rounding.",
+  "Round cash to": "Round cash to",
+  "Do not round": "Do not round",
+  "Rounding direction": "Rounding direction",
+  "To the nearest": "To the nearest",
+  "Always down": "Always down",
+  "Always up": "Always up",
+  "When goods are on the shelf but not yet entered, the till can still sell them. The sale is flagged for you to fix the stock.": "When goods are on the shelf but not yet entered, the till can still sell them. The sale is flagged for you to fix the stock.",
+  "Selling more than the recorded stock": "Selling more than the recorded stock",
+  "Not allowed": "Not allowed",
+  "Allowed, and flagged": "Allowed, and flagged",
+  "Rounding": "Rounding"
 }

@@ -2848,5 +2848,18 @@
   "You are not allowed to change a price. Ask a manager to approve it.": "لا يُسمح لك بتغيير السعر. اطلب موافقة المدير.",
   "Damaged": "تالف",
   "Loyal customer": "عميل دائم",
-  "Round down": "تقريب للأسفل"
+  "Round down": "تقريب للأسفل",
+  "Cash and stock": "النقد والمخزون",
+  "Round the cash a customer pays to the smallest coin you really have. Cards are never rounded. The sale and its tax stay exact; the few fils difference is kept in your books as cash rounding.": "قرّب النقد الذي يدفعه الزبون إلى أصغر عملة معدنية متوفرة لديك. البطاقات لا تُقرَّب أبدًا. تبقى قيمة البيع وضريبته دقيقة، ويُسجَّل فرق الفلسات القليل في دفاترك كتقريب نقدي.",
+  "Round cash to": "تقريب النقد إلى",
+  "Do not round": "بدون تقريب",
+  "Rounding direction": "اتجاه التقريب",
+  "To the nearest": "إلى الأقرب",
+  "Always down": "للأسفل دائمًا",
+  "Always up": "للأعلى دائمًا",
+  "When goods are on the shelf but not yet entered, the till can still sell them. The sale is flagged for you to fix the stock.": "عندما تكون البضاعة على الرف ولم تُسجَّل بعد، يستطيع الصندوق بيعها. يُعلَّم البيع لتصحّح المخزون لاحقًا.",
+  "Selling more than the recorded stock": "البيع بأكثر من المخزون المسجّل",
+  "Not allowed": "غير مسموح",
+  "Allowed, and flagged": "مسموح مع تعليمه",
+  "Rounding": "التقريب"
 }
