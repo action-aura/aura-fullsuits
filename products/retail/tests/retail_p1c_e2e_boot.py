@@ -194,6 +194,12 @@ MUTANTS = {
     "till_reset_logout_removed": ("this._resetTillForNewUser('logout');", "", "**/app-shell.js*"),
     "till_shell_reset_noop": ("window.RetailSystem._resetTillForNewUser(reason);", "", "**/app-shell.js*"),
     "till_same_user_clears": ("const sameUser = !!now && !!keyOf(prev) && keyOf(now) === keyOf(prev);", "const sameUser = false;", "**/app-shell.js*"),
+    # UI-3b (retail_ui3b_e2e.py): each breaks ONE guard, served in memory only
+    "ui3b_overlay_inset": ("inset-block-start: var(--top-banner-inset, 0px);", "inset-block-start: 0px;", "**/main.css*"),
+    "ui3b_rail_64": (".sub-sidebar.sub-sidebar-rail { inline-size: 96px; }", ".sub-sidebar.sub-sidebar-rail { inline-size: 64px; }", "**/main.css*"),
+    "ui3b_ai_top": ("html .ai-panel, html .sub-ai-panel { position: fixed; top: var(--top-banner-inset, 0px); }", "html .ai-panel, html .sub-ai-panel { top: 0px; }", "**/main.css*"),
+    "ui3b_help_cap": ("max-block-size:calc(100vh - var(--top-banner-inset, 0px) - 32px)", "max-block-size:calc(100vh - 32px)", "**/help.js*"),
+    "ui3b_tabs_never": ("tabs.length < 2", "tabs.length < 99", "**/app-shell.js*"),
     "xlarge_cart_floor": ("html.ui-xlarge .pos-cart-items { min-block-size:calc(2 * var(--pos-cart-row-min) + 8px); }", "html.ui-xlarge .pos-cart-items { min-block-size:calc(5 * var(--pos-cart-row-min) + 8px); }"),
 }
 

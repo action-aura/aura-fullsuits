@@ -5728,3 +5728,30 @@ html.ui-xlarge .sub-content:not([data-section="pos"]) :is(td, th, label, input, 
 html.ui-xlarge .ret-modal :is(td, th, label, input, select, textarea, .ret-btn) { font-size: 17px; line-height: 26px; }
 html.ui-xlarge .sub-content:not([data-section="pos"]) :is(td, th, label),
 html.ui-xlarge .ret-modal :is(td, th, label) { line-height: 28px; }
+
+/* UI-3b item 5: a dialog starts BELOW any top banner. The licence / sync banners are
+   position:fixed at top:0 and stack ABOVE the dialogs, so a full-screen overlay that is
+   `inset:0` centres its box in the whole viewport and the dialog's title slides under the
+   banner (the Help dialog in Arabic: its heading was unreadable behind the yellow licence
+   banner). --top-banner-inset is the measured banner height (app-shell _reflowTopBanners),
+   0px when there is none -- so with no banner nothing moves by a pixel. NOT the command palette:
+   its field is anchored near the top and already clears the banner (retail_p1b_palette_fix_e2e F2), and
+   that crew's contract is that its scrim DIMS the banner rather than leaving it bright. `html` raises
+   specificity above the overlays whose own rules are injected later by their scripts
+   (ret-modal-overlay, iw-, sg-).
+   Two more halves of the same rule, both found by measuring in a real browser: (1) a dialog
+   TALLER than the space below the banner centres itself and overflows upward, so its title is
+   under the banner again -- its max-height must be the space below the banner, not 88vh;
+   (2) the AI panel is position:absolute against the viewport (sub-ai.js appends it to <body>,
+   NOT inside #page-subsystem), so it also needs the inset as its own `top`. */
+html .ret-modal-overlay, html .sub-modal-overlay, html .sub-confirm-overlay,
+html .modal, html .modal-overlay, html .theme-picker-backdrop,
+html .iw-overlay, html .sg-overlay {
+  inset-block-start: var(--top-banner-inset, 0px);
+}
+html .ret-modal { max-height: min(88vh, calc(100vh - var(--top-banner-inset, 0px) - 24px)); }
+html .sub-modal { max-height: min(90vh, calc(100vh - var(--top-banner-inset, 0px) - 24px)); }
+/* position:fixed, not just a top: an absolute box is anchored to the DOCUMENT, and a banner that is
+   sticky in the flow makes the document scrollable by its own height -- measured, the panel's top then
+   sat at y=0 (under the banner) although its computed top was the inset. Fixed is anchored to the screen. */
+html .ai-panel, html .sub-ai-panel { position: fixed; top: var(--top-banner-inset, 0px); }

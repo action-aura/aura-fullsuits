@@ -366,7 +366,7 @@ const AuraHelp = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'aura-help-overlay';
     overlay.innerHTML = `
-      <div class="ret-modal aura-help" id="aura-help-dialog" role="dialog" aria-modal="true" aria-labelledby="aura-help-title" style="max-block-size:calc(100vh - 32px);overflow-y:auto">
+      <div class="ret-modal aura-help" id="aura-help-dialog" role="dialog" aria-modal="true" aria-labelledby="aura-help-title" style="max-block-size:calc(100vh - var(--top-banner-inset, 0px) - 32px);overflow-y:auto">
         <div class="aura-help-head">
           <h3 id="aura-help-title">${this._esc(t('Help'))}</h3>
           <button type="button" class="ret-btn ret-btn-ghost ret-btn-sm" id="aura-help-close" aria-label="${this._esc(t('Close'))}" title="${this._esc(t('Close'))}">✕</button>

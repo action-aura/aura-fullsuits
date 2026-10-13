@@ -432,12 +432,42 @@ function testCssRailMutationsAreCaught() {
 }
 //#END-ITEM 3
 
+//#BEGIN-ITEM 5
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// 5 (item 5) -- CSS + help.js: dialogs and panels start below a top banner
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+function testCssOverlays(cssSrc = CSS_SRC) {
+  const css = cssSrc.replace(/\r\n/g, '\n');
+  for (const cls of ['ret-modal-overlay', 'sub-modal-overlay', 'sub-confirm-overlay', 'modal-overlay', 'iw-overlay', 'sg-overlay']) {
+    assert.ok(new RegExp(`html \\.${cls}[,\\s{]`).test(css), `overlay .${cls} is not pushed below a top banner`);
+  }
+  const block = /html \.ret-modal-overlay[\s\S]*?\{([^}]*)\}/.exec(css.slice(css.indexOf('UI-3b item 5')));
+  assert.ok(block && /inset-block-start:\s*var\(--top-banner-inset,\s*0px\)/.test(block[1]), 'overlay rule must use --top-banner-inset');
+  // the two halves found by measuring: a tall dialog must fit BELOW the banner, and the AI panel is not inside .page
+  assert.ok(/html \.ret-modal \{ max-height: min\(88vh, calc\(100vh - var\(--top-banner-inset, 0px\) - 24px\)\); \}/.test(css), 'a dialog taller than the space under the banner would overflow upward again');
+  assert.ok(/html \.ai-panel, html \.sub-ai-panel \{ position: fixed; top: var\(--top-banner-inset, 0px\); \}/.test(css), 'the AI panel ignores the banner');
+  const help = fs.readFileSync(path.join(FRONTEND, 'help.js'), 'utf8');
+  assert.ok(/id="aura-help-dialog"[^>]*max-block-size:calc\(100vh - var\(--top-banner-inset, 0px\) - 32px\)/.test(help), "help.js's inline dialog cap ignores the banner");
+  console.log('PASS: css overlays -- every full-screen overlay, the tall dialog cap and the AI panel start below --top-banner-inset');
+}
+
+function testCssOverlaysMutationsAreCaught() {
+  mustFail('AI panel ignores the banner => css overlays test fails', () =>
+    testCssOverlays(mutate(CSS_SRC, "html .ai-panel, html .sub-ai-panel { position: fixed; top: var(--top-banner-inset, 0px); }", "html .ai-panel, html .sub-ai-panel { top: 0px; }")));
+  mustFail('dialog cap ignores the banner => css overlays test fails', () =>
+    testCssOverlays(mutate(CSS_SRC, "html .ret-modal { max-height: min(88vh, calc(100vh - var(--top-banner-inset, 0px) - 24px)); }", "html .ret-modal { max-height: 88vh; }")));
+  mustFail('overlay ignores the banner inset => css overlays test fails', () =>
+    testCssOverlays(mutate(CSS_SRC, "  inset-block-start: var(--top-banner-inset, 0px);\n}", "  inset-block-start: 0px;\n}")));
+}
+//#END-ITEM 5
+
 const CASES = [
   testReachabilityTableBeforeVsAfter, testReachabilityTableMutationsAreCaught,   //#ITEM 1
   testTabBar, testTabBarMutationsAreCaught,                                      //#ITEM 1
   testRememberedSection, testRememberedSectionMutationsAreCaught,                //#ITEM 2
   testHeader, testHeaderMutationsAreCaught,                                      //#ITEM 4
   testCssRail, testCssRailMutationsAreCaught,                                    //#ITEM 3
+  testCssOverlays, testCssOverlaysMutationsAreCaught,                            //#ITEM 5
 ];
 let failed = 0;
 for (const fn of CASES) {
