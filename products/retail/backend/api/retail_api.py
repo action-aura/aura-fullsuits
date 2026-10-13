@@ -11150,7 +11150,10 @@ def create_return():
                     "WHERE r.sale_id=? AND ri.sale_item_id=? AND r.company_id=?",
                     (sale_id, sale_item_id, cid)
                 ).fetchone()[0]
-                claim_key = ('item', sale_item_id)
+                # ONE claim key per sale LINE, whichever identifier named it (verifier L6): a request
+                # naming the same line once by sale_item_id and once by product used to be counted
+                # under two different keys and refunded twice the quantity sold.
+                claim_key = ('item', sold['id'])
             else:
                 # `unit_cost` added, same reason as the sale_item_id branch
                 # immediately above.
@@ -11193,7 +11196,7 @@ def create_return():
                     "WHERE r.sale_id=? AND ri.product_id=? AND r.company_id=?",
                     (sale_id, pid, cid)
                 ).fetchone()[0]
-                claim_key = ('product', pid)
+                claim_key = ('item', sold['id'])   # the same key the sale_item_id branch uses
 
             already_claimed = claimed_this_request.get(claim_key, 0.0)
             remaining = float(sold['quantity']) - float(already_returned or 0) - already_claimed

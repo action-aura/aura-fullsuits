@@ -193,3 +193,41 @@ def test_h1_fuzz_cash_back_never_exceeds_cash_taken_and_equals_it_after_a_full_r
         assert after == before, (price, qty, cuts, before, after)
         ran += 1
     assert ran == 6
+
+
+# ── PRE-EXISTING (verifier L6): one request naming the same line twice ───────────────────────
+
+def _line_sale(qty=2, price=10.0):
+    admin, cid, pid = H._new_shop(price=price)
+    s = _sale(admin, pid, items=[{'product_id': pid, 'quantity': qty}], payment_method='cash',
+              amount_paid=1000)
+    line = _rows("SELECT id FROM sale_items WHERE sale_id=?", (s['id'],))[0]['id']
+    return admin, cid, pid, s, line
+
+
+def _returned_qty(sale_id):
+    return D(str(_rows("SELECT COALESCE(SUM(ri.quantity),0) AS q FROM return_items ri JOIN returns r "
+                       "ON r.id=ri.return_id WHERE r.sale_id=?", (sale_id,))[0]['q']))
+
+
+def test_l6_the_same_line_named_by_id_and_by_product_cannot_be_returned_twice():
+    admin, cid, pid, s, line = _line_sale(qty=2)
+    r = _ret(admin, s['id'], [{'sale_item_id': line, 'product_id': pid, 'quantity': 2},
+                              {'product_id': pid, 'quantity': 2}], refund_method='cash')
+    assert r.status_code == 400, r.get_json()           # was 200 with refund_amount 40.0 for 20 sold
+    assert _returned_qty(s['id']) == 0 and not _rows("SELECT id FROM returns WHERE sale_id=?", (s['id'],))
+    r = _ret(admin, s['id'], [{'product_id': pid, 'quantity': 2},
+                              {'sale_item_id': line, 'quantity': 1}], refund_method='cash')
+    assert r.status_code == 400, r.get_json()           # the other order too
+    assert _returned_qty(s['id']) == 0
+
+
+def test_l6_two_identifiers_that_together_stay_within_the_quantity_sold_are_still_accepted():
+    admin, cid, pid, s, line = _line_sale(qty=2, price=10.0)
+    r = _ret(admin, s['id'], [{'sale_item_id': line, 'product_id': pid, 'quantity': 1},
+                              {'product_id': pid, 'quantity': 1}], refund_method='cash')
+    assert r.status_code == 200, r.get_json()
+    assert D(str(r.get_json()['data']['refund_amount'])) == D('20.000')     # exactly what was sold
+    assert _returned_qty(s['id']) == 2
+    r = _ret(admin, s['id'], [{'product_id': pid, 'quantity': 1}], refund_method='cash')
+    assert r.status_code == 400                                              # nothing left to return
