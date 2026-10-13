@@ -8039,3 +8039,17 @@ Branch `feat/android-2a` (off 75ffaac3). Android only; no backend change, no `RE
 ## 2026-10-12 — retail schema v53 CLAIMED (MONEY-4c: a customer's credit follows the shop default unless set)
 
 RETAIL_SCHEMA_VERSION 52 -> 53. Nobody else bumps it. New stored value `customers.credit_mode = 'inherit'` = follow `default_credit_mode`; the v53 step converts legacy `'none'` to `'inherit'`. Branch `feat/money-4c`.
+
+## 2026-10-13 — OWNER-PRIV (what the relay keeps and for how long)
+- Relay (`owner_sync_events`, `owner_sync_quarantine`) stores shop business data as plaintext JSONB. Pruning today is cursor-only
+  (nightly `sync prune-events --apply`, below the slowest ACTIVE device); no age cap; quarantine never auto-deleted. PRIVACY.md
+  now says so (it used to claim the opposite).
+- DONE (no migration, no Alembic revision): `owner/app/privacy_retention.py` via `commercial housekeeping` -- finished e-mail rows
+  lose body/subject/recipient-name after 30d (`OWNER_EMAIL_BODY_RETENTION_DAYS`, floor 2); login attempts deleted after 180d
+  (`OWNER_LOGIN_ATTEMPT_RETENTION_DAYS`). Tests: `owner/tests/test_privacy_retention.py`.
+- NOT DONE on purpose: age-based sync-event pruning. A joining device and a restored/re-pointed device pull from cursor 0 and there
+  is no snapshot endpoint, so an age cap would silently drop history. E2E encryption not built: devices hold only Ed25519 signing
+  keys, no shop secret. Options with effort/risk: ownerpriv findings (snapshot bootstrap -> shop key E2E -> stale-device policy).
+- OPEN, UNPROVEN: because cursor pruning is already live, a device joining LATER may miss business rows every existing device has
+  already acked (reannounce.py covers authority state only). Needs a two-then-third-device test on the Lab rig.
+- Arabic privacy text: none in repo; must follow the corrected PRIVACY.md when written.
