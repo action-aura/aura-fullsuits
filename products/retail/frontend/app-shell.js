@@ -1749,7 +1749,8 @@ const SubsystemApp = {
     // the SAME rule (fix round 3, HIGH 2): it used to always send a cashier
     // to 'dashboard', one click from the refusal sentence the dashboard shows
     // them. "Home" is the till for a sell-only person, on every path.
-    this.launch('retail', this._isSellOnlyCapabilities() ? 'pos' : 'dashboard');
+    // UI-3b item 2: restore the last section (never for a sell-only person).
+    this.launch('retail', this._landingSection());
 
     // P1a item 5: polled at shell start and on window 'focus' ONLY, never
     // per navigation -- see _pollConnectedServicesStatus's own comment.
@@ -4686,6 +4687,37 @@ const SubsystemApp = {
     } catch (e) { /* private mode */ }
   },
 
+  // UI-3b item 2 ("remember where I was"): the section a person was last on, per
+  // user, so a restart (or the Windows app being closed for the night) lands them
+  // where they left off instead of on Today. Per user, never per device: the shared
+  // till is signed in by a different person each shift.
+  _lastSectionStorageKey() {
+    const uid = (this.currentUser && this.currentUser.id) || 'anon';
+    return 'aura_last_section_' + uid;
+  },
+
+  _rememberSection(sectionId) {
+    if (!sectionId) return;
+    try { localStorage.setItem(this._lastSectionStorageKey(), String(sectionId)); } catch (e) { /* private mode */ }
+  },
+
+  // Where to land on launch. Sell-only people ALWAYS start on the till (their home
+  // is the till, whatever they last opened). Everyone else: the stored section, but
+  // only if the SAME rule the sidebar and palette apply still offers it to them today
+  // (a grant removed overnight, a screen that no longer exists, a device-bound screen
+  // on another computer all fall back to Today). Anything unreadable falls back too.
+  _landingSection() {
+    if (this._isSellOnlyCapabilities()) return 'pos';
+    let stored = null;
+    try { stored = localStorage.getItem(this._lastSectionStorageKey()); } catch (e) { stored = null; }
+    if (!stored) return 'dashboard';
+    const sys = this.systems && this.systems.retail;
+    const item = sys && (sys.nav || []).find((i) => i.id === stored);
+    // externalPage rows are separate documents, never an in-shell section.
+    if (!item || item.externalPage || !this._isPageOffered(item)) return 'dashboard';
+    return stored;
+  },
+
   // Collapse-menu preference (B4): 'rail' | 'full' | absent. Absent keeps the
   // automatic behaviour (icon rail on the till route only).
   _sidebarModeStorageKey() {
@@ -5115,6 +5147,7 @@ const SubsystemApp = {
       el.classList.toggle('active', el.dataset.section === homeId);
     });
     this._syncSectionTabs(sectionId);
+    this._rememberSection(sectionId);
 
     // P1a item 4: the sidebar collapses to a 64px icon rail on the Till
     // route specifically -- kept in step here (not only in _renderShell's

@@ -303,9 +303,65 @@ function testTabBarMutationsAreCaught() {
     testTabBar(mutate(SHELL_SRC, "if (!set || tabs.length < 2) { el.innerHTML = ''; el.hidden = true; return; }", "if (!set || tabs.length < 2) { el.innerHTML = ''; return; }")));
 }
 
+//#BEGIN-ITEM 2
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// 3 -- remember where I was
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+function testRememberedSection(shellSrc = SHELL_SRC) {
+  const store = {};
+  const a = boot(shellSrc, HUB_SRC, ROLES.owner, { store, userId: 'u1' });
+  a.App._rememberSection('sales');
+  assert.strictEqual(a.App._landingSection(), 'sales', 'the owner returns to where they were');
+  // per user
+  const b = boot(shellSrc, HUB_SRC, ROLES.owner, { store, userId: 'u2' });
+  assert.strictEqual(b.App._landingSection(), 'dashboard', 'another user does not inherit the first one\'s section');
+  // a tab of Reports & Books is restorable (deep link into a tab)
+  a.App._rememberSection('cash-flow');
+  assert.strictEqual(a.App._landingSection(), 'cash-flow');
+  // sell-only is ALWAYS the till, even with a stored report screen
+  const cs = {};
+  const c = boot(shellSrc, HUB_SRC, ROLES.cashier, { store: cs });
+  c.App._rememberSection('reports');
+  assert.strictEqual(c.App._landingSection(), 'pos', 'a sell-only person lands on the till');
+  // a screen no longer offered falls back to Today
+  const ms = {};
+  const m1 = boot(shellSrc, HUB_SRC, ROLES.manager, { store: ms });
+  m1.App._rememberSection('employees');
+  assert.strictEqual(m1.App._landingSection(), 'dashboard', 'a stored screen the person may no longer open falls back to Today');
+  m1.App._rememberSection('does-not-exist');
+  assert.strictEqual(m1.App._landingSection(), 'dashboard');
+  m1.App._rememberSection('whatsapp');
+  assert.strictEqual(m1.App._landingSection(), 'dashboard', 'an external page is never restored as an in-shell section');
+  // storage that throws neither crashes the save nor the read
+  const boom = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); }, removeItem() {} };
+  const d = boot(shellSrc, HUB_SRC, ROLES.owner, { localStorage: boom });
+  assert.doesNotThrow(() => d.App._rememberSection('sales'));
+  assert.strictEqual(d.App._landingSection(), 'dashboard');
+  // wiring: launch uses it, navigation records it
+  assert.ok(/this\.launch\('retail', this\._landingSection\(\)\)/.test(shellSrc), 'init() must launch on _landingSection()');
+  assert.ok(/this\._rememberSection\(sectionId\)/.test(shellSrc), '_navigateNow must record the section');
+  console.log('PASS: section remembered per user, restored on launch, till for sell-only, safe when storage throws');
+}
+
+function testRememberedSectionMutationsAreCaught() {
+  mustFail('sell-only rule dropped => test fails', () =>
+    testRememberedSection(mutate(SHELL_SRC, "    if (this._isSellOnlyCapabilities()) return 'pos';\n    let stored", "    let stored")));
+  mustFail('offered-check dropped => test fails', () =>
+    testRememberedSection(mutate(SHELL_SRC, "if (!item || item.externalPage || !this._isPageOffered(item)) return 'dashboard';", "if (!item) return 'dashboard';")));
+  mustFail('not keyed per user => test fails', () =>
+    testRememberedSection(mutate(SHELL_SRC, "return 'aura_last_section_' + uid;", "return 'aura_last_section_x';")));
+  mustFail('init no longer restores => test fails', () =>
+    testRememberedSection(mutate(SHELL_SRC, "this.launch('retail', this._landingSection());", "this.launch('retail', this._isSellOnlyCapabilities() ? 'pos' : 'dashboard');")));
+  mustFail('storage errors not swallowed => test fails', () =>
+    testRememberedSection(mutate(SHELL_SRC, "try { localStorage.setItem(this._lastSectionStorageKey(), String(sectionId)); } catch (e) { /* private mode */ }", "localStorage.setItem(this._lastSectionStorageKey(), String(sectionId));")));
+}
+
+//#END-ITEM 2
+
 const CASES = [
   testReachabilityTableBeforeVsAfter, testReachabilityTableMutationsAreCaught,   //#ITEM 1
   testTabBar, testTabBarMutationsAreCaught,                                      //#ITEM 1
+  testRememberedSection, testRememberedSectionMutationsAreCaught,                //#ITEM 2
 ];
 let failed = 0;
 for (const fn of CASES) {
