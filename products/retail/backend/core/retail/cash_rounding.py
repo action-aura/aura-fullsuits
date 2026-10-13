@@ -73,17 +73,23 @@ def config(settings):
     return parse_interval(s.get(SETTING_INTERVAL, DEFAULT_INTERVAL)), parse_rule(s.get(SETTING_RULE))
 
 
-def round_cash(amount, interval, rule, quantum):
+def round_cash(amount, interval, rule, quantum, never_zero=False):
     """`amount` rounded to a multiple of `interval` by `rule`, quantized to the currency's own
     smallest unit `quantum`. `interval` 0 returns `amount` quantized and otherwise unchanged.
 
-    Never returns a negative number for a non-negative amount. 'down' can take a small positive
-    amount to 0 (a 0.003 total rounded down to a 0.050 coin is free): the caller decides whether
-    that is acceptable; the setting is the shop's choice."""
+    Never returns a negative number for a non-negative amount. 'down' (and 'nearest' on a tiny
+    amount) can take a small positive amount to 0: 0.099 'down' to a 0.100 coin is FREE. A SALE must
+    never be charged nothing for goods that cost something, so the sale paths pass `never_zero=True`
+    and a positive amount that would round to 0 is charged ONE interval instead (verifier LOW). The
+    default stays False for a refund: a return's cash is rounded on the running total of the sale
+    (create_return), where an intermediate 0 is correct and the coin arrives with a later part."""
     amount = Decimal(str(amount))
     if interval <= 0:
         return amount.quantize(quantum, rounding=ROUND_HALF_UP)
     units = amount / interval
     mode = {'nearest': ROUND_HALF_UP, 'down': ROUND_FLOOR, 'up': ROUND_CEILING}.get(rule, ROUND_HALF_UP)
     rounded = units.quantize(Decimal(1), rounding=mode) * interval
-    return max(rounded, _OFF).quantize(quantum, rounding=ROUND_HALF_UP)
+    rounded = max(rounded, _OFF).quantize(quantum, rounding=ROUND_HALF_UP)
+    if never_zero and amount > 0 and rounded == 0:
+        return interval.quantize(quantum, rounding=ROUND_HALF_UP)
+    return rounded

@@ -89,6 +89,9 @@ function testTable(src) {
     [3.457, 0.1, 'nearest', 3500, 43],
     [3.45, 0.05, 'up', 3450, 0],             // already a coin multiple
     [3.457, 0, 'nearest', 3457, 0],          // off
+    [0.099, 0.1, 'down', 100, 1],            // never free: a positive total is at least one coin
+    [0.02, 0.05, 'nearest', 50, 30],
+    [0.02, 0.05, 'down', 50, 30],
   ];
   for (const [total, interval, rule, due, rnd] of cases) {
     const { R } = setup(src, { interval, rule }, 'cash', total);
@@ -187,6 +190,8 @@ function main() {
   testShortGuardUsesTheRoundedRemainder(SRC);
   mustFail('the cash-method gate removed (a card total rounds)',
     testOnlyCashRounds, mutant(SRC, "|| this._paymentMethod !== 'cash' ||", '||'));
+  mustFail('a positive total may round to 0 again (free sale)',
+    testTable, mutant(SRC, 'return Math.max(step, units * step);', 'return Math.max(0, units * step);'));
   mustFail('the rule ignored (always nearest)',
     testTable, mutant(SRC, "const units = r.rule === 'down' ? Math.floor(q + 1e-9) : r.rule === 'up' ? Math.ceil(q - 1e-9) : Math.floor(q + 0.5 + 1e-9);",
       'const units = Math.floor(q + 0.5 + 1e-9);'));

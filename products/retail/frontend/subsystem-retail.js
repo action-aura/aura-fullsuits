@@ -8445,7 +8445,9 @@ const RetailSystem = {
     if (!(step > 1)) return minor;
     const q = minor / step;
     const units = r.rule === 'down' ? Math.floor(q + 1e-9) : r.rule === 'up' ? Math.ceil(q - 1e-9) : Math.floor(q + 0.5 + 1e-9);
-    return Math.max(0, units * step);
+    // Never FREE: a positive total that rounds to 0 ('down' on 0.099, 'nearest' on 0.020) is one
+    // coin, like the server's round_cash(never_zero=True) -- the verifier's LOW (b).
+    return Math.max(step, units * step);
   },
 
   // The signed rounding the cash part gets right now (rounded - exact), in minor units; 0 = none.

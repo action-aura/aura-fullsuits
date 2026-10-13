@@ -292,3 +292,50 @@ def test_m4_a_return_without_the_ack_refunds_the_exact_cash_with_it_the_coin():
     d = r.get_json()['data']
     assert r.status_code == 200 and d['tender_refund_amount'] == 3.45 and d['refund_amount'] == 3.457
     assert _rows("SELECT rounding_amount FROM returns WHERE id=?", (d['id'],))[0]['rounding_amount'] == -0.007
+
+
+# ── LOW (b): rounding never makes a positive total FREE ──────────────────────────────────────
+
+@pytest.mark.parametrize('amount,interval,rule,expected', [
+    ('0.099', '0.100', 'down', '0.100'),        # was 0.000: a free sale
+    ('0.020', '0.050', 'nearest', '0.050'),     # was 0.000
+    ('0.020', '0.050', 'down', '0.050'),
+    ('0.150', '0.100', 'down', '0.100'),        # already non-zero: untouched
+    ('0.140', '0.050', 'nearest', '0.150'),
+    ('0.000', '0.050', 'down', '0.000'),        # a genuinely free total stays free
+])
+def test_low_b_round_cash_never_turns_a_positive_sale_total_into_zero(amount, interval, rule, expected):
+    assert cr.round_cash(D(amount), D(interval), rule, Q, never_zero=True) == D(expected)
+
+
+def test_low_b_the_refund_default_still_lets_a_part_round_to_zero():
+    """The running-total return rounding needs the plain behaviour: 0.020 'down' is 0 for a refund
+    part (the coin arrives with a later part, H1). Only the SALE paths ask for never_zero."""
+    assert cr.round_cash(D('0.020'), D('0.050'), 'down', Q) == D('0.000')
+
+
+def test_low_b_a_single_cash_sale_of_0_099_rounded_down_to_0_100_is_charged_one_coin():
+    admin, cid, pid = H._new_shop(price=0.099)
+    _settings(admin, cash_rounding_interval='0.100', cash_rounding_rule='down')
+    s = _sale(admin, pid, payment_method='cash')
+    assert s['amount_paid'] == 0.1 and s['rounding_amount'] == 0.001, s
+    assert [(m['method'], m['amount']) for m in _sale_pay_rows(s['id'])] == [('cash', 0.1)]
+    assert _bal(cid, '4950') == D('0.001')                     # customer paid 0.001 MORE than the total
+    conn = H.get_retail_conn()
+    try:
+        assert gl.trial_balance(conn, cid)['is_balanced'] is True
+    finally:
+        conn.close()
+
+
+def test_low_b_a_split_sale_whose_cash_part_would_round_to_zero_is_charged_one_coin():
+    admin, cid, pid = H._new_shop(price=5.020)
+    _settings(admin, cash_rounding_interval='0.050', cash_rounding_rule='down')
+    s = _sale(admin, pid, tenders=[{'method': 'card', 'amount': 5.0}, {'method': 'cash', 'amount': 1.0}])
+    assert [(m['method'], m['amount']) for m in _sale_pay_rows(s['id'])] == [('card', 5.0), ('cash', 0.05)], \
+        _sale_pay_rows(s['id'])
+    assert s['rounding_amount'] == 0.03
+
+
+def _sale_pay_rows(sale_id):
+    return _rows("SELECT method, amount FROM payments WHERE sale_id=? AND direction='in' ORDER BY id", (sale_id,))

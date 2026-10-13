@@ -9246,7 +9246,8 @@ def create_sale():
             if (str(pm).strip().lower() == 'cash' and _round_interval > 0
                     and amount_due_after_points > _money_epsilon(currency)):
                 _rounded_due = float(cash_rounding_engine.round_cash(
-                    Decimal(str(amount_due_after_points)), _round_interval, _round_rule, _quant))
+                    Decimal(str(amount_due_after_points)), _round_interval, _round_rule, _quant,
+                    never_zero=True))
             paid      = max(0.0, _money(data.get('amount_paid', (amount_due_after_points
                                                                if _rounded_due is None else _rounded_due)), currency))
             if _rounded_due is not None and paid >= _rounded_due - _money_epsilon(currency):

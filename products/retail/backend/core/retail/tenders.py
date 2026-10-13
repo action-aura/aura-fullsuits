@@ -120,7 +120,7 @@ def settle_tenders(tenders, amount_due, currency=None, cash_rounding=None):
         interval, rule = cash_rounding
         remainder = due - other_sum
         if interval > 0 and remainder > eps:
-            rounded = cash_rounding_engine.round_cash(remainder, interval, rule, quant)
+            rounded = cash_rounding_engine.round_cash(remainder, interval, rule, quant, never_zero=True)
             if cash >= rounded - eps:
                 rounding = rounded - remainder
                 effective_due = due + rounding
