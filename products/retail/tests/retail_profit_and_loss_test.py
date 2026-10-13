@@ -805,3 +805,36 @@ def test_a_voided_expense_account_netting_to_zero_is_hidden_but_a_live_one_shows
     assert [a['code'] for a in after['operating_expenses']['accounts']] == ['6100']
     assert after['operating_expenses']['total'] == 40.0 and after['net_profit'] == -40.0
     assert after['has_activity'] is True
+
+# ═════════════════════════════════════════════════════════════════════════
+# POLISH-1: the Expenses list says WHO by name, the e-mail only as a fallback
+# ═════════════════════════════════════════════════════════════════════════
+
+def _set_display_name(company_id, name):
+    reg = registry_conn()
+    reg.execute("UPDATE users SET display_name=? WHERE company_id=?", (name, company_id))
+    reg.commit(); reg.close()
+
+
+def test_expenses_list_recorded_by_is_the_display_name_with_email_fallback(client):
+    cid = client.test_company_id
+    reg = registry_conn()   # the fixture's raw INSERT has no wire uid; production accounts always do
+    reg.execute("UPDATE users SET uid=? WHERE company_id=?", (str(uuid.uuid4()), cid))
+    reg.commit(); reg.close()
+    r = client.post(f'{API}/expenses', json={
+        'gl_account_code': '6000', 'amount': 10, 'paid_via': 'bank', 'memo': 'who'})
+    assert r.status_code == 200, r.get_json()
+    reg = registry_conn()
+    email = reg.execute("SELECT email FROM users WHERE company_id=?", (cid,)).fetchone()['email']
+    reg.close()
+    # no display name set -> the e-mail (the only thing we know)
+    row = client.get(f'{API}/expenses').get_json()['data']['expenses'][0]
+    assert row['created_by_name'] == email
+    # a display name wins
+    _set_display_name(cid, 'Sara Cashier')
+    row = client.get(f'{API}/expenses').get_json()['data']['expenses'][0]
+    assert row['created_by_name'] == 'Sara Cashier'
+    # a blank one is "no name", not an empty label
+    _set_display_name(cid, '   ')
+    row = client.get(f'{API}/expenses').get_json()['data']['expenses'][0]
+    assert row['created_by_name'] == email

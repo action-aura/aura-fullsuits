@@ -13657,6 +13657,13 @@ def list_expenses():
     today = _gl_business_date(conn, cid)
     conn.close()
     names = _resolve_actor_identities(cid, [r['created_by'] for r in rows])
+    # POLISH-1: "Recorded by" is the person's display name; the e-mail is only the fallback for a
+    # person who has none (the shared identity lookup carries the e-mail, never the name).
+    display = _actor_display_names(cid, [r['created_by'] for r in rows])
+    names = {k: dict(v, employee_name=display.get(str(k)) or v.get('employee_name'))
+             for k, v in names.items()}
+    for ref, name in display.items():
+        names.setdefault(ref, {'employee_id': None, 'email': None, 'employee_name': name})
     items = [_expense_public(r, names, account_names) for r in rows]
     live_total = sum(i['amount'] for i in items if not i['voided'])
     return jsonify({'status': 'success', 'data': {
