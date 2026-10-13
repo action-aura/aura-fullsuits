@@ -126,7 +126,9 @@ class SyncLicenseState(Base, TimestampMixin):
 
     Monotonic by construction (pruning.py writes max(old, new) in the same
     transaction as each delete batch). It is ONLY ever written by pruning and
-    by the one-off backfill in the migration, never by a request."""
+    by the operator's `flask sync mark-pruned`, never by a request and never
+    by a migration backfill (seq is shared by all licences, so a first-event
+    seq says nothing about whether anything was deleted)."""
 
     __tablename__ = "owner_sync_license_state"
 

@@ -543,6 +543,36 @@ def register_cli(app: Flask) -> None:
                 alarm.license_id, alarm.pending_count, alarm.threshold,
             )
 
+    @sync_group.command("mark-pruned")
+    @click.option("--license", "license_id", required=True, help="Licence UUID.")
+    @click.option("--through", default=None, type=int, help="Highest seq known to be gone. Default: lowest stored seq for the licence - 1.")
+    @click.option("--dry-run", is_flag=True, default=False, help="Print what would be recorded; write nothing.")
+    def mark_pruned_cmd(license_id: str, through: int | None, dry_run: bool):
+        """Records, for ONE licence, that its history is pruned through a seq.
+        Use after deploying SYNC-BOOT Phase 1 on a relay that already pruned
+        for real: the migration claims nothing, so a new device on such a
+        licence would otherwise receive a partial stream. Always --dry-run
+        first and read the number. Audited."""
+        import uuid as _uuid
+        from app.sync.pruning import mark_pruned
+
+        try:
+            lic = _uuid.UUID(license_id)
+            result = mark_pruned(lic, through, dry_run=dry_run)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        if not dry_run:
+            audit_record(
+                actor_staff_user_id=None,
+                actor_role_snapshot=None,
+                action_code="SYNC_LICENSE_MARKED_PRUNED",
+                entity_type="license",
+                entity_public_id=str(lic),
+                reason=f"pruned_through_seq raised to at least {result['through']} by operator CLI",
+                after_state={"pruned_through_seq": result["through"]},
+            )
+        click.echo(json.dumps(result, indent=2))
+
     @app.cli.group("reports")
     def reports_group():
         """Phase 9R M5 -- scheduled report-snapshot generation. Meant to be

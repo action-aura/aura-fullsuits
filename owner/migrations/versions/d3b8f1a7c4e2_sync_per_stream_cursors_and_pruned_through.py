@@ -20,20 +20,18 @@ Why (docs: SYNC-BOOT plan sections 0, 4, 5.1; ROADMAP.md claim of 2026-10-13):
    has been pruned, so pull() can answer RESYNC_REQUIRED instead of returning a
    partial stream that looks gap-free.
 
-BACKFILL (the only judgement call in this revision). Production was already
-being pruned before pruned_through existed, so the number is unknown. We
-reconstruct a SAFE LOWER-BOUND-ON-DAMAGE estimate: for each licence that has a
-cursor at or beyond its oldest retained event, pruned_through = oldest retained
-seq - 1. Meaning: "nothing older than what is on disk is claimed to be
-deliverable". This errs toward a loud RESYNC_REQUIRED, never toward silently
-serving a partial history. KNOWN COST of erring that way: seq is one identity
-sequence shared by ALL licences, so a licence whose very first event happens to
-have seq > 1 gets pruned_through = first_seq - 1 even though nothing was ever
-deleted; a brand-new device pulling since=0 would be told to resync. Phase 3
-(bootstrap) is what lets such a device recover; until then the operator can set
-the row to 0 by hand if the licence provably never pruned.
-A licence with no cursor at or beyond its oldest event (nothing proves a prune
-ran, or no device ever advanced) gets NO row (= 0).
+BACKFILL: NONE (deliberately). An earlier draft inferred pruned_through from
+"oldest retained seq - 1" for licences with an advanced cursor. That was wrong:
+seq is ONE identity sequence shared by ALL licences, so a licence that was
+never pruned, whose first event simply sits at seq 5000, would be claimed
+pruned through 4999 and every NEW device (since=0) would get 409
+RESYNC_REQUIRED with no bootstrap until Phase 3 -- joining a shop broken for
+nearly every licence. No row exists after this migration (= 0 = "nothing
+pruned"). pruned_through is raised ONLY by a real `sync prune-events --apply`
+deletion (same transaction as the delete, per-licence highest deleted seq).
+A live relay that already pruned before this column existed is corrected by
+the operator with `flask sync mark-pruned --license <id> [--through N]`
+(use --dry-run first); see ROADMAP "SYNC-BOOT Phase 1" amendment.
 
 Downgrade collapses (installation_id, stream) back to installation_id, keeping
 the MOST ADVANCED row per installation; that can only make a device look
@@ -68,22 +66,6 @@ def upgrade() -> None:
         sa.Column("last_prune_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-    )
-
-    # Backfill: see the module docstring. Only licences that have BOTH events
-    # and a cursor at/beyond the oldest retained event get a row.
-    op.execute(
-        """
-        INSERT INTO owner_sync_license_state (license_id, pruned_through_seq)
-        SELECT e.license_id, MIN(e.seq) - 1
-        FROM owner_sync_events e
-        GROUP BY e.license_id
-        HAVING MIN(e.seq) - 1 > 0
-           AND EXISTS (
-               SELECT 1 FROM owner_sync_device_cursors c
-               WHERE c.license_id = e.license_id AND c.last_acked_seq >= MIN(e.seq)
-           )
-        """
     )
 
 

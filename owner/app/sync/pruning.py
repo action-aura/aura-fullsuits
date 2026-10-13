@@ -187,6 +187,35 @@ def _record_pruned_through(license_id: uuid.UUID, seq: int) -> None:
     ))
 
 
+def min_stored_seq(license_id: uuid.UUID) -> int | None:
+    """Lowest seq still stored for this licence, or None if it has no events."""
+    return db_session.execute(
+        select(func.min(SyncEvent.seq)).where(SyncEvent.license_id == license_id)
+    ).scalar_one()
+
+
+def mark_pruned(license_id: uuid.UUID, through: int | None = None, *, dry_run: bool = True) -> dict:
+    """Operator escape hatch: explicitly record that this licence's history is
+    gone up to `through`. For a live relay that pruned for real BEFORE
+    pruned_through existed (the migration deliberately backfills nothing -- seq
+    is shared by all licences, so it cannot tell "pruned" from "starts late").
+    Default `through` = (lowest seq still stored for the licence) - 1, returned
+    so the operator can review it; a licence with no stored events needs an
+    explicit --through. Monotonic (GREATEST) like every other writer."""
+    if through is None:
+        lowest = min_stored_seq(license_id)
+        if lowest is None:
+            raise ValueError("licence has no stored events; pass an explicit --through")
+        through = lowest - 1
+    if through < 0:
+        raise ValueError("--through must be >= 0")
+    result = {"license_id": str(license_id), "through": through, "dry_run": dry_run}
+    if not dry_run and through > 0:
+        _record_pruned_through(license_id, through)
+        db_session.commit()
+    return result
+
+
 def prune_owner_sync_events(*, dry_run: bool = True, batch_size: int = DEFAULT_BATCH_SIZE) -> PruneReport:
     """Deletes every owner_sync_events row at or below its license's
     watermark (see _watermark_for_license), one license at a time, in
