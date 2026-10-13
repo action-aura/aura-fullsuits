@@ -8138,3 +8138,12 @@ Audit: every refusal writes `DISCOUNT_APPROVAL_PIN_REFUSED` (approver uid, cashi
 **OPEN, recorded not fixed (returns code, pre-existing rounding):** partial returns of a cart-discounted line can refund 1–3 fils LESS than was paid — measured 33 of 156 fuzzed sales returned in parts (each part re-priced at the stored odd % and rounded). UI-3a amplifies it by putting a non-round % on every discounted line. Over-refunds are already capped by the tender cap. Needs a returns-side fix (refund the stored line_total pro rata, not a re-priced %).
 
 - Full run after the fix round: `run_all_tests.py retail commercial_runtime sync -j 6` = 509 files, 509 passed, 0 failed (log kept with the job).
+
+
+## 2026-10-13 — retail schema v55 CLAIMED (MONEY-5: per-tender accounts, cash rounding)
+
+RETAIL_SCHEMA_VERSION 54 -> 55, branch `feat/money-5` (off 5b1fe123). Nobody else bumps it. Shape-gated, idempotent,
+additive only: `payment_methods.gl_account_code TEXT NULL` (per-tender GL account), `sales.rounding_amount REAL NULL`
+(signed cash-rounding delta). New lazily-seeded GL accounts: 1010 Cash in Drawer, 1020 Bank, 1030 Card Clearing,
+1040 CliQ / Wallet, 4950 Cash Rounding. Also in this wave, no schema: `allow_negative_stock` setting and the
+partial-return remainder rule (returns refund exactly what was paid).
