@@ -218,7 +218,10 @@ def test_both_services_factories_return_local_site_relay_client():
 def test_forwarder_and_housekeeping_each_started_exactly_once():
     assert _forwarder_start_calls['count'] == 1, _forwarder_start_calls
     assert _housekeeping_start_calls['count'] == 1, _housekeeping_start_calls
-    assert _housekeeping_kwargs_seen[0].get('consumer_floor_provider') is _app_module._hub_own_consumer_floors
+    # SYNC-JOIN (2026-10-13): was `is _hub_own_consumer_floors`; app.py now wires the
+    # wrapper that prepends a 0 floor. The own-floors guarantee is still checked inside.
+    _provider_carries_hub_floors_and_syncjoin_zero(
+        _housekeeping_kwargs_seen[0].get('consumer_floor_provider'), _app_module)
 
 
 def test_forwarder_cloud_factory_builds_a_real_client_for_the_configured_cloud():
@@ -344,3 +347,16 @@ def test_reentrancy_start_sync_after_activation_completes_forwarder_still_one():
     assert not thread.is_alive(), "_start_sync_after_activation hung (RLock re-entrancy regression)"
     assert _forwarder_start_calls['count'] == 1, (
         f"a second call must not start a second forwarder loop, got {_forwarder_start_calls['count']}")
+
+
+def _provider_carries_hub_floors_and_syncjoin_zero(provider, app_module):
+    """The wired provider must (a) be the SYNC-JOIN wrapper, (b) still carry the
+    hub's OWN two stream floors (the original guarantee this test pinned by
+    identity), and (c) lead with 0 so nothing is pruned until bootstrap exists."""
+    assert provider is app_module._hub_housekeeping_floors
+    real = app_module._hub_own_consumer_floors
+    try:
+        app_module._hub_own_consumer_floors = lambda: [41, 43]
+        assert provider() == [0, 41, 43]
+    finally:
+        app_module._hub_own_consumer_floors = real

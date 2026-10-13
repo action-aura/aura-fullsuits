@@ -206,7 +206,10 @@ def test_2_activation_mid_process_turns_hub_self_sync_on_with_no_restart():
         assert isinstance(service._client_factory(), LocalSiteRelayClient), label
     assert _sync_service_module._active_service is _app_module._sync_service
     assert _counts == {'forwarder_start': 1, 'housekeeping_start': 1, 'sync_start': 2}, _counts
-    assert _housekeeping_kwargs_seen[0]['consumer_floor_provider'] is _app_module._hub_own_consumer_floors
+    # SYNC-JOIN (2026-10-13): was `is _hub_own_consumer_floors`; app.py now wires the
+    # wrapper that prepends a 0 floor. The own-floors guarantee is still checked inside.
+    _provider_carries_hub_floors_and_syncjoin_zero(
+        _housekeeping_kwargs_seen[0]['consumer_floor_provider'], _app_module)
 
 
 def test_3_a_second_activation_hook_changes_nothing():
@@ -311,3 +314,16 @@ def test_6_was_active_before_reads_the_cursor_even_with_an_empty_site_log():
         assert _app_module._hub_self_sync_was_active_before() is True
     finally:
         conn.close()
+
+
+def _provider_carries_hub_floors_and_syncjoin_zero(provider, app_module):
+    """The wired provider must (a) be the SYNC-JOIN wrapper, (b) still carry the
+    hub's OWN two stream floors (the original guarantee this test pinned by
+    identity), and (c) lead with 0 so nothing is pruned until bootstrap exists."""
+    assert provider is app_module._hub_housekeeping_floors
+    real = app_module._hub_own_consumer_floors
+    try:
+        app_module._hub_own_consumer_floors = lambda: [41, 43]
+        assert provider() == [0, 41, 43]
+    finally:
+        app_module._hub_own_consumer_floors = real
