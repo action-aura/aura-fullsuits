@@ -398,7 +398,7 @@ def test_list_price_is_snapshotted_on_every_line(shop):
 
 def test_price_override_denied_without_the_capability_allowed_with_it_or_a_pin(shop):
     _, owner, cashier, manager, pids = shop
-    body = _cart(pids)
+    body = _cart(pids, discount_reason='Price match')
     body['items'][0]['unit_price_override'] = 3.0
     before = _state()
     denied = _post(cashier, body)
@@ -426,7 +426,7 @@ def test_price_override_denied_without_the_capability_allowed_with_it_or_a_pin(s
 def test_a_bad_override_is_refused(shop):
     _, owner, _, _, pids = shop
     for bad in (-1, 'abc', 1.00012):
-        body = _cart(pids)
+        body = _cart(pids, discount_reason='Price match')
         body['items'][0]['unit_price_override'] = bad
         r = _post(owner, body)
         assert r.status_code == 400 and r.get_json()['code'] == 'PRICE_OVERRIDE_INVALID', (bad, r.get_json())
@@ -633,3 +633,105 @@ def test_the_counter_rolls_over_when_the_window_or_the_lock_runs_out():
         assert conn.execute("SELECT failures FROM pin_approval_attempts WHERE company_id=?", (co2,)).fetchone()[0] == 0
     finally:
         conn.close()
+
+
+# ── price override: a reason is mandatory; the list price includes paid extras ────────────
+# Verifier MEDIUM-1: a PIN-approved override to 0.000 needed no reason and showed nowhere but
+# the list_price column. Verifier HIGH-2: list_price was taken BEFORE modifier extras, so a plain
+# bread with a +0.500 extra printed a false "was 1.000, now 1.500" strike-through.
+
+def test_a_price_override_needs_a_reason_whoever_approves_it(shop):
+    _, owner, cashier, manager, pids = shop
+    before = _state()
+    for who, extra in ((owner, {}), (manager, {}), (cashier, {'approval': _approval(manager)})):
+        body = _cart(pids, **extra)
+        body['items'][0]['unit_price_override'] = 0.0               # given away
+        r = _post(who, body)
+        assert r.status_code == 400 and r.get_json()['code'] == 'DISCOUNT_REASON_REQUIRED', r.get_json()
+        body['discount_reason'] = '   '                              # blank is no reason
+        body['idempotency_key'] = str(uuid.uuid4())
+        assert _post(who, body).status_code == 400
+    assert _state() == before
+    body = _cart(pids, approval=_approval(manager), discount_reason='Damaged box')
+    body['items'][0]['unit_price_override'] = 0.0
+    ok = _post(cashier, body)
+    assert ok.status_code == 200, ok.get_json()
+    row = _q("SELECT discount_reason, discount_approved_by FROM sales WHERE id=?", ok.get_json()['data']['id'])[0]
+    assert row == {'discount_reason': 'Damaged box', 'discount_approved_by': manager.user_uid}
+
+
+def _bread_with_a_paid_extra(owner, pids):
+    g = owner.post(f'{API}/modifier-groups', json={'name': 'Extras %s' % uuid.uuid4().hex[:5], 'min_select': 0})
+    assert g.status_code == 200, g.get_json()
+    gid = g.get_json()['data']['id']
+    o = owner.post(f'{API}/modifier-groups/{gid}/options', json={'name': 'Extra shot', 'price_delta': 0.5})
+    assert o.status_code == 200, o.get_json()
+    a = owner.post(f'{API}/products/{pids[0]}/modifier-groups', json={'group_id': gid})
+    assert a.status_code == 200, a.get_json()
+    return o.get_json()['data']['id']
+
+
+def _receipt_line(owner, sale_id, name):
+    rm = owner.get(f'{API}/printer/receipt-model?sale_id={sale_id}')
+    assert rm.status_code == 200, rm.get_json()
+    return [l for l in rm.get_json()['data']['lines'] if name in json.dumps(l)][0]
+
+
+def test_a_paid_extra_is_part_of_the_list_price_and_prints_no_strike_through(shop):
+    _, owner, _, _, pids = shop                                  # Widget A lists at 3.500
+    opt = _bread_with_a_paid_extra(owner, pids)
+    body = _cart(pids)
+    body['items'][0]['modifier_option_ids'] = [opt]
+    r = _post(owner, body)
+    assert r.status_code == 200, r.get_json()
+    row = _q("SELECT unit_price, list_price FROM sale_items WHERE sale_id=? ORDER BY id", r.get_json()['data']['id'])[0]
+    assert row == {'unit_price': 4.0, 'list_price': 4.0}          # the verifier saw list 3.5 / charged 4.0
+    line = _receipt_line(owner, r.get_json()['data']['id'], 'Widget A')
+    assert not line.get('strike'), line                         # no override -> nothing struck
+
+
+def test_an_overridden_line_with_an_extra_strikes_the_extras_inclusive_list_price(shop):
+    _, owner, _, _, pids = shop
+    opt = _bread_with_a_paid_extra(owner, pids)
+    body = _cart(pids, discount_reason='Price match')
+    body['items'][0]['modifier_option_ids'] = [opt]
+    body['items'][0]['unit_price_override'] = 3.0                # base 3.000 + 0.500 extra = charged 3.500
+    r = _post(owner, body)
+    assert r.status_code == 200, r.get_json()
+    row = _q("SELECT unit_price, list_price FROM sale_items WHERE sale_id=? ORDER BY id", r.get_json()['data']['id'])[0]
+    assert row == {'unit_price': 3.5, 'list_price': 4.0}          # list = 3.500 + 0.500, override left out
+    line = _receipt_line(owner, r.get_json()['data']['id'], 'Widget A')
+    assert 'JD 4.000' in str(line.get('strike')), line           # strike shows the extras-inclusive LIST price
+
+
+# ── hostile numbers and text never become a 500 or a stored control character ─────────────
+
+def test_absurd_and_non_finite_amounts_are_a_400_never_a_500(shop):
+    _, owner, _, _, pids = shop
+    before = _state()
+    for field in ('cart_discount_amount', 'cart_target_total', 'unit_price_override'):
+        for bad in (1e30, float('nan'), float('inf'), float('-inf'), -5, 1_000_001, '1e30', 'NaN'):
+            body = _cart(pids, discount_reason='x')
+            if field == 'unit_price_override':
+                body['items'][0][field] = bad
+            else:
+                body[field] = bad
+            r = _post(owner, body)
+            assert r.status_code == 400, (field, bad, r.status_code, r.get_data(as_text=True)[:200])
+    assert _state() == before
+
+
+def test_the_discount_reason_is_cleaned_on_the_way_in(shop):
+    _, owner, _, _, pids = shop
+    dirty = 'a\nb\r\nc‮evil⁦x⁩\x07 <i>  '
+    r = _post(owner, _cart(pids, cart_discount_amount=0.5, discount_reason=dirty))
+    assert r.status_code == 200, r.get_json()
+    stored = _q("SELECT discount_reason FROM sales WHERE id=?", r.get_json()['data']['id'])[0]['discount_reason']
+    assert stored == 'a b c' + 'evil' + 'x <i>', repr(stored)
+    assert not any(ch in stored for ch in '‪‫‬‭‮⁦⁧⁨⁩\n\r\x07')
+    just_fits = _post(owner, _cart(pids, cart_discount_amount=0.5, discount_reason='x' * 120))
+    assert just_fits.status_code == 200
+    too_long = _post(owner, _cart(pids, cart_discount_amount=0.5, discount_reason='x' * 121))
+    assert too_long.status_code == 400 and too_long.get_json()['code'] == 'DISCOUNT_REASON_TOO_LONG'
+    only_controls = _post(owner, _cart(pids, cart_discount_amount=0.5, discount_reason='‮\n\x07'))
+    assert only_controls.status_code == 400 and only_controls.get_json()['code'] == 'DISCOUNT_REASON_REQUIRED'

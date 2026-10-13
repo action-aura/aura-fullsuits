@@ -4128,6 +4128,8 @@ const RetailSystem = {
         <input type="number" id="lm-price" class="ret-input" min="0" step="${1 / Math.pow(10, dp)}" value="${item.unit_price_override != null ? item.unit_price_override : ''}"
           placeholder="${this._esc(this._fmt(item.unit_price))}" style="width:100%" />
         ${cap ? '' : `<div class="ds-note" style="margin-top:6px">${t('A different price needs a manager’s PIN at Charge.')}</div>`}
+        <label class="ds-lbl" for="lm-reason" style="margin-top:10px">${t('Reason')}</label>
+        <input type="text" id="lm-reason" class="ret-input" maxlength="${this._DISC_REASON_MAX}" value="${this._esc(item.price_reason || '')}" style="width:100%" />
         <div id="lm-error" class="ds-error" role="alert"></div>
         <div class="ret-modal-footer">
           <button type="button" class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
@@ -4158,6 +4160,15 @@ const RetailSystem = {
       const raw = priceEl.value === '' ? null : parseFloat(priceEl.value);
       if (raw != null && !(raw >= 0)) { if (err) err.textContent = t('The price cannot be negative.'); return; }
       item.unit_price_override = raw != null && raw !== item.unit_price ? this._roundMoney(raw) : null;
+      // A price of its own needs a reason (the server refuses one without it): the same rule as
+      // every amount discount, so a given-away line is never anonymous.
+      const why = String((document.getElementById('lm-reason') || {}).value || '').trim().slice(0, this._DISC_REASON_MAX);
+      if (item.unit_price_override != null && !why) {
+        item.unit_price_override = null;
+        if (err) err.textContent = t('Pick a reason first');
+        return;
+      }
+      item.price_reason = item.unit_price_override != null ? why : null;
     }
     // An item discount cannot sit beside an amount/target discount (the server refuses
     // the pair); keep the newer intention, drop the older.
@@ -10433,6 +10444,7 @@ const RetailSystem = {
       items: this._cart.map(i => {
         const out = { ...i, discount_pct: this._cartDisc ? 0 : (i.disc_pct != null ? i.disc_pct : discPct) };
         if (i.unit_price_override == null) delete out.unit_price_override;
+        delete out.price_reason;
         return out;
       }),
     };
@@ -10444,6 +10456,12 @@ const RetailSystem = {
       payload.discount_reason = this._cartDisc.reason;
     } else if (this._discReason) {
       payload.discount_reason = this._discReason;
+    }
+    if (!payload.discount_reason) {
+      // A line price of its own carries its reason to the sale (one sale-level field).
+      const whys = [];
+      this._cart.forEach(i => { if (i.unit_price_override != null && i.price_reason && whys.indexOf(i.price_reason) === -1) whys.push(i.price_reason); });
+      if (whys.length) payload.discount_reason = whys.join('; ').slice(0, this._DISC_REASON_MAX);
     }
     if (approval) payload.approval = approval;
     if (builtTenders.tenders) {

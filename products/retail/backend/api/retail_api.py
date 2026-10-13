@@ -1211,6 +1211,21 @@ CAP_PRICE_OVERRIDE = CAP_DISCOUNT
 DISCOUNT_REASON_MAX_LEN = 120
 
 
+_BIDI_CONTROLS = frozenset('\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069')
+_LINE_BREAKS = re.compile('[\r\n\x0b\x0c\x85\u2028\u2029]+')
+
+
+def _clean_discount_reason(raw):
+    """The reason text as it is stored and printed (verifier L2). A newline becomes a space, every
+    other control character and every bidi override / isolate (U+202A-202E, U+2066-2069) is dropped,
+    then trimmed. Not HTML-escaped here: the screens escape on output; this keeps the paper and the
+    ESC/POS receipt (which do not) from being steered by an invisible character."""
+    import unicodedata
+    text = _LINE_BREAKS.sub(' ', str(raw if raw is not None else ''))
+    text = ''.join(ch for ch in text if ch not in _BIDI_CONTROLS and unicodedata.category(ch) != 'Cc')
+    return text.strip()
+
+
 def _approval_error(status, code, message, **data):
     body = {'status': 'error', 'code': code, 'message': message}
     if data:
@@ -8245,7 +8260,7 @@ def create_sale():
         wants_amount_discount = cart_discount_amount is not None or cart_target_total is not None
         wants_override = any(isinstance(i, dict) and i.get('unit_price_override') is not None
                              for i in items_in)
-        discount_reason = str(data.get('discount_reason') or '').strip()
+        discount_reason = _clean_discount_reason(data.get('discount_reason'))
         if cart_discount_amount is not None and cart_target_total is not None:
             conn.close()
             return jsonify({'status': 'error', 'code': 'DISCOUNT_AMBIGUOUS', 'message': (
@@ -8303,7 +8318,9 @@ def create_sale():
                                 'data': {'limit_pct': limit_pct, 'requested_pct': asked_pct}}), 403
             pct_discount_approved = bool(approver) and (limit_pct <= 0 or asked_pct > limit_pct + 1e-9)
             cashier_discount = (asked_pct, limit_pct)
-        if (pct_discount_approved or wants_amount_discount) and not discount_reason:
+        # A price override needs a reason whoever approves it (verifier MEDIUM-1: with a PIN and no
+        # reason a 3.500 line was given away at 0.000 and only the list_price column showed it).
+        if (pct_discount_approved or wants_amount_discount or wants_override) and not discount_reason:
             conn.close()
             return jsonify({'status': 'error', 'code': 'DISCOUNT_REASON_REQUIRED', 'message': (
                 'Say why this discount is given (for example Damaged, Loyal customer, Round down).')}), 400
@@ -8743,9 +8760,10 @@ def create_sale():
             unit_price = float(product['sell_price'])
             tax_rate = float(product['tax_rate'])
             # UI-3a (schema v54): the LIST price, snapshotted for every line at the instant
-            # of sale, BEFORE any override. "Sold below list" is then a plain comparison of
+            # of sale. `list_base` here is the product's sell_price before any override; the
+            # stored `list_price` is settled below, after the modifier extras are known. "Sold below list" is then a plain comparison of
             # two columns on the row, never a join to a product price that has since moved.
-            list_price = unit_price
+            list_base = unit_price
             # UI-3a: per-line price override. The client sends an INTENT (a number); the
             # server decides whether this session may set it. It replaces the product's
             # sell_price as the line's base price and then goes through the normal pricing
@@ -8769,7 +8787,7 @@ def create_sale():
                 if float(override_value) != unit_price:
                     unit_price = float(override_value)
                     override_lines.append(
-                        (product['name'], list_price, unit_price, bool(approver and not session_may_override_price)))
+                        (product['name'], list_base, unit_price, bool(approver and not session_may_override_price)))
 
             # Schema v39 (cost basis for COGS): SNAPSHOT the product's cost
             # basis AT THIS INSTANT, inside this sale's own BEGIN IMMEDIATE
@@ -8848,6 +8866,7 @@ def create_sale():
             # never silently dropped: a "no peanuts" modifier the server
             # could not resolve is a safety bug, not a pricing one.
             product_modifier_groups = modifier_engine.load_product_modifier_groups(conn, cid, pid)
+            price_before_extras = unit_price
             try:
                 unit_price, modifier_snapshots = modifier_engine.resolve_line_modifiers(
                     unit_price, product_modifier_groups, item.get('modifier_option_ids')
@@ -8855,6 +8874,18 @@ def create_sale():
             except modifier_engine.ModifierValidationError as mve:
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'message': mve.message}), 400
+            # UI-3a (verifier HIGH-2): the LIST price is the line's full list unit price INCLUDING
+            # the paid extras, snapshotted AFTER they are applied -- list base + extras, with the
+            # override (if any) left out of it. It used to be snapshotted before the extras, so a
+            # plain 1.000 bread with a +0.500 extra stored list 1.000 / charged 1.500 and every
+            # such receipt printed a false "was 1.000, now 1.500" strike-through. With no override
+            # the line is sold AT list, so the two are the same number by construction (no float
+            # drift between "list" and "charged"); with one, the extras are added to the list base.
+            was_overridden = price_override is not None and float(override_value) != list_base
+            if was_overridden:
+                list_price = _money(list_base + (unit_price - price_before_extras), currency)
+            else:
+                list_price = unit_price
 
             # `effective_discount_pct`, not the raw manual value -- this is
             # the ONLY place a promotion actually changes what a sale
@@ -9342,7 +9373,7 @@ def create_sale():
         sale_discount_approved_by = (approver['uid'] if approver
                                      and (pct_discount_approved or _override_needed_manager) else None)
         sale_discount_reason = (discount_reason or None) if (
-            cart_discount_applied or pct_discount_approved) else None
+            cart_discount_applied or pct_discount_approved or override_lines) else None
         sale_uid = _new_uid()
         # W2a (schema v48): the points this sale grants, decided ONCE here so the
         # sales row, the sale's sync payload and the 'earn' ledger row below all

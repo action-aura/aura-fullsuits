@@ -235,6 +235,7 @@ async function run() {
     RS._cashierDiscountLimit = 10;
     RS._cart = BRIEF();
     RS._cart[0].unit_price_override = 3;
+    RS._cart[0].price_reason = 'Price match';
     RS._cart[1].disc_pct = 5;
     RS._recalc();
     assert.strictEqual(RS._lineGross(RS._cart[0]), 3, 'the override is the line price');
@@ -243,6 +244,8 @@ async function run() {
     await RS._checkout(); await settle();
     const items = posted[0].body.items;
     assert.strictEqual(items[0].unit_price_override, 3);
+    assert.strictEqual(posted[0].body.discount_reason, 'Price match', "a line price's reason must travel as the sale's discount_reason");
+    assert.strictEqual('price_reason' in items[0], false, 'the till-only price_reason field must not be sent');
     assert.strictEqual('unit_price_override' in items[1], false, 'a line without an override must not send the key');
     assert.strictEqual(items[1].discount_pct, 5, "a line's own % must win over the sale-wide box");
     assert.strictEqual(items[2].discount_pct, 0);

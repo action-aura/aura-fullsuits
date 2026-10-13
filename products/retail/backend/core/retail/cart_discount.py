@@ -61,6 +61,9 @@ CODE_BAD_AMOUNT = 'DISCOUNT_INVALID_AMOUNT'
 CODE_TARGET_NOT_REACHABLE = 'TARGET_NOT_REACHABLE'
 CODE_BAD_TARGET = 'TARGET_INVALID'
 
+#: The largest amount / target / price the pure module will parse (see parse_amount).
+MAX_AMOUNT = Decimal(1_000_000)
+
 
 class CartDiscountError(Exception):
     """A refusal with a stable `code`, a plain-words `message` and optional `data`."""
@@ -93,6 +96,11 @@ def parse_amount(value, quant: Decimal, code=CODE_BAD_AMOUNT, what='discount amo
         raise CartDiscountError(code, f'The {what} must be a number.')
     if not d.is_finite():
         raise CartDiscountError(code, f'The {what} must be a number.')
+    # A sane ceiling, checked BEFORE quantize(): 1e30 is finite, and quantizing it overflows the
+    # Decimal context (decimal.InvalidOperation) -- which used to surface as an HTTP 500 from the
+    # sale route (verifier L1). No real till figure is anywhere near a million.
+    if d.copy_abs() > MAX_AMOUNT:
+        raise CartDiscountError(code, f'The {what} is too large.')
     if d != d.quantize(quant, rounding=ROUND_HALF_UP):
         raise CartDiscountError(code, f'The {what} has more decimals than this currency uses.')
     return d.quantize(quant, rounding=ROUND_HALF_UP)

@@ -129,6 +129,29 @@ def test_the_step_adds_each_missing_column_to_a_v53_shaped_database(get_conn):
         conn.close()
 
 
+def test_the_pin_attempts_table_is_created_by_the_step_keeps_its_rows_and_replays(get_conn):
+    """Verifier round: the manager-PIN lockout counter lives in the retail DB, in the v54 step
+    (v54 had not shipped, so no v55). A database that ALREADY ran the earlier v54 has no such table;
+    replaying the step must add it, and replaying again must not touch the rows it holds."""
+    conn = get_conn()
+    try:
+        cols = [r[1] for r in conn.execute('PRAGMA table_info("pin_approval_attempts")').fetchall()]
+        assert cols == ["company_id", "approver_uid", "window_start", "failures", "locked_until"], cols
+        conn.execute("DROP TABLE pin_approval_attempts")           # a v54 that ran before this table existed
+        conn.commit()
+        schema._migrate_add_ui3a_discount_columns(conn)
+        conn.execute("INSERT INTO pin_approval_attempts VALUES ('c','a','2026-10-13 10:00:00',3,NULL)")
+        conn.commit()
+        schema._migrate_add_ui3a_discount_columns(conn)
+        schema._migrate_add_ui3a_discount_columns(conn)
+        assert tuple(conn.execute("SELECT failures FROM pin_approval_attempts").fetchone()) == (3,)
+        # the primary key is what makes the atomic upsert one row per approver
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO pin_approval_attempts VALUES ('c','a',NULL,1,NULL)")
+    finally:
+        conn.close()
+
+
 def _svc(get_conn):
     return SyncService(client_factory=lambda: None, get_conn=get_conn,
                        local_company_id_provider=lambda: CID)

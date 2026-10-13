@@ -307,6 +307,7 @@ def override_flow(browser, ids, manager_uid):
         page.click(".pos-line-opt")
         page.wait_for_selector("#lm-dialog", timeout=5000)
         page.fill("#lm-price", "3")
+        page.fill("#lm-reason", "Price match")
         shot(page, "en-9-line-menu")
         page.click("#lm-ok")
         page.wait_for_timeout(400)
@@ -323,8 +324,9 @@ def override_flow(browser, ids, manager_uid):
               li["unit_price"] == 3.0 and li["list_price"] == 3.5, str(li))
         struck = page.evaluate("[...document.querySelectorAll('#ret-receipt-dialog .rcpt-amt span')].some(s => s.style.textDecoration.includes('line-through'))")
         check("[override] the receipt strikes the list price", struck)
-        s = db("SELECT discount_approved_by FROM sales ORDER BY id DESC LIMIT 1")[0]
+        s = db("SELECT discount_approved_by, discount_reason FROM sales ORDER BY id DESC LIMIT 1")[0]
         check("[override] the approving manager is recorded", s["discount_approved_by"] == manager_uid, str(s))
+        check("[override] the reason typed in the line menu is stored on the sale", s["discount_reason"] == "Price match", str(s))
     finally:
         ctx.close()
 
