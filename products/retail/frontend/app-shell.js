@@ -4120,13 +4120,19 @@ const SubsystemApp = {
               <span class="sub-palette-trigger-text">${t('Search or jump to…')}</span>
               <kbd class="sub-palette-trigger-key" dir="ltr" data-no-i18n translate="no" aria-hidden="true">${this._paletteHintLabel()}</kbd>
             </button>
-            <button class="sub-header-btn" id="aura-lang-toggle" onclick="AuraI18n.toggle()" title="Language / اللغة" style="font-size:13px;font-weight:700;">${window.AuraI18n && AuraI18n.current === 'ar' ? 'EN' : 'ع'}</button>
+            <!-- UI-3b item 4: "EN | ع", both languages spelled out with the current one
+                 marked -- the old single letter ('ع' while in English) read as a typo to a
+                 first-time user. The button still toggles; aria-label/title name the action. -->
+            <button class="sub-header-btn sub-lang-btn" id="aura-lang-toggle" type="button" onclick="AuraI18n.toggle()"
+               title="${t('Language')} / اللغة" aria-label="${t('Language')} / اللغة">
+              <span class="sub-lang-opt${window.AuraI18n && AuraI18n.current === 'ar' ? '' : ' is-current'}" dir="ltr" translate="no" data-no-i18n>EN</span><span class="sub-lang-sep" aria-hidden="true">|</span><span class="sub-lang-opt${window.AuraI18n && AuraI18n.current === 'ar' ? ' is-current' : ''}" translate="no" data-no-i18n>ع</span>
+            </button>
             <!-- Theme control. ThemeEngine is the light/dark switch now (the
                  old accent-palette picker it replaced is documented on the
                  engine itself); dark v2 is token-value-only, so this can no
                  longer produce the historical white-on-white state -- see
                  index.html's boot comment for that postmortem. -->
-            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${t('Change UI theme')}">${window.AuraIcons ? AuraIcons.render('palette', 18) : '🎨'}</button>
+            <button class="sub-header-btn" type="button" onclick="ThemeEngine.openPicker()" title="${t('Change UI theme')}" aria-label="${t('Change UI theme')}">${window.AuraIcons ? AuraIcons.render('palette', 18) : '🎨'}</button>
             <!-- Full screen (owner 2026-10-07: "it needs to be fullscreen not
                  just windowed"). Icon/title/aria reflect the CURRENT state;
                  _syncFullscreenButton keeps them in step. -->
@@ -4224,10 +4230,11 @@ const SubsystemApp = {
   // V2: the computer segment, derived at paint time so a language switch
   // re-words it. A typed device name wins untouched; else the platform word
   // through t(); else whatever `deviceLabel` was set to (older callers).
+  // UI-3b item 4: the bare platform word ("Windows") told nobody anything the
+  // operating system had not already -- it is no longer a fallback. Only a name
+  // someone typed for this computer is shown.
   _deviceDisplay() {
-    if (this.deviceNamed) return this.deviceNamed;
-    if (this.devicePlatform) return this._platformLabel(this.devicePlatform) || this.deviceLabel;
-    return this.deviceLabel;
+    return this.deviceNamed || null;
   },
 
   _identityPlace() {

@@ -282,8 +282,10 @@ async function testHeaderAIButtonMutationIsCaught() {
   // right after it -- an ANCHOR update, not an assertion change; the check
   // below still has to catch exactly the same mutant.
   const mutated = mutate(SHELL_SRC, [[
-    `            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${'${t(\'Change UI theme\')}'}">${'${window.AuraIcons ? AuraIcons.render(\'palette\', 18) : \'🎨\'}'}</button>`,
-    `            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${'${t(\'Change UI theme\')}'}">${'${window.AuraIcons ? AuraIcons.render(\'palette\', 18) : \'🎨\'}'}</button>
+    // UI-3b: ANCHOR update only (the theme button gained type="button" + aria-label, item 4); the
+    // mutant is still "re-add a duplicate header AI button" and the same check must catch it.
+    `            <button class="sub-header-btn" type="button" onclick="ThemeEngine.openPicker()" title="${'${t(\'Change UI theme\')}'}" aria-label="${'${t(\'Change UI theme\')}'}">${'${window.AuraIcons ? AuraIcons.render(\'palette\', 18) : \'🎨\'}'}</button>`,
+    `            <button class="sub-header-btn" type="button" onclick="ThemeEngine.openPicker()" title="${'${t(\'Change UI theme\')}'}" aria-label="${'${t(\'Change UI theme\')}'}">${'${window.AuraIcons ? AuraIcons.render(\'palette\', 18) : \'🎨\'}'}</button>
             <button class="sub-header-btn" onclick="SubAI.open('${'${systemId}'}')" title="AI Assistant">🤖</button>`,
   ]]);
   const msg = await provesMutation(

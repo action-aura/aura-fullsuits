@@ -358,10 +358,59 @@ function testRememberedSectionMutationsAreCaught() {
 
 //#END-ITEM 2
 
+//#BEGIN-ITEM 4
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// 4 -- header: language, tooltips, identity chip
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+function testHeader(shellSrc = SHELL_SRC) {
+  const ctx = boot(shellSrc, HUB_SRC, ROLES.owner, { help: true, deviceNamed: null, devicePlatform: 'WINDOWS', branchName: 'Main Branch' });
+  const h = ctx.html;
+  const lang = /<button[^>]*id="aura-lang-toggle"[\s\S]*?<\/button>/.exec(h);
+  assert.ok(lang, 'no language button');
+  assert.ok(lang[0].includes('>EN<') && lang[0].includes('>ع<') && lang[0].includes('sub-lang-sep'),
+    'the language button spells out both languages with a divider (EN | ع)');
+  assert.strictEqual((lang[0].match(/is-current/g) || []).length, 1, 'exactly one language is marked current');
+  assert.ok(/aria-label="[^"]+"/.test(lang[0]) && /title="[^"]+"/.test(lang[0]), 'language button needs a tooltip and an aria-label');
+  for (const [id, what] of [['aura-palette-trigger', 'search'], ['aura-lang-toggle', 'language'], ['sub-fullscreen-btn', 'full screen']]) {
+    const m = new RegExp(`<button[^>]*id="${id}"[^>]*>`).exec(h);
+    assert.ok(m && /title="[^"]+"/.test(m[0]) && /aria-label="[^"]+"/.test(m[0]), `${what} button needs title + aria-label`);
+  }
+  const theme = /<button[^>]*onclick="ThemeEngine\.openPicker\(\)"[^>]*title=[^>]*>/.exec(h.slice(h.indexOf('sub-header-right')));
+  assert.ok(theme && /aria-label="[^"]+"/.test(theme[0]), 'theme button needs an aria-label');
+  // the chip: "Windows" only if the device has a typed name
+  const chip = region(h, 'id="sub-identity-chip-btn"', '</button>');
+  assert.ok(!/Windows/i.test(chip), 'the platform word must not appear without a typed device name');
+  assert.ok(chip.includes('Main Branch'), 'the branch still shows');
+  const named = boot(shellSrc, HUB_SRC, ROLES.owner, { deviceNamed: 'Front till', devicePlatform: 'WINDOWS', branchName: 'Main Branch' });
+  assert.ok(region(named.html, 'id="sub-identity-chip-btn"', '</button>').includes('Front till'), 'a typed device name still shows');
+  // the identity menu keeps Language, Appearance, Help, Log out and drops Plan & devices
+  const menu = region(h, 'id="sub-identity-menu"', '</div>');
+  for (const keep of ['AuraI18n.toggle()', 'ThemeEngine.openPicker()', 'AuraHelp.open()', 'SubsystemApp.logout()']) {
+    assert.ok(menu.includes(keep), `identity menu lost ${keep}`);
+  }
+  assert.ok(!menu.includes('openLicensing'), 'Plan & devices must live in the hub only');
+  console.log('PASS: header -- EN | ع, tooltips + aria-labels on all four buttons, no platform word without a device name, lean identity menu');
+}
+
+function testHeaderMutationsAreCaught() {
+  mustFail('chip shows the platform again => header test fails', () =>
+    testHeader(mutate(SHELL_SRC, "    return this.deviceNamed || null;\n", "    return this.deviceNamed || this._platformLabel(this.devicePlatform) || null;\n")));
+  mustFail('theme button loses its aria-label => header test fails', () =>
+    testHeader(mutate(SHELL_SRC, " title=\"${t('Change UI theme')}\" aria-label=\"${t('Change UI theme')}\">", " title=\"${t('Change UI theme')}\">")));
+  mustFail('language button back to one letter => header test fails', () =>
+    testHeader(mutate(SHELL_SRC, "<span class=\"sub-lang-sep\" aria-hidden=\"true\">|</span>", "")));
+  mustFail('Plan & devices back in the identity menu => header test fails', () =>
+    testHeader(mutate(SHELL_SRC, "          <button type=\"button\" class=\"sub-identity-menu-item\" role=\"menuitem\" onclick=\"SubsystemApp._closeIdentityMenu();AuraI18n.toggle()\">${t('Language')}</button>",
+      "          <button type=\"button\" class=\"sub-identity-menu-item\" role=\"menuitem\" onclick=\"SubsystemApp._closeIdentityMenu();SubsystemApp.openLicensing()\">x</button><button type=\"button\" class=\"sub-identity-menu-item\" role=\"menuitem\" onclick=\"SubsystemApp._closeIdentityMenu();AuraI18n.toggle()\">${t('Language')}</button>")));
+}
+
+//#END-ITEM 4
+
 const CASES = [
   testReachabilityTableBeforeVsAfter, testReachabilityTableMutationsAreCaught,   //#ITEM 1
   testTabBar, testTabBarMutationsAreCaught,                                      //#ITEM 1
   testRememberedSection, testRememberedSectionMutationsAreCaught,                //#ITEM 2
+  testHeader, testHeaderMutationsAreCaught,                                      //#ITEM 4
 ];
 let failed = 0;
 for (const fn of CASES) {

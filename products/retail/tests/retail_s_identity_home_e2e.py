@@ -264,8 +264,12 @@ def case_chipar(browser, base):
         ur.go_lang(page, "ar")
         chip(page)
         place = _place_text(page)
-        assert WINDOWS_AR in place, f"Arabic chip has no Arabic platform word: {place!r}"
-        assert "Windows" not in place, f"Arabic chip still has the English platform word: {place!r}"
+        # UI-3b item 4: the platform word is DROPPED unless the device has a typed name, so the old
+        # "Arabic platform word is present" claim is gone. WHAT THIS CAN NO LONGER CATCH: the platform word
+        # being mistranslated (there is none). Caught instead: neither the Arabic NOR the English platform
+        # word appears, the branch is Arabic, and a TYPED device name still shows untouched (below).
+        assert WINDOWS_AR not in place and "Windows" not in place, f"the chip still prints a platform word: {place!r}"
+        assert MAIN_BRANCH_AR in place, f"Arabic chip lost the branch: {place!r}"
         ur.shot(page, "chip-ar-boot")
         # The branch in this data is the e2e's own typed "Main branch" (lower-case b),
         # NOT the server's seeded default "Main Branch" -- typed names are the owner's
@@ -283,12 +287,17 @@ def case_chipar(browser, base):
     try:
         chip(page)
         before = _place_text(page)
-        assert "Windows" in before and "Main" in before, f"English chip is not the expected control: {before!r}"
+        assert "Windows" not in before and "Main" in before, f"English chip is not the expected control: {before!r}"
         ur.go_lang(page, "ar")
         page.wait_for_timeout(500)
         after = _place_text(page)
-        assert WINDOWS_AR in after and 'Windows' not in after, \
-            f"after switching to Arabic the chip kept English: {after!r}"
+        assert WINDOWS_AR not in after and 'Windows' not in after and 'Main' not in after, \
+            f"after switching to Arabic the chip kept English or printed a platform word: {after!r}"
+        assert MAIN_BRANCH_AR in after, f"after switching to Arabic the branch did not follow: {after!r}"
+        # the allow-half: a name someone TYPED for this computer still shows, untouched, in both languages
+        typed = page.evaluate("""() => { SubsystemApp.deviceNamed = 'Front till'; SubsystemApp._renderShell(SubsystemApp.systems.retail, 'retail');
+            return (document.querySelector('.sub-identity-place') || {textContent: ''}).textContent; }""")
+        assert "Front till" in typed, f"a typed device name was dropped: {typed!r}"
         ur.shot(page, "chip-ar-switched")
     finally:
         ctx.close()
@@ -406,7 +415,15 @@ def case_books(browser, base):
         head = page.inner_text("#sub-header-section").strip()
         assert head == "Books", f"accountant's header says {head!r}, want 'Books'"
         rows = nav_rows(page)
-        assert len(rows) >= 4 and "trial-balance" in rows, f"sidebar not really rendered (vacuous): {rows}"
+        # UI-3b: Trial Balance is a TAB of the one "Reports & Books" row now, not a row of its own. Same
+        # non-vacuity: the sidebar is really rendered AND the accountant's own books are one click away.
+        assert len(rows) >= 4 and "reports" in rows and "trial-balance" not in rows, f"sidebar not really rendered (vacuous): {rows}"
+        page.evaluate("() => SubsystemApp._navigate('trial-balance')")
+        page.wait_for_selector('#sub-section-tabs [data-tab-section="trial-balance"]', timeout=15000)
+        tabs = page.evaluate("() => [...document.querySelectorAll('#sub-section-tabs [data-tab-section]')].map(b => b.dataset.tabSection)")
+        assert "trial-balance" in tabs and "expenses" in tabs, f"the accountant's tab bar: {tabs}"
+        page.evaluate("() => SubsystemApp._navigate('dashboard')")
+        page.wait_for_selector(".bkh-grid", timeout=20000)
         for gone in ("returns", "scanner"):
             assert gone not in rows, f"accountant is still offered the {gone!r} row: {rows}"
         # chip: the raw platform word must never be printed
@@ -421,8 +438,9 @@ def case_books(browser, base):
                     platform: d.platform || null}; }""")
         assert info["label"] != "WINDOWS", f"chip printed the raw platform word: {info}"
         if not info["name"] and info["platform"]:
-            assert info["label"] == "Windows", f"no device name, platform {info['platform']!r}: label {info['label']!r}"
-            assert "WINDOWS" not in (c["title"] or ""), f"chip title has the raw platform word: {c['title']!r}"
+            # UI-3b item 4: no typed name -> no platform word at all (it used to be "Windows").
+            assert not info["label"], f"no device name, platform {info['platform']!r}: the chip still prints {info['label']!r}"
+            assert "WINDOWS" not in (c["title"] or "") and "Windows" not in (c["title"] or ""), f"chip title has the platform word: {c['title']!r}"
         pretty = page.evaluate("""() => ['WINDOWS', 'android', 'IOS', 'MacOS', 'fooBAR', '', null, '  '].map(
             p => SubsystemApp._platformLabel(p))""")
         assert pretty == ["Windows", "Android", "iOS", "macOS", "Foobar", "", "", ""], f"platform words: {pretty}"

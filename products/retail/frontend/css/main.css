@@ -3197,6 +3197,14 @@ button.sub-nav-item.sub-settings-gear:focus-visible { outline: var(--focus-ring-
   transition: background 0.2s;
 }
 .sub-header-btn:hover { background: var(--surface-hover); }
+/* UI-3b item 4: "EN | ع" -- wider than the 36px square the single-letter button used. The
+   current language is the strong one; the other is dimmed but still plainly a word. */
+.sub-header-btn.sub-lang-btn {
+  width: auto; padding-inline: 10px; gap: 6px; font-size: 13px; font-weight: 700; white-space: nowrap;
+}
+.sub-lang-opt { color: var(--text-tertiary); font-weight: 600; }
+.sub-lang-opt.is-current { color: var(--text-primary); font-weight: 800; }
+.sub-lang-sep { color: var(--border-strong, var(--text-tertiary)); font-weight: 400; }
 /* UI-3b item 1: tabs of a multi-screen entry (Reports & Books). A quiet underline bar between
    the header and the screen; scrolls sideways on a phone instead of wrapping. */
 .sub-section-tabs {
