@@ -27,7 +27,9 @@ class SplitWiringContractTest {
 
     @Test
     fun charge_is_enabled_only_when_two_or_more_parts_cover_the_total() {
-        assertThat(pos).contains("enabled = !charging && (!splitMode || (splitParts.size >= 2 && splitSummary.chargeable))")
+        // ANDROID-3: `cartLines.isNotEmpty()` joined the gate (the tablet pane shows Charge with an empty cart); the
+        // split rule itself is unchanged and still pinned in full.
+        assertThat(pos).contains("enabled = !charging && cartLines.isNotEmpty() && (!splitMode || (splitParts.size >= 2 && splitSummary.chargeable))")
     }
 
     @Test

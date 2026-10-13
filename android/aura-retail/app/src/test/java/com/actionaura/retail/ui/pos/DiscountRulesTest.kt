@@ -78,8 +78,8 @@ class DiscountRulesTest {
     @Test
     fun the_whole_sale_percentage_goes_on_every_line_that_has_none_of_its_own() {
         val items = buildSaleItems(
-            cart = linkedMapOf("a" to 2.0, "b" to 1.0),
-            lineDiscounts = emptyMap(), salePct = 10.0, access = DiscountAccess.Full,
+            lines = listOf(CartLine("a", 2.0), CartLine("b", 1.0)),
+            salePct = 10.0, access = DiscountAccess.Full,
         )
         assertThat(items.map { it.discount_pct }).containsExactly(10.0, 10.0)
         assertThat(items.map { it.product_id }).containsExactly("a", "b").inOrder()
@@ -88,8 +88,8 @@ class DiscountRulesTest {
     @Test
     fun a_lines_own_percentage_wins_for_that_line_and_is_not_stacked() {
         val items = buildSaleItems(
-            cart = linkedMapOf("a" to 2.0, "b" to 1.0),
-            lineDiscounts = mapOf("a" to 5.0), salePct = 10.0, access = DiscountAccess.Full,
+            lines = listOf(CartLine("a", 2.0, ownPct = 5.0), CartLine("b", 1.0)),
+            salePct = 10.0, access = DiscountAccess.Full,
         )
         assertEquals(5.0, items[0].discount_pct, 0.0)   // not 14.5
         assertEquals(10.0, items[1].discount_pct, 0.0)
@@ -100,15 +100,15 @@ class DiscountRulesTest {
         // Deny half: state left over from a manager's sign-in, then a cashier with no
         // limit signs in. The screen hides the control; this proves the request is clean too.
         val items = buildSaleItems(
-            cart = linkedMapOf("a" to 1.0),
-            lineDiscounts = mapOf("a" to 50.0), salePct = 20.0, access = DiscountAccess.None,
+            lines = listOf(CartLine("a", 1.0, ownPct = 50.0)),
+            salePct = 20.0, access = DiscountAccess.None,
         )
         assertEquals(0.0, items.single().discount_pct, 0.0)
     }
 
     @Test
     fun quantities_and_ids_are_untouched() {
-        val items = buildSaleItems(linkedMapOf("a" to 2.5), emptyMap(), 0.0, DiscountAccess.Full)
+        val items = buildSaleItems(listOf(CartLine("a", 2.5)), 0.0, DiscountAccess.Full)
         assertEquals("a", items.single().product_id)
         assertEquals(2.5, items.single().quantity, 0.0)
     }

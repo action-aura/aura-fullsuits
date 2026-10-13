@@ -269,6 +269,12 @@ data class Product(
     val total_stock: Double = 0.0, val reorder_level: Int = 0, val unit: String? = null,
     val category_name: String? = null,
     val barcode: String? = null,   // returned by the Flask API; used for camera-scan lookup
+    // ANDROID-3. A variant row points at its parent and carries the label the picker shows
+    // ("Red / L"); a parent row of /products/lookup says has_variants. has_modifiers is the
+    // list/lookup/variants routes' EXISTS flag: "this product has a live modifier group". SQLite
+    // hands 0/1 integers and Gson refuses an integer for a Boolean, so these stay Ints.
+    val parent_product_id: String? = null, val variant_label: String? = null,
+    val has_variants: Int = 0, val has_modifiers: Int = 0,
 )
 data class ProductsResponse(val status: String = "", val data: List<Product> = emptyList())
 
@@ -320,7 +326,13 @@ data class StockAdjustResponse(val status: String = "", val new_stock: Double = 
 // added in this migration phase), so it always defaults to 0 here.
 // unit_price/tax_rate/line_total are never sent -- the server always
 // resolves them from the product row, never from the request body.
-data class SaleItemReq(val product_id: String, val quantity: Double, val discount_pct: Double = 0.0)
+data class SaleItemReq(
+    val product_id: String, val quantity: Double, val discount_pct: Double = 0.0,
+    // ANDROID-3, the desktop's names: the picked modifier option IDS (never prices - the server
+    // resolves them) and a price the cashier set for the line. Null = key omitted, so a plain line
+    // is byte for byte what it always was.
+    val modifier_option_ids: List<String>? = null, val unit_price_override: Double? = null,
+)
 
 // subtotal/discount_amount/tax_amount/total are deliberately NOT fields
 // here (Wave 0: the server computes and ignores any client-submitted
@@ -353,6 +365,11 @@ data class CreateSaleRequest(
     // amount_paid (the server derives paid / change / balance from the parts). Null for every
     // ordinary sale, so Gson omits the key and a single-method request is unchanged byte for byte.
     val tenders: List<TenderPart>? = null,
+    // ANDROID-3 (UI-3a): a sale-level discount as INTENT - an amount off or a wanted total (never
+    // both; the server refuses the pair), why, and a manager's approval. All null on an ordinary
+    // sale, so Gson omits them.
+    val cart_discount_amount: Double? = null, val cart_target_total: Double? = null,
+    val discount_reason: String? = null, val approval: ApprovalReq? = null,
 )
 
 /** One part of a split payment. For cash, `amount` is the money HANDED OVER (change comes back). */

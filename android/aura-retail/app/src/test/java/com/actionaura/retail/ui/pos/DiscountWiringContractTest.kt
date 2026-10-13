@@ -36,7 +36,7 @@ class DiscountWiringContractTest {
 
     @Test
     fun the_sale_items_are_built_by_the_discount_rulebook_not_inline() {
-        assertThat(posSrc).contains("buildSaleItems(cart.toMap(), lineDiscounts.toMap(), salePct, access)")
+        assertThat(posSrc).contains("buildSaleItems(cartLines, salePct, access, cartDiscountOn = activeDisc != null)")
         // The old inline mapping (no discount at all) must be gone.
         assertThat(posSrc).doesNotContain("SaleItemReq(id, qty)")
     }
@@ -49,20 +49,24 @@ class DiscountWiringContractTest {
 
     @Test
     fun the_discount_controls_sit_behind_the_access_check() {
-        // Both the whole-sale box and the per-line tap target are inside `access !is DiscountAccess.None`.
+        // The whole-sale % box is inside `access !is DiscountAccess.None`.
         val box = posSrc.indexOf("SaleDiscountField(")
         val gateBefore = posSrc.lastIndexOf("if (access !is DiscountAccess.None)", box)
         assertThat(box).isGreaterThan(-1)
         assertThat(gateBefore).isGreaterThan(-1)
         assertThat(box - gateBefore).isLessThan(200)
-        val line = posSrc.indexOf("discountLineId = id")
-        val lineGate = posSrc.lastIndexOf("if (access !is DiscountAccess.None)", line)
-        assertThat(line - lineGate).isLessThan(900)
+        // ANDROID-3: the per-line tap target is no longer gated (a price of its own is offered to everyone who
+        // can sell, and a manager's PIN is asked at Charge); the line menu gates only its % box, from `access`.
+        assertThat(posSrc).contains("lineMenuKey = l.key")
+        val menu = codeOnly(File(moduleRoot, "src/main/java/com/actionaura/retail/ui/screens/PosLineMenu.kt").readText())
+        val pctBox = menu.indexOf("Item discount (%)")
+        assertThat(menu.lastIndexOf("if (access !is DiscountAccess.None)", pctBox)).isGreaterThan(-1)
     }
 
     @Test
     fun a_successful_sale_clears_the_discount_state() {
-        assertThat(posSrc).contains("salePctText = \"\"; lineDiscounts.clear()")
+        assertThat(posSrc).contains("cartLines = emptyList(); cartDisc = null; showCart = false; successSale = r.data")
+        assertThat(posSrc).contains("salePctText = \"\" splitMode = false")
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.actionaura.retail.net
 
+import com.actionaura.retail.ui.i18n.money
 import com.actionaura.retail.ui.i18n.tr
 import com.google.gson.JsonParser
 import retrofit2.HttpException
@@ -34,7 +35,7 @@ fun apiErrorMessage(e: Throwable): String = when (e) {
     is HttpException -> {
         // An HTTP error body is ONE-SHOT (okhttp's ResponseBody.string()
         // consumes it), so parse it exactly once and hand the parts around.
-        val body = parseErrorBody(e)
+        val body = parseErrorBodyOnce(e)
         when (e.code()) {
             // TWO different servers-side refusals share HTTP 403 and used to
             // both read "Blocked by your subscription/license":
@@ -59,6 +60,14 @@ fun apiErrorMessage(e: Throwable): String = when (e) {
                     body.limitPct?.let { tr("You can give at most %s%% discount. Ask a manager for more.").format(pctText(it)) }
                         ?: body.message?.let { tr(it) }
                         ?: tr("You don't have permission to do this.")
+                } else if (body.code in APPROVAL_REFUSAL_CODES) {
+                    // ANDROID-3 (UI-3a): a manager's PIN was refused, or a price needs one. These are
+                    // 403s with a string code and no reason_code, so without this branch they read as
+                    // "no permission" and the cashier could not tell a wrong PIN from a missing role.
+                    // The server's own sentence is the message (and has an Arabic entry); it is
+                    // deliberately the SAME for a wrong PIN, an unknown manager and a manager without
+                    // authority, so showing it plainly leaks nothing.
+                    body.message?.let { tr(it) } ?: tr("You don't have permission to do this.")
                 } else if (body.reasonCode != null) {
                     // Licensing/subscription guard. Prefix makes unmistakably
                     // clear the block is the subscription, not the network; the
@@ -83,7 +92,8 @@ fun apiErrorMessage(e: Throwable): String = when (e) {
             // one (e.g. the AI route's 503 "AI assistant is temporarily
             // unavailable."), otherwise at least name the status code instead
             // of pretending the network is down.
-            else -> body.message?.let { tr(it) }
+            else -> targetUnreachableMessage(e.code(), body)
+                ?: body.message?.let { tr(it) }
                 ?: (tr("Server error") + " (HTTP ${e.code()})")
         }
     }
@@ -147,6 +157,8 @@ private data class ErrorBody(
     val message: String?, val reasonCode: String?, val code: String? = null,
     /** `data.limit_pct` of a DISCOUNT_OVER_LIMIT refusal; null for every other body. */
     val limitPct: Double? = null,
+    /** `data.nearest_below` / `nearest_above` of a TARGET_NOT_REACHABLE refusal, whichever exist. */
+    val nearestTotals: List<Double> = emptyList(),
 )
 
 /** "10", not "10.0"; "7.5" stays -- the percentage as a person would say it. */
@@ -174,6 +186,45 @@ internal fun conflictMessageFor(code: String?): String? = when (code) {
     else -> null
 }
 
+/**
+ * "Make the total X" the shop cannot hit exactly: a 400 TARGET_NOT_REACHABLE that names the nearest totals
+ * it CAN reach. The numbers are the server's; the sentence is built here so it can be translated.
+ */
+private fun targetUnreachableMessage(status: Int, body: ErrorBody): String? =
+    if (status == 400 && body.code == "TARGET_NOT_REACHABLE" && body.nearestTotals.isNotEmpty())
+        tr("That exact total cannot be reached. Nearest: %s").format(body.nearestTotals.joinToString(" / ") { money(it) })
+    else null
+
+/**
+ * The 403 `code`s that mean "a manager's PIN is needed / was refused" rather than "you lack permission".
+ * [MANAGER_NEEDED_CODES] are the two that mean ASK A MANAGER (the sale was refused for want of one);
+ * the rest say a PIN was tried and did not pass.
+ */
+internal val MANAGER_NEEDED_CODES = setOf("DISCOUNT_OVER_LIMIT", "PRICE_OVERRIDE_DENIED")
+internal val APPROVAL_REFUSAL_CODES = setOf(
+    "PRICE_OVERRIDE_DENIED", "APPROVAL_REJECTED", "APPROVER_IS_CASHIER", "APPROVER_NOT_AUTHORISED",
+)
+
+/**
+ * A failed call, read once: the words for the person AND whether the right next step is to ask a
+ * manager. An HTTP error body is one-shot, so the message and the decision must come from the same
+ * parse -- hence one function rather than [apiErrorMessage] plus a second look at the exception.
+ */
+data class ApiFailure(val message: String, val needsManager: Boolean)
+
+fun apiFailure(e: Throwable): ApiFailure =
+    ApiFailure(
+        message = apiErrorMessage(e),
+        needsManager = e is HttpException && e.code() == 403 && parseErrorBodyOnce(e).code in MANAGER_NEEDED_CODES,
+    )
+
+// An error body can be read from the connection only once; remember the parse per exception so
+// apiErrorMessage and apiFailure can both look at it. Weak, so it never outlives the exception.
+private val parsedBodies = java.util.Collections.synchronizedMap(java.util.WeakHashMap<HttpException, ErrorBody>())
+
+private fun parseErrorBodyOnce(e: HttpException): ErrorBody =
+    parsedBodies.getOrPut(e) { parseErrorBody(e) }
+
 private fun parseErrorBody(e: HttpException): ErrorBody = try {
     val raw = e.response()?.errorBody()?.string()
     if (raw.isNullOrBlank()) NO_ERROR_BODY
@@ -195,6 +246,10 @@ private fun parseErrorBody(e: HttpException): ErrorBody = try {
                 ?.asString?.takeIf { it.isNotBlank() },
             limitPct = body.get("data")?.takeIf { it.isJsonObject }?.asJsonObject
                 ?.get("limit_pct")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asDouble,
+            nearestTotals = listOf("nearest_below", "nearest_above").mapNotNull { k ->
+                body.get("data")?.takeIf { it.isJsonObject }?.asJsonObject
+                    ?.get(k)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asDouble
+            },
         )
     }
 } catch (_: Exception) { NO_ERROR_BODY }

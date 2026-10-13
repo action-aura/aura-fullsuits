@@ -34,11 +34,18 @@ class SaleContractTest {
     @Test
     fun saleItemReq_carries_no_financial_authority_fields() {
         // Compile-time guarantee as much as a reflection check can prove one:
-        // SaleItemReq has exactly product_id, quantity, discount_pct -- no
-        // unit_price, tax_rate, or line_total. If a future edit reintroduces
-        // one of those fields, this test fails immediately.
+        // SaleItemReq carries INTENT only -- product, quantity, a percentage, the picked modifier
+        // option ids and (ANDROID-3) a price the cashier chose for the line. No unit_price, tax_rate
+        // or line_total. If a future edit reintroduces one of those fields, this test fails immediately.
+        //
+        // CHANGED in ANDROID-3 (modifier_option_ids, unit_price_override added, the desktop's names).
+        // What it can no longer catch: a NEW field that happens to be called like one of those two. What
+        // still holds: the set is closed (any other field fails here) and the explicit forbidden names
+        // below stay forbidden. unit_price_override is not a computed price: the server demands a reason
+        // for it and a manager's PIN below the cashier's authority (retail_ui3a_authority_test.py).
         val fields = SaleItemReq::class.java.declaredFields.filterNot { java.lang.reflect.Modifier.isStatic(it.modifiers) }.map { it.name }.toSet()
-        assertEquals(setOf("product_id", "quantity", "discount_pct"), fields)
+        assertEquals(setOf("product_id", "quantity", "discount_pct", "modifier_option_ids", "unit_price_override"), fields)
+        assertTrue(fields.intersect(setOf("unit_price", "tax_rate", "line_total", "tax_amount")).isEmpty())
     }
 
     @Test
