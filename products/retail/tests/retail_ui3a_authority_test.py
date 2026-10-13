@@ -395,3 +395,27 @@ def test_the_sale_and_its_lines_carry_the_new_fields_on_the_wire(shop):
     item_evs = [json.loads(e['payload']) for e in _q(
         "SELECT payload FROM sync_outbox WHERE entity_type='sale_item' ORDER BY rowid DESC LIMIT 3")]
     assert sorted(e['list_price'] for e in item_evs) == [0.181, 2.75, 3.5]
+
+
+# ── who the till may offer in the "ask a manager" dialog ────────────────────────────
+
+def test_the_approver_list_names_only_pin_holding_managers_and_leaks_nothing(shop):
+    cid, owner, cashier, manager, pids = shop
+    pin_cashier = _make_user('cashier', cid, pin='7777')      # has a PIN but no authority
+    r = cashier.get(f'{API}/discount/approvers')
+    assert r.status_code == 200, r.get_json()
+    rows = r.get_json()['data']
+    refs = {x['ref'] for x in rows}
+    assert manager.user_uid in refs                            # a manager with a PIN is offered
+    assert pin_cashier.user_uid not in refs                    # a cashier with a PIN is not
+    assert owner.user_uid not in refs                          # an owner with no PIN is not
+    assert all(set(x) == {'ref', 'label'} for x in rows)       # nothing but a reference and a name
+    assert manager.email not in json.dumps(rows)
+    # the asker never sees themselves, even a manager asking
+    own = manager.get(f'{API}/discount/approvers').get_json()['data']
+    assert manager.user_uid not in {x['ref'] for x in own}
+    # and what it offers is accepted by the approval
+    _set_limit(owner, '5')
+    ok = _post(cashier, _cart(pids, cart_discount_amount=0.65, discount_reason='x',
+                              approval={'approver': rows[0]['ref'], 'pin': PIN}))
+    assert ok.status_code == 200, ok.get_json()

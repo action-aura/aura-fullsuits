@@ -8086,6 +8086,40 @@ def _resolve_quotation_for_conversion(conn, cid, qid):
 
 # ── POS / Sales ───────────────────────────────────────────────────────────────
 
+@retail_bp.route('/discount/approvers', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_SELL)
+def list_discount_approvers():
+    """Who can the till offer in the "ask a manager" dialog (UI-3a)?
+
+    People who could approve a discount BY PIN right now: active, in THIS company, hold retail.discount
+    (or are the admin), have a PIN set, and are not the person asking. A cashier cannot list employees
+    (that is Settings > Team, owner-only), so this narrow read exists -- and it answers with a `ref` the
+    approval accepts and a display `label` ONLY: no e-mail, no role, no hash, nothing that identifies
+    whether a PIN exists beyond the person being in the list at all.
+    """
+    cid = _cid()
+    me = session.get('mt_user_id')
+    reg = _registry_conn()
+    try:
+        rows = reg.execute(
+            "SELECT id, uid, role, employee_id, display_name FROM users "
+            "WHERE company_id=? AND status='active' AND pin_hash IS NOT NULL AND pin_hash != '' "
+            "ORDER BY COALESCE(NULLIF(display_name,''), employee_id)", (cid,)).fetchall()
+        out = []
+        for r in rows:
+            if r['id'] == me:
+                continue
+            if not (str(r['role'] or '') == 'admin' or _user_has_capability(reg, r['id'], CAP_DISCOUNT)):
+                continue
+            out.append({'ref': r['uid'] or r['id'],
+                        'label': (r['display_name'] or '').strip() or r['employee_id']})
+    finally:
+        reg.close()
+    return jsonify({'status': 'success', 'data': out})
+
+
 @retail_bp.route('/sales', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
