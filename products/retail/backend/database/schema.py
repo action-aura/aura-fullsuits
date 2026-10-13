@@ -1407,7 +1407,14 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # creating a customer stored it, but create_sale resolved `cust.credit_mode or shop_default` and
 # 'none' is truthy -- the shop default was dead for every normally created customer (UI-2 measured
 # it in a browser). The resolver is core/retail/credit_terms.py; every reader uses it.
-RETAIL_SCHEMA_VERSION = 53
+# v54 (2026-10-13, UI-3a -- claimed in ROADMAP.md "retail schema v54 CLAIMED"): amount discounts,
+# "make the total X", a per-line price override and a manager's PIN as approval. Three additive,
+# nullable columns and nothing else: `sale_items.list_price` (the product's sell_price AT SALE
+# TIME, so "sold below list" can be reported without joining today's price), `sales.discount_reason`
+# (why a cart-level / over-limit discount was given) and `sales.discount_approved_by` (the
+# approving manager's users.uid). Per-line `discount_pct` stays the only stored discount figure --
+# an amount discount is converted to it, so no new money column exists. Appended LAST.
+RETAIL_SCHEMA_VERSION = 54
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2604,6 +2611,9 @@ def _migrate_retail_schema(conn):
     # v52 -> v53 (MONEY-4c): appended LAST. It only reads/writes `customers.credit_mode`; nothing a
     # step above derives from. See the v53 comment on RETAIL_SCHEMA_VERSION.
     _migrate_credit_mode_inherit(conn)
+    # v53 -> v54 (UI-3a): appended LAST. Three nullable columns on sales / sale_items; nothing above
+    # derives from them. See the v54 comment on RETAIL_SCHEMA_VERSION.
+    _migrate_add_ui3a_discount_columns(conn)
 
 
 def _migrate_credit_mode_inherit(conn):
@@ -2642,6 +2652,30 @@ def _migrate_credit_mode_inherit(conn):
         conn.execute("ALTER TABLE customers ADD COLUMN credit_mode TEXT DEFAULT 'inherit'")
     if entry_user_version < 53:
         conn.execute("UPDATE customers SET credit_mode='inherit' WHERE credit_mode='none'")
+
+
+def _migrate_add_ui3a_discount_columns(conn):
+    """One-time migration (schema v53 -> v54, UI-3a). See the v54 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    Shape-gated per column (PRAGMA table_info, then ALTER only what is missing), so the whole chain
+    replaying is byte-identical and a database that a sibling branch already touched is not
+    broken. No backfill, on purpose: an old sale has no list price we could honestly state (the
+    product's price today is not the price then) and was never given a reason or an approver, so
+    NULL -- "unknown", not "none" -- is the true value and every reader must treat it that way.
+    Queues no sync event: these are columns of rows that sync already carries (the sale and
+    sale_item payloads gain the keys at write time), never a row of their own."""
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    for table, column, ddl in (
+            ('sale_items', 'list_price', 'REAL'),
+            ('sales', 'discount_reason', 'TEXT'),
+            ('sales', 'discount_approved_by', 'TEXT')):
+        if table not in live:
+            continue
+        cols = {row[1] for row in conn.execute('PRAGMA table_info("%s")' % table).fetchall()}
+        if column not in cols:
+            conn.execute('ALTER TABLE "%s" ADD COLUMN %s %s' % (table, column, ddl))
 
 
 def _migrate_add_money4b_expenses(conn):

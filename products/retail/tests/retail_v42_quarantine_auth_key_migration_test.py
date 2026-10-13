@@ -92,7 +92,7 @@ def test_a_v41_database_is_rebuilt_with_auth_key_and_keeps_every_row(tmp_path):
     sch.init_retail()                                      # the REAL v41 -> v42 upgrade, backup and checks included
     conn = _open(sch)
     try:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 53  # v53 UPDATE: head moved 52 -> 53 (MONEY-4c); v53's own shape is pinned by retail_money4c_credit_inherit_test.py. (was:  head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py | prior: v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py)
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 54  # v54 UPDATE: head moved 53 -> 54 (UI-3a); v54's own shape is pinned by retail_ui3a_sync_migration_test. [earlier: v53 UPDATE: head moved 52 -> 53 (MONEY-4c); v53's own shape is pinned by retail_money4c_credit_inherit_test.py. (was:  head moved 51 -> 52 (MONEY-4b); v52's own shape is pinned by retail_money4b_migration_test.py | prior: v51 UPDATE: head moved 50 -> 51 (MONEY-3); v51's own shape is pinned by retail_money3_cheque_books_test.py / retail_money3_supplier_drawer_test.py | prior: v50 UPDATE: head moved 49 -> 50 (W2b/W3a); v50's own shape is pinned by retail_v50_config_sync_migration_test.py)]
         assert _pk(conn) == {"entity_id", "event_type", "auth_key"}
         rows = {r["entity_id"]: dict(r) for r in conn.execute(
             "SELECT entity_id, entity_type, event_type, payload, reason, detail, quarantined_at, auth_key "
