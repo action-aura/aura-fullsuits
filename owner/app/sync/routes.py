@@ -46,7 +46,7 @@ full reasoning.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, current_app, jsonify, request
 from sqlalchemy import func, select, text
@@ -56,7 +56,7 @@ from app.extensions import db_session
 from app.licensing_service import device_identity, replay
 from app.licensing_service.canonical import canonicalize_bytes
 from app.models.installations import Installation
-from app.models.sync import SyncDeviceCursor, SyncEvent, SyncQuarantineEvent
+from app.models.sync import SyncDeviceCursor, SyncEvent, SyncLicenseState, SyncQuarantineEvent
 
 bp = Blueprint("sync", __name__, url_prefix="/api/sync/v1")
 
@@ -476,8 +476,63 @@ def _lock_license_stream(license_id: uuid.UUID) -> None:
     db_session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:license_id))"), {"license_id": str(license_id)})
 
 
-def _advance_device_cursor(device_id: uuid.UUID, license_id: uuid.UUID, new_cursor: int) -> None:
-    """Upserts SyncDeviceCursor for this device -- called ONLY from pull()
+SYNC_STREAMS = ("retail", "registry", "all")
+LEGACY_STREAM = "legacy"
+# last_pulled_at is liveness, not a watermark: writing it on every pull would
+# turn a 10-second poll into a row update per device per tick. Hourly is
+# plenty for the "is this producer live within N days" question it answers.
+_LAST_PULLED_WRITE_INTERVAL = timedelta(hours=1)
+_MAX_CAPS = 16
+_MAX_CAP_LEN = 48
+
+
+class InvalidStreamError(Exception):
+    """The signed pull body named a stream/caps value outside the protocol."""
+
+
+def _requested_stream(body: dict) -> tuple[str, list | None]:
+    """Reads the SYNC-BOOT `stream` and `caps` fields out of the (already
+    signature-verified) pull body.
+
+    `stream` absent -> 'legacy': an old client that predates per-stream
+    cursors. That must keep working byte-for-byte, so it gets its own cursor
+    row exactly as before. Present-but-unknown is rejected rather than
+    coerced: a typo silently landing in 'legacy' would hide a stream from the
+    prune position.
+
+    This is its own function (not inlined) so the compatibility test can
+    stand in for an OLD Owner that never read these fields."""
+    stream = body.get("stream")
+    if stream is None:
+        stream = LEGACY_STREAM
+    elif not isinstance(stream, str) or stream not in SYNC_STREAMS:
+        raise InvalidStreamError("INVALID_STREAM")
+
+    caps = body.get("caps")
+    if caps is not None:
+        if (
+            not isinstance(caps, list)
+            or len(caps) > _MAX_CAPS
+            or not all(isinstance(c, str) and 0 < len(c) <= _MAX_CAP_LEN for c in caps)
+        ):
+            raise InvalidStreamError("INVALID_CAPS")
+        caps = sorted(set(caps))
+    return stream, caps
+
+
+def _license_pruned_through(license_id: uuid.UUID) -> int:
+    """Highest seq ever pruned for this licence (0 = never / unknown)."""
+    value = db_session.execute(
+        select(SyncLicenseState.pruned_through_seq).where(SyncLicenseState.license_id == license_id)
+    ).scalar_one_or_none()
+    return int(value or 0)
+
+
+def _advance_device_cursor(
+    device_id: uuid.UUID, license_id: uuid.UUID, new_cursor: int, *, stream: str = LEGACY_STREAM,
+    caps: list | None = None,
+) -> None:
+    """Upserts SyncDeviceCursor for this (device, stream) -- called ONLY from pull()
     (see SyncDeviceCursor's own docstring for why push() must never call
     this). GREATEST-style guard: never lets an already-higher persisted
     cursor regress, regardless of what value is passed in.
@@ -502,12 +557,21 @@ def _advance_device_cursor(device_id: uuid.UUID, license_id: uuid.UUID, new_curs
     value is plausible. Bounding an untrusted, client-supplied `since`
     against server truth is pull()'s job, at the point that untrusted value
     enters -- see the clamp in pull() and the reasoning there."""
-    existing = db_session.get(SyncDeviceCursor, device_id)
+    existing = db_session.get(SyncDeviceCursor, (device_id, stream))
+    now = datetime.now(timezone.utc)
     if existing is None:
-        db_session.add(SyncDeviceCursor(installation_id=device_id, license_id=license_id, last_acked_seq=new_cursor))
-    elif new_cursor > existing.last_acked_seq:
+        db_session.add(SyncDeviceCursor(
+            installation_id=device_id, stream=stream, license_id=license_id, last_acked_seq=new_cursor,
+            last_pulled_at=now, caps=caps,
+        ))
+        return
+    if new_cursor > existing.last_acked_seq:
         existing.last_acked_seq = new_cursor
     # else: new_cursor <= existing.last_acked_seq -- no-op, by design.
+    if existing.last_pulled_at is None or now - existing.last_pulled_at >= _LAST_PULLED_WRITE_INTERVAL:
+        existing.last_pulled_at = now
+    if caps is not None and caps != existing.caps:
+        existing.caps = caps
 
 
 @bp.route("/push", methods=["POST"])
@@ -602,6 +666,22 @@ def pull():
         return _error("INVALID_SINCE")
 
     try:
+        stream, caps = _requested_stream(body)
+    except InvalidStreamError as exc:
+        return _error(str(exc))
+
+    # SYNC-BOOT: a device whose cursor is BELOW the pruned range would
+    # otherwise be handed a partial stream that looks gap-free (the pruned
+    # events simply are not there to return) -- silent divergence with no
+    # error anywhere. Tell it instead. Checked BEFORE any read and, crucially,
+    # BEFORE the cursor write below: a 409 must not record the stale `since`
+    # as an acknowledgement (it would be a no-op for GREATEST, but writing
+    # liveness/caps for a device we just refused would hide that it is stuck).
+    pruned_through = _license_pruned_through(license_id)
+    if since < pruned_through:
+        return jsonify({"reason_code": "RESYNC_REQUIRED", "pruned_through": pruned_through}), 409
+
+    try:
         rows = db_session.execute(
             select(SyncEvent)
             .where(SyncEvent.license_id == license_id)
@@ -669,7 +749,7 @@ def pull():
         # any reason, the whole response falls through to the generic
         # except/500 below rather than ever reporting a cursor the server
         # didn't actually persist.
-        _advance_device_cursor(installation.id, license_id, cursor)
+        _advance_device_cursor(installation.id, license_id, cursor, stream=stream, caps=caps)
         db_session.commit()
     except Exception:
         db_session.rollback()

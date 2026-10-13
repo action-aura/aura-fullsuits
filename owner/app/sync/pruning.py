@@ -30,11 +30,12 @@ import uuid
 from dataclasses import dataclass, field
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.extensions import db_session
 from app.licensing_service.device_identity import get_active_device_key
 from app.models.installations import Installation
-from app.models.sync import SyncDeviceCursor, SyncEvent, SyncQuarantineEvent
+from app.models.sync import SyncDeviceCursor, SyncEvent, SyncLicenseState, SyncQuarantineEvent
 
 # Installation statuses that can currently authenticate against
 # /api/sync/v1 -- mirrors routes.py::_authenticate's own rejection set
@@ -118,18 +119,72 @@ def _watermark_for_license(license_id: uuid.UUID) -> int | None:
     of everything it hasn't seen, exactly like a slow-but-caught-up-once
     device would; silently excluding it because it has no row yet would
     let its own unseen history be deleted out from under it before it
-    ever gets a chance to pull."""
+    ever gets a chance to pull.
+
+    SYNC-BOOT Phase 1: a device now has up to one cursor row PER STREAM, and
+    its single contribution to the MIN is `device_position` below."""
     active_ids = _active_device_ids(license_id)
     if not active_ids:
         return None
 
     cursor_rows = db_session.execute(
-        select(SyncDeviceCursor.installation_id, SyncDeviceCursor.last_acked_seq).where(
-            SyncDeviceCursor.installation_id.in_(active_ids)
-        )
+        select(
+            SyncDeviceCursor.installation_id, SyncDeviceCursor.stream, SyncDeviceCursor.last_acked_seq,
+        ).where(SyncDeviceCursor.installation_id.in_(active_ids))
     ).all()
-    acked_by_device = {row.installation_id: row.last_acked_seq for row in cursor_rows}
-    return min(acked_by_device.get(device_id, 0) for device_id in active_ids)
+    streams_by_device: dict[uuid.UUID, dict[str, int]] = {}
+    for row in cursor_rows:
+        streams_by_device.setdefault(row.installation_id, {})[row.stream] = row.last_acked_seq
+    return min(device_position(streams_by_device.get(device_id, {})) for device_id in active_ids)
+
+
+def device_position(positions: dict[str, int]) -> int:
+    """Collapses one device's per-stream cursors into the ONE number pruning
+    may trust for it (SYNC-BOOT plan section 4).
+
+    A retail device runs two streams (retail, registry) over one installation
+    id, and each is only as caught up as its own cursor. The old single row
+    followed whichever stream pulled furthest, so the shop's data could be
+    pruned out from under the stream that was lagging.
+
+      * ANY stream-tagged row ('retail' / 'registry'): min(retail, registry),
+        and a stream with no row yet counts as 0 -- "the registry stream has
+        not reported" must hold the watermark, never be skipped. The legacy
+        row is IGNORED from here on: an upgraded client's old pre-upgrade
+        cursor says nothing about the streams it now tracks separately.
+      * else an 'all' row (the LAN hub's forwarder, which forwards both
+        streams under one cursor): that value.
+      * else a 'legacy' row (an old client): that value -- today's behaviour,
+        so a legacy-only device pins its licence exactly as before.
+      * else 0 (no row at all).
+    """
+    if "retail" in positions or "registry" in positions:
+        return min(positions.get("retail", 0), positions.get("registry", 0))
+    if "all" in positions:
+        return positions["all"]
+    if "legacy" in positions:
+        return positions["legacy"]
+    return 0
+
+
+def _record_pruned_through(license_id: uuid.UUID, seq: int) -> None:
+    """Raises (never lowers) owner_sync_license_state.pruned_through_seq.
+    Called INSIDE the same transaction as the delete batch it describes: if
+    the delete committed without this row (or vice versa) a device could be
+    served a partial stream (events gone, no RESYNC_REQUIRED) or be told to
+    resync for events that still exist. GREATEST keeps it monotonic even if
+    two prune runs overlap."""
+    stmt = pg_insert(SyncLicenseState).values(
+        license_id=license_id, pruned_through_seq=seq, last_prune_at=func.now(),
+    )
+    db_session.execute(stmt.on_conflict_do_update(
+        index_elements=[SyncLicenseState.license_id],
+        set_={
+            "pruned_through_seq": func.greatest(SyncLicenseState.pruned_through_seq, stmt.excluded.pruned_through_seq),
+            "last_prune_at": func.now(),
+            "updated_at": func.now(),
+        },
+    ))
 
 
 def prune_owner_sync_events(*, dry_run: bool = True, batch_size: int = DEFAULT_BATCH_SIZE) -> PruneReport:
@@ -174,7 +229,15 @@ def prune_owner_sync_events(*, dry_run: bool = True, batch_size: int = DEFAULT_B
             ).scalars().all()
             if not batch_ids:
                 break
+            # pruned_through advances to THIS batch's highest deleted seq, in the
+            # same transaction as the delete (see _record_pruned_through). The
+            # batch is the lowest-seq slice, so everything <= its max is gone
+            # once the commit lands; never claim more than was actually deleted.
+            batch_max_seq = db_session.execute(
+                select(func.max(SyncEvent.seq)).where(SyncEvent.id.in_(batch_ids))
+            ).scalar_one()
             db_session.execute(delete(SyncEvent).where(SyncEvent.id.in_(batch_ids)))
+            _record_pruned_through(license_id, batch_max_seq)
             db_session.commit()  # each batch is its own short transaction, never one long-held lock
             deleted_for_license += len(batch_ids)
             if len(batch_ids) < batch_size:
