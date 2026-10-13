@@ -214,6 +214,17 @@ def _scan(path):
         values = None
         tail = src[close:close + 4000]
         vm = re.search(r"\bVALUES\s*\(", tail, re.IGNORECASE)
+        # An `INSERT ... (cols) SELECT ...` has no VALUES list of its own; the
+        # first VALUES( after it belongs to a LATER statement. Measured
+        # 2026-10-13: schema.py's site_device_cursors_new copy (4 columns,
+        # SELECT of 4) was paired with the next INSERT's `VALUES (1, 0, 0)`
+        # and reported "4 columns, 3 values". A SELECT or another INSERT that
+        # comes before the VALUES( ends this statement's search.
+        if vm:
+            sm = re.search(r"\bSELECT\b", tail, re.IGNORECASE)
+            nm = re.search(r"\bINSERT\b", tail, re.IGNORECASE)
+            if (sm and sm.start() < vm.start()) or (nm and nm.start() < vm.start()):
+                vm = None
         if vm:
             v_open = close + tail.index('(', vm.end() - 1)
             v_close = _match_paren(src, v_open)
@@ -389,3 +400,18 @@ def test_the_utc_stamp_is_never_written_from_local_wall_clock():
             f"the one aware-UTC timestamp helper this suite writes *_at_utc "
             f"columns with (commercial_runtime/identity/user_accounts.py)"
         )
+
+
+def test_an_insert_select_is_not_paired_with_the_next_statements_values():
+    """Regression pin (2026-10-13): the v56 `site_device_cursors_new` copy is an
+    INSERT ... SELECT. The scanner used to borrow the NEXT statement's
+    `VALUES (1, 0, 0)` for it. It must now be recognised as having no VALUES
+    list, while the very next INSERT (site_prune_state) keeps its own."""
+    by_table = {}
+    for ins in ALL_INSERTS:
+        if ins.path == 'database/schema.py':
+            by_table.setdefault(str(ins).split('INSERT INTO ')[-1].split()[0], []).append(ins)
+    copy = by_table['site_device_cursors_new']
+    assert copy and all(i.values is None for i in copy), [i.values for i in copy]
+    prune_state = by_table.get('site_prune_state', [])
+    assert prune_state and all(i.values is not None and len(i.values) == len(i.columns) for i in prune_state)
