@@ -42,6 +42,9 @@ COMPOSE=(docker compose -f "$COMPOSE_DIR/docker-compose.yml" --env-file "$ENV_FI
 PG_MAJOR="${PG_MAJOR:-18}"
 SIGNING_KEY_DIR=/app/owner/var/signing-keys
 UPLOADS_PARENT=/app/owner/var
+# sync-bootstrap is DELIBERATELY absent (SYNC-BOOT Phase 3): it holds transient,
+# encrypted shop copies in transit between devices (deleted on ack / after 72 h).
+# Backing it up would keep a shop's data longer than its owner expects.
 UPLOAD_DIRS=(expense-attachments release-artifacts)
 
 log() { printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1"; }
