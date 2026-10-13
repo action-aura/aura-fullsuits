@@ -1590,6 +1590,41 @@ def get_retail_conn():
     return _conn('retail')
 
 
+def migrate_retail_file(path):
+    """Bring the retail.db FILE at `path` up to this build's schema (SYNC-BOOT Phase 2: a bootstrap
+    copy taken from a computer on an OLDER build, staged for install).
+
+    The only machinery this codebase has for "migrate a retail database" is `init_retail`, which
+    works on the process-wide `BASE_DIR`/`SUBSYS_DIR`. So this copies the file into a private
+    directory, points those two globals at it for the duration, runs the REAL `init_retail`
+    (base DDL, `ensure_schema_version` with its backup and integrity checks, the boot-time
+    reconciliations), restores the globals, and copies the migrated file back. NOT thread-safe by
+    construction -- the globals are swapped -- which is why the installer calls it only at start-up
+    (`apply_staged`), before the app serves a request or starts a sync thread. A failure raises and
+    leaves the original file at `path` untouched."""
+    import shutil
+    import tempfile
+    global BASE_DIR, SUBSYS_DIR
+    saved = (BASE_DIR, SUBSYS_DIR)
+    with tempfile.TemporaryDirectory(prefix='aura-bootstrap-migrate-') as tmp:
+        sub = os.path.join(tmp, 'subsystems')
+        os.makedirs(sub)
+        work = os.path.join(sub, 'retail.db')
+        shutil.copyfile(path, work)
+        BASE_DIR, SUBSYS_DIR = tmp, sub
+        try:
+            init_retail()
+        finally:
+            BASE_DIR, SUBSYS_DIR = saved
+        conn = sqlite3.connect(work)
+        try:
+            conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            conn.execute('PRAGMA journal_mode = DELETE')
+        finally:
+            conn.close()
+        shutil.copyfile(work, path)
+
+
 def sub_create(conn_fn, table, data):
     conn = conn_fn()
     try:
