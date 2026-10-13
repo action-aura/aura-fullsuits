@@ -35,6 +35,16 @@ THE SCENARIO (both tests share it up to the fork):
      (what a real join leaves on it) and pulls until there is nothing more.
   5. C must hold A's products, A's customer and A's sale.
 
+SYNC-BOOT PHASE 1 CHANGED WHAT C SEES. Owner now records how far it has pruned and
+answers a pull below that point with 409 RESYNC_REQUIRED instead of a silent,
+gap-free-looking partial stream. So in the pruned scenario C is now TOLD it is
+behind (`test_late_joiner_after_prune_is_told_to_resync`, which passes today).
+It still cannot be given the history: there is no bootstrap until Phase 3. The
+strict xfail below therefore now fails where a real join would call for one -- at
+`_join_bootstrap`, which raises AssertionError("no bootstrap ...") -- and keeps
+failing with an AssertionError for the same reason as before. Phase 3 replaces
+`_join_bootstrap` with the real thing and removes the xfail.
+
 WHAT THIS DOES NOT COVER: the Android client's transport (Kotlin), the LAN hub
 (site relay) path -- which has the same shape of pruning in
 commercial_runtime/sync/site_relay/pruning.py, see the analysis -- and the
@@ -142,10 +152,31 @@ class _Computer:
         [r] = self.run([{"op": "raw_select", "sql": sql, "params": params or []}])
         return r["rows"]
 
+    def pull_results(self, rounds: int = 4) -> list:
+        """The raw results of `rounds` retail pulls. A pull Owner refuses with
+        RESYNC_REQUIRED comes back as {"resync_required": True, "pruned_through": N}
+        (the harness no longer lets it escape as an exception)."""
+        return self.run([{"op": "pull"} for _ in range(rounds)])
+
     def pull_until_quiet(self, rounds: int = 4) -> None:
         """Owner hands back at most 500 rows per pull; a few pulls in one process
-        drain anything this scenario can produce."""
-        self.run([{"op": "pull"} for _ in range(rounds)])
+        drain anything this scenario can produce. If Owner says this computer is
+        behind its pruned range, a real join has to ask for a bootstrap."""
+        results = self.pull_results(rounds)
+        if any(r.get("resync_required") for r in results):
+            _join_bootstrap(self, results)
+
+
+def _join_bootstrap(computer, results) -> None:
+    """What a joining computer does when Owner answers RESYNC_REQUIRED: request a
+    bootstrap (a peer's consistent copy of the shop) and install it. Phase 3 of
+    SYNC-BOOT builds that. Until then this is the honest place to fail -- with an
+    AssertionError, so the strict xfail below stays an xfail of the SAME kind --
+    rather than carrying on with a partial history."""
+    refused = next(r for r in results if r.get("resync_required"))
+    raise AssertionError(
+        "no bootstrap exists yet (SYNC-BOOT Phase 3): Owner told this computer to resync "
+        f"(pruned through seq {refused.get('pruned_through')}) and there is nothing to resync FROM")
 
 
 def _event_count(app, license_id) -> int:
@@ -240,14 +271,20 @@ def _prune_exactly_as_production_does(app) -> dict:
     return report
 
 
-def _join_c_and_read(shop) -> dict:
-    """Step 4: activate C (only now -- a computer bought later), give it the
-    shop's company id, pull until quiet, and read what it holds."""
+def _join_c(shop) -> "_Computer":
+    """Step 4, before any pull: activate C (only now -- a computer bought later)
+    and give it the shop's company id."""
     c = shop["c"]
     c.activate(shop["client"], shop["full_key"])
     c.run([{"op": "bootstrap"}])
     c.run([{"op": "reg_exec", "sql": "UPDATE company_settings SET company_id=?", "params": [shop["company_id"]]},
            {"op": "reg_exec", "sql": "UPDATE users SET company_id=?", "params": [shop["company_id"]]}])
+    return c
+
+
+def _join_c_and_read(shop) -> dict:
+    """Step 4: join C, pull until quiet, and read what it holds."""
+    c = _join_c(shop)
     c.pull_until_quiet()
     return {
         "skus": {r["sku"] for r in c.select("SELECT sku FROM products")},
@@ -270,13 +307,58 @@ def test_control_late_joiner_without_prune_receives_the_shops_history(shop):
     assert shop["a_sales"] <= held["sales"], (shop["a_sales"], held["sales"])
 
 
+def test_late_joiner_after_prune_is_told_to_resync(shop):
+    """SYNC-BOOT Phase 1. The same shop and the same production prune as the xfail
+    below -- but what is asserted is what Owner now DOES: it tells C its cursor is
+    below the pruned range instead of handing back the un-pruned tail and letting C
+    believe that is the shop.
+
+    Both halves matter and are checked separately:
+      * C is refused (RESYNC_REQUIRED, with Owner's own pruned_through number),
+        every time it asks again -- it does not slip through on a later round;
+      * C applied NOTHING and its cursor did not move: a refusal that still let a
+        partial batch through would be the silent partial history again.
+    MUTATION: delete the `since < pruned_through` branch in owner/app/sync/routes.py
+    pull() and C's pulls succeed with the tail only -> this test goes red."""
+    app, license_id = shop["app"], shop["license_id"]
+    before = _event_count(app, license_id)
+    report = _prune_exactly_as_production_does(app)
+    after = _event_count(app, license_id)
+    if not (report.get("dry_run") is False and after < before):
+        pytest.fail(f"the production prune deleted nothing ({before} -> {after}, report {report}); "
+                    "the scenario did not happen, so nothing below would mean anything")
+    with app.app_context():
+        from app.sync.routes import _license_pruned_through
+        pruned_through = _license_pruned_through(license_id)
+    assert pruned_through > 0, "the prune ran but Owner did not record how far (pruned_through is still 0)"
+
+    c = _join_c(shop)
+    results = c.pull_results(rounds=3)
+    assert all(r.get("resync_required") is True for r in results), results
+    assert all(r.get("pruned_through") == pruned_through for r in results), (results, pruned_through)
+
+    # nothing partial was applied, nothing was acknowledged
+    assert c.select("SELECT sku FROM products") == [], "C applied rows from a pull Owner had refused"
+    assert c.select("SELECT COUNT(*) AS n FROM sales")[0]["n"] == 0
+    assert c.select("SELECT last_seq FROM sync_cursor WHERE id=1")[0]["last_seq"] == 0
+    # ...and Owner recorded no acknowledgement for C either (a 409 writes no cursor)
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.sync import SyncDeviceCursor
+        rows = db_session.query(SyncDeviceCursor).filter(
+            SyncDeviceCursor.installation_id == uuid.UUID(c.installation_id)).all()
+        assert rows == [], [(r.stream, r.last_acked_seq) for r in rows]
+
+
 @pytest.mark.xfail(
     strict=True, raises=AssertionError,
     reason=(
         "SYNC-JOIN gap (measured 2026-10-13): Owner's nightly `sync prune-events --apply` deletes every "
         "event all CURRENTLY active devices have acked; a computer activated afterwards pulls from 0 and "
         "Owner has no snapshot to give it, so it never receives the shop's earlier products, customers "
-        "or sales. See the module docstring; remove this mark when a bootstrap exists."
+        "or sales. Since SYNC-BOOT Phase 1 Owner at least TELLS it (RESYNC_REQUIRED, see the test above), "
+        "but there is no bootstrap to give it the history yet. See the module docstring; remove this mark "
+        "when a bootstrap exists."
     ),
 )
 def test_late_joiner_after_production_prune_receives_the_shops_history(shop):

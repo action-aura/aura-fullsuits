@@ -326,7 +326,14 @@ def pull_down(
     # Raises on failure exactly like `forward_up`'s own `cloud_client.push`
     # call above -- deliberately not wrapped here either; `run_once` is
     # where a pull failure becomes a non-raising, logged result.
-    result = cloud_client.pull(since=cloud_pull_seq)
+    # SYNC-BOOT: the hub forwards BOTH client streams over one cloud cursor, so
+    # it pulls as stream 'all' (Owner's prune position uses it when the
+    # installation has no retail/registry rows). A duck-typed client without
+    # `supports_stream` keeps the old one-argument call.
+    if getattr(cloud_client, "supports_stream", False):
+        result = cloud_client.pull(since=cloud_pull_seq, stream="all")
+    else:
+        result = cloud_client.pull(since=cloud_pull_seq)
     events = result.get("events", [])
     # Owner's own `cursor` field. On an empty-rows response this may be
     # Owner's own zero-rows CLAMP -- the cloud-side mirror of the same

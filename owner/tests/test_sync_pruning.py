@@ -159,7 +159,7 @@ def test_zero_active_devices_prunes_nothing(app, client, seeded, signing_key):
         from app.models.sync import SyncDeviceCursor
         from app.sync.pruning import _watermark_for_license, prune_owner_sync_events
 
-        cursor_row = db_session.get(SyncDeviceCursor, uuid.UUID(installation_id))
+        cursor_row = db_session.get(SyncDeviceCursor, (uuid.UUID(installation_id), "legacy"))
         assert cursor_row is not None and cursor_row.last_acked_seq == max_seq
 
         installation = db_session.get(Installation, uuid.UUID(installation_id))
@@ -317,8 +317,8 @@ def test_active_device_that_never_pulled_blocks_everything(app, client, seeded, 
         from app.sync.pruning import _watermark_for_license, prune_owner_sync_events
 
         # The precondition this test is built on: A has a cursor, B has none.
-        assert db_session.get(SyncDeviceCursor, uuid.UUID(installation_a)) is not None
-        assert db_session.get(SyncDeviceCursor, uuid.UUID(installation_b)) is None
+        assert db_session.get(SyncDeviceCursor, (uuid.UUID(installation_a), "legacy")) is not None
+        assert db_session.get(SyncDeviceCursor, (uuid.UUID(installation_b), "legacy")) is None
 
         # Asserts THE CHECK RAN: the watermark must be 0 (B's implied
         # "nothing acknowledged"), not A's max_seq.
@@ -543,7 +543,7 @@ def test_overlarge_since_cannot_pre_acknowledge_future_events(app, client, seede
         from app.extensions import db_session
         from app.models.sync import SyncDeviceCursor
 
-        cursor_a = db_session.get(SyncDeviceCursor, uuid.UUID(installation_a))
+        cursor_a = db_session.get(SyncDeviceCursor, (uuid.UUID(installation_a), "legacy"))
         assert cursor_a.last_acked_seq == first_seq, "persisted cursor must be clamped to real MAX(seq)"
 
     # Two more events arrive AFTER A's bogus claim. A has never seen them.

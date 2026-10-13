@@ -72,9 +72,22 @@ class SyncDeviceCursor(Base, TimestampMixin):
     which correctly blocks pruning of its own unacknowledged history rather
     than silently treating "never pulled" as "nothing to lose".
 
-    `installation_id` (not a synthetic id) is the PK -- one cursor row per
-    device, which is sufficient because a device's id (an Installation's own
-    id) is already globally unique, never license-scoped ambiguously.
+    SYNC-BOOT Phase 1: the PK is (installation_id, stream), not installation_id
+    alone. One installation id is shared by TWO client streams -- retail and
+    registry -- yet each stream keeps its OWN cursor locally. With one Owner
+    row per installation the row followed whichever stream pulled last/fastest,
+    so the prune watermark could pass events the lagging stream never applied
+    (read in the code, then reproduced by the cross-stack registry-stall test).
+    `stream` is 'retail' | 'registry' | 'all' (the LAN hub's forwarder, which
+    forwards both) | 'legacy' (an old client that sends no stream; every row that
+    existed before this revision was backfilled to it). See pruning.py for how
+    the per-stream positions collapse into ONE number per installation.
+
+    `last_pulled_at` is liveness (written at most hourly -- a write per pull
+    would be a write per 10 seconds per device); `caps` is the capability list
+    the client declared in its signed pull body (None = never declared). Neither
+    is read by anything in Phase 1 except tests; Phase 3/4 consume them.
+
     `license_id` is denormalized onto this row (rather than derived via a
     join back through owner_installations at prune time) purely so
     pruning's per-license MIN(last_acked_seq) query is a single indexed
@@ -85,11 +98,14 @@ class SyncDeviceCursor(Base, TimestampMixin):
     installation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_installations.id"), primary_key=True
     )
+    stream: Mapped[str] = mapped_column(String(16), primary_key=True, default="legacy", server_default="legacy")
     license_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_licenses.id"), nullable=False)
     # GREATEST-style: routes.py::_advance_device_cursor never lets this
     # regress below its current value, regardless of what a given pull
     # response computed -- see that function's own docstring.
     last_acked_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    last_pulled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    caps: Mapped[list | None] = mapped_column(JSONB)
 
     __table_args__ = (
         # pruning.py's per-license watermark query filters on license_id
@@ -98,6 +114,29 @@ class SyncDeviceCursor(Base, TimestampMixin):
         # license_id-leading index above.
         Index("ix_owner_sync_device_cursors_license", "license_id"),
     )
+
+
+class SyncLicenseState(Base, TimestampMixin):
+    """SYNC-BOOT Phase 1: the one fact the relay never recorded -- how far
+    this licence's event log has been PRUNED. Before this row existed a device
+    whose cursor sat below the pruned range got a partial, gap-free-looking
+    stream back (the missing events simply were not there to return) and no
+    error, ever. `pruned_through_seq` is the highest seq ever deleted for the
+    licence; pull() answers 409 RESYNC_REQUIRED when `since` is below it.
+
+    Monotonic by construction (pruning.py writes max(old, new) in the same
+    transaction as each delete batch). It is ONLY ever written by pruning and
+    by the operator's `flask sync mark-pruned`, never by a request and never
+    by a migration backfill (seq is shared by all licences, so a first-event
+    seq says nothing about whether anything was deleted)."""
+
+    __tablename__ = "owner_sync_license_state"
+
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_licenses.id"), primary_key=True
+    )
+    pruned_through_seq: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    last_prune_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class SyncQuarantineEvent(Base, UUIDPKMixin, TimestampMixin):

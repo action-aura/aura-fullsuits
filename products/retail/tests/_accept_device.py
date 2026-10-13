@@ -62,6 +62,20 @@ against.
     live. Off by default because the harness never armed it and older tests
     were written without it.
 
+SYNC-BOOT Phase 1 additions (also OPT-IN, owner_relay runs only):
+
+  * `stream_labels` -- build the retail service with stream_label='retail' (and
+    the registry service with 'registry'), as the shipped app does, so Owner
+    keeps one cursor per stream for this computer. Off by default: the SYNC-JOIN
+    proof was written against the legacy single-cursor shape.
+  * `registry_owner_relay` -- run the REGISTRY service over the same real Owner
+    relay client instead of a FileRelay, so both streams of one computer talk to
+    one Owner, which is the whole shape the per-stream cursors exist for.
+  * `pull` / `reg_pull` no longer let Owner's RESYNC_REQUIRED escape as an
+    exception: the op returns {"ok": False, "resync_required": True,
+    "pruned_through": N} and the CALLER decides. Silently treating it as "pulled
+    nothing" is exactly the partial-history failure the answer exists to stop.
+
 Run as a bare subprocess, same contract as its ancestors:
     python _accept_device.py <app_data_dir> <relay_db_path> <actions_path> <output_path> [<options_json>]
 """
@@ -85,6 +99,21 @@ class _ListHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         _CAPTURED_LOGS.append(self.format(record))
+
+
+def _pull_result(pull_once) -> dict:
+    """Runs one pull; Owner's RESYNC_REQUIRED becomes an explicit result instead
+    of an exception (see the module docstring). Anything else still raises."""
+    # Duck-typed on reason_code, no import: this file also runs on OLD checkouts
+    # (`code_root`) whose relay_client has neither RESYNC_REQUIRED nor .details.
+    try:
+        pull_once()
+    except Exception as exc:
+        if getattr(exc, "reason_code", None) != "RESYNC_REQUIRED":
+            raise
+        details = getattr(exc, "details", None) or {}
+        return {"ok": False, "resync_required": True, "pruned_through": details.get("pruned_through")}
+    return {"ok": True}
 
 
 def _provision_signed_identity(app_data_dir: str) -> None:
@@ -224,6 +253,8 @@ def main() -> None:
     else:
         relay = FileRelay(relay_db_path)
     service_kwargs = {}
+    if options.get("stream_labels"):
+        service_kwargs["stream_label"] = "retail"
     if options.get("arm_provider"):
         from database.schema import RETAIL_SCHEMA_VERSION as _RSV
         service_kwargs["local_schema_version_provider"] = lambda: _RSV
@@ -239,14 +270,20 @@ def main() -> None:
     # the main-computer assignment) -- built the way the real app builds it,
     # see the module docstring. Absent unless the caller asks for it.
     registry_service = None
-    if options.get("registry_relay"):
+    if options.get("registry_relay") or options.get("registry_owner_relay"):
         from commercial_runtime.sync.sync_service import REGISTRY_SYNC_ENTITY_TYPES
-        registry_relay = FileRelay(options["registry_relay"])
+        if options.get("registry_owner_relay"):
+            assert options.get("owner_relay"), "registry_owner_relay needs owner_relay"
+            registry_relay = relay
+        else:
+            registry_relay = FileRelay(options["registry_relay"])
+        registry_kwargs = {"stream_label": "registry"} if options.get("stream_labels") else {}
         registry_service = SyncService(
             client_factory=lambda: registry_relay,
             get_conn=registry_conn,
             local_company_id_provider=local_company_id_from_registry,
             handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES,
+            **registry_kwargs,
         )
 
     API = "/api/sub/retail"
@@ -393,8 +430,7 @@ def main() -> None:
             results.append({"ok": True})
 
         elif op == "pull":
-            service.pull_once()
-            results.append({"ok": True})
+            results.append(_pull_result(service.pull_once))
 
         elif op == "apply_result_raw":
             # ACCEPTANCE-PASS ADDITION (see module docstring): applies a
@@ -744,8 +780,11 @@ def main() -> None:
         elif op in ("reg_push", "reg_pull"):
             if registry_service is None:
                 raise RuntimeError("registry stream not configured: pass options.registry_relay")
-            (registry_service.push_once if op == "reg_push" else registry_service.pull_once)()
-            results.append({"ok": True})
+            if op == "reg_pull":
+                results.append(_pull_result(registry_service.pull_once))
+            else:
+                registry_service.push_once()
+                results.append({"ok": True})
 
         elif op == "reg_apply_raw":
             # Registry-stream twin of `apply_result_raw`: a caller-supplied pull

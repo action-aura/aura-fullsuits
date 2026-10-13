@@ -564,7 +564,7 @@ def test_pull_persists_device_cursor_push_does_not(app, client, seeded, signing_
         from app.models.sync import SyncDeviceCursor
 
         # push() alone must not create a cursor row for A.
-        assert db_session.get(SyncDeviceCursor, uuid.UUID(installation_a)) is None
+        assert db_session.get(SyncDeviceCursor, (uuid.UUID(installation_a), "legacy")) is None
 
     pull_resp = _pull(client, _pull_body(key_b, installation_b, since=0))
     assert pull_resp.status_code == 200
@@ -575,7 +575,7 @@ def test_pull_persists_device_cursor_push_does_not(app, client, seeded, signing_
         from app.extensions import db_session
         from app.models.sync import SyncDeviceCursor
 
-        row = db_session.get(SyncDeviceCursor, uuid.UUID(installation_b))
+        row = db_session.get(SyncDeviceCursor, (uuid.UUID(installation_b), "legacy"))
         assert row is not None
         assert row.last_acked_seq == returned_cursor
         assert str(row.license_id) == str(license_id)
@@ -611,7 +611,7 @@ def test_pull_persists_cursor_even_with_zero_new_rows(app, client, seeded, signi
         from app.extensions import db_session
         from app.models.sync import SyncDeviceCursor
 
-        row = db_session.get(SyncDeviceCursor, uuid.UUID(installation_a))
+        row = db_session.get(SyncDeviceCursor, (uuid.UUID(installation_a), "legacy"))
         assert row is not None
         assert row.last_acked_seq == max_seq
 
@@ -635,5 +635,5 @@ def test_pull_cursor_never_regresses(app, client, seeded, signing_key):
         _advance_device_cursor(uuid.UUID(installation_id), license_id, 5)  # attempted regression
         db_session.commit()
 
-        row = db_session.get(SyncDeviceCursor, uuid.UUID(installation_id))
+        row = db_session.get(SyncDeviceCursor, (uuid.UUID(installation_id), "legacy"))
         assert row.last_acked_seq == 100  # unchanged, not regressed to 5

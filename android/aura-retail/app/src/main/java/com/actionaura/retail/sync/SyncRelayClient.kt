@@ -80,6 +80,19 @@ class SyncNetworkError(reasonCode: String, message: String) : SyncRelayClientErr
 class SyncMalformedResponseError(reasonCode: String, message: String) : SyncRelayClientError(reasonCode, message)
 class SyncRelayRejected(reasonCode: String, message: String) : SyncRelayClientError(reasonCode, message)
 
+/** SYNC-BOOT: Owner answered 409 RESYNC_REQUIRED -- this stream's cursor is
+ * below the range Owner has already pruned, so a pull can never return the
+ * missing history. Not transient (never retried; the HTTP layer returns the
+ * body like any other 4xx). [prunedThrough] is Owner's own number, if given.
+ * [repeat] is true for the cheap "still waiting for a resync" skip that
+ * [SyncCoordinator] throws on later ticks WITHOUT contacting the relay, so
+ * the log line is written once, on the real refusal, not once per tick. */
+class SyncResyncRequired(
+    val prunedThrough: Long?,
+    message: String,
+    val repeat: Boolean = false,
+) : SyncRelayClientError("RESYNC_REQUIRED", message)
+
 /** Final-review Fix 2 (2026-08-07): the configured relay URL is not safe to
  * speak to at all. Never retried -- a misconfigured build does not become
  * correct by trying again. */
@@ -221,8 +234,16 @@ class SyncRelayClient(
         return result
     }
 
-    fun pull(since: Long): JsonObject {
-        val body = signedBody(linkedMapOf("since" to since))
+    /** [stream] (SYNC-BOOT): 'retail' | 'registry' -- rides INSIDE the signed
+     * body so Owner keeps one cursor per (installation, stream) and a captured
+     * request cannot be replayed under another stream. Omitted when null: an
+     * Owner (or LAN hub) that predates it verifies the signature over the whole
+     * body and ignores the unknown key, and a new Owner reads absence as the
+     * 'legacy' stream -- an old caller is byte-for-byte what it was. */
+    fun pull(since: Long, stream: String? = null): JsonObject {
+        val extra = linkedMapOf<String, Any?>("since" to since)
+        if (stream != null) extra["stream"] = stream
+        val body = signedBody(extra)
         val result = requestJson("GET", "/api/sync/v1/pull", body)
         raiseIfRejected(result)
         return result
@@ -242,6 +263,10 @@ class SyncRelayClient(
 
     private fun raiseIfRejected(result: JsonObject) {
         val reasonCode = result.get("reason_code")?.takeUnless { it.isJsonNull }?.asString
+        if (reasonCode == "RESYNC_REQUIRED") {
+            val prunedThrough = result.get("pruned_through")?.takeUnless { it.isJsonNull }?.asLong
+            throw SyncResyncRequired(prunedThrough, "Sync relay says this stream must resync (pruned through $prunedThrough).")
+        }
         if (reasonCode != null) {
             throw SyncRelayRejected(reasonCode, "Sync relay rejected the request: $reasonCode")
         }

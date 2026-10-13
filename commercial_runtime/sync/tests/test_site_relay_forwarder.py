@@ -314,6 +314,35 @@ def test_pull_down_applies_events_inserts_into_site_log_and_advances_cursor(conn
     assert cloud_pull_seq == 42
 
 
+class _StreamAwareCloudClient(FakeCloudClient):
+    """Advertises `supports_stream` like the real SyncRelayClient."""
+    supports_stream = True
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.pull_streams = []
+
+    def pull(self, since, stream=None):
+        self.pull_streams.append(stream)
+        return super().pull(since)
+
+
+def test_pull_down_asks_the_cloud_as_stream_all_when_the_client_supports_it(conn):
+    """SYNC-BOOT: the hub forwards BOTH client streams under one cloud cursor,
+    so Owner must be told 'all' (its prune position for such a device)."""
+    client = _StreamAwareCloudClient(pull_queue=[{"events": [], "cursor": 0}])
+    forwarder.pull_down(conn, client, apply_pulled=lambda events: None)
+    assert client.pull_streams == ["all"]
+
+
+def test_pull_down_to_a_client_without_stream_support_is_unchanged(conn):
+    """Direction 2: FakeCloudClient.pull(self, since) has no `stream`; passing one
+    would TypeError. The forwarder must not."""
+    client = FakeCloudClient(pull_queue=[{"events": [], "cursor": 0}])
+    forwarder.pull_down(conn, client, apply_pulled=lambda events: None)
+    assert client.pull_calls == [0]
+
+
 def test_pull_down_zero_rows_still_advances_cursor_to_cloud_clamp(conn):
     """Owner's own zero-rows clamp can hand back a corrected cursor even
     with no events (e.g. a hub recovering from a stale/over-large `since`)

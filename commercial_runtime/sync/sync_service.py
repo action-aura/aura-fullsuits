@@ -379,6 +379,7 @@ from commercial_runtime.identity.user_accounts import (
 # only lazily inside the functions that verify or sign, so this import is as
 # Android-safe as the identity imports above.
 from commercial_runtime.sync import authority as _authority
+from commercial_runtime.sync.relay_client import RESYNC_REQUIRED, RelayRejected, pull_for_stream
 
 logger = logging.getLogger(__name__)
 
@@ -1176,6 +1177,22 @@ class SyncFreshnessStore(NamedTuple):
     record_override: Callable[[sqlite3.Connection, str], None]
 
 
+#: SYNC-BOOT: streams currently refused with RESYNC_REQUIRED, keyed by the
+#: SyncService's `stream_label` ('retail' / 'registry'). Process-wide on purpose:
+#: `/sync/health` is served from the ONE registered (retail) service, yet the
+#: registry stream runs in a second service instance; without a shared view a
+#: registry stream that has stopped would be invisible there. Only services
+#: constructed WITH a stream_label ever write here.
+_RESYNC_STREAMS: dict = {}
+_RESYNC_STREAMS_LOCK = threading.Lock()
+
+
+def resync_streams_snapshot() -> dict:
+    """{stream_label: pruned_through} for every stream told RESYNC_REQUIRED."""
+    with _RESYNC_STREAMS_LOCK:
+        return {label: info.get("pruned_through") for label, info in _RESYNC_STREAMS.items()}
+
+
 #: (entity_type, entity_id) pairs already warned about for a quarantine flood, so
 #: the WARNING is one line per entity per process, not one per dropped event.
 _FLOOD_WARNED: set = set()
@@ -1194,8 +1211,19 @@ class SyncService:
         local_schema_version_provider: Optional[Callable[[], Optional[int]]] = None,
         on_tick: Optional[Callable[[], None]] = None,
         authority_env_provider: Optional[Callable[[], "_authority.AuthorityEnv"]] = None,
+        stream_label: Optional[str] = None,
     ):
-        """`authority_env_provider` (AUDIT-033 / S-AUTH): zero-argument callable
+        """`stream_label` (SYNC-BOOT Phase 1): 'retail' or 'registry' -- which of
+        the two client streams this instance is. pull_once sends it inside the
+        signed pull body so Owner keeps one cursor per (installation, stream)
+        instead of one per installation, but ONLY to a client that advertises
+        `supports_stream` (the real SyncRelayClient); the LAN-hub client and test
+        doubles are never handed it. `None` (the default, every pre-existing
+        caller) sends nothing, which Owner reads as the legacy stream. It is
+        also the key under which a RESYNC_REQUIRED refusal is surfaced in
+        /sync/health.
+
+        `authority_env_provider` (AUDIT-033 / S-AUTH): zero-argument callable
         returning an `authority.AuthorityEnv` -- the receiver's Owner trust
         store, its own licence id, its own signer and device id. `None` (the
         default, and what production uses) resolves them from app data on every
@@ -1376,6 +1404,11 @@ class SyncService:
         self._local_schema_version_provider = local_schema_version_provider
         self._on_tick = on_tick
         self._authority_env_provider = authority_env_provider
+        self._stream_label = stream_label
+        # SYNC-BOOT: set when Owner answers RESYNC_REQUIRED for this stream.
+        # {"pruned_through": int|None, "relay_url": str|None}. While set, the
+        # stream stops pulling (push is untouched) and health says so.
+        self._resync_required: Optional[dict] = None
         self._authority_unsigned_logged = False
         self._authority_env_cache = None
         self._local_freshness_store = local_freshness_store
@@ -1505,13 +1538,79 @@ class SyncService:
                 # on an unknown URL would re-pull the entire history on every
                 # single tick. Widening the client contract instead would have
                 # been the tail wagging the dog.
-                self.ensure_cursor_matches_relay(conn, getattr(client, "base_url", None))
+                relay_url = getattr(client, "base_url", None)
+                if self.ensure_cursor_matches_relay(conn, relay_url):
+                    # A different relay has its own sequence space and its own
+                    # pruned range; a refusal from the old one proves nothing.
+                    self.clear_resync_required()
+                self._raise_if_resync_pending(relay_url)
                 since = self.read_cursor(conn)
-                result = client.pull(since)  # raises on failure
+                try:
+                    result = pull_for_stream(client, since, self._stream_label)  # raises on failure
+                except RelayRejected as exc:
+                    if exc.reason_code == RESYNC_REQUIRED:
+                        self._enter_resync_required(exc, relay_url)
+                    raise
                 self.apply_pull_result(conn, result)
                 conn.commit()
             finally:
                 conn.close()
+
+    def _enter_resync_required(self, exc: "RelayRejected", relay_url: Optional[str]) -> None:
+        """Owner says this stream's cursor is below what it has already pruned.
+        Pulling again with the same `since` can never succeed, and applying
+        anything newer would hand this device a silently partial history, so the
+        stream stops pulling (push is untouched) and the state becomes visible.
+        Logged ONCE per entry -- the tick repeats every few seconds."""
+        pruned_through = exc.details.get("pruned_through")
+        first = self._resync_required is None
+        self._resync_required = {"pruned_through": pruned_through, "relay_url": relay_url}
+        if self._stream_label is not None:
+            with _RESYNC_STREAMS_LOCK:
+                _RESYNC_STREAMS[self._stream_label] = dict(self._resync_required)
+        if first:
+            logger.error(
+                "Sync RESYNC REQUIRED (stream=%s): the relay has already pruned history this "
+                "device never received (pruned through seq %s). This stream has STOPPED pulling "
+                "so it cannot return a partial history; pushing continues. It needs a fresh copy "
+                "of the shop's data (bootstrap).",
+                self._stream_label or "default", pruned_through,
+            )
+
+    def _raise_if_resync_pending(self, relay_url: Optional[str]) -> None:
+        """Short-circuits a pull for a stream already told RESYNC_REQUIRED against
+        THIS relay, without contacting it. Re-raised as the same RelayRejected so
+        run_once's one handler covers the first refusal and every later skip."""
+        state = self._resync_required
+        if state is None:
+            return
+        if state["relay_url"] is not None and relay_url is not None and state["relay_url"] != relay_url:
+            self.clear_resync_required()
+            return
+        raise RelayRejected(
+            RESYNC_REQUIRED, "Sync stream is waiting for a resync (pull skipped).",
+            {"pruned_through": state["pruned_through"]},
+        )
+
+    def clear_resync_required(self) -> None:
+        """Leaves the 'resync required' state (a new relay, or -- in a later
+        phase -- a completed bootstrap)."""
+        self._resync_required = None
+        if self._stream_label is not None:
+            with _RESYNC_STREAMS_LOCK:
+                _RESYNC_STREAMS.pop(self._stream_label, None)
+
+    def _record_resync_pull(self) -> None:
+        """Health for a pull that did not run because of RESYNC_REQUIRED: the
+        pull half is unhealthy with that reason, but `consecutive_failures` is
+        pinned at 1 so the exponential backoff (shared with the PUSH half's
+        cadence) does not slow pushing down to five-minute ticks."""
+        with self._health_lock:
+            h = self._health["pull"]
+            h["healthy"] = False
+            h["consecutive_failures"] = 1
+            h["last_failure_at"] = datetime.now(timezone.utc).isoformat()
+            h["last_failure_reason"] = RESYNC_REQUIRED
 
     def read_outbox(self, conn, limit: Optional[int] = None) -> list:
         """Reads (never deletes) the current sync_outbox rows, in the same
@@ -8410,12 +8509,17 @@ class SyncService:
             self.pull_once()
             self._record_sync_success("pull")
         except Exception as exc:
-            failures = self._record_sync_failure("pull", exc)
-            logger.error(
-                "Sync pull FAILED (reason=%s, consecutive failures=%d); the local cursor "
-                "was not advanced and the same range will be re-pulled on the next tick.",
-                self._failure_reason(exc), failures, exc_info=True,
-            )
+            if isinstance(exc, RelayRejected) and exc.reason_code == RESYNC_REQUIRED:
+                # Already logged once by _enter_resync_required; not a transient
+                # failure, so no per-tick error line and no backoff growth.
+                self._record_resync_pull()
+            else:
+                failures = self._record_sync_failure("pull", exc)
+                logger.error(
+                    "Sync pull FAILED (reason=%s, consecutive failures=%d); the local cursor "
+                    "was not advanced and the same range will be re-pulled on the next tick.",
+                    self._failure_reason(exc), failures, exc_info=True,
+                )
 
     @staticmethod
     def _fresh_half_health() -> dict:
@@ -8653,6 +8757,12 @@ class SyncService:
             # expiry -- see _offline_override_valid's own docstring.
             "offline_override_at": offline_override_at,
             "offline_override_valid": self._offline_override_valid(offline_override_at, push, pull),
+            # SYNC-BOOT: Owner refused this stream's cursor as older than the
+            # range it has pruned. The stream has stopped pulling (so it cannot
+            # show a silently partial history); pushing continues.
+            "stream": self._stream_label,
+            "resync_required": self._resync_required is not None,
+            "resync_pruned_through": (self._resync_required or {}).get("pruned_through"),
             "push": push,
             "pull": pull,
         }
@@ -8809,7 +8919,16 @@ def get_active_health() -> dict:
     service = _active_service
     if service is None:
         return {"configured": False}
-    return service.get_health()
+    health = service.get_health()
+    # SYNC-BOOT: this snapshot is the retail service's, but the registry
+    # stream runs in a second instance. Overlay every stream that has been told
+    # RESYNC_REQUIRED so a stopped registry stream is not invisible here.
+    streams = resync_streams_snapshot()
+    health["resync_streams"] = streams
+    if streams:
+        health["resync_required"] = True
+        health["healthy"] = False
+    return health
 
 
 def record_offline_override() -> bool:
