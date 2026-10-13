@@ -72,7 +72,23 @@ class MalformedResponseError(SyncRelayClientError):
 class RelayRejected(SyncRelayClientError):
     """Owner reached, request understood, and Owner said no (bad signature,
     replayed nonce, unknown installation, oversized batch, ...). The
-    reason_code is exactly what Owner returned -- never invented here."""
+    reason_code is exactly what Owner returned -- never invented here.
+
+    `details` carries the rest of Owner's rejection body (everything but
+    reason_code) so a caller can act on structured facts -- today only
+    RESYNC_REQUIRED's `pruned_through`. Empty dict, never None."""
+
+    def __init__(self, reason_code: str, message: str, details: Optional[dict] = None):
+        super().__init__(reason_code, message)
+        self.details = dict(details or {})
+
+
+#: Owner's answer to a pull whose cursor is below the range it has already
+#: pruned (SYNC-BOOT). Not transient: retrying the same `since` can never help.
+RESYNC_REQUIRED = "RESYNC_REQUIRED"
+
+#: Pull-body stream labels Owner understands (owner/app/sync/routes.py).
+SYNC_STREAMS = ("retail", "registry", "all")
 
 
 def _new_nonce() -> str:
@@ -94,6 +110,12 @@ class SyncRelayClientConfig:
 
 
 class SyncRelayClient:
+    #: This client puts the signed `stream` field in its pull body. SyncService
+    #: only passes a stream to a client that says so, because the other
+    #: relay clients it drives (the LAN hub's LocalClient, test doubles) have
+    #: no such parameter and the hub keeps one cursor per device (Phase 2).
+    supports_stream = True
+
     def __init__(
         self,
         base_url: str,
@@ -140,8 +162,18 @@ class SyncRelayClient:
         self._raise_if_rejected(result)
         return result
 
-    def pull(self, since: int) -> dict:
-        body = self._signed_body({"since": since})
+    def pull(self, since: int, stream: Optional[str] = None, caps: Optional[list] = None) -> dict:
+        """`stream` / `caps` (SYNC-BOOT) ride INSIDE the signed body, so a
+        captured request cannot be replayed under a different stream. Both are
+        omitted when None: an Owner that predates them verifies the signature
+        over the whole body and ignores unknown keys, and absence means
+        'legacy' to a new Owner -- an old caller is byte-for-byte unchanged."""
+        extra: dict = {"since": since}
+        if stream is not None:
+            extra["stream"] = stream
+        if caps is not None:
+            extra["caps"] = list(caps)
+        body = self._signed_body(extra)
         # POST, not GET -- see owner/app/sync/routes.py's pull() docstring
         # (2026-08-12): a frozen PyInstaller build of this exact client
         # reproducibly got an empty response body on GET-with-body, isolated
@@ -167,7 +199,10 @@ class SyncRelayClient:
     @staticmethod
     def _raise_if_rejected(result: dict) -> None:
         if isinstance(result, dict) and "reason_code" in result:
-            raise RelayRejected(result["reason_code"], f"Sync relay rejected the request: {result['reason_code']}")
+            details = {k: v for k, v in result.items() if k != "reason_code"}
+            raise RelayRejected(
+                result["reason_code"], f"Sync relay rejected the request: {result['reason_code']}", details
+            )
 
     def _request(self, method: str, path: str, json_body: dict) -> dict:
         url = self._config.base_url + path
@@ -218,3 +253,13 @@ class SyncRelayClient:
                 raise MalformedResponseError("MALFORMED_RESPONSE", f"Response was not valid JSON: {exc}") from exc
 
         raise last_error or NetworkError("NETWORK_UNAVAILABLE", "Request failed with no captured error.")
+
+
+def pull_for_stream(client, since: int, stream: Optional[str]) -> dict:
+    """Calls `client.pull`, adding the stream label only if the client
+    advertises `supports_stream`. Duck-typed on purpose (see SyncService's
+    contract with its client): a double or a LAN-hub client built to the
+    documented `.pull(since)` surface keeps working untouched."""
+    if stream is not None and getattr(client, "supports_stream", False):
+        return client.pull(since, stream=stream)
+    return client.pull(since)

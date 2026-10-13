@@ -1211,7 +1211,8 @@ def _build_windows_sync_services(relay_base_url):
                                 local_ensure_schema=_ensure_credit_schema,
                                 local_freshness_store=_retail_sync_freshness_store,
                                 local_schema_version_provider=lambda: RETAIL_SCHEMA_VERSION,
-                                stock_exception_recorder=record_or_refresh_stock_exception)
+                                stock_exception_recorder=record_or_refresh_stock_exception,
+                                stream_label='retail')  # SYNC-BOOT: Owner keeps one cursor per stream
     # F3b: a payment voided on this till BEFORE its journal arrived is only
     # completed by a sweep that runs after every pull. sync_service.py has no
     # post-apply hook, so the sweep is wrapped onto this instance. The
@@ -1273,7 +1274,8 @@ def _build_windows_sync_services(relay_base_url):
         handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES,
         # Late-bound: this runs at IMPORT time (the `if _SYNC_RELAY_URL_IS_USABLE`
         # block below), long before `_announce_heartbeat_device` is defined.
-        on_tick=lambda: _announce_heartbeat_device())
+        on_tick=lambda: _announce_heartbeat_device(),
+        stream_label='registry')  # SYNC-BOOT: Owner keeps one cursor per stream
 
     return _sync_service, _registry_sync_service
 
@@ -1350,7 +1352,8 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
                                         local_ensure_schema=_ensure_credit_schema,
                                         local_freshness_store=_android_sync_freshness_store,
                                         local_schema_version_provider=lambda: RETAIL_SCHEMA_VERSION,
-                                        stock_exception_recorder=record_or_refresh_stock_exception)  # client_factory never used -- see comment above
+                                        stock_exception_recorder=record_or_refresh_stock_exception,
+                                        stream_label='retail')  # client_factory never used -- see comment above
     # F3b: same post-pull void-reversal sweep as the Windows retail service.
     install_void_reversal_sweep(_android_sync_service)
     install_party_balance_refresh(_android_sync_service)  # v44, same as the Windows service
@@ -1410,7 +1413,8 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
 
     _android_registry_sync_service = SyncService(
         None, _android_registry_sync_get_conn, local_company_id_from_registry,
-        handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)  # client_factory never used -- see comment above
+        handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES,
+        stream_label='registry')  # client_factory never used -- see comment above
     app.register_blueprint(make_sync_internal_blueprint(
         sync_service=_android_registry_sync_service,
         get_conn=_android_registry_sync_get_conn,
