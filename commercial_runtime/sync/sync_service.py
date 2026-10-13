@@ -3511,8 +3511,8 @@ class SyncService:
                     "points_redeemed_amount, "
                     "payment_method, status, idempotency_key, notes, created_at, due_date, session_id, "
                     "uid, actor_user_uid, terminal_id, created_at_utc, points_earned, "
-                    "discount_reason, discount_approved_by) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,NULL,?,?,?,?,?,?,?) "
+                    "discount_reason, discount_approved_by, rounding_amount) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,NULL,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                     (local_company_id, p.get("sale_number"), resolved_branch_id, p.get("customer_id"),
                      p.get("cashier", "POS"), p.get("subtotal", 0), p.get("discount_amount", 0),
@@ -3529,7 +3529,12 @@ class SyncService:
                      # UI-3a (schema v54): why a cart-level / over-limit discount
                      # was given and which manager approved it. Absent (a v53
                      # sender) stays NULL = unknown -- never defaulted to ''.
-                     p.get("discount_reason"), p.get("discount_approved_by")),
+                     p.get("discount_reason"), p.get("discount_approved_by"),
+                     # MONEY-5 (schema v55): the signed cash rounding. Absent (a v54 sender) or
+                     # None stays NULL = "none recorded" -- never 0.0 invented. Every derived
+                     # "still owed" figure adds it back, so a peer that dropped it would book a
+                     # phantom debt of the rounded fils on a named customer.
+                     p.get("rounding_amount")),
                 )
             except sqlite3.IntegrityError as exc:
                 # Aseel-parity wave A-PAR (schema v34), per-document-type
@@ -3696,15 +3701,16 @@ class SyncService:
                     "INSERT INTO returns (company_id, return_number, sale_id, branch_id, cashier, reason, "
                     "refund_method, refund_amount, status, idempotency_key, created_at, session_id, "
                     "uid, actor_user_uid, terminal_id, created_at_utc, "
-                    "tender_refund_amount, ar_forgiven_amount, store_credit_amount, tax_refunded) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,NULL,?,NULL,?,?,?,?,?,?,?,?) "
+                    "tender_refund_amount, ar_forgiven_amount, store_credit_amount, tax_refunded, "
+                    "rounding_amount) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,NULL,?,NULL,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                     (local_company_id, p.get("return_number"), sale_local_id, resolved_branch_id,
                      p.get("cashier", "POS"), p.get("reason", ""), p.get("refund_method", "cash"),
                      p.get("refund_amount", 0), p.get("status", "completed"), p.get("created_at"),
                      p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc"),
                      _tender_refund_amount, _ar_forgiven_amount, _store_credit_amount,
-                     _tax_refunded),
+                     _tax_refunded, p.get("rounding_amount")),   # MONEY-5: NULL from an older till
                 )
             except sqlite3.IntegrityError as exc:
                 # Aseel-parity wave A-PAR (schema v34) -- identical

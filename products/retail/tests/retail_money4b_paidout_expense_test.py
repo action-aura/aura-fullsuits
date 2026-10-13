@@ -170,10 +170,10 @@ def _balance_sheet(admin, as_of):
 
 
 def _cash_balance(bs):
-    for a in bs['assets']['accounts']:
-        if a['code'] == '1000':
-            return a['amount']
-    return 0.0
+    # MONEY-5: "cash" is every cash-like account -- the drawer's 1010, the bank's 1020 and the
+    # pre-v55 history in 1000 (where `_seed_cash_in_books` puts its seed, like an old sale).
+    return round(sum(a['amount'] for a in bs['assets']['accounts']
+                     if a['code'] in gl.CASH_LIKE_CODES), 3)
 
 
 def _trial_balance(admin):
@@ -195,7 +195,8 @@ def test_paid_out_with_an_account_posts_dr_account_cr_cash_on_the_business_day()
     js = _journals(cid, 'cash_movement')
     # The shape this guards against: asserting a date over an EMPTY list passes forever.
     assert len(js) == 1, js
-    assert js[0]['lines'] == {'6300': (20.0, 0.0), '1000': (0.0, 20.0)}, js[0]
+    # MONEY-5: a drawer paid-out leaves 1010 Cash in Drawer (it left 1000 before the tender split).
+    assert js[0]['lines'] == {'6300': (20.0, 0.0), '1010': (0.0, 20.0)}, js[0]
     assert js[0]['date'] == PREV, js[0]
     mv = _movement_rows(cid, 'paid_out')
     assert len(mv) == 1 and js[0]['source_uid'] == mv[0]['id']
@@ -209,7 +210,7 @@ def test_paid_out_to_owner_drawings_is_equity_not_an_expense():
     r = _move(admin, sid, 'paid_out', 30, reason='owner took cash home', gl_account_code='3100')
     assert r.status_code == 200, r.get_json()
     js = _journals(cid, 'cash_movement')
-    assert len(js) == 1 and js[0]['lines'] == {'3100': (30.0, 0.0), '1000': (0.0, 30.0)}, js
+    assert len(js) == 1 and js[0]['lines'] == {'3100': (30.0, 0.0), '1010': (0.0, 30.0)}, js
     pl = admin.get(f'{API}/reports/profit-and-loss?start_date={SAME}&end_date={SAME}').get_json()['data']
     assert pl['operating_expenses']['total'] == 0.0, 'owner drawings must not reduce profit'
     assert pl['net_profit'] == 100.0
@@ -225,7 +226,7 @@ def test_a_paid_out_with_no_account_goes_to_other_expenses_and_is_never_refused(
     assert r.status_code == 200, r.get_json()
     assert r.get_json()['data']['gl_account_code'] == '6900'
     js = _journals(cid, 'cash_movement')
-    assert len(js) == 1 and js[0]['lines'] == {'6900': (5.0, 0.0), '1000': (0.0, 5.0)}, js
+    assert len(js) == 1 and js[0]['lines'] == {'6900': (5.0, 0.0), '1010': (0.0, 5.0)}, js
     # blank string is "none" too
     r = _move(admin, sid, 'paid_out', 6, gl_account_code='  ')
     assert r.status_code == 200 and r.get_json()['data']['gl_account_code'] == '6900'
@@ -267,7 +268,7 @@ def test_paid_in_to_other_income_posts_dr_cash_cr_4800_on_the_business_day():
     assert r.get_json()['data']['gl_account_code'] == '4800'
     js = _journals(cid, 'cash_movement')
     assert len(js) == 1, js                      # a count: a date over an empty list passes forever
-    assert js[0]['lines'] == {'1000': (15.0, 0.0), '4800': (0.0, 15.0)}, js[0]
+    assert js[0]['lines'] == {'1010': (15.0, 0.0), '4800': (0.0, 15.0)}, js[0]
     assert js[0]['date'] == PREV, js[0]
     mv = _movement_rows(cid, 'paid_in')
     assert len(mv) == 1 and js[0]['source_uid'] == mv[0]['id']
@@ -287,7 +288,7 @@ def test_paid_in_by_the_owner_is_equity_up_not_income():
     r = _move(admin, sid, 'paid_in', 25, reason='owner put money back', gl_account_code='3100')
     assert r.status_code == 200, r.get_json()
     js = _journals(cid, 'cash_movement')
-    assert len(js) == 1 and js[0]['lines'] == {'1000': (25.0, 0.0), '3100': (0.0, 25.0)}, js
+    assert len(js) == 1 and js[0]['lines'] == {'1010': (25.0, 0.0), '3100': (0.0, 25.0)}, js
     pl = admin.get(f'{API}/reports/profit-and-loss?start_date={SAME}&end_date={SAME}').get_json()['data']
     assert pl['net_profit'] == 100.0, 'the owner putting money back is not income'
     bs = _balance_sheet(admin, SAME)
@@ -303,7 +304,7 @@ def test_a_paid_in_with_no_account_goes_to_other_income_and_is_never_refused():
     assert r.status_code == 200, r.get_json()
     assert r.get_json()['data']['gl_account_code'] == '4800'
     js = _journals(cid, 'cash_movement')
-    assert len(js) == 1 and js[0]['lines'] == {'1000': (40.0, 0.0), '4800': (0.0, 40.0)}, js
+    assert len(js) == 1 and js[0]['lines'] == {'1010': (40.0, 0.0), '4800': (0.0, 40.0)}, js
     r = _move(admin, sid, 'paid_in', 6, gl_account_code='  ')
     assert r.status_code == 200 and r.get_json()['data']['gl_account_code'] == '4800'
 
@@ -410,7 +411,7 @@ def test_an_expense_posts_dr_account_cr_cash_at_its_business_date_and_lists():
     assert e['uid'] and e['voided'] is False and e['gl_account_code'] == '6000'
     js = _journals(cid, 'expense')
     assert len(js) == 1, js
-    assert js[0]['lines'] == {'6000': (250.0, 0.0), '1000': (0.0, 250.0)} and js[0]['date'] == '2026-03-05'
+    assert js[0]['lines'] == {'6000': (250.0, 0.0), '1020': (0.0, 250.0)} and js[0]['date'] == '2026-03-05'
     assert js[0]['source_uid'] == e['uid']
     # a second, later expense for the list filters
     assert _expense(admin, gl_account_code='6100', amount=40, business_date=SAME,
@@ -440,7 +441,7 @@ def test_voiding_an_expense_posts_the_reversal_once_and_restores_the_books():
     assert r.status_code == 200, r.get_json()
     assert r.get_json()['data']['voided'] is True and r.get_json()['data']['void_reason'] == 'entered twice'
     rev = _journals(cid, 'reversal')
-    assert len(rev) == 1 and rev[0]['lines'] == {'6000': (0.0, 250.0), '1000': (250.0, 0.0)}, rev
+    assert len(rev) == 1 and rev[0]['lines'] == {'6000': (0.0, 250.0), '1020': (250.0, 0.0)}, rev
     # a second void is refused and posts nothing
     again = admin.post(f'{API}/expenses/{uid}/void', json={'reason': 'again'})
     assert again.status_code == 409 and again.get_json()['code'] == 'ALREADY_VOIDED'

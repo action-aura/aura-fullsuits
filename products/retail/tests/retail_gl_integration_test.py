@@ -149,6 +149,15 @@ def _account(tb, code):
     return [a for a in tb['accounts'] if a['code'] == code][0]
 
 
+def _cash_like(tb):
+    """MONEY-5 (v55): "cash and bank" is no longer one account -- tenders land in 1010/1020/1030/1040
+    and only pre-v55 history sits in 1000. The assertions below were written against the single
+    1000 balance and mean "how much money does the shop hold", so they now read the SUM over
+    `gl.CASH_LIKE_CODES`: the same totals, still exact (a wrong total still fails). WHICH account
+    each tender lands in is pinned by retail_money5_tender_accounts_test.py."""
+    return round(sum(a['balance'] for a in tb['accounts'] if a['code'] in gl.CASH_LIKE_CODES), 3)
+
+
 def _trial_balance(company_id):
     conn = get_retail_conn()
     try:
@@ -188,7 +197,7 @@ def test_walk_in_cash_sale_posts_a_balanced_journal(client):
 
     tb = _trial_balance(cid)
     assert tb['is_balanced']
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == 22.0
+    assert _cash_like(tb) == 22.0
     assert _account(tb, gl.ACCOUNT_SALES_REVENUE)['balance'] == 20.0
     assert _account(tb, gl.ACCOUNT_TAX_PAYABLE)['balance'] == 2.0
     assert _account(tb, gl.ACCOUNT_AR)['balance'] == 0.0
@@ -222,7 +231,7 @@ def test_walk_in_sale_with_change_given_back_books_only_net_received(client):
 
     tb = _trial_balance(cid)
     assert tb['is_balanced']
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == 10.0
+    assert _cash_like(tb) == 10.0
     assert _account(tb, gl.ACCOUNT_SALES_REVENUE)['balance'] == 10.0
 
 
@@ -243,7 +252,7 @@ def test_credit_sale_posts_ar_leg_tying_to_customer_subledger(client):
 
     tb = _assert_ar_ties(cid)
     assert _account(tb, gl.ACCOUNT_AR)['balance'] == 30.0
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == 20.0
+    assert _cash_like(tb) == 20.0
     assert _account(tb, gl.ACCOUNT_SALES_REVENUE)['balance'] == 50.0
 
 
@@ -294,7 +303,7 @@ def test_sale_with_loyalty_redemption_posts_loyalty_expense_leg(client):
     assert _account(tb, gl.ACCOUNT_LOYALTY_EXPENSE)['balance'] == 15.0
     # net_received = total(100) - points_redeemed_amount(15) = 85, tendered
     # 100 -> change 15 handed back, net_received stays 85.
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == 85.0
+    assert _cash_like(tb) == 85.0
     assert _account(tb, gl.ACCOUNT_SALES_REVENUE)['balance'] == 100.0
 
 
@@ -362,7 +371,7 @@ def test_full_cash_return_with_no_ar_posts_cash_and_returns_only(client):
 
     tb = _trial_balance(cid)
     assert tb['is_balanced']
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == 0.0  # +20 sale, -20 return
+    assert _cash_like(tb) == 0.0  # +20 sale, -20 return
     assert _account(tb, gl.ACCOUNT_AR)['balance'] == 0.0
     assert _account(tb, gl.ACCOUNT_SALES_RETURNS)['balance'] == 20.0
 
@@ -386,7 +395,7 @@ def test_customer_payment_clears_ar_and_ties_to_subledger(client):
 
     tb = _assert_ar_ties(cid)
     assert _account(tb, gl.ACCOUNT_AR)['balance'] == 60.0
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == 40.0
+    assert _cash_like(tb) == 40.0
 
 
 def test_supplier_payment_clears_ap_and_ties_to_subledger(client):
@@ -413,13 +422,13 @@ def test_supplier_payment_clears_ap_and_ties_to_subledger(client):
     # covered in retail_po_receipts_routes_test.py).
     tb = _assert_ap_ties(cid)
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == -15.0
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -15.0
+    assert _cash_like(tb) == -15.0
 
     r = client.post(f'{API}/purchase-orders/{po_id}/receive')
     assert r.status_code == 200, r.get_json()
     tb = _assert_ap_ties(cid)
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 25.0
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -15.0
+    assert _cash_like(tb) == -15.0
 
 
 # ── 6. Purchase orders ────────────────────────────────────────────────────
@@ -453,7 +462,7 @@ def test_purchase_order_with_down_payment_posts_inventory_cash_ap(client):
     assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 0.0
     assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 140.0
     assert _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'] == 100.0
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -15.0
+    assert _cash_like(tb) == -15.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 25.0
     # (Absolute figures, hand-computed from the seed: 100 units x cost 1.000 =
     # 100.000 of opening stock, per STOCK-BOOKS verify F8.)
@@ -535,7 +544,7 @@ def test_purchase_order_with_a_negative_amount_paid_does_not_inflate_ap(client):
     assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 140.0
     assert _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'] == 100.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 40.0
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == 0.0
+    assert _cash_like(tb) == 0.0
 
 
 def test_purchase_order_paid_in_full_up_front_posts_no_ap_leg(client):
@@ -565,7 +574,7 @@ def test_purchase_order_paid_in_full_up_front_posts_no_ap_leg(client):
     assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 0.0
     assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 140.0
     assert _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'] == 100.0
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -40.0
+    assert _cash_like(tb) == -40.0
 
 
 def test_purchase_order_with_no_supplier_still_balances(client):
@@ -610,7 +619,7 @@ def test_purchase_order_with_no_supplier_still_balances(client):
     # neither; 100.000 on each fails if the order leaks into 1200 at all.
     assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 100.0
     assert _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'] == 100.0
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -40.0
+    assert _cash_like(tb) == -40.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 0.0
 
 
@@ -637,7 +646,7 @@ def test_pay_purchase_order_posts_ap_settlement(client):
     assert r.status_code == 200, r.get_json()
     tb = _assert_ap_ties(cid)
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 0.0
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -40.0
+    assert _cash_like(tb) == -40.0
 
 
 # ── 7. The end-to-end, multi-document session ────────────────────────────

@@ -15,6 +15,7 @@ import sys
 import tempfile
 import uuid
 import xml.etree.ElementTree as ET
+from decimal import Decimal
 from pathlib import Path
 
 PRODUCT_DIR = Path(__file__).resolve().parents[1]
@@ -219,3 +220,93 @@ def test_enqueue_return_is_invisible_when_not_opted_in():
     client, cid, (pa, _pb) = _make_company()
     assert adapter.enqueue_return(get_retail_conn, company_id=cid, return_id=1, return_number='R') is False
     assert _sequence_rows(cid) == 0
+
+
+# ---- MONEY-5 verifier round (M1): cash rounding + parts through the credit note ----------------
+
+def _credit_note_docs(client, cid, sale, n_returns):
+    """Reconcile, then the built EInvoiceDocument of the sale and of each return's credit note."""
+    conn = get_retail_conn()
+    adapter.reconcile_missing_sales(conn, cid, ei_settings.enabled_at(conn, cid))
+    conn.commit()
+    sale_row = conn.execute("SELECT * FROM einvoice_outbox WHERE company_id=? AND source_type='sale'",
+                            (cid,)).fetchone()
+    notes = conn.execute("SELECT * FROM einvoice_outbox WHERE company_id=? AND source_type='return' "
+                         "ORDER BY id", (cid,)).fetchall()
+    assert len(notes) == n_returns, len(notes)
+    docs = (adapter.build_document(conn, sale_row), [adapter.build_document(conn, n) for n in notes])
+    conn.close()
+    return docs
+
+
+def test_a_rounded_down_cash_sale_has_a_cash_invoice_AND_a_cash_credit_note():
+    """Verifier M1: the credit note path classified the sale without adding back the fils the shop
+    conceded, so a 3.457 cash sale settled with 3.450 had a CASH invoice and a CREDIT credit note
+    (the guide requires the credit note's type to match the original)."""
+    client, cid, (pa, pb) = _make_company(tax_rate=0.0, price=3.457)
+    _opt_in(cid)
+    r = client.post('/api/sub/retail/settings/credit', json={
+        'cash_rounding_interval': '0.050', 'cash_rounding_rule': 'nearest'})
+    assert r.status_code == 200, r.get_json()
+    r = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pb, 'quantity': 1}], 'payment_method': 'cash', 'amount_paid': 3.45,
+        'cash_rounding_ack': True, 'idempotency_key': str(uuid.uuid4())})
+    assert r.status_code == 200, r.get_json()
+    sale = r.get_json()['data']
+    assert sale['rounding_amount'] == -0.007 and sale['amount_paid'] == 3.45     # genuinely rounded down
+    ret = client.post('/api/sub/retail/returns', json={
+        'sale_id': sale['id'], 'items': [{'product_id': pb, 'quantity': 1}],
+        'idempotency_key': str(uuid.uuid4())})
+    assert ret.status_code == 200, ret.get_json()
+    inv, notes = _credit_note_docs(client, cid, sale, 1)
+    assert inv.payment_type == 'cash'
+    assert notes[0].payment_type == 'cash' and notes[0].type_name == inv.type_name, (
+        notes[0].payment_type, notes[0].type_name, inv.type_name)
+
+
+def test_a_genuinely_unpaid_sale_still_has_a_credit_invoice_and_credit_note():
+    """The deny half of the add-back: only the shop's own conceded fils count as paid."""
+    client, cid, (pa, pb) = _make_company(tax_rate=0.0, price=10.0)
+    _opt_in(cid)
+    cust = client.post('/api/sub/retail/customers', json={'name': 'Credit Buyer', 'phone': '0790000000', 'credit_mode': 'unlimited'})
+    cust_id = cust.get_json()['data']['id']
+    r = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pb, 'quantity': 1}], 'payment_method': 'cash', 'amount_paid': 6.0,
+        'customer_id': cust_id, 'idempotency_key': str(uuid.uuid4())})
+    assert r.status_code == 200, r.get_json()
+    sale = r.get_json()['data']
+    ret = client.post('/api/sub/retail/returns', json={
+        'sale_id': sale['id'], 'items': [{'product_id': pb, 'quantity': 1}],
+        'idempotency_key': str(uuid.uuid4())})
+    assert ret.status_code == 200, ret.get_json()
+    inv, notes = _credit_note_docs(client, cid, sale, 1)
+    assert inv.payment_type == 'credit' and notes[0].payment_type == 'credit'
+
+
+def test_credit_notes_of_a_line_returned_in_parts_sum_to_the_refunds_to_the_fil():
+    """Verifier M1 (b): 3 x 0.181 taxed 16% under a 'make the total 0.500' discount, returned 1+1+1.
+    Each credit note's lines (extension + tax) must equal that return's refund_amount, and the three
+    must add to the sale total -- re-pricing each part with calculate_line drifted 1-3 fils."""
+    from commercial_runtime.einvoicing.istd_ubl import _totals, validate_istd_document
+    client, cid, (pa, pb) = _make_company(tax_rate=16.0, price=0.181)
+    _opt_in(cid)
+    r = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pa, 'quantity': 3}], 'payment_method': 'cash', 'amount_paid': 100,
+        'cart_target_total': 0.5, 'discount_reason': 'x', 'idempotency_key': str(uuid.uuid4())})
+    assert r.status_code == 200, r.get_json()
+    sale = r.get_json()['data']
+    refunds = []
+    for _ in range(3):
+        rr = client.post('/api/sub/retail/returns', json={
+            'sale_id': sale['id'], 'items': [{'product_id': pa, 'quantity': 1}],
+            'idempotency_key': str(uuid.uuid4())})
+        assert rr.status_code == 200, rr.get_json()
+        refunds.append(Decimal(str(rr.get_json()['data']['refund_amount'])))
+    assert sum(refunds, Decimal(0)) == Decimal(str(sale['total']))
+    inv, notes = _credit_note_docs(client, cid, sale, 3)
+    for refund, note in zip(refunds, notes):
+        line_sum = _totals(note)[3]                       # sum of (extension + tax) over the lines
+        assert line_sum == refund, (line_sum, refund)
+        assert Decimal(str(note.grand_total)).quantize(Decimal('0.001')) == refund
+        assert validate_istd_document(note) == [], validate_istd_document(note)
+    assert sum((_totals(n)[3] for n in notes), Decimal(0)) == Decimal(str(sale['total']))

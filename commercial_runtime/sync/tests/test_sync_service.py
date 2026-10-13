@@ -221,6 +221,9 @@ CREATE TABLE sales (
     -- unknown (a sale from before v54, or from a v53 sender), never '' and never 0.
     discount_reason TEXT,
     discount_approved_by TEXT,
+    -- MONEY-5 (retail schema v55): the sale apply binds the signed cash rounding. Same
+    -- fixture-follows-schema rule as the columns above. NULL = none recorded (an older sender).
+    rounding_amount REAL,
     status TEXT DEFAULT 'completed',
     idempotency_key TEXT UNIQUE,
     notes TEXT,
@@ -306,6 +309,7 @@ CREATE TABLE returns (
     -- reconcile), so the fixture is fixed, not sync_service made to sniff
     -- the table's shape.
     tax_refunded REAL,
+    rounding_amount REAL,   -- MONEY-5 (v55): the return's own signed cash rounding
     FOREIGN KEY (sale_id) REFERENCES sales(id)
 );
 CREATE UNIQUE INDEX idx_returns_uid ON returns(uid) WHERE uid IS NOT NULL;

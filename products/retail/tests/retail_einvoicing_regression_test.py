@@ -140,6 +140,11 @@ SALE_RESPONSE_KEYS = [
     'customer_id', 'customer_name', 'discount_amount', 'employee_name',
     'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
     'points_redeemed', 'points_redeemed_amount',
+    # MONEY-5 (v55): the signed cash rounding (None when nothing was rounded), so the till's
+    # sale-complete modal and printed slip can say "Rounding -0.007" from the SERVER's figure.
+    # Always present (null when none) -- same contract as points_redeemed_amount above. The Android
+    # SaleResult ignores unknown keys (see point 2 above). This list stays an EXACT match.
+    'rounding_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
 # The exact same set PLUS 'einvoice' -- see SALE_RESPONSE_KEYS' own comment.
@@ -222,6 +227,12 @@ SALES_TABLE_COLUMNS = [
     # amounts come from the sale's own money columns, unchanged). What this can no longer catch: a stray
     # column with either NAME on sales -- the claim (v7 added only new tables) is unaffected.
     'discount_reason', 'discount_approved_by',
+    # MONEY-5 (schema v55, _migrate_add_money5_tender_columns, claimed in ROADMAP.md first):
+    # sales.rounding_amount -- the signed cash rounding. Same category as the two above. The ONE place
+    # e-invoicing reads it is einvoice_adapter's cash-vs-credit classification (a sale settled with
+    # coins is still cash); the invoice AMOUNTS come from the sale's own money columns, unchanged.
+    # What this can no longer catch: a stray column NAMED rounding_amount on sales.
+    'rounding_amount',
     'due_date',
 ]
 SALE_ITEMS_TABLE_COLUMNS = [

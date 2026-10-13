@@ -18,6 +18,8 @@ is a deliberate, documented Phase 1 judgment call, not an oversight.
 """
 from __future__ import annotations
 
+from decimal import Decimal, ROUND_HALF_UP
+
 from core.retail import pricing as tax_engine
 from commercial_runtime.einvoicing import outbox as outbox_module
 from commercial_runtime.einvoicing import sequence, settings
@@ -141,7 +143,7 @@ def build_document(conn, outbox_row) -> EInvoiceDocument:
     # loop -- reused here rather than queried a second time.
     seller_name = settings.get_setting(conn, company_id, 'seller_name') or 'Aura Retail Merchant'
     seller_tin = settings.get_setting(conn, company_id, 'seller_tin')
-    payment_type = derive_payment_type(sale['payment_method'], float(sale['amount_paid']), float(sale['total']))
+    payment_type = _sale_payment_type(sale)
 
     istd = _istd_fields(conn, company_id, outbox_row, invoice_family, payment_type)
     return EInvoiceDocument(
@@ -193,7 +195,20 @@ def _istd_fields(conn, company_id, outbox_row, invoice_family, payment_type, **e
 
 
 def _sale_payment_type(sale) -> str:
-    return derive_payment_type(sale['payment_method'], float(sale['amount_paid']), float(sale['total']))
+    """cash / credit of a SALE, the ONE rule both the invoice (388) and its credit note (381) use --
+    the guide requires the credit note's type name to match the original's.
+
+    MONEY-5: a cash sale of 3.457 settled with 3.450 (rounding_amount -0.007) is PAID IN FULL. The
+    shared rule `amount_paid + 0.005 < total` would call it a credit sale; adding back the fils the
+    shop conceded keeps cash cash. (Rounding up never needs it: paid >= total already.) The credit
+    note path used to call derive_payment_type without this add-back (the JOFOTARA-1 merge brought
+    that second call site in), so a rounded-down cash sale had a CASH invoice and a CREDIT note."""
+    try:
+        conceded = max(0.0, -float(sale['rounding_amount'] or 0))
+    except (KeyError, IndexError, TypeError, ValueError):
+        conceded = 0.0
+    return derive_payment_type(sale['payment_method'], float(sale['amount_paid']) + conceded,
+                               float(sale['total']))
 
 
 def _tax_mode_and_currency(conn, company_id):
@@ -236,9 +251,12 @@ def _build_return_document(conn, outbox_row) -> EInvoiceDocument:
         raise SaleNotFoundError(f"Return {ret['id']}: its sale was never e-invoiced, so there is nothing to credit.")
 
     mode, currency = _tax_mode_and_currency(conn, company_id)
-    lines, total = [], 0.0
+    quantum = tax_engine.currency_quantum(currency)
+    # (description, qty, unit_price, rate, calc, stored line total) per returned line.
+    parts = []
     for ri in conn.execute(
-        "SELECT product_id, quantity, sale_item_id FROM return_items WHERE return_id=? ORDER BY id", (ret['id'],)
+        "SELECT product_id, quantity, sale_item_id, line_total FROM return_items WHERE return_id=? ORDER BY id",
+        (ret['id'],)
     ).fetchall():
         if ri['sale_item_id']:
             si = conn.execute(
@@ -255,11 +273,30 @@ def _build_return_document(conn, outbox_row) -> EInvoiceDocument:
         calc = tax_engine.calculate_line(
             float(si['unit_price']), float(ri['quantity']), float(si['discount_pct'] or 0),
             float(si['tax_rate'] or 0), mode=mode, currency=currency)
-        total += calc['total']
+        stored = ri['line_total'] if ri['line_total'] is not None else calc['total']
+        parts.append((si, ri, calc, Decimal(str(stored)).quantize(quantum, rounding=ROUND_HALF_UP)))
+
+    # THE CREDIT NOTE MUST SUM TO WHAT WAS ACTUALLY REFUNDED. Re-pricing each returned part with
+    # calculate_line drifts 1-3 fils from `return_items.line_total` for a line returned in parts (the
+    # completing part takes the remainder; see create_return), and the ISTD profile compares the lines'
+    # sum to the document total. So each line carries the STORED amount: the tax the return really
+    # reversed (`returns.tax_refunded`, any residue on the last line) and the line's discount absorbs
+    # the remaining fils, so extension + tax == the stored line total to the fil.
+    taxes = [Decimal(str(c['tax'])).quantize(quantum, rounding=ROUND_HALF_UP) for _si, _ri, c, _t in parts]
+    if parts and ret['tax_refunded'] is not None:
+        taxes[-1] += Decimal(str(ret['tax_refunded'])).quantize(quantum, rounding=ROUND_HALF_UP) - sum(taxes, Decimal('0'))
+        taxes[-1] = max(taxes[-1], Decimal('0'))
+    lines, total = [], Decimal('0')
+    for (si, ri, calc, stored_total), tax in zip(parts, taxes):
+        gross = (Decimal(str(ri['quantity'])) * Decimal(str(si['unit_price']))).quantize(
+            quantum, rounding=ROUND_HALF_UP)
+        discount = max(gross + tax - stored_total, Decimal('0'))
+        total += stored_total
         lines.append(EInvoiceLine(
             description=si['product_name'], quantity=float(ri['quantity']), unit_price=float(si['unit_price']),
-            discount_amount=calc['discount_amount'], tax_amount=calc['tax'], line_total=calc['taxable_amount'],
+            discount_amount=float(discount), tax_amount=float(tax), line_total=float(gross - discount),
             tax_rate=float(si['tax_rate'] or 0), tax_category=tax_category_for_rate(si['tax_rate'])))
+    total = float(total)
 
     buyer_name, buyer_id = _fetch_buyer(conn, company_id, sale['customer_id'])
     payment_type = _sale_payment_type(sale)

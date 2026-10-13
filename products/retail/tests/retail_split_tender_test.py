@@ -263,12 +263,19 @@ def test_6_gl_cash_and_bank_rises_by_the_retained_sum_and_trial_balance_balances
     def net(a):
         return round(float(a.get('debit', 0) or 0) - float(a.get('credit', 0) or 0), 3)
 
-    before = net(_acct(_tb(client), '1000')) if any(
-        a['code'] == '1000' for a in _tb(client)['accounts']) else 0.0
+    def held(tb, code):
+        return net(_acct(tb, code)) if any(a['code'] == code for a in tb['accounts']) else 0.0
+
+    tb0 = _tb(client)
+    before = {c: held(tb0, c) for c in ('1000', '1010', '1030')}
     r = _split(client, pid, [{'method': 'card', 'amount': 5}, {'method': 'cash', 'amount': 10}])
     assert r.status_code == 200
     tb = _tb(client)
-    assert round(net(_acct(tb, '1000')) - before, 3) == 11.832
+    # MONEY-5: the retained 11.832 is split by METHOD -- the card part 5.000 to 1030 Card Clearing,
+    # the cash part 10 less 3.168 change = 6.832 to 1010 Cash in Drawer -- and 1000 is untouched.
+    assert round(held(tb, '1030') - before['1030'], 3) == 5.0
+    assert round(held(tb, '1010') - before['1010'], 3) == 6.832
+    assert round(held(tb, '1000') - before['1000'], 3) == 0.0
     tot = tb.get('totals') or {}
     if tot:
         assert round(float(tot['debit']) - float(tot['credit']), 3) == 0

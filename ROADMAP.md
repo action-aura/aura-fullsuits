@@ -8139,6 +8139,74 @@ Audit: every refusal writes `DISCOUNT_APPROVAL_PIN_REFUSED` (approver uid, cashi
 
 - Full run after the fix round: `run_all_tests.py retail commercial_runtime sync -j 6` = 509 files, 509 passed, 0 failed (log kept with the job).
 
+
+## 2026-10-13 — retail schema v55 CLAIMED (MONEY-5: per-tender accounts, cash rounding)
+
+RETAIL_SCHEMA_VERSION 54 -> 55, branch `feat/money-5` (off 5b1fe123). Nobody else bumps it. Shape-gated, idempotent,
+additive only: `payment_methods.gl_account_code TEXT NULL` (per-tender GL account), `sales.rounding_amount REAL NULL`
+(signed cash-rounding delta). New lazily-seeded GL accounts: 1010 Cash in Drawer, 1020 Bank, 1030 Card Clearing,
+1040 CliQ / Wallet, 4950 Cash Rounding. Also in this wave, no schema: `allow_negative_stock` setting and the
+partial-return remainder rule (returns refund exactly what was paid).
+
+## 2026-10-13 — MONEY-5 CASHED IN (per-tender accounts, cash rounding, negative stock, exact partial refunds) — retail schema v55
+
+Branch `feat/money-5` (off 5b1fe123, retail v54). RETAIL_SCHEMA_VERSION 54 -> 55. Two nullable columns only:
+`sales.rounding_amount REAL` and `payment_methods.gl_account_code TEXT` (shape-gated, no backfill; `payment_methods`
+is a table the route layer creates, so the column is added by `_ensure_credit_schema` as well — two paths, same column).
+
+* **#8 per-tender GL accounts.** New accounts (seeded lazily from `DEFAULT_CHART`): 1010 Cash in Drawer, 1020 Bank,
+  1030 Card Clearing, 1040 CliQ / Wallet, 4950 Cash Rounding (revenue, either sign). `general_ledger.tender_account`:
+  cash -> 1010, card -> 1030, mobile/cliq/wallet -> 1040, transfer/bank -> 1020, voucher -> 2300, anything else -> 1000;
+  an optional per-shop override on `payment_methods.gl_account_code` (cash-like codes only). `post_sale` debits one line
+  per tender (the very rows written to `payments`), `post_return` credits per refund leg, customer / supplier / PO
+  payments use their method, drawer paid-outs / paid-ins -> 1010, expense `paid_via` bank/card -> 1020 and
+  `cash_office` stays 1000. **Only new journals change; nothing is rewritten.** The cash-flow statement and the
+  payment-void journal matching now read every cash-like account (`gl.CASH_LIKE_CODES`) — `financial_statements.py`
+  was touched in `_cash_balance` and the cash-flow period query ONLY.
+* **#3 cash rounding.** Settings `cash_rounding_interval` ('0' off | 0.005 | 0.010 | 0.050 | 0.100) and
+  `cash_rounding_rule` (nearest | down | up), owner-only via `POST /settings/credit` (one canonical spelling stored;
+  bad values 400). Applied in `create_sale` to the CASH part that settles what is left (split: the cash leg only; a
+  card, a voucher, a part left on account is never rounded; rounding applies only when the cash handed over covers the
+  rounded amount). The sale stays whole; `sales.rounding_amount` is the signed difference (3.457 settled with 3.450 ->
+  -0.007) and GL 4950 takes the other side so `post_sale` balances by construction. `net_received` / the `payments`
+  cash row / the drawer's expected cash are the coins that arrived. Returns refund the goods whole and re-round the
+  cash leg (capped at the cash the sale took through cash and not yet returned); `post_return` books the difference
+  to 4950. Receipt (receipt_model, ESC/POS, browser slip, sale detail) shows "Rounding -0.007"; the till mirrors the
+  rounding for display and for the `amount_paid` it sends (the server is the authority). The sale sync event carries
+  `rounding_amount`. Every derived "what is still owed" formula (`party_balance`, statements, the tender lines,
+  `create_return`'s `original_balance_due`, the e-invoice cash/credit classification) adds the rounding back, otherwise
+  a named customer paying the coins would carry a phantom debt of the rounded fils.
+* **#9 part 1 allow negative stock.** `allow_negative_stock` ('0' default | '1'), owner-only, audited on change.
+  '1' takes the path `behind_on_sync` takes (allow, flag oversold, write the stock exception).
+* **Returns exactness (UI-3a verifier L4).** The part that completes a sale line takes the remainder (what the line
+  cost minus what earlier parts refunded); a part that does not is capped at the remainder. Fuzz: 156 seeded sales,
+  every line returned in 1–3 parts, refunds == paid exactly, never over.
+* **Proved.** Python: retail_money5_{migration,tender_accounts,cash_rounding,negative_stock,return_exactness}_test
+  (every guard mutation-proved RED in the commits); JS: retail_money5_till_rounding_test. Real app (port 5104, EN + AR,
+  Playwright, owner): 3.457 cash sale -> panel "Rounding -0.007" and Exact 3.450 -> sale stored total 3.457 / rounding
+  -0.007 / paid 3.45, receipt shows Rounding; split card 5.000 + cash 6.000 for 10.457 -> card 5.000, cash 5.450, GL
+  1030 5.000 / 1010 5.450 / 4950 Dr 0.007; trial balance, balance sheet (1010, 1030 listed) and cash flow reconcile;
+  full return pays 5.000 card + 5.450 cash and the books still balance (18/18). That run FOUND a real bug no suite
+  had: the till's client guards refused the rounded tender ("Cash is less than what is left") -- fixed in 062afd05.
+  Pre-existing failure NOT mine: `retail_einvoicing_regression_test::test_no_worker_thread_starts_for_a_company_with_no_enqueued_rows_at_boot`
+  fails identically at 5b1fe123 (checked in a clean worktree).
+* **Decisions / left open (recorded):**
+  * NOT built: a one-time optional reclass of the old 1000 balance into 1010 (a data decision); "deposit to bank" and
+    "card settlement received" drawer movements; a drawer-expected vs 1010 tie; stock-take (#9 part 2).
+  * The old 1000 account keeps history and still receives: unknown tender methods, cheque clearing at the bank
+    (1150/2050 <-> 1000), PO order-basis down payments. A refund of a PRE-v55 cash sale credits 1010, which can read
+    negative until the shop reclasses.
+  * 'card' expenses (`paid_via='card'`) leave 1020, not 1030 (1030 is what the card COMPANY owes the shop).
+  * Round-up with an API client that sends the exact unrounded amount (Android does until it learns rounding): the
+    cash does not cover the rounded amount, so that sale is simply not rounded (balance 0, rounding NULL).
+  * Return rounding (CORRECTED in the verifier-fix round; this line used to understate it): the first cut rounded each
+    return's cash leg on its own, so 50 returns of one 0.010 piece paid back a whole coin each (all 0.500 after 10
+    pieces worth 0.100). The cash is now rounded on the RUNNING TOTAL of the sale's cash refunds (see "MONEY-5
+    verifier fix round" below): never ahead of the goods by more than one coin, exactly the cash taken after a full
+    return, and 4950 nets the sale's own rounding to zero.
+  * Arabic strings for the new Settings card and "Rounding" need a native reader (same standing note as LOYALTY-EARN).
+  * Android is untouched: it ignores `rounding_amount` and sends the unrounded amount.
+
 ## JOFOTARA-1 (document profile built offline; transport waits on credentials)
 
 Built the ISTD (JoFotara) UBL 2.1 profile as `commercial_runtime/einvoicing/istd_ubl.py` from PUBLIC material only (Qoyod's walk-through of the ISTD guide v1.5, Odoo); nothing contacted ISTD and no credentials exist. Rules, sources with fetch dates and the full open-question list: `docs/einvoicing/istd-profile.md`.
@@ -8220,3 +8288,12 @@ Single-writer resource: the Owner Alembic chain head. `alembic heads` was `c7a4f
 - Phase 2 proper: producer, installer, table classes, `include_own_once`, main answers bootstrap requests (+ `branch_alias`), hub transport (plan section 7).
 - Clients do not send `caps` yet; Owner Revision B (bootstrap mailbox) is Phase 3.
 - `HubTransport.kt` builds no pull body (discovery/join only) so it needed no Phase 1 change.
+
+### 2026-10-13 — MONEY-5 verifier fix round (b9fecc7f..c732349d)
+H1 return cash rounded on the sale's running total (piece-by-piece returns can no longer pay back more than value + one coin);
+pre-existing double-refund via line id + product closed (f164f411); credit notes classify cash/credit like their invoice and
+sum to the refund (M1); server rounds only for clients sending `cash_rounding_ack` (desktop till) — Android sales stay
+unrounded until the phone shows rounding (M4); rounding never makes a sale free; 4950 shown inside sales on the P&L, not
+Other income; sync + reader + guard mutants now killed (M2/M3). Verified by the orchestrator: all 8 retail_money5_* files,
+the till JS, einvoicing 225 + istd 8, P&L 22 green. Recorded, not fixed: PO order-basis down payments and cheque clearing
+still post to 1000; 1010 can read negative after refunding pre-v55 cash sales until a reclass exists.

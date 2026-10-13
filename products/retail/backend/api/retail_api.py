@@ -157,6 +157,7 @@ from core.retail import doc_series
 from core.retail import returns_settlement
 from core.retail import return_legs  # MONEY-3 M1: refund a split-paid sale through several methods
 from core.retail import tenders as tender_engine
+from core.retail import cash_rounding as cash_rounding_engine
 # UI-3a (schema v54): cart-level amount discounts / "make the total X" (pure, exact in
 # minor units) and the failure throttle behind a manager-PIN approval.
 from core.retail import cart_discount as cart_disc
@@ -3978,8 +3979,8 @@ def _classify_po_payments(cur, po, eps):
             "JOIN gl_journal_lines l ON l.journal_id = j.id "
             "JOIN gl_accounts a ON a.id = l.account_id AND a.company_id = j.company_id "
             "WHERE j.company_id=? AND j.source_type='purchase_order' AND j.source_id=? "
-            "AND j.reversed_journal_id IS NULL AND a.code=? AND l.credit > 0 ORDER BY l.id",
-            (cid, po['id'], gl.ACCOUNT_CASH)).fetchall()]
+            "AND j.reversed_journal_id IS NULL AND a.code IN (?,?,?,?,?) AND l.credit > 0 ORDER BY l.id",
+            (cid, po['id'], *gl.CASH_LIKE_CODES)).fetchall()]
     except sqlite3.OperationalError:
         cash_lines = []            # no books tables yet: nothing is provable
     local, sibling, unprovable = [], [], []
@@ -4406,7 +4407,8 @@ def create_purchase_order():
             # W4a-2 fix: reference = the payment's, as post_supplier_payment does.
             gl.post_po_prepayment(conn, cid, branch_id, po_id, bool(supplier_id),
                                   amount_paid, down_pay_uid, currency, reference=down_pay_ref,
-                                  business_date=_gl_business_date(conn, cid))
+                                  business_date=_gl_business_date(conn, cid),
+                                  method=data.get('method', 'cash'))
         # W4a: queue order + lines in THIS transaction, so the outbox rows and
         # the rows they describe land or roll back together.
         _po_stamp_and_queue_create(cur, po_id, None)
@@ -8555,6 +8557,8 @@ def create_sale():
         # `_evaluate_offline_sales_stop` above is: every line of one sale is
         # judged against the SAME snapshot of "is this device behind".
         behind_on_sync = _is_device_behind_on_sync()
+        # MONEY-5: read once, like `behind_on_sync`, from the same `_s` snapshot this sale uses.
+        allow_negative_stock = str(_s.get('allow_negative_stock')) == '1'
         # Launch-readiness Phase 7 stage 7d-iii follow-up (two-lines-same-
         # product oversell fix, 2026-08-29): `inventory_balances` is NOT
         # decremented until the SEPARATE write loop further down (`for line
@@ -8699,7 +8703,12 @@ def create_sale():
                 # quantity) -- WHAT is compared to `on_hand` is what changed
                 # here; WHEN this refuses vs. relaxes is untouched, still
                 # gated purely on `behind_on_sync` below.
-                if not behind_on_sync:
+                # MONEY-5 / review #9 part 1: the owner's `allow_negative_stock` setting takes the
+                # SAME path as being behind on sync -- allow the sale, flag it oversold, and let the
+                # write loop record the stock exception. Goods on the shelf that are not typed in yet
+                # are the everyday reason; the exception row is how the owner finds and fixes them.
+                # Default '0' keeps the hard refusal byte for byte.
+                if not behind_on_sync and not allow_negative_stock:
                     conn.rollback(); conn.close()
                     return jsonify({'status': 'error',
                                      'message': f'Insufficient stock for "{product["name"]}" (have {on_hand}, requested {requested_so_far}).'}), 400
@@ -9196,11 +9205,28 @@ def create_sale():
         # customer by up to 5 fils on their change, the exact defect class
         # `_money`'s own docstring warns about for a drawer count.
         split_settlement = None
+        # MONEY-5 / review #3 -- CASH ROUNDING. Off ('0', the default) means every figure below is
+        # exactly what it was before the feature. On, the CASH part that settles what is left is
+        # rounded to the shop's coin; the sale (total, lines, tax) stays whole and the signed
+        # difference is kept in `sale_rounding` (-0.007 when 3.457 is settled with 3.450) -> stored
+        # on the sale, carried on the wire, booked to GL 4950. `effective_due` is what the tenders
+        # must now cover: the amount due plus that difference.
+        _round_interval, _round_rule = cash_rounding_engine.config(_s)
+        # M4 (verifier): round ONLY for a client that says it knows about rounding. The desktop till
+        # sends `cash_rounding_ack: true`; Android (which shows the unrounded total and no Rounding
+        # line) does not yet, so a phone sale is charged exactly the total it displayed and the
+        # drawer is never short coins the cashier was never told to take. Android learning to round
+        # is a follow-up (ROADMAP, MONEY-5 verifier fix round).
+        if not _client_knows_cash_rounding(data):
+            _round_interval = Decimal('0')
+        sale_rounding = 0.0
+        effective_due = amount_due_after_points
         if split_tenders:
             # Split tender: the parts decide paid/change/balance_due, never a
-            # client-sent amount_paid. See core/retail/tenders.py.
+            # client-sent amount_paid. See core/retail/tenders.py. The cash leg only is rounded.
             split_settlement = tender_engine.settle_tenders(
-                split_tenders, amount_due_after_points, currency)
+                split_tenders, amount_due_after_points, currency,
+                cash_rounding=((_round_interval, _round_rule) if _round_interval > 0 else None))
             if not split_settlement['ok']:
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'code': split_settlement['code'],
@@ -9208,10 +9234,27 @@ def create_sale():
             paid = float(split_settlement['paid'])
             change = float(split_settlement['change'])
             balance_due = float(split_settlement['balance_due'])
+            sale_rounding = float(split_settlement['rounding'])
+            effective_due = _money(amount_due_after_points + sale_rounding, currency)
         else:
-            paid      = max(0.0, _money(data.get('amount_paid', amount_due_after_points), currency))
-            change    = max(0.0, _money(paid - amount_due_after_points, currency))
-            balance_due = _money(amount_due_after_points - paid, currency)
+            # A single CASH tender is rounded when the cash handed over covers the rounded amount.
+            # A part-payment in cash (the rest on account), a card, a voucher: never rounded -- the
+            # debt (or the exact charge) settles the remainder, not a coin. When the client sends
+            # no amount_paid the default is the ROUNDED amount, so an API caller that just says
+            # "cash" is not handed fils back in change.
+            _rounded_due = None
+            if (str(pm).strip().lower() == 'cash' and _round_interval > 0
+                    and amount_due_after_points > _money_epsilon(currency)):
+                _rounded_due = float(cash_rounding_engine.round_cash(
+                    Decimal(str(amount_due_after_points)), _round_interval, _round_rule, _quant,
+                    never_zero=True))
+            paid      = max(0.0, _money(data.get('amount_paid', (amount_due_after_points
+                                                               if _rounded_due is None else _rounded_due)), currency))
+            if _rounded_due is not None and paid >= _rounded_due - _money_epsilon(currency):
+                sale_rounding = _money(_rounded_due - amount_due_after_points, currency)
+                effective_due = _rounded_due
+            change    = max(0.0, _money(paid - effective_due, currency))
+            balance_due = _money(effective_due - paid, currency)
 
         # ── Credit-sale rules (Accounts Receivable) ──────────────────────────
         # A credit sale leaves an unpaid balance owed by a NAMED customer. Walk-ins
@@ -9396,13 +9439,16 @@ def create_sale():
                                subtotal,discount_amount,tax_amount,total,amount_paid,
                                change_amount,points_redeemed_amount,payment_method,status,idempotency_key,notes,created_at,due_date,
                                session_id,uid,actor_user_uid,terminal_id,created_at_utc,points_earned,
-                               discount_reason,discount_approved_by)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?,?,?,?,?)
+                               discount_reason,discount_approved_by,rounding_amount)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (cid, sale_number, bid, customer_id, data.get('cashier', _uid()),
               subtotal, discount, tax, total, paid, change, points_redeemed_amount,
               pm, idem, data.get('notes',''), now_local, due_date, cash_session_id,
               sale_uid, actor, terminal, utc_now, points_earned,
-              sale_discount_reason, sale_discount_approved_by))
+              sale_discount_reason, sale_discount_approved_by,
+              # MONEY-5: NULL when nothing was rounded (the same "unknown / none" reading an
+              # old sale has); a number only when cash rounding actually moved the cash part.
+              (sale_rounding if abs(sale_rounding) > 0 else None)))
         sale_id = cur.lastrowid
         # UI-3a audit trail. One row per fact a manager would later ask about: a cart discount
         # (how much, how it was asked, why), the approval that allowed it (WHO approved --
@@ -9470,6 +9516,11 @@ def create_sale():
             # approved it. `sale` has no update event, so this payload is the only way another
             # till ever learns them; a v53 receiver ignores unknown keys.
             'discount_reason': sale_discount_reason, 'discount_approved_by': sale_discount_approved_by,
+            # MONEY-5 (schema v55): the signed cash rounding. `sale` has no update event, so this is
+            # the only way another till learns it -- and every derived "what is still owed" figure
+            # (`total - points - amount_paid + rounding`) needs it to agree with this till. NULL
+            # when nothing was rounded; a v54 receiver ignores the unknown key.
+            'rounding_amount': (sale_rounding if abs(sale_rounding) > 0 else None),
         })
 
         for line in resolved_lines:
@@ -9784,7 +9835,9 @@ def create_sale():
         # variable's own comment above), so `total` here would have counted
         # the customer's OWN points as cash the drawer received, failing
         # the Z-report by exactly the redeemed amount on every redemption.
-        net_received = min(paid, amount_due_after_points)
+        # MONEY-5: `effective_due` == amount_due_after_points unless the cash part was rounded, in
+        # which case the drawer keeps the ROUNDED coins (what really changed hands).
+        net_received = min(paid, effective_due)
         if split_settlement:
             # Split tender: ONE payments row per tender, each at the amount
             # RETAINED (cash minus change; card/mobile as charged). One row
@@ -9850,10 +9903,22 @@ def create_sale():
         else:
             voucher_for_gl = (net_received if (str(pm).strip().lower() == gl.TENDER_VOUCHER
                                                and net_received > _eps) else 0.0)
+        # MONEY-5 / #8: hand the books the SAME per-method rows the `payments` table just got, so
+        # a split cash+card sale debits 1010 Cash in Drawer and 1030 Card Clearing separately
+        # (the voucher part still lands in 2300 via tender_account). The single-tender sale is one
+        # row of its method; 'credit' (on account) is AR below, never a tender row.
+        if split_settlement:
+            tender_parts_for_gl = [(_m, float(_a)) for _m, _a in split_settlement['rows']
+                                   if float(_a) > _eps]
+        elif net_received > _eps:
+            tender_parts_for_gl = [(pm if pm != 'credit' else 'cash', net_received)]
+        else:
+            tender_parts_for_gl = []
         gl.post_sale(conn, cid, bid, sale_id, sale_number, currency,
                      net_received, ar_amount_for_gl, points_redeemed_amount,
                      tax, revenue_amount, business_date=gl_business_date,
-                     voucher_amount=voucher_for_gl)
+                     voucher_amount=voucher_for_gl, tender_parts=tender_parts_for_gl,
+                     rounding_amount=sale_rounding)
 
         # Schema v39 (cost basis for COGS): Dr Cost of Goods Sold / Cr
         # Inventory for the cost basis of what actually left the shelf on
@@ -9978,6 +10043,7 @@ def create_sale():
             # site's own comment).
             'change': change, 'total': total,
             'amount_paid': paid, 'balance_due': balance_due, 'warning': warning,
+            'rounding_amount': (sale_rounding if abs(sale_rounding) > 0 else None),   # MONEY-5
             # Loyalty redemption, wave 1 (schema v27) -- always present
             # (0/0 for the overwhelming majority of sales that never
             # redeem), matching 'oversold_past_recorded_stock' below's own
@@ -10914,7 +10980,7 @@ def create_return():
         # comment for the full defect.
         sale = cur.execute(
             "SELECT id, uid, branch_id, customer_id, total, amount_paid, payment_method, "
-            "points_redeemed_amount, tax_amount, points_earned "
+            "points_redeemed_amount, tax_amount, points_earned, rounding_amount "
             "FROM sales WHERE id=? AND company_id=?",
             (sale_id, cid)
         ).fetchone()
@@ -11010,6 +11076,9 @@ def create_return():
         # already claimed by earlier lines in THIS request per product_id and
         # subtract it from what remains returnable for later lines.
         claimed_this_request = {}
+        # MONEY-5 item 4: the money each line has been refunded so far WITHIN this request, keyed
+        # like `claimed_this_request` (two parts of one line in one payload must see each other).
+        claimed_value_this_request = {}
         for item in items:
             pid = item.get('product_id')
             try:
@@ -11083,7 +11152,16 @@ def create_return():
                     "WHERE r.sale_id=? AND ri.sale_item_id=? AND r.company_id=?",
                     (sale_id, sale_item_id, cid)
                 ).fetchone()[0]
-                claim_key = ('item', sale_item_id)
+                refunded_value_before = cur.execute(
+                    "SELECT COALESCE(SUM(ri.line_total),0) FROM return_items ri "
+                    "JOIN returns r ON ri.return_id = r.id "
+                    "WHERE r.sale_id=? AND ri.sale_item_id=? AND r.company_id=?",
+                    (sale_id, sale_item_id, cid)
+                ).fetchone()[0]
+                # ONE claim key per sale LINE, whichever identifier named it (verifier L6): a request
+                # naming the same line once by sale_item_id and once by product used to be counted
+                # under two different keys and refunded twice the quantity sold.
+                claim_key = ('item', sold['id'])
             else:
                 # `unit_cost` added, same reason as the sale_item_id branch
                 # immediately above.
@@ -11120,7 +11198,13 @@ def create_return():
                     "WHERE r.sale_id=? AND ri.product_id=? AND r.company_id=?",
                     (sale_id, pid, cid)
                 ).fetchone()[0]
-                claim_key = ('product', pid)
+                refunded_value_before = cur.execute(
+                    "SELECT COALESCE(SUM(ri.line_total),0) FROM return_items ri "
+                    "JOIN returns r ON ri.return_id = r.id "
+                    "WHERE r.sale_id=? AND ri.product_id=? AND r.company_id=?",
+                    (sale_id, pid, cid)
+                ).fetchone()[0]
+                claim_key = ('item', sold['id'])   # the same key the sale_item_id branch uses
 
             already_claimed = claimed_this_request.get(claim_key, 0.0)
             remaining = float(sold['quantity']) - float(already_returned or 0) - already_claimed
@@ -11135,11 +11219,35 @@ def create_return():
             calc = tax_engine.calculate_line(
                 float(sold['unit_price']), qty, float(sold['discount_pct'] or 0),
                 float(sold['tax_rate'] or 0), mode=mode, currency=currency)
+            # ── MONEY-5 item 4 -- A LINE RETURNED IN PARTS REFUNDS EXACTLY WHAT IT COST ────────
+            # Measured (UI-3a verifier, 33 of 156 fuzzed sales): each part used to be re-priced from
+            # the stored per-line % and rounded ON ITS OWN, so the parts of one line summed to 1-3
+            # fils LESS than the customer paid (an amount discount stores an odd % per line). Same
+            # idea as `returns.tax_refunded`: the part that brings the line to fully returned takes
+            # the REMAINDER -- what the line cost minus what earlier parts already refunded -- and a
+            # part that is not the last is capped at that remainder, so a rounded-up part can never
+            # over-refund. What the line cost is the sale's own pricing function over the WHOLE sold
+            # quantity: exactly what a one-piece return of the line has always refunded, so a line
+            # returned in one piece is unchanged.
+            _qtq = tax_engine.currency_quantum(currency)
+            _line_cost = Decimal(str(tax_engine.calculate_line(
+                float(sold['unit_price']), float(sold['quantity']), float(sold['discount_pct'] or 0),
+                float(sold['tax_rate'] or 0), mode=mode, currency=currency)['total']))
+            _value_before = (Decimal(str(refunded_value_before or 0))
+                             + claimed_value_this_request.get(claim_key, Decimal('0')))
+            _value_left = max(_line_cost - _value_before, Decimal('0'))
+            _completes_line = (float(already_returned or 0) + already_claimed + qty
+                               >= float(sold['quantity']) - 0.0001)
+            _part_value = Decimal(str(calc['total']))
+            _part_value = _value_left if _completes_line else min(_part_value, _value_left)
+            _part_value = _part_value.quantize(_qtq, rounding=ROUND_HALF_UP)
+            claimed_value_this_request[claim_key] = (
+                claimed_value_this_request.get(claim_key, Decimal('0')) + _part_value)
             resolved_items.append({
                 'product_id': pid, 'sale_item_id': sale_item_id, 'quantity': qty,
                 'unit_price': float(sold['unit_price']),
                 'discount_amount': calc['discount_amount'], 'tax_amount': calc['tax'],
-                'line_total': calc['total'],
+                'line_total': float(_part_value),
                 # Schema v39: the ORIGINAL SALE LINE'S cost-basis snapshot
                 # (`sold['unit_cost']`, just added to both SELECTs above),
                 # NEVER the product's `avg_cost`/`cost_price` as they stand
@@ -11154,7 +11262,7 @@ def create_return():
                 # free goods.
                 'unit_cost_snapshot': float(sold['unit_cost'] or 0),
             })
-            refund_total += Decimal(str(calc['total']))
+            refund_total += _part_value
 
         # Same currency-driven quantum as create_sale's identical sum-then-
         # quantize step above (see that comment) -- a hardcoded 2dp here
@@ -11275,8 +11383,13 @@ def create_return():
         # calculation is moot), so this is not a narrower version of the
         # change-refund bug the tender cap above exists to close -- it is a
         # different figure, doing a different job.
+        # MONEY-5: `+ rounding_amount` -- create_sale's own balance_due is measured against the
+        # ROUNDED amount due (effective_due), so a cash sale settled in coins never "became a debt".
+        # Without this term a named customer returning such a sale would be forgiven the fils as
+        # if they had been owed.
         original_balance_due = max(0.0, _money(
-            float(sale['total']) - float(sale['points_redeemed_amount'] or 0) - float(sale['amount_paid'] or 0),
+            float(sale['total']) - float(sale['points_redeemed_amount'] or 0) - float(sale['amount_paid'] or 0)
+            + float(sale['rounding_amount'] or 0),
             currency))
         balance_due_remaining = max(0.0, original_balance_due - float(_prior[1]))
         # v44: DERIVED from the shop's records, not read from the per-computer
@@ -11571,6 +11684,70 @@ def create_return():
         elif _legs_mode or _needs_method:
             refund_method = refund_legs[0]['method']
 
+        # ── MONEY-5 / review #3: RE-ROUND THE CASH LEG -- ON THE RUNNING TOTAL ──────────────────
+        # The refund of the GOODS stays exact (`refund`, the legs' sum before this block) -- the
+        # customer is owed what the goods were worth. Only the CASH that physically leaves the
+        # drawer is in coins, so the cash leg is rounded by the same shop rule a cash sale uses and
+        # the difference (`return_rounding`, signed: cash handed back minus what the goods were
+        # worth) is booked to 4950 by post_return.
+        #
+        # THE ROUNDING IS ON THE CUMULATIVE CASH OF THE SALE, NOT PER RETURN. Rounding each return
+        # on its own let a customer return 1 unit at a time and be paid one whole coin per return:
+        # measured (verifier H1) 50 x 0.010 sold for 0.500 cash, 'up' to 0.050, 10 single-unit
+        # returns (goods worth 0.100) had paid ALL 0.500 back. So this return's cash is
+        #     round(exact cash value of every return of this sale so far, INCLUDING this one)
+        #       - cash already handed back for the sale,
+        # held to [0, cash the sale took]. A piece-by-piece return is therefore never ahead of the
+        # goods by more than one coin interval, and once everything is back the cash handed back is
+        # exactly what the sale took, so 4950 nets the sale's own rounding to zero for ANY rule.
+        # `returns.rounding_amount` (this block's `return_rounding`, stored below) is what lets a
+        # later return recover the EXACT cash value of the earlier ones: exact = leg - rounding.
+        # A card / mobile / transfer leg is never rounded. Off ('0') changes nothing.
+        return_rounding = 0.0
+        _rc_interval, _rc_rule = cash_rounding_engine.config(_s)
+        if not _client_knows_cash_rounding(data):
+            _rc_interval = Decimal('0')       # M4: same gate as create_sale -- see its comment
+        if _rc_interval > 0 and not _needs_method:
+            _cash_taken = next((Decimal(str(a)) for m, a in _sale_paid if m == 'cash'), None)
+            _cash_back_before = Decimal(str(_already_by_method.get('cash') or 0))
+            _prev_round = Decimal(str(cur.execute(
+                "SELECT COALESCE(SUM(COALESCE(r.rounding_amount,0)),0) FROM returns r "
+                "WHERE r.sale_id=? AND r.company_id=? AND r.status='completed'",
+                (sale_id, cid)).fetchone()[0] or 0))
+            # Floats come back from SQLite: 0.14 + 0.01 must be 0.15 to the fil, or an 'up' rule
+            # would read 0.15000000000000002 as just past a coin and hand back one more.
+            _exact_before = (_cash_back_before - _prev_round).quantize(_tq, rounding=ROUND_HALF_UP)
+            # The goods this return is worth but the settlement could not pay: the sale took LESS
+            # cash than its total (it was rounded down), so the pool `tender_available` is a few fils
+            # short of the goods. That gap is the sale's own rounding coming back, not a debt and not
+            # a loss -- it is added to the exact cash value (so the cash comes out the same coin) and
+            # booked to 4950 with the rest, so a full return nets the sale's rounding to ZERO.
+            # Bounded by the rounding of this sale that earlier returns have not yet reversed.
+            _sale_round = Decimal(str(sale['rounding_amount'] or 0))
+            _short_allowed = max(_prev_round - _sale_round, Decimal('0'))
+            _unsettled = max(Decimal(str(_refund_to_settle)) - Decimal(str(tender_refund))
+                             - Decimal(str(ar_forgiven + store_credit)), Decimal('0'))
+            _short = min(_unsettled, _short_allowed) if _unsettled > Decimal(str(_eps)) else Decimal('0')
+            _cash_change = Decimal('0')
+            for _lg in refund_legs:
+                if str(_lg['method']).strip().lower() != 'cash' or _cash_taken is None:
+                    continue
+                _leg_amt = Decimal(str(_lg['amount'])).quantize(_tq, rounding=ROUND_HALF_UP)
+                _exact = _leg_amt + _short
+                if _exact <= Decimal(str(_eps)):
+                    continue
+                _target = cash_rounding_engine.round_cash(
+                    _exact_before + _exact, _rc_interval, _rc_rule, _tq)
+                _rounded = min(_target, _cash_taken) - _cash_back_before
+                _rounded = max(_rounded, Decimal('0')).quantize(_tq, rounding=ROUND_HALF_UP)
+                if _rounded != _leg_amt:
+                    _cash_change += _rounded - _leg_amt
+                    _lg['amount'] = float(_rounded)
+                return_rounding += float(_rounded - _exact)
+                _short = Decimal('0')
+            if abs(_cash_change) > 0:
+                tender_refund = float(Decimal(str(tender_refund)) + _cash_change)
+
         if data.get('dry_run'):
             conn.rollback(); conn.close()
             return jsonify({'status': 'success', 'data': {
@@ -11627,13 +11804,13 @@ def create_return():
                                  tender_refund_amount,ar_forgiven_amount,store_credit_amount,
                                  status,idempotency_key,created_at,
                                  session_id,uid,actor_user_uid,terminal_id,created_at_utc,
-                                 tax_refunded)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?)
+                                 tax_refunded, rounding_amount)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?,?)
         """, (cid, ret_num, sale_id, bid, _uid(),
               data.get('reason','Customer return'), refund_method, refund,
               tender_refund, ar_forgiven, store_credit, idem, now_local,
               cash_session_id, ret_uid, actor, terminal, utc_now,
-              return_tax_refunded))
+              return_tax_refunded, (return_rounding if abs(return_rounding) > 0 else None)))
         ret_id = cur.lastrowid
 
         # MONEY-3 M1: the legs, written in the same transaction and shipped INSIDE the return's
@@ -11670,6 +11847,7 @@ def create_return():
             # unlike cash_session_id -- the receiving device's tax report must
             # read the same figure this device's books did.
             'tax_refunded': return_tax_refunded,
+            'rounding_amount': (return_rounding if abs(return_rounding) > 0 else None),   # MONEY-5
             # MONEY-3 M1: the refund legs (see the INSERT above). A sender without this key
             # (older till) is read by the receiver as ONE legacy leg of `refund_method`.
             'legs': _leg_payload,
@@ -11966,7 +12144,8 @@ def create_return():
                         tender_refund, ar_forgiven + store_credit,
                         tax_refunded=return_tax_refunded,
                         points_restored_value=float(_points_restored_value),
-                        tender_legs=refund_legs, business_date=gl_business_date)
+                        tender_legs=refund_legs, business_date=gl_business_date,
+                        rounding_amount=return_rounding)
 
         # Schema v39 (cost basis for COGS): the MIRROR of create_sale's own
         # COGS posting -- Cr Cost of Goods Sold / Dr Inventory for the cost
@@ -13599,7 +13778,7 @@ def create_expense():
              actor or str(_uid()), _now()))
         gl.post_expense(conn, cid, bid, euid, amount, account, currency,
                         business_date=business_date, reference=f'expense {euid[:8]}',
-                        memo=memo or None)
+                        memo=memo or None, paid_via=paid_via)
         _audit(conn, 'EXPENSE_RECORDED', 'expense', euid, f'{account} amount={amount} via={paid_via}')
         conn.commit()
         row = conn.execute("SELECT * FROM expenses WHERE uid=? AND company_id=?", (euid, cid)).fetchone()
@@ -15192,7 +15371,7 @@ def report_whatsapp():
             for p in parties:
                 oldest = conn.execute(
                     "SELECT MIN(created_at) FROM sales WHERE company_id=? AND customer_id=? "
-                    "AND (total-amount_paid)>?",
+                    "AND (total-amount_paid+COALESCE(rounding_amount,0))>?",   # MONEY-5: rounding settles fils
                     (cid, p['id'], _eps),
                 ).fetchone()[0]
                 days = 0
@@ -15689,6 +15868,17 @@ def _money_for(currency=None):
 #: `currency=None` reproduces the historical 0.005 byte for byte, the same
 #: contract `_money` above carries and for the same reason: an unaudited
 #: caller keeps exactly the behaviour it had.
+def _client_knows_cash_rounding(data) -> bool:
+    """True when the request says its client displays and tenders ROUNDED cash
+    (`cash_rounding_ack: true`, sent by the desktop till). Server-side rounding is only safe for such
+    a client: one that does not know (Android today) would charge a total different from the one it
+    showed. Anything but an explicit true/1/'true'/'1' is False."""
+    v = (data or {}).get('cash_rounding_ack')
+    if isinstance(v, str):
+        return v.strip().lower() in ('1', 'true', 'yes')
+    return v is True or v == 1
+
+
 def _money_epsilon(currency=None):
     try:
         quant = tax_engine.currency_quantum(currency) if currency else Decimal('0.01')
@@ -15892,6 +16082,15 @@ _DEFAULT_SETTINGS = {
     # setting existed, so an install that never touches it earns exactly as it did.
     # Syncs shop-wide like every retail_setting (not device-local).
     'loyalty_earn_spend': '10',
+    # MONEY-5 (review #3): cash rounding. '0' = OFF -- the default, so an install that never opens
+    # the setting keeps every figure exactly as it was. Valid intervals / rules are owned by
+    # core/retail/cash_rounding.py; a stored value outside them reads as OFF, never a guess.
+    'cash_rounding_interval': cash_rounding_engine.DEFAULT_INTERVAL,
+    'cash_rounding_rule': cash_rounding_engine.DEFAULT_RULE,
+    # MONEY-5 (review #9 part 1): '1' lets create_sale sell past the recorded stock on a device that
+    # is NOT behind on sync -- the same path `behind_on_sync` takes (allow, flag the sale oversold,
+    # write the stock exception). '0' = the historic hard refusal. Owner-only (credit_settings_set).
+    'allow_negative_stock': '0',
     # 'after_discount' (default) | 'before_discount' -- see core/retail/pricing.py,
     # the single source of truth for what these two modes mean and compute.
     'tax_calculation_mode': tax_engine.DEFAULT_MODE,
@@ -16103,6 +16302,13 @@ def _ensure_credit_schema(conn):
     # no-op, same "whichever of the two sites runs first" contract this
     # function's own idx_payments_party comment above already documents.
     addcol('sales', 'points_redeemed_amount', "REAL DEFAULT 0")
+    # MONEY-5 (schema v55): the same lazy safety net for the two v55 columns, for the same reason
+    # as the one above -- a database stamped 55 by an earlier build of this branch (or a table this
+    # file creates itself, `payment_methods`) never re-enters the migration chain. Idempotent with
+    # database/schema.py's _migrate_add_money5_tender_columns: whichever runs first wins.
+    addcol('sales', 'rounding_amount', "REAL")
+    addcol('returns', 'rounding_amount', "REAL")
+    addcol('payment_methods', 'gl_account_code', "TEXT")
     # schema v29 (ROADMAP.md's "CLAIMED: retail v29" entry,
     # database/schema.py's _migrate_add_loyalty_return_id). Same lazy-guard
     # shape as `points_redeemed_amount` immediately above -- a SECOND,
@@ -16209,7 +16415,7 @@ def _sale_tender_lines(conn, cid, sale_id):
     never has to special-case 'split' to read it.
     """
     srow = conn.execute(
-        "SELECT total, amount_paid, change_amount, points_redeemed_amount FROM sales "
+        "SELECT total, amount_paid, change_amount, points_redeemed_amount, rounding_amount FROM sales "
         "WHERE id=? AND company_id=?", (sale_id, cid)).fetchone()
     if not srow:
         return []
@@ -16224,8 +16430,10 @@ def _sale_tender_lines(conn, cid, sale_id):
         tendered = amt + change if r['method'] == 'cash' else amt
         out.append({'method': r['method'], 'amount': _money(amt, currency),
                     'tendered': _money(tendered, currency)})
+    # MONEY-5: + rounding (negative when the shop took fewer fils than the total): the rounded
+    # fils are a concession, not a debt on account.
     on_acct = _money(float(srow['total'] or 0) - float(srow['points_redeemed_amount'] or 0)
-                     - float(srow['amount_paid'] or 0), currency)
+                     - float(srow['amount_paid'] or 0) + float(srow['rounding_amount'] or 0), currency)
     if on_acct > _money_epsilon(currency):
         out.append({'method': 'credit', 'amount': on_acct, 'tendered': on_acct})
     return out
@@ -16543,6 +16751,37 @@ def credit_settings_set():
         if _old_lim != data['cashier_discount_limit_pct']:
             _audit(conn, 'CASHIER_DISCOUNT_LIMIT_CHANGED', 'retail_setting', 'cashier_discount_limit_pct',
                    f"{_old_lim}% -> {data['cashier_discount_limit_pct']}%")
+    # MONEY-5: cash rounding + negative stock, validated BEFORE any write (all-or-nothing, like the
+    # others). The interval is stored in ONE canonical spelling ('0.05' -> '0.050') so the settings
+    # screen's <select> and the sync of the setting (last-writer-wins on the text) cannot disagree
+    # about the same coin; an unknown interval / rule is refused, not coerced to off.
+    if 'cash_rounding_interval' in data:
+        _ci = cash_rounding_engine.canonical_interval(data['cash_rounding_interval'])
+        if _ci is None:
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'CASH_ROUNDING_INVALID',
+                            'message': 'Round cash to one of: ' + ', '.join(cash_rounding_engine.VALID_INTERVALS)
+                                       + ' (0 turns rounding off).'}), 400
+        data['cash_rounding_interval'] = _ci
+    if 'cash_rounding_rule' in data:
+        _cr = str(data['cash_rounding_rule'] or '').strip().lower()
+        if _cr not in cash_rounding_engine.VALID_RULES:
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'CASH_ROUNDING_INVALID',
+                            'message': 'Rounding direction must be one of: '
+                                       + ', '.join(cash_rounding_engine.VALID_RULES) + '.'}), 400
+        data['cash_rounding_rule'] = _cr
+    if 'allow_negative_stock' in data:
+        _an = str(data['allow_negative_stock']).strip().lower()
+        if _an not in ('0', '1', 'true', 'false'):
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'ALLOW_NEGATIVE_STOCK_INVALID',
+                            'message': 'allow_negative_stock must be 0 or 1.'}), 400
+        data['allow_negative_stock'] = '1' if _an in ('1', 'true') else '0'
+        _old_an = '1' if str(_settings(conn, cid).get('allow_negative_stock')) == '1' else '0'
+        if _old_an != data['allow_negative_stock']:
+            _audit(conn, 'ALLOW_NEGATIVE_STOCK_CHANGED', 'retail_setting', 'allow_negative_stock',
+                   f"{_old_an} -> {data['allow_negative_stock']}")
     # LOYALTY-EARN: validated before any write, like the two above; stored as a
     # canonical plain-decimal string ('5', '2.5', '0') so it round-trips.
     if 'loyalty_earn_spend' in data:
@@ -16583,7 +16822,8 @@ def credit_settings_set():
                             'message': f'The till holds at most {POS_FAVOURITES_MAX} favourites. Remove one first.'}), 400
         data['pos_favourites'] = json.dumps(_favs, separators=(',', ':'))
     for k in ('base_currency', 'default_credit_mode', 'default_credit_limit', 'enforce_credit_limit',
-              'loyalty_point_value', 'cashier_discount_limit_pct', 'loyalty_earn_spend', 'pos_favourites'):
+              'loyalty_point_value', 'cashier_discount_limit_pct', 'loyalty_earn_spend', 'pos_favourites',
+              'cash_rounding_interval', 'cash_rounding_rule', 'allow_negative_stock'):
         if k in data:
             conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
                          "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
@@ -17341,6 +17581,7 @@ def printer_receipt_payload():
             'total': sale['total'],
             'amount_paid': sale['amount_paid'],
             'change': sale['change_amount'],
+            'rounding_amount': sale['rounding_amount'] if 'rounding_amount' in sale.keys() else None,   # MONEY-5
         }
 
         # `shop`/`currency` -- reused verbatim from printer_test's own
@@ -20224,7 +20465,7 @@ def branding_logo_delete():
 @mt_require_subsystem('retail')
 def payment_methods_list():
     cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn); _seed_methods(conn, cid); conn.commit()
-    rows = conn.execute("SELECT id,name,type,is_active,sort_order FROM payment_methods "
+    rows = conn.execute("SELECT id,name,type,is_active,sort_order,gl_account_code FROM payment_methods "
                         "WHERE company_id=? AND is_active=1 ORDER BY sort_order,name", (cid,)).fetchall()
     conn.close()
     return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
@@ -20243,9 +20484,17 @@ def payment_methods_add():
     cid = _cid(); data = request.json or {}
     if not data.get('name'):
         return jsonify({'status': 'error', 'message': 'Method name required'}), 400
+    # MONEY-5 / #8: an OPTIONAL per-shop override of which GL account this method lands in. Only
+    # the cash-like accounts are allowed (the list the books treat as "cash and bank"): a method
+    # pointed at Sales or Receivables would let a till credit revenue by naming a code.
+    gl_code = str(data.get('gl_account_code') or '').strip() or None
+    if gl_code is not None and gl_code not in gl.CASH_LIKE_CODES:
+        return jsonify({'status': 'error', 'code': 'INVALID_GL_ACCOUNT',
+                        'message': f'gl_account_code must be one of {list(gl.CASH_LIKE_CODES)}.'}), 400
     conn = get_retail_conn(); _ensure_credit_schema(conn)
-    conn.execute("INSERT INTO payment_methods (company_id,name,type,is_active,sort_order) VALUES (?,?,?,1,?)",
-                 (cid, data['name'], data.get('type', 'other'), int(data.get('sort_order', 99))))
+    conn.execute("INSERT INTO payment_methods (company_id,name,type,is_active,sort_order,gl_account_code) "
+                 "VALUES (?,?,?,1,?,?)",
+                 (cid, data['name'], data.get('type', 'other'), int(data.get('sort_order', 99)), gl_code))
     conn.commit(); conn.close()
     return jsonify({'status': 'success'})
 
@@ -20603,9 +20852,9 @@ def _statement_events(conn, cid, cust_id, _eps):
     # epsilon sweep moved every such gate at once.
     charges = conn.execute(
         "SELECT sale_number AS ref, created_at, created_at_utc, customer_id AS cust, "
-        "(total - COALESCE(points_redeemed_amount,0) - amount_paid) AS amount, 'charge' AS kind, 1 AS sign "
+        "(total - COALESCE(points_redeemed_amount,0) - amount_paid + COALESCE(rounding_amount,0)) AS amount, 'charge' AS kind, 1 AS sign "
         "FROM sales WHERE company_id=? AND customer_id " + scope + " "
-        "AND (total - COALESCE(points_redeemed_amount,0) - amount_paid) > ? ORDER BY id",
+        "AND (total - COALESCE(points_redeemed_amount,0) - amount_paid + COALESCE(rounding_amount,0)) > ? ORDER BY id",
         (cid, *scope_params, _eps)).fetchall()
     # Aseel-parity wave A-PAR (schema v32) FORCED FIX, not a new feature: a
     # cheque bounce writes the OPPOSITE `direction` on purpose (see
@@ -20961,7 +21210,8 @@ def customer_payment(cust_id):
         # terminal or a branch), so branch_id is None -- matches
         # gl_journals.branch_id's own nullable design.
         gl.post_customer_payment(conn, cid, None, ref, currency, amt, source_uid=pay_uid,
-                                 business_date=_gl_business_date(conn, cid))
+                                 business_date=_gl_business_date(conn, cid),
+                                 method=data.get('method', 'cash'))
         _audit(conn, 'CUSTOMER_PAYMENT', 'customer', cust_id, f'{ref} amount={amt}')
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -21320,7 +21570,7 @@ def supplier_payment(sid):
         # customer_payment's identical comment just above -- same
         # reasoning, no branch context on this route.
         gl.post_supplier_payment(conn, cid, None, ref, currency, amt, source_uid=pay_uid,
-                                 business_date=_gl_business_date(conn, cid))
+                                 business_date=_gl_business_date(conn, cid), method=method)
         _audit(conn, 'SUPPLIER_PAYMENT', 'supplier', sid, f'{ref} amount={amt}')
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -21421,7 +21671,7 @@ def pay_purchase_order(po_id):
             # the payment row are findable from each other by reference.
             gl.post_po_prepayment(conn, cid, po['branch_id'], po_id, bool(po['supplier_id']),
                                   amt, pay_uid, currency, reference=ref,
-                                  business_date=_gl_business_date(conn, cid))
+                                  business_date=_gl_business_date(conn, cid), method=po_method)
         elif po['supplier_id']:
             # v44: re-derived (the instalment is a 'po' payment row, which
             # the supplier formula counts), not moved by -amt.
@@ -21437,7 +21687,8 @@ def pay_purchase_order(po_id):
             gl.post_supplier_payment(conn, cid, None, ref, currency, amt,
                                       source_type='po_payment', source_id=po_id,
                                       source_uid=pay_uid,
-                                      business_date=_gl_business_date(conn, cid))
+                                      business_date=_gl_business_date(conn, cid),
+                                      method=po_method)
         _audit(conn, 'PO_PAYMENT', 'purchase_order', po_id, f"{ref} amount={amt}")
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -23278,7 +23529,8 @@ def _reverse_payment_journal(conn, cid, payment):
         cash = conn.execute(
             "SELECT COALESCE(SUM(l.debit),0) AS d, COALESCE(SUM(l.credit),0) AS c "
             "FROM gl_journal_lines l JOIN gl_accounts a ON a.id=l.account_id "
-            "WHERE l.journal_id=? AND a.code=?", (cand['id'], gl.ACCOUNT_CASH)).fetchone()
+            "WHERE l.journal_id=? AND a.code IN (?,?,?,?,?)",
+            (cand['id'], *gl.CASH_LIKE_CODES)).fetchone()
         if _money(cash['d'] or cash['c'], currency) == want:
             return gl.reverse_journal(conn, cid, cand['id'],
                                       memo=f"Void of payment {ref}",

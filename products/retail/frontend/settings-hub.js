@@ -144,7 +144,8 @@
     taxRate: { section: 'tax', fields: ['tax-default-rate'], save: () => R()._saveDefaultTaxRate() },
     credit: {
       section: 'credit',
-      fields: ['credit-mode', 'credit-limit', 'credit-enforce', 'credit-loyalty', 'credit-loyalty-earn', 'credit-cashier-disc'],
+      fields: ['credit-mode', 'credit-limit', 'credit-enforce', 'credit-loyalty', 'credit-loyalty-earn', 'credit-cashier-disc',
+        'cash-rounding-interval', 'cash-rounding-rule', 'allow-negative-stock'],
       save: () => saveCredit(),
     },
     deviceBranch: { section: 'tills', fields: ['device-branch-select'], save: () => R()._saveDeviceBranch() },
@@ -476,6 +477,11 @@
         loyalty_point_value: String(loyalty),
         loyalty_earn_spend: String(earnSpend),
         cashier_discount_limit_pct: String(cashierDisc),
+        // MONEY-5: cash rounding + selling past recorded stock. The server validates both and
+        // stores one canonical spelling; the selects can only offer valid values.
+        cash_rounding_interval: $('cash-rounding-interval').value,
+        cash_rounding_rule: $('cash-rounding-rule').value,
+        allow_negative_stock: $('allow-negative-stock').value === '1' ? '1' : '0',
       });
       if (!resp || resp.status !== 'success') {
         toast((resp && resp.message) || t('Could not save the credit settings.'), 'error');
@@ -509,6 +515,10 @@
       // server that predates the setting (key absent) falls back to the old 10.
       $('credit-loyalty-earn').value = d.loyalty_earn_spend != null && d.loyalty_earn_spend !== '' ? d.loyalty_earn_spend : '10';
       $('credit-cashier-disc').value = d.cashier_discount_limit_pct != null && Number(d.cashier_discount_limit_pct) > 0 ? d.cashier_discount_limit_pct : '';
+      // MONEY-5: a server that predates these keys (absent) reads as "off", the same as the default.
+      $('cash-rounding-interval').value = ['0', '0.005', '0.010', '0.050', '0.100'].includes(d.cash_rounding_interval) ? d.cash_rounding_interval : '0';
+      $('cash-rounding-rule').value = ['nearest', 'down', 'up'].includes(d.cash_rounding_rule) ? d.cash_rounding_rule : 'nearest';
+      $('allow-negative-stock').value = d.allow_negative_stock === '1' ? '1' : '0';
     } catch (e) { console.error(e); }
     syncCreditLimitVisibility();
     rebaseline('credit');
@@ -1865,6 +1875,32 @@
         <p class="sh-card-lead">${esc(t('The most a cashier can take off a sale, in percent. Managers and the owner are not limited. 0 means cashiers cannot give discounts.'))}</p>
         <div class="ret-field" style="margin:0"><label for="credit-cashier-disc">${esc(t('Most a cashier can discount (%)'))}</label>
           <input type="number" id="credit-cashier-disc" min="0" max="100" step="0.5" dir="ltr" /></div>
+      </div>
+      <div class="sub-chart-card" id="cash-handling-card">
+        <h3 class="sh-card-title">${esc(t('Cash and stock'))}</h3>
+        <p class="sh-card-lead">${esc(t('Round the cash a customer pays to the smallest coin you really have. Cards are never rounded. The sale and its tax stay exact; the few fils difference is kept in your books as cash rounding.'))}</p>
+        <div class="sh-row">
+          <div class="ret-field" style="margin:0"><label for="cash-rounding-interval">${esc(t('Round cash to'))}</label>
+            <select id="cash-rounding-interval">
+              <option value="0">${esc(t('Do not round'))}</option>
+              <option value="0.005">0.005</option>
+              <option value="0.010">0.010</option>
+              <option value="0.050">0.050</option>
+              <option value="0.100">0.100</option>
+            </select></div>
+          <div class="ret-field" style="margin:0"><label for="cash-rounding-rule">${esc(t('Rounding direction'))}</label>
+            <select id="cash-rounding-rule">
+              <option value="nearest">${esc(t('To the nearest'))}</option>
+              <option value="down">${esc(t('Always down'))}</option>
+              <option value="up">${esc(t('Always up'))}</option>
+            </select></div>
+        </div>
+        <p class="sh-card-lead" style="margin-top:12px">${esc(t('When goods are on the shelf but not yet entered, the till can still sell them. The sale is flagged for you to fix the stock.'))}</p>
+        <div class="ret-field" style="margin:0"><label for="allow-negative-stock">${esc(t('Selling more than the recorded stock'))}</label>
+          <select id="allow-negative-stock">
+            <option value="0">${esc(t('Not allowed'))}</option>
+            <option value="1">${esc(t('Allowed, and flagged'))}</option>
+          </select></div>
       </div>`;
   }
 
