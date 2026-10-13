@@ -2878,7 +2878,7 @@ button.sub-nav-group-label .sub-nav-group-label-stack .sub-nav-status { margin-i
    override, so it composes with the phone rail without conflict (a phone
    never shows this class' effects -- the sidebar itself is display:none
    there). Logical `inline-size`, not `width`, per retail_design_rtl_test.js. */
-.sub-sidebar.sub-sidebar-rail { inline-size: 64px; }
+.sub-sidebar.sub-sidebar-rail { inline-size: 96px; }
 /* Rail brand row: the 18px side padding + a 40px mark + a 32px button cannot
    share 64px, so stack them: mark, then the expand button, both centred. */
 .sub-sidebar.sub-sidebar-rail .sub-sidebar-brand {
@@ -2892,8 +2892,7 @@ button.sub-nav-group-label .sub-nav-group-label-stack .sub-nav-status { margin-i
   background: var(--border-hairline);
 }
 .sub-sidebar.sub-sidebar-rail .sub-brand-text,
-.sub-sidebar.sub-sidebar-rail .sub-nav-label,
-.sub-sidebar.sub-sidebar-rail .sub-nav-text,
+.sub-sidebar.sub-sidebar-rail .sub-nav-hint,
 .sub-sidebar.sub-sidebar-rail .sub-nav-group-label-text,
 .sub-sidebar.sub-sidebar-rail .sub-nav-group-chevron,
 .sub-sidebar.sub-sidebar-rail .sub-nav-status,
@@ -2904,6 +2903,28 @@ button.sub-nav-group-label .sub-nav-group-label-stack .sub-nav-status { margin-i
 .sub-sidebar.sub-sidebar-rail button.sub-nav-group-label {
   justify-content: center;
 }
+/* UI-3b item 3: the rail shows a SHORT LABEL under each icon (10.5px, at most two lines,
+   centred). 64px of bare icons left a touch user guessing what each glyph was and a
+   tooltip (`title`) never shows on touch. 96px is the width the phone tab bar's own
+   label-under-icon cells already prove readable. Width only -- the rail's HEIGHT is its
+   own scroll box (.sub-nav is overflow-y:auto), so the till's Charge button cannot be
+   pushed down by taller rows. The status dots of Connected services stay hidden: a word
+   under a label would be a third line. */
+.sub-sidebar.sub-sidebar-rail .sub-nav-item {
+  flex-direction: column; gap: 2px; padding: 6px 4px; min-block-size: 46px;
+  border-inline-start-width: 0;
+}
+/* The list's own 10px side padding and its stable scrollbar gutter (8px) left a long word like "Quotations"
+   only ~68px: it broke mid-word ("Quotation / s") in the first screenshot. On the rail the list gets 4px and no
+   reserved gutter, so a label has ~80px and breaks only between words. */
+.sub-sidebar.sub-sidebar-rail .sub-nav { padding-inline: 4px; scrollbar-gutter: auto; }
+.sub-sidebar.sub-sidebar-rail .sub-nav-text { display: block; min-inline-size: 0; text-align: center; }
+.sub-sidebar.sub-sidebar-rail .sub-nav-item .sub-nav-label {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+  overflow: hidden; max-inline-size: 100%; text-align: center; overflow-wrap: break-word;
+  font-size: 10.5px; line-height: 1.15; font-weight: 600; color: var(--text-secondary);
+}
+.sub-sidebar.sub-sidebar-rail .sub-nav-item.active .sub-nav-label { color: var(--text-primary); }
 /* A closed group's items are already `hidden` by _toggleSidebarGroup's own
    attribute; the rail forces every group OPEN (all icons visible, no
    accordion) since there is no room for a group header's text to explain

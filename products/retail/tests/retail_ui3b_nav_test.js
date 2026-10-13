@@ -406,11 +406,38 @@ function testHeaderMutationsAreCaught() {
 
 //#END-ITEM 4
 
+//#BEGIN-ITEM 3
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// 3 (item 3) -- CSS: the till rail shows a label under every icon
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+function testCssRail(cssSrc = CSS_SRC) {
+  const css = cssSrc.replace(/\r\n/g, '\n');
+  assert.ok(/\.sub-sidebar\.sub-sidebar-rail\s*\{\s*inline-size:\s*96px;\s*\}/.test(css), 'rail must be 96px wide');
+  // the hide-list must NOT contain the label any more
+  const hide = /\.sub-sidebar\.sub-sidebar-rail \.sub-brand-text,[\s\S]*?\{\s*display:\s*none;/.exec(css);
+  assert.ok(hide && !/sub-nav-label/.test(hide[0]), 'rail still hides .sub-nav-label');
+  const lab = /\.sub-sidebar\.sub-sidebar-rail \.sub-nav-item \.sub-nav-label\s*\{([^}]*)\}/.exec(css);
+  assert.ok(lab && /font-size:\s*10\.5px/.test(lab[1]) && /display:\s*-webkit-box/.test(lab[1]), 'rail labels: 10.5px, shown');
+  assert.ok(/overflow-wrap:\s*break-word/.test(lab[1]) && !/overflow-wrap:\s*anywhere/.test(lab[1]), 'a long label must break between words, not inside them ("Quotation / s")');
+  assert.ok(/\.sub-sidebar\.sub-sidebar-rail \.sub-nav \{[^}]*padding-inline:\s*4px/.test(css), 'the rail list must give labels their room (4px side padding)');
+  console.log('PASS: css rail -- 96px rail, 10.5px labels shown, breaking between words');
+}
+
+function testCssRailMutationsAreCaught() {
+  mustFail('rail back to 64px => css rail test fails', () => testCssRail(mutate(CSS_SRC, ".sub-sidebar.sub-sidebar-rail { inline-size: 96px; }", ".sub-sidebar.sub-sidebar-rail { inline-size: 64px; }")));
+  mustFail('rail label hidden again => css rail test fails', () =>
+    testCssRail(mutate(CSS_SRC, ".sub-sidebar.sub-sidebar-rail .sub-brand-text,\n.sub-sidebar.sub-sidebar-rail .sub-nav-hint,", ".sub-sidebar.sub-sidebar-rail .sub-brand-text,\n.sub-sidebar.sub-sidebar-rail .sub-nav-label,\n.sub-sidebar.sub-sidebar-rail .sub-nav-hint,")));
+  mustFail('labels break inside words => css rail test fails', () =>
+    testCssRail(mutate(CSS_SRC, "max-inline-size: 100%; text-align: center; overflow-wrap: break-word;", "max-inline-size: 100%; text-align: center; overflow-wrap: anywhere;")));
+}
+//#END-ITEM 3
+
 const CASES = [
   testReachabilityTableBeforeVsAfter, testReachabilityTableMutationsAreCaught,   //#ITEM 1
   testTabBar, testTabBarMutationsAreCaught,                                      //#ITEM 1
   testRememberedSection, testRememberedSectionMutationsAreCaught,                //#ITEM 2
   testHeader, testHeaderMutationsAreCaught,                                      //#ITEM 4
+  testCssRail, testCssRailMutationsAreCaught,                                    //#ITEM 3
 ];
 let failed = 0;
 for (const fn of CASES) {
