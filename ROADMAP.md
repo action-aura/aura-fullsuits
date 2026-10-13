@@ -8039,3 +8039,7 @@ Branch `feat/android-2a` (off 75ffaac3). Android only; no backend change, no `RE
 ## 2026-10-12 — retail schema v53 CLAIMED (MONEY-4c: a customer's credit follows the shop default unless set)
 
 RETAIL_SCHEMA_VERSION 52 -> 53. Nobody else bumps it. New stored value `customers.credit_mode = 'inherit'` = follow `default_credit_mode`; the v53 step converts legacy `'none'` to `'inherit'`. Branch `feat/money-4c`.
+
+## 2026-10-13 — retail schema v54 CLAIMED (UI-3a: amount discounts, price override, manager approval)
+
+RETAIL_SCHEMA_VERSION 53 -> 54. Nobody else bumps it. Shape-gated, idempotent additive columns only: `sale_items.list_price REAL NULL` (snapshot of the product's sell_price at sale time, so "sold below list" is reportable), `sales.discount_reason TEXT NULL`, `sales.discount_approved_by TEXT NULL` (approver's users.uid). Branch `feat/ui-3a` (off 4db70a0b, rc.11). Scope: `create_sale` accepts `cart_discount_amount`, `cart_target_total`, per-line `unit_price_override` and an `approval` {approver, pin}; the sale sync payload carries the three new fields. Android is NOT in this wave.
