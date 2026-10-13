@@ -8328,3 +8328,7 @@ Single-writer resource: `RETAIL_SCHEMA_VERSION`. v55 is MONEY-5's (unmerged). On
 9. Install is at the NEXT start; the launcher's supervised restart is requested after staging, a dev run needs a manual restart.
 
 **What Phase 3 needs:** Owner revision B (mailbox, encrypted chunks) and the same `request_and_stage`/`installer` on top of it; Android requester side (Kotlin builds the Owner calls; the staged-swap route); caps: advertise `bootstrap_v1` only when the Owner path exists; make Owner honour and echo `include_own`; Owner `fast_forward_to` for the registry stream; the desktop pinned hub transport if desktops should join hubs. The strict xfail's `_join_bootstrap` stub is still the Phase 3 replacement point.
+
+
+## 2026-10-13 — Owner Alembic revision after d3b8f1a7c4e2 CLAIMED (SYNC-BOOT Phase 3: bootstrap mailbox)
+Single-writer resource: the Owner Alembic chain head. `alembic heads` was `d3b8f1a7c4e2` when this was claimed (verified on feat/sync-boot-p3 off 350db44d). Revision B (SYNC-BOOT Phase 3) creates `owner_sync_bootstrap_requests` (the bootstrap mailbox: request/claim/ready/delivered lifecycle, one open request per (installation, stream)). Blob bytes live on a filesystem directory (`OWNER_SYNC_BOOTSTRAP_DIR`), not in the database. Any other Owner revision must chain after it. Retail schema is NOT touched in Phase 3 (v56 is Phase 2's).
