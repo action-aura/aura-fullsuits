@@ -1,6 +1,8 @@
 package com.actionaura.retail.net
 
 import com.google.gson.JsonArray
+import com.actionaura.retail.ui.pos.CartLine
+import com.actionaura.retail.ui.pos.ModifierPick
 import com.google.gson.JsonObject
 
 /**
@@ -33,6 +35,15 @@ data class HeldLine(
     val discount_pct: Double = 0.0,
     val unit_price: Double = 0.0,
     val line_total: Double = 0.0,
+    // ANDROID-3: the rest of the desktop's cart line. The server stores `items` VERBATIM (hold_sale
+    // keeps the list as sent, resume hands it back), so these survive the round trip and a desktop
+    // resume reads them too. Null = key omitted, a plain line is unchanged.
+    /** A percentage of this line's OWN (the desktop's `disc_pct`); `discount_pct` above stays the effective one. */
+    val disc_pct: Double? = null,
+    val modifier_option_ids: List<String>? = null,
+    val modifiers: List<ModifierPick>? = null,
+    val unit_price_override: Double? = null,
+    val price_reason: String? = null,
 )
 
 data class HoldSaleRequest(
@@ -66,9 +77,7 @@ data class SimpleStatusResponse(val status: String = "", val message: String? = 
 
 /** A parked cart read back, in the phone's own cart shape. */
 data class ResumedCart(
-    val quantities: Map<String, Double>,
-    /** Per-line percentages that differ from the whole-sale one. */
-    val lineDiscounts: Map<String, Double>,
+    val lines: List<CartLine>,
     val salePct: Double,
     val customerId: String?,
     val paymentMethod: String,
@@ -79,33 +88,52 @@ data class ResumedCart(
  * Read a `resume` response body into a cart.
  *
  * Tolerant on purpose: the snapshot may have been written by the desktop (whose
- * lines carry many more fields -- name, modifiers, variant labels) or by an
- * older build. A line without a product id or a positive quantity is skipped.
- * The same product twice (a desktop cart with two modifier choices) is merged
- * into one phone line -- the phone has no modifiers yet, so the extras of such
- * a line are NOT carried (recorded in ROADMAP as an ANDROID-2a gap).
+ * lines carry many more fields) or by an older build. A line without a product
+ * id or a positive quantity is skipped.
  *
- * A line whose percentage equals the whole-sale percentage is "inherited" and
- * not recorded as the line's own, so resuming then holding again does not
- * freeze a whole-sale discount onto each line.
+ * ANDROID-3: a line keeps everything the desktop's cart line carries that the
+ * phone understands -- `modifier_option_ids` + `modifiers` (the extras), the
+ * price of its own (`unit_price_override`, `price_reason`) and its own
+ * percentage (`disc_pct`). Two lines of one product with DIFFERENT extras stay
+ * two lines; the same product with the same extras is merged (that is the
+ * desktop's own merge key). Before this a desktop sale with extras resumed on
+ * the phone as plain products.
+ *
+ * Own percentage: the desktop's `disc_pct` when present; otherwise a phone-written
+ * (or older) line's `discount_pct` when it differs from the whole-sale one --
+ * a line that merely follows the whole-sale percentage is "inherited" and not
+ * recorded as the line's own, so resuming then holding again does not freeze a
+ * whole-sale discount onto each line.
  */
 fun parseResumedCart(data: JsonObject?): ResumedCart {
     val salePct = data.number("discount_pct") ?: 0.0
-    val qty = LinkedHashMap<String, Double>()
-    val own = LinkedHashMap<String, Double>()
+    val out = ArrayList<CartLine>()
     val items: JsonArray = data?.get("items")?.takeIf { it.isJsonArray }?.asJsonArray ?: JsonArray()
     for (el in items) {
         val line = el.takeIf { it.isJsonObject }?.asJsonObject ?: continue
         val id = line.get("product_id")?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() } ?: continue
         val q = line.number("quantity") ?: continue
         if (q <= 0.0) continue
-        qty[id] = (qty[id] ?: 0.0) + q
-        val pct = line.number("discount_pct")
-        if (pct != null && kotlin.math.abs(pct - salePct) > 1e-9) own[id] = pct
+        val optionIds = line.get("modifier_option_ids")?.takeIf { it.isJsonArray }?.asJsonArray
+            ?.mapNotNull { it.takeIf { e -> e.isJsonPrimitive }?.asString?.takeIf { s -> s.isNotBlank() } } ?: emptyList()
+        val picks = line.get("modifiers")?.takeIf { it.isJsonArray }?.asJsonArray
+            ?.mapNotNull { e ->
+                val m = e.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
+                val name = m.get("name")?.takeIf { it.isJsonPrimitive }?.asString ?: return@mapNotNull null
+                ModifierPick(m.get("group_name")?.takeIf { it.isJsonPrimitive }?.asString ?: "", name, m.number("price_delta") ?: 0.0)
+            } ?: emptyList()
+        val pct = line.number("disc_pct") ?: line.number("discount_pct")?.takeIf { kotlin.math.abs(it - salePct) > 1e-9 }
+        val override = line.number("unit_price_override")?.takeIf { it >= 0.0 }
+        val parsed = CartLine(
+            productId = id, quantity = q, modifierOptionIds = optionIds, modifiers = picks,
+            ownPct = pct?.takeIf { it > 0.0 }, unitPriceOverride = override,
+            priceReason = if (override != null) line.get("price_reason")?.takeIf { it.isJsonPrimitive }?.asString else null,
+        )
+        val at = out.indexOfFirst { it.key == parsed.key }
+        if (at >= 0) out[at] = out[at].copy(quantity = out[at].quantity + q) else out += parsed
     }
     return ResumedCart(
-        quantities = qty,
-        lineDiscounts = own,
+        lines = out,
         salePct = salePct,
         customerId = data?.get("customer_id")?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() },
         paymentMethod = data?.get("payment_method")?.takeIf { it.isJsonPrimitive }?.asString ?: "cash",

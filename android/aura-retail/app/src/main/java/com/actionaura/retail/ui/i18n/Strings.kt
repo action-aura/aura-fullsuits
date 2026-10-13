@@ -1404,4 +1404,112 @@ private val AR_STRINGS: Map<String, String> = mapOf(
         "دخل آخر",
     "Owner put money back (drawings)" to
         "أعاده المالك إلى الدرج (مسحوبات المالك)",
+    "New total" to
+        "الإجمالي الجديد",
+    "Round total down to" to
+        "تقريب الإجمالي للأسفل إلى",
+    "Damaged" to
+        "تالف",
+    "Loyal customer" to
+        "عميل دائم",
+    "Round down" to
+        "تقريب للأسفل",
+    "Discount %s  →  Estimated total %s" to
+        "الخصم %s  ←  الإجمالي المقدّر %s",
+    "An estimate. The shop confirms the real total when you charge." to
+        "هذا تقدير. يؤكد المحل الإجمالي الفعلي عند الدفع.",
+    "Remove discount" to
+        "إزالة الخصم",
+    "Apply discount" to
+        "تطبيق الخصم",
+    "Enter a discount first" to
+        "أدخل الخصم أولاً",
+    "Pick a reason first" to
+        "اختر السبب أولاً",
+    "The discount cannot be more than the cart total before tax." to
+        "لا يمكن أن يزيد الخصم عن إجمالي السلة قبل الضريبة.",
+    "The new total cannot be higher than the current total." to
+        "لا يمكن أن يكون الإجمالي الجديد أعلى من الإجمالي الحالي.",
+    "Ask a manager" to
+        "اطلب موافقة المدير",
+    "A manager has to enter their PIN to allow this." to
+        "على المدير إدخال رمز PIN الخاص به للسماح بذلك.",
+    "Approve" to
+        "موافقة",
+    "Choose a variant" to
+        "اختر النوع",
+    "No variants found." to
+        "لا توجد أنواع.",
+    "Out of stock" to
+        "نفد من المخزون",
+    "Choose options" to
+        "اختر الإضافات",
+    "Required" to
+        "مطلوب",
+    "Optional" to
+        "اختياري",
+    "Choose one" to
+        "اختر واحدًا",
+    "Choose at least" to
+        "اختر على الأقل",
+    "Choose up to" to
+        "اختر حتى",
+    "Choose any" to
+        "اختر ما تشاء",
+    "Add to cart" to
+        "أضف إلى السلة",
+    "Item discount (%)" to
+        "خصم الصنف (%)",
+    "Price" to
+        "السعر",
+    "A different price needs a manager's PIN at Charge." to
+        "السعر المختلف يحتاج رمز PIN من المدير عند الدفع.",
+    "The price cannot be negative." to
+        "لا يمكن أن يكون السعر سالبًا.",
+    "Apply" to
+        "تطبيق",
+    "Discount cleared — the cart changed" to
+        "أُزيل الخصم — تغيّرت السلة",
+    "Discount cleared — it cannot be combined with an item discount or promotion" to
+        "أُزيل الخصم — لا يمكن جمعه مع خصم صنف أو عرض",
+    "The sale discount is not kept with a held sale." to
+        "لا يُحفظ خصم الفاتورة مع الفاتورة المعلّقة.",
+    "No manager has a PIN set up. Ask the owner to set one in Settings > Team." to
+        "لا يوجد مدير لديه رمز PIN. اطلب من المالك تعيينه من الإعدادات > الفريق.",
+    "The total charged is %s" to
+        "الإجمالي المحصَّل هو %s",
+    "Remove the item discounts and promotions first" to
+        "أزل خصومات الأصناف والعروض أولاً",
+    "Estimated total" to
+        "الإجمالي المقدّر",
+    "was" to
+        "كان",
+    "Price changed" to
+        "تم تغيير السعر",
+    "Discount / price" to
+        "خصم / سعر",
+    "%d variants" to
+        "%d أنواع",
+    "That manager PIN was not accepted." to
+        "لم يُقبل رمز PIN الخاص بالمدير.",
+    "Too many wrong PINs for this manager. Try again in a few minutes." to
+        "محاولات خاطئة كثيرة لرمز PIN هذا المدير. حاول بعد بضع دقائق.",
+    "A different person must approve this. Pick a manager." to
+        "يجب أن يوافق شخص آخر. اختر مديرًا.",
+    "You are not allowed to change a price. Ask a manager to approve it." to
+        "غير مسموح لك بتغيير السعر. اطلب موافقة المدير.",
+    "Say why this discount is given (for example Damaged, Loyal customer, Round down)." to
+        "اذكر سبب هذا الخصم (مثل: تالف، عميل دائم، تقريب للأسفل).",
+    "Send either a discount amount or a target total, not both." to
+        "أرسل مبلغ خصم أو إجمالي مطلوبًا، وليس كليهما.",
+    "A cart discount cannot be combined with a per-item discount or a quotation. Remove one of them." to
+        "لا يمكن جمع خصم السلة مع خصم صنف أو عرض سعر. أزل أحدهما.",
+    "That exact total cannot be reached. Nearest: %s" to
+        "لا يمكن الوصول إلى هذا الإجمالي بالضبط. الأقرب: %s",
+    "That exact total cannot be reached. Pick one of the nearby totals." to
+        "لا يمكن الوصول إلى هذا الإجمالي بالضبط. اختر أحد الإجماليات القريبة.",
+    "That exact discount cannot be given on this cart. Try a slightly different amount." to
+        "لا يمكن منح هذا الخصم بالضبط على هذه السلة. جرّب مبلغًا مختلفًا قليلًا.",
+    "That discount does not fit this cart." to
+        "هذا الخصم لا يناسب هذه السلة.",
 )

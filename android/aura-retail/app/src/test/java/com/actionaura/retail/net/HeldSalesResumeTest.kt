@@ -26,7 +26,7 @@ class HeldSalesResumeTest {
              "discount_pct":10,"payment_method":"card","customer_id":"c-1"}
             """.trimIndent()
         )
-        assertThat(cart.quantities).containsExactly("p1", 2.0, "p2", 1.5).inOrder()
+        assertThat(cart.lines.map { it.productId to it.quantity }).containsExactly("p1" to 2.0, "p2" to 1.5).inOrder()
         assertThat(cart.salePct).isEqualTo(10.0)
         assertThat(cart.customerId).isEqualTo("c-1")
         assertThat(cart.paymentMethod).isEqualTo("card")
@@ -41,7 +41,7 @@ class HeldSalesResumeTest {
                "discount_pct":10}"""
         )
         // "a" follows the sale-wide 10%; only "b" carries its own 5%.
-        assertThat(cart.lineDiscounts).containsExactly("b", 5.0)
+        assertThat(cart.lines.associate { it.productId to it.ownPct }).containsExactly("a", null, "b", 5.0)
     }
 
     @Test
@@ -51,24 +51,26 @@ class HeldSalesResumeTest {
                          {"quantity":3},{"product_id":"z","quantity":0},{"product_id":"y","quantity":-1},
                          "not-an-object"],"discount_pct":0}"""
         )
-        assertThat(cart.quantities).containsExactly("a", 3.0)
+        assertThat(cart.lines.map { it.productId to it.quantity }).containsExactly("a" to 3.0)
     }
 
     @Test
     fun a_missing_or_empty_body_is_an_empty_cart_not_a_crash() {
-        assertThat(parseResumedCart(null).quantities).isEmpty()
-        assertThat(parse("{}").quantities).isEmpty()
+        assertThat(parseResumedCart(null).lines).isEmpty()
+        assertThat(parse("{}").lines).isEmpty()
         assertThat(parse("{}").paymentMethod).isEqualTo("cash")
-        assertThat(parse("""{"items":"oops"}""").quantities).isEmpty()
+        assertThat(parse("""{"items":"oops"}""").lines).isEmpty()
     }
 
     @Test
     fun a_phone_hold_round_trips_through_its_own_resume_with_line_discounts_intact() {
         // hold: a=5% own, b inherits the sale 10%  ->  resume: same effective result.
         val hold = com.actionaura.retail.ui.pos.buildHoldRequest(
-            cart = linkedMapOf("a" to 2.0, "b" to 1.0),
+            lines = listOf(
+                com.actionaura.retail.ui.pos.CartLine("a", 2.0, ownPct = 5.0),
+                com.actionaura.retail.ui.pos.CartLine("b", 1.0)),
             products = mapOf("a" to Product(id = "a", name = "A", sell_price = 2.0), "b" to Product(id = "b", name = "B", sell_price = 3.0)),
-            lineDiscounts = mapOf("a" to 5.0), salePct = 10.0,
+            salePct = 10.0,
             access = com.actionaura.retail.ui.pos.DiscountAccess.Full,
             customerId = null, label = "", singleMethod = "cash", displayTotal = 0.0, dp = 3,
         )
@@ -76,8 +78,8 @@ class HeldSalesResumeTest {
             mapOf("items" to hold.items, "discount_pct" to hold.discount_pct, "payment_method" to hold.payment_method)
         ).asJsonObject
         val back = parseResumedCart(snapshot)
-        assertThat(back.quantities).containsExactly("a", 2.0, "b", 1.0).inOrder()
+        assertThat(back.lines.map { it.productId to it.quantity }).containsExactly("a" to 2.0, "b" to 1.0).inOrder()
         assertThat(back.salePct).isEqualTo(10.0)
-        assertThat(back.lineDiscounts).containsExactly("a", 5.0)
+        assertThat(back.lines.associate { it.productId to it.ownPct }).containsExactly("a", 5.0, "b", null)
     }
 }
