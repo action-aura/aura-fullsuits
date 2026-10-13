@@ -226,7 +226,12 @@ app.register_blueprint(auth_bp)
 app.register_blueprint(onboarding_bp)
 app.register_blueprint(retail_bp)
 app.register_blueprint(import_bp)
-app.register_blueprint(make_backup_blueprint('retail', DATABASE_DIR, APP_VERSION))
+app.register_blueprint(make_backup_blueprint(
+    'retail', DATABASE_DIR, APP_VERSION,
+    # SYNC-BOOT Phase 2: after a restore the relay's self-exclusion would lose whatever this
+    # computer pushed after the backup was taken. `_after_backup_restore` arms include_own_once
+    # (and then does exactly what the default hook did: ask the launcher for a restart).
+    restart_after_restore=lambda: _after_backup_restore()))
 app.register_blueprint(device_bp)
 
 # R-LAN: the operator's side of hub mode ("Connect a device", who is
@@ -1045,6 +1050,35 @@ def _ensure_runtime_schema_for_sync():
             'hit "no such table" on its first pull until this succeeds.')
 
 
+def _retail_bootstrap_hooks():
+    """`BootstrapHooks` for the RETAIL stream's SyncService (SYNC-BOOT Phase 2). A function, and defined
+    BEFORE `_build_windows_sync_services`, so the test harness builds a device's services with exactly
+    the hooks production does. Every body is a lambda: this runs at IMPORT time, before the helpers
+    further down this module exist; they resolve when called."""
+    from commercial_runtime.sync.bootstrap.hooks import BootstrapHooks
+    return BootstrapHooks(
+        # `bootstrap_producer_v1` = "I act on bootstrap requests a hub piggybacks on my pull". NOT
+        # `bootstrap_v1` (= "I can fetch a copy from Owner"): that needs Owner's mailbox (Phase 3),
+        # and advertising it early would let a later retention gate believe this client can recover.
+        caps=('bootstrap_producer_v1',),
+        include_own_once=lambda: _bootstrap_include_own_pending('retail'),
+        include_own_done=lambda: _bootstrap_include_own_done('retail'),
+        reapply_outbox_pending=lambda: _bootstrap_reapply_pending(),
+        reapply_outbox_done=lambda: _bootstrap_reapply_done(),
+        on_resync_required=lambda stream, client, relay_url, details: _bootstrap_on_resync(
+            stream, client, relay_url, details),
+        on_bootstrap_requests=lambda requests: _bootstrap_on_requests(requests))
+
+
+def _registry_bootstrap_hooks():
+    """`BootstrapHooks` for the REGISTRY stream: only include_own_once (a restore replaces registry.db
+    too). Its RESYNC_REQUIRED needs no hook: the service fast-forwards by itself."""
+    from commercial_runtime.sync.bootstrap.hooks import BootstrapHooks
+    return BootstrapHooks(
+        include_own_once=lambda: _bootstrap_include_own_pending('registry'),
+        include_own_done=lambda: _bootstrap_include_own_done('registry'))
+
+
 def _build_windows_sync_services(relay_base_url):
     """Constructs the Windows sync-service pair -- everything the `if
     _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':` block
@@ -1276,6 +1310,10 @@ def _build_windows_sync_services(relay_base_url):
         # block below), long before `_announce_heartbeat_device` is defined.
         on_tick=lambda: _announce_heartbeat_device(),
         stream_label='registry')  # SYNC-BOOT: Owner keeps one cursor per stream
+
+    # SYNC-BOOT Phase 2: the bootstrap seams (see `_retail_bootstrap_hooks`).
+    _sync_service.set_bootstrap_hooks(_retail_bootstrap_hooks())
+    _registry_sync_service.set_bootstrap_hooks(_registry_bootstrap_hooks())
 
     return _sync_service, _registry_sync_service
 
@@ -2801,6 +2839,11 @@ def _start_site_relay_if_enabled():
                 hub_identity_provider=_hub_identity_provider,
                 license_public_id_provider=_hub_license_public_id_provider,
                 trust_store_provider=_hub_trust_store_provider,
+                # SYNC-BOOT Phase 2: a device told RESYNC_REQUIRED asks THIS hub for a fresh copy
+                # of the shop, and the main computer is asked to re-announce the authority state.
+                bootstrap_provider=_hub_bootstrap_provider,
+                bootstrap_board=_hub_bootstrap_board,
+                on_bootstrap_requested=_hub_on_bootstrap_requested,
                 host=SITE_RELAY_BIND_HOST,
                 port=SITE_RELAY_PORT,
                 identity_dir=Path(DATABASE_DIR).parent / 'site-relay',
@@ -3163,6 +3206,25 @@ def _announce_device(reason):
             exc_info=True)
 
 
+def _make_retail_emit(company_id):
+    """The retail half of a re-announce: queues this computer's till allocations, numbering books
+    and branch aliases into retail.db's outbox (the payload builders live in `retail_api`; the
+    shared package must not import the product)."""
+    def _retail_emit(is_main, terminal_uid):
+        from api.retail_api import reannounce_authority_events
+        from database.schema import get_retail_conn
+        retail_conn = get_retail_conn()
+        try:
+            return reannounce_authority_events(
+                retail_conn, company_id, is_main=is_main, terminal_uid=terminal_uid)
+        except Exception:
+            retail_conn.rollback()
+            raise
+        finally:
+            retail_conn.close()
+    return _retail_emit
+
+
 def _reannounce_authority_state(reg_conn, company_id):
     """The retail half of `commercial_runtime.sync.reannounce.run_if_due`: hands it
     a callback that queues this computer's till allocations / numbering books into
@@ -3171,24 +3233,185 @@ def _reannounce_authority_state(reg_conn, company_id):
     try:
         from commercial_runtime.sync import reannounce as _reannounce
 
-        def _retail_emit(is_main, terminal_uid):
-            from api.retail_api import reannounce_authority_events
-            from database.schema import get_retail_conn
-            retail_conn = get_retail_conn()
-            try:
-                return reannounce_authority_events(
-                    retail_conn, company_id, is_main=is_main, terminal_uid=terminal_uid)
-            except Exception:
-                retail_conn.rollback()
-                raise
-            finally:
-                retail_conn.close()
-
         _reannounce.run_if_due(reg_conn, company_id, app_data_dir=Path(DATABASE_DIR).parent,
-                               retail_emit=_retail_emit)
+                               retail_emit=_make_retail_emit(company_id))
     except Exception:
         logging.getLogger(__name__).warning(
             'Authority re-announce failed; this till keeps running.', exc_info=True)
+
+
+# ── SYNC-BOOT Phase 2: bootstrap seams ──────────────────────────────────────────────────────────
+# A computer far enough behind its relay that the relay has pruned what it needs takes a COPY of
+# the shop instead of a replay (commercial_runtime/sync/bootstrap/). Everything below is glue: the
+# logic lives in the shared package, the product-specific parts (which tables are what) in
+# database/bootstrap_classes.py. Every function here NEVER RAISES: a bootstrap nicety must not be
+# able to stop a till from booting, pulling, or ringing up a sale.
+
+from commercial_runtime.sync.bootstrap.board import BootstrapBoard as _BootstrapBoard  # noqa: E402
+
+_hub_bootstrap_board = _BootstrapBoard()
+
+
+def _bootstrap_app_dir():
+    return Path(DATABASE_DIR).parent
+
+
+def _bootstrap_include_own_pending(stream):
+    from commercial_runtime.sync.bootstrap import installer
+    return installer.include_own_once_pending(_bootstrap_app_dir(), stream)
+
+
+def _bootstrap_include_own_done(stream):
+    from commercial_runtime.sync.bootstrap import installer
+    installer.clear_include_own_once(_bootstrap_app_dir(), stream)
+
+
+def _bootstrap_reapply_pending():
+    from commercial_runtime.sync.bootstrap import installer
+    return installer.reapply_outbox_pending(_bootstrap_app_dir())
+
+
+def _bootstrap_reapply_done():
+    from commercial_runtime.sync.bootstrap import installer
+    installer.clear_reapply_outbox(_bootstrap_app_dir())
+
+
+def _apply_staged_bootstrap():
+    """Install a bootstrap copy staged by a previous run. Called first thing in `init_app()`, BEFORE
+    any database of this product is opened: the swap replaces retail.db, which cannot be done under
+    a running app. A copy from an older build is migrated forward here (`migrate_retail_file`).
+    Returns the installer's report (or None). NEVER RAISES."""
+    try:
+        from commercial_runtime.sync.bootstrap import installer
+        from database.bootstrap_classes import retail_spec
+        from database.schema import migrate_retail_file
+        report = installer.apply_staged(
+            _bootstrap_app_dir(), retail_spec(RETAIL_SCHEMA_VERSION), migrate_fn=migrate_retail_file)
+        if report is not None:
+            logging.getLogger(__name__).warning('Bootstrap install: %s', report)
+        return report
+    except Exception:
+        logging.getLogger(__name__).exception('Bootstrap install failed unexpectedly; booting on the old data.')
+        return None
+
+
+def _after_backup_restore():
+    """The backup blueprint's `restart_after_restore`: arm include_own_once for BOTH streams (a
+    restore replaces registry.db and retail.db), then ask for the usual restart."""
+    try:
+        from commercial_runtime.sync.bootstrap import installer
+        installer.mark_include_own_once(_bootstrap_app_dir(), 'backup-restore')
+    except Exception:
+        logging.getLogger(__name__).warning('Could not arm include_own_once after a restore.', exc_info=True)
+    from commercial_runtime.install_support.restart import schedule_restart
+    return schedule_restart()
+
+
+def _bootstrap_on_resync(stream, client, relay_url, details):
+    """This device's relay said RESYNC_REQUIRED. For the RETAIL stream against a LAN hub: request a
+    copy of the shop from the hub, verify and stage it, and ask the launcher to restart so the next
+    start installs it. Returns True when a copy is staged. Owner's own mailbox is Phase 3, so a cloud
+    relay returns False (the stream stays stopped and visible in /sync/health)."""
+    log = logging.getLogger(__name__)
+    try:
+        if stream != 'retail' or not hasattr(client, 'post_signed_raw'):
+            return False
+        from commercial_runtime.sync import authority as _authority
+        from commercial_runtime.sync.bootstrap import transport_hub
+        from commercial_runtime.sync.bootstrap.errors import BootstrapError
+        from commercial_runtime.sync.relay_client import SyncRelayClientError
+        from commercial_runtime.sync.site_relay.upstream import is_lan_hub_url
+        from commercial_runtime.sync.sync_service import local_company_id_from_registry
+        from database.bootstrap_classes import retail_spec
+        ports, known = _lan_hub_signals()
+        if not is_lan_hub_url(relay_url, hub_ports=ports, known_hub_urls=known):
+            return False
+        env = _authority.default_authority_env(_bootstrap_app_dir())
+        try:
+            record = transport_hub.request_and_stage(
+                client, spec=retail_spec(RETAIL_SCHEMA_VERSION), app_data_dir=_bootstrap_app_dir(),
+                relay_url=relay_url, trust_store=env.trust_store, own_licence=env.own_licence,
+                expected_company_id=local_company_id_from_registry())
+        except (BootstrapError, SyncRelayClientError) as exc:
+            log.warning('Bootstrap: could not get a copy of the shop from the hub (%s). This computer '
+                        'stays stopped on that stream until it is restarted.',
+                        getattr(exc, 'reason_code', type(exc).__name__))
+            return False
+        log.warning('Bootstrap: a copy of the shop (complete up to relay position %s) is staged; it is '
+                    'installed at the next start.', record.get('as_of'))
+        from commercial_runtime.install_support.restart import schedule_restart
+        schedule_restart()
+        return True
+    except Exception:
+        log.exception('Bootstrap request failed unexpectedly.')
+        return False
+
+
+def _force_main_reannounce(reason):
+    """Re-announce the shop's authority state NOW if THIS computer is the main one. Returns the
+    report (or None). NEVER RAISES."""
+    try:
+        from commercial_runtime.sync import reannounce as _reannounce
+        from commercial_runtime.sync.sync_service import local_company_id_from_registry
+        company_id = local_company_id_from_registry()
+        if not company_id:
+            return None
+        reg = get_registry_conn()
+        try:
+            return _reannounce.force_main_reannounce(
+                reg, company_id, app_data_dir=_bootstrap_app_dir(), retail_emit=_make_retail_emit(company_id))
+        finally:
+            reg.close()
+    except Exception:
+        logging.getLogger(__name__).warning('Forced authority re-announce (%s) failed.', reason, exc_info=True)
+        return None
+
+
+def _bootstrap_on_requests(requests):
+    """A hub told this producer-capable computer that others are waiting. Only the main computer
+    acts (force_main_reannounce checks); everyone else does nothing and costs nothing."""
+    if requests:
+        _force_main_reannounce('hub request: %s' % ', '.join(sorted({r.get('requester', '?') for r in requests})))
+
+
+def _hub_on_bootstrap_requested(requester, stream):
+    """Called by this hub's own routes when a device asks. If this computer IS the main it answers at
+    once; if not, the request sits on the board for the main's next pull."""
+    _force_main_reannounce('device %s (%s)' % (requester, stream))
+
+
+def _hub_bootstrap_provider(requester_installation_id, requester_schema_version):
+    """Build the copy for `POST /bootstrap` from THIS hub's own retail.db. Raises BootstrapError for
+    a refusal the route reports (no signer, hub not on its site log, requester too old)."""
+    from commercial_runtime.sync import authority as _authority
+    from commercial_runtime.sync.bootstrap import errors as _bootstrap_errors
+    from commercial_runtime.sync.bootstrap.errors import BootstrapError
+    from commercial_runtime.sync.bootstrap.producer import BootstrapOffer, build_bootstrap
+    from commercial_runtime.sync.site_relay import store as _site_store
+    from commercial_runtime.sync.site_relay.local_client import LOCAL_RELAY_URL
+    from commercial_runtime.sync.sync_service import local_company_id_from_registry
+    from database.bootstrap_classes import retail_spec
+    from database.schema import _get_path
+
+    if requester_schema_version is not None and requester_schema_version < RETAIL_SCHEMA_VERSION:
+        # The copy is this hub's schema; a requester on an older build cannot read it (it can only
+        # migrate forward from a copy that is not newer than itself). Say so before building 50 MB.
+        raise BootstrapError(
+            _bootstrap_errors.SCHEMA_NEWER,
+            'this hub is on a newer version than the device asking; update the device first')
+    company_id = local_company_id_from_registry()
+    if not company_id:
+        raise BootstrapError(_bootstrap_errors.PRODUCER_FAILED, 'this computer has no company yet')
+    signer = _authority.local_signer_or_none(_bootstrap_app_dir())
+    built = build_bootstrap(
+        spec=retail_spec(RETAIL_SCHEMA_VERSION), source_path=_get_path('retail'), company_id=company_id,
+        signer=signer, expected_relay_url=LOCAL_RELAY_URL, requester=requester_installation_id)
+    conn = get_retail_conn()
+    try:
+        end_of_log = _site_store.max_event_seq(conn)
+    finally:
+        conn.close()
+    return BootstrapOffer(data=built.data, as_of=built.as_of, registry_fast_forward=end_of_log)
 
 
 def _announce_when_company_established(company_id=None):
@@ -3278,6 +3501,9 @@ def init_app():
     # seam guaranteed to run for both the real entry point and every test
     # bootstrap. Never fatal: a logging failure must not stop a till booting.
     _configure_file_logging()
+    # SYNC-BOOT Phase 2: install a staged bootstrap copy BEFORE any database is opened (the swap
+    # replaces retail.db). A copy from an older build is migrated forward inside this call.
+    _apply_staged_bootstrap()
     init_registry_db()
     # AUDIT-032: narrow any pre-existing cash.close + cash.approve pair.
     _sweep_cash_pair_at_boot()
