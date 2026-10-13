@@ -8220,3 +8220,7 @@ Single-writer resource: the Owner Alembic chain head. `alembic heads` was `c7a4f
 - Phase 2 proper: producer, installer, table classes, `include_own_once`, main answers bootstrap requests (+ `branch_alias`), hub transport (plan section 7).
 - Clients do not send `caps` yet; Owner Revision B (bootstrap mailbox) is Phase 3.
 - `HubTransport.kt` builds no pull body (discovery/join only) so it needed no Phase 1 change.
+
+
+## 2026-10-13 — retail schema v56 CLAIMED (SYNC-BOOT Phase 2: per-stream hub cursors, site prune state)
+Single-writer resource: `RETAIL_SCHEMA_VERSION`. v55 is MONEY-5's (unmerged). On feat/sync-boot-p2 the constant goes 54 -> 56; the v56 step is written independent of v55's columns, so the orchestrator orders the two at merge. v56 rebuilds `site_device_cursors` with PK (installation_id, stream) (existing rows become 'legacy') and creates `site_prune_state(id=1, pruned_through_seq, site_log_floor)`. Nothing else may claim v56.
