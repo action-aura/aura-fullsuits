@@ -594,6 +594,19 @@ def test_authority_fulfil_waits_for_the_copy_and_settles_in_either_order(app, cl
 
 
 # ---------------------------------------------------------------- Phase 3 additions
+def test_fast_forward_is_never_below_the_prune_point_even_when_the_table_is_empty(app, client, seeded, signing_key):
+    """A prune that emptied the licence's events leaves max(seq) = 0; skipping a device's registry cursor to
+    0 would get it refused again (0 < pruned_through) on every pull. MUTATION: return the bare max seq in
+    _licence_max_seq -> red."""
+    license_id, ((a, ka), (b, kb), _c) = _shop(app, client)
+    _push(client, ka, a, [_make_event()])
+    _mark_pruned(app, license_id, 5)                       # as if everything up to 5 was pruned: none remain
+    body = _pull(client, kb, b, 0, stream="registry").get_json()
+    assert body["reason_code"] == "RESYNC_REQUIRED" and body["fast_forward_to"] >= 5, body
+    again = _pull(client, kb, b, body["fast_forward_to"], stream="registry")
+    assert again.status_code == 200, again.get_json()      # and the number it was given is actually pullable
+
+
 def test_ack_after_the_72_hours_is_expired_not_delivered(app, client, seeded, signing_key, box):
     """A READY copy past its expiry must not be acked into DELIVERED just because the nightly sweep has
     not run yet. Both directions: in time -> 200 DELIVERED; past expiry -> 409 BOOTSTRAP_EXPIRED, bytes gone.

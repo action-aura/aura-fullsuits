@@ -262,7 +262,15 @@ def test_pull_below_pruned_through_is_told_to_resync(app, client, seeded, signin
     for stream in ("retail", "registry", None):
         r = _pull_stream(client, kb, ib, 0, stream=stream)
         assert r.status_code == 409, stream
-        assert r.get_json() == {"reason_code": "RESYNC_REQUIRED", "pruned_through": 3}
+        body = r.get_json()
+        if stream == "registry":
+            # SYNC-BOOT Phase 3 (plan 2.2): the registry stream is never copied, so Owner also names where
+            # its log ends NOW (`fast_forward_to`) for the device to skip to. Nothing else may be added, and
+            # the number is checked in test_sync_bootstrap_routes (it equals the licence's top seq).
+            assert set(body) == {"reason_code", "pruned_through", "fast_forward_to"}, body
+            assert isinstance(body["fast_forward_to"], int) and body["fast_forward_to"] >= 3
+            body = {k: v for k, v in body.items() if k != "fast_forward_to"}
+        assert body == {"reason_code": "RESYNC_REQUIRED", "pruned_through": 3}
 
 
 def test_resync_required_writes_no_cursor(app, client, seeded, signing_key):

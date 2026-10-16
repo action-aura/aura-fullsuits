@@ -161,8 +161,12 @@ def _lease_lapsed(row: SyncBootstrapRequest) -> bool:
 
 
 def _licence_max_seq(license_id) -> int:
-    return int(db_session.execute(
+    """Where the licence's log ends NOW. Never below what has been pruned: when the prune has emptied the
+    table the remaining rows say 0, and a device told to skip to 0 would be refused (0 < pruned_through)
+    again on its next pull -- forever."""
+    top = int(db_session.execute(
         select(func.coalesce(func.max(SyncEvent.seq), 0)).where(SyncEvent.license_id == license_id)).scalar_one())
+    return max(top, _license_pruned_through(license_id))
 
 
 def _valid_pubkey(value) -> bool:
