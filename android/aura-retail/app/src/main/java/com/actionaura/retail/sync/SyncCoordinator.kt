@@ -219,6 +219,52 @@ object SyncCoordinator {
      *  [onHubPairingChanged], the whole point of this task. */
     @Volatile private var target = RelayTarget("", "")
 
+    // ── SYNC-BOOT Phase 3: the requester for a copy of the shop ─────────────────────────────────
+    /** Where the requester keeps its single-use key and request id (beside the device identity), set by
+     *  [startLocked]. Null until the coordinator has started. */
+    @Volatile private var bootstrapStateDir: File? = null
+
+    /** Test seam: builds the requester for a relay instead of the real signed one. Production never assigns it. */
+    internal var bootstrapRequesterOverride: ((String) -> BootstrapRequester?)? = null
+
+    /** Called once a copy is staged. The copy is installed when the embedded Python backend next STARTS, so the
+     *  app has to restart it; that wiring is on-device work (see ROADMAP, SYNC-BOOT Phase 3 gaps). */
+    internal var onBootstrapStaged: () -> Unit = {}
+    private var lastBootstrapStepMillis = 0L
+    private const val BOOTSTRAP_STEP_INTERVAL_MS = 20_000L
+    /** What this client can do, sent in every pull so Owner's retention rule can see it. Android is a REQUESTER only. */
+    private val CAPS = listOf("bootstrap_v1")
+
+    /** One throttled step of the requester while the RETAIL stream is stopped against Owner's cloud relay. A phone
+     *  can only ever be the one asking: it builds no copies. NEVER throws (a stopped stream must not break the tick). */
+    private fun stepBootstrapRequester(
+        installationId: String, localBaseUrl: String, internalSecret: String,
+        relayBaseUrl: String, identity: DeviceIdentity,
+    ) {
+        val now = clock()
+        if (now - lastBootstrapStepMillis < BOOTSTRAP_STEP_INTERVAL_MS) return
+        lastBootstrapStepMillis = now
+        try {
+            val requester = bootstrapRequesterOverride?.invoke(relayBaseUrl) ?: run {
+                val dir = bootstrapStateDir ?: return
+                BootstrapRequester(
+                    OwnerMailboxTransport(relayClient(installationId, relayBaseUrl, identity, "")),
+                    LocalBootstrapStager(localBaseUrl, internalSecret, http, SyncStream.ALL.first { it.label == "retail" }.prefix),
+                    FileBootstrapStateStore(File(dir, "bootstrap-request.json")), relayBaseUrl, BuildConfig.VERSION_NAME)
+            }
+            when (requester.step()) {
+                RequesterOutcome.STAGED -> {
+                    logError("Bootstrap: a copy of the shop is staged; it is installed when the backend next starts.", null)
+                    onBootstrapStaged()
+                }
+                else -> {}
+            }
+        } catch (exc: Exception) {
+            // A refused copy (wrong shop, newer schema, open drawer) or an unreachable Owner: say so, retry later.
+            logError("Bootstrap request step failed (${(exc as? BootstrapRefused)?.reasonCode ?: reasonOf(exc)}); will retry.", exc)
+        }
+    }
+
     /** [target]'s url, exposed `internal` purely so a plain-JVM test can
      *  assert WHICH url [start]'s precedence actually picked, not just
      *  whether the coordinator started at all -- "some valid url was
@@ -396,6 +442,7 @@ object SyncCoordinator {
         // and every signed push/pull would fail with INVALID_SIGNATURE
         // or DEVICE_KEY_REVOKED.
         identity = DeviceIdentity(identityDir)
+        bootstrapStateDir = File(identityDir, "bootstrap")
         target = newTarget
         running = true
         scheduleNext()
@@ -1098,6 +1145,10 @@ object SyncCoordinator {
         val cursor = getLocal(cursorPath, localBaseUrl, internalSecret)
         val installationId = cursor.stringOrNull("installation_id") ?: return null
         val since = cursor.get("since")?.asLong ?: 0L
+        // SYNC-BOOT Phase 3: after a bootstrap install (or a restore) Python arms a one-shot "send me my own
+        // events too"; the retail stream only, because that is the database that was replaced.
+        val includeOwn = stream.label == "retail" &&
+            cursor.get("include_own")?.takeUnless { it.isJsonNull }?.asBoolean == true
 
         // SYNC-BOOT: a stream already told RESYNC_REQUIRED by THIS relay stops
         // pulling -- asking again with the same cursor can never succeed, and
@@ -1106,13 +1157,17 @@ object SyncCoordinator {
         val pending = resyncRequired[stream.label]
         if (pending != null) {
             if (pending.relayBaseUrl == relayBaseUrl && pending.spkiPin == spkiPin) {
+                if (stream.label == "retail" && spkiPin.isBlank()) {
+                    stepBootstrapRequester(installationId, localBaseUrl, internalSecret, relayBaseUrl, identity)
+                }
                 throw SyncResyncRequired(pending.prunedThrough, "Stream ${stream.label} is waiting for a resync (pull skipped).", repeat = true)
             }
             clearResyncRequired(stream.label)
         }
 
         val result = try {
-            relayClient(installationId, relayBaseUrl, identity, spkiPin).pull(since, stream.label) // raises on failure
+            relayClient(installationId, relayBaseUrl, identity, spkiPin)
+                .pull(since, stream.label, CAPS, includeOwn) // raises on failure
         } catch (exc: SyncResyncRequired) {
             synchronized(lock) {
                 resyncRequired = resyncRequired + (stream.label to ResyncState(relayBaseUrl, spkiPin, exc.prunedThrough))
@@ -1125,6 +1180,11 @@ object SyncCoordinator {
         // Any?> round-trip would NOT) -- the local route applies it via the
         // exact same SyncService.apply_pull_result() pull_once() itself uses.
         postLocal(stream.prefix + "/_internal/pull-apply", result.toString(), localBaseUrl, internalSecret)
+        // Owner echoes include_own only when it REALLY honoured it (an older Owner would not), so the flag
+        // is spent only then. Done after the apply: the events were applied first.
+        if (includeOwn && result.get("include_own")?.takeUnless { it.isJsonNull }?.asBoolean == true) {
+            postLocal(stream.prefix + "/_internal/bootstrap/include-own-done", "{}", localBaseUrl, internalSecret)
+        }
         return result.getAsJsonArray("events")?.size() ?: 0
     }
 

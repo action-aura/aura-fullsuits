@@ -1,0 +1,119 @@
+"""SYNC-BOOT Phase 3, Android seam: the `/_internal/bootstrap/*` routes Kotlin uses to hand a
+DECRYPTED copy of the shop to the embedded Python backend, and the `include_own` flag it reads
+from `/_internal/cursor`. Driven through a real Flask test client, like test_internal_routes.py.
+
+The product's stage function is a recording stub here (the real one is
+tests of installer.stage in retail_bootstrap_producer_installer_test.py); what this file pins is
+the HTTP contract Kotlin depends on: secret required, a refusal is a 409 with its reason code and
+stages nothing, the one-shot flag is only reported when armed, and a blueprint built WITHOUT the
+seam (the registry stream, every older caller) exposes none of it.
+"""
+import sqlite3
+from types import SimpleNamespace
+
+import pytest
+from flask import Flask
+
+from commercial_runtime.sync.bootstrap.errors import BootstrapError, COMPANY_MISMATCH
+from commercial_runtime.sync.internal_routes import make_sync_internal_blueprint
+from commercial_runtime.sync.sync_service import SyncService
+
+SECRET = "s3cret"
+
+
+class _Repo:
+    def load(self):
+        return SimpleNamespace(owner_installation_id="inst-1")
+
+
+def _conn_factory(path):
+    def get_conn():
+        c = sqlite3.connect(path)
+        c.row_factory = sqlite3.Row
+        return c
+    return get_conn
+
+
+@pytest.fixture
+def parts(tmp_path):
+    db = str(tmp_path / "t.db")
+    c = sqlite3.connect(db)
+    c.executescript("CREATE TABLE sync_cursor (id INTEGER PRIMARY KEY CHECK (id=1), last_seq INTEGER NOT NULL DEFAULT 0);"
+                    "INSERT INTO sync_cursor (id,last_seq) VALUES (1,0);"
+                    "CREATE TABLE sync_outbox (id TEXT PRIMARY KEY, entity_type TEXT, entity_id TEXT, event_type TEXT, "
+                    "payload TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);")
+    c.commit()
+    c.close()
+    state = SimpleNamespace(staged=[], armed=True, done=0, refuse=False)
+
+    def stage(data, relay_url):
+        if state.refuse:
+            raise BootstrapError(COMPANY_MISMATCH, "another shop")
+        state.staged.append((data, relay_url))
+        return {"as_of": 41}
+
+    def spent():
+        state.done += 1
+        state.armed = False
+
+    seam = SimpleNamespace(schema_version=lambda: 56, stage=stage,
+                           include_own_pending=lambda: state.armed, include_own_done=spent)
+    get_conn = _conn_factory(db)
+    svc = SyncService(None, get_conn, lambda: None)
+
+    def client(with_seam=True):
+        app = Flask(__name__)
+        app.register_blueprint(make_sync_internal_blueprint(
+            sync_service=svc, get_conn=get_conn, state_repository=_Repo(), shared_secret=SECRET,
+            bootstrap=seam if with_seam else None))
+        return app.test_client()
+    return client, state
+
+
+H = {"X-Aura-Internal-Secret": SECRET}
+
+
+def test_every_bootstrap_route_needs_the_internal_secret(parts):
+    client, _ = parts
+    c = client()
+    assert c.get("/api/sync/_internal/bootstrap/info").status_code == 403
+    assert c.post("/api/sync/_internal/bootstrap/stage", data=b"zip").status_code == 403
+    assert c.post("/api/sync/_internal/bootstrap/include-own-done").status_code == 403
+
+
+def test_stage_hands_the_bytes_and_relay_to_the_product_and_reports_the_position(parts):
+    client, state = parts
+    r = client().post("/api/sync/_internal/bootstrap/stage?relay_url=https%3A%2F%2Fowner.example", data=b"PK-zip", headers=H)
+    assert r.status_code == 200 and r.get_json() == {"result": "SUCCESS", "as_of": 41}
+    assert state.staged == [(b"PK-zip", "https://owner.example")]
+
+
+def test_a_refused_copy_is_a_409_with_its_reason_and_stages_nothing(parts):
+    """Both directions of the same route: accepted above, refused here."""
+    client, state = parts
+    state.refuse = True
+    r = client().post("/api/sync/_internal/bootstrap/stage", data=b"zip", headers=H)
+    assert r.status_code == 409 and r.get_json()["reason_code"] == COMPANY_MISMATCH
+    assert state.staged == []
+    assert client().post("/api/sync/_internal/bootstrap/stage", data=b"", headers=H).status_code == 400
+
+
+def test_info_reports_the_schema_this_build_runs(parts):
+    client, _ = parts
+    assert client().get("/api/sync/_internal/bootstrap/info", headers=H).get_json() == {"schema_version": 56}
+
+
+def test_cursor_reports_include_own_only_while_armed_and_done_spends_it(parts):
+    client, state = parts
+    c = client()
+    assert c.get("/api/sync/_internal/cursor", headers=H).get_json()["include_own"] is True
+    assert c.post("/api/sync/_internal/bootstrap/include-own-done", headers=H).status_code == 200
+    assert state.done == 1
+    assert c.get("/api/sync/_internal/cursor", headers=H).get_json()["include_own"] is False
+
+
+def test_without_the_seam_nothing_changes(parts):
+    client, _ = parts
+    c = client(with_seam=False)
+    assert c.get("/api/sync/_internal/bootstrap/info", headers=H).status_code == 404
+    assert "include_own" not in c.get("/api/sync/_internal/cursor", headers=H).get_json()

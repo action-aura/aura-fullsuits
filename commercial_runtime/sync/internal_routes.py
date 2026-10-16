@@ -115,6 +115,7 @@ def make_sync_internal_blueprint(
     shared_secret: str,
     blueprint_name: str = "sync_internal",
     url_prefix: str = "/api/sync",
+    bootstrap=None,
 ) -> Blueprint:
     """`blueprint_name`/`url_prefix` default to the ONLY values this
     function has ever used, so the existing (retail-stream) call site in
@@ -132,6 +133,12 @@ def make_sync_internal_blueprint(
     would still collide on `url_prefix`, and vice versa.
     """
     bp = Blueprint(blueprint_name, __name__, url_prefix=url_prefix)
+    # SYNC-BOOT Phase 3 (Android requester). `bootstrap` is the RETAIL stream's seam to the shared
+    # bootstrap package (Kotlin builds and signs the Owner-mailbox calls itself, because Python never
+    # holds the device key; it hands the DECRYPTED copy here to be verified and staged). Object with
+    # schema_version(), stage(data: bytes, relay_url: str) -> dict (raises BootstrapError),
+    # include_own_pending() -> bool, include_own_done(). None (the registry stream, every older caller)
+    # registers none of the routes below and leaves /_internal/cursor byte-for-byte what it was.
 
     def _authorized() -> bool:
         provided = request.headers.get("X-Aura-Internal-Secret", "")
@@ -249,7 +256,11 @@ def make_sync_internal_blueprint(
                 since = sync_service.read_cursor(conn)
         finally:
             conn.close()
-        return jsonify({"installation_id": installation_id, "since": since}), 200
+        body = {"installation_id": installation_id, "since": since}
+        if bootstrap is not None:
+            # Asked for once, after a bootstrap install or a restore (see BootstrapHooks.include_own_once).
+            body["include_own"] = bool(bootstrap.include_own_pending())
+        return jsonify(body), 200
 
     @bp.route("/_internal/pull-apply", methods=["POST"])
     def internal_pull_apply():
@@ -278,5 +289,39 @@ def make_sync_internal_blueprint(
         finally:
             conn.close()
         return jsonify({"result": "SUCCESS"}), 200
+
+    if bootstrap is not None:
+        @bp.route("/_internal/bootstrap/info", methods=["GET"])
+        def internal_bootstrap_info():
+            """What Kotlin needs to ask Owner for a copy: the schema this build runs."""
+            if not _authorized():
+                return _forbidden()
+            return jsonify({"schema_version": int(bootstrap.schema_version())}), 200
+
+        @bp.route("/_internal/bootstrap/stage", methods=["POST"])
+        def internal_bootstrap_stage():
+            """Kotlin downloaded and DECRYPTED a copy of the shop from Owner's mailbox; verify it (signed
+            manifest, same shop, schema, no open drawer) and park it for the next start. The body is the
+            zip itself. A refusal is a normal outcome and says why; nothing is staged then."""
+            if not _authorized():
+                return _forbidden()
+            from commercial_runtime.sync.bootstrap.errors import BootstrapError
+
+            data = request.get_data()
+            if not data:
+                return jsonify({"reason_code": "INVALID_REQUEST", "detail": "Expected the copy as the body."}), 400
+            try:
+                record = bootstrap.stage(data, request.args.get("relay_url", ""))
+            except BootstrapError as exc:
+                return jsonify({"reason_code": exc.reason_code, "detail": exc.message}), 409
+            return jsonify({"result": "SUCCESS", "as_of": record.get("as_of")}), 200
+
+        @bp.route("/_internal/bootstrap/include-own-done", methods=["POST"])
+        def internal_bootstrap_include_own_done():
+            """Owner echoed include_own: the one-shot is spent."""
+            if not _authorized():
+                return _forbidden()
+            bootstrap.include_own_done()
+            return jsonify({"result": "SUCCESS"}), 200
 
     return bp

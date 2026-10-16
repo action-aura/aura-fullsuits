@@ -1397,11 +1397,20 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # F3b: same post-pull void-reversal sweep as the Windows retail service.
     install_void_reversal_sweep(_android_sync_service)
     install_party_balance_refresh(_android_sync_service)  # v44, same as the Windows service
+    # SYNC-BOOT Phase 3: the Android requester's seam (Kotlin talks to Owner's mailbox itself and hands
+    # the decrypted copy to /_internal/bootstrap/stage). Resolved lazily: the functions live further down.
+    from types import SimpleNamespace as _Ns
+    _android_bootstrap_seam = _Ns(
+        schema_version=lambda: RETAIL_SCHEMA_VERSION,
+        stage=lambda data, relay_url: _bootstrap_stage_bytes(data, relay_url),
+        include_own_pending=lambda: _bootstrap_include_own_pending('retail'),
+        include_own_done=lambda: _bootstrap_include_own_done('retail'))
     app.register_blueprint(make_sync_internal_blueprint(
         sync_service=_android_sync_service,
         get_conn=_sync_get_conn,
         state_repository=_sync_state_repository,
         shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
+        bootstrap=_android_bootstrap_seam,
     ))
 
     # Sync backend follow-up (Android registry stream): the ANDROID mirror of
@@ -3307,6 +3316,20 @@ def _after_backup_restore():
         logging.getLogger(__name__).warning('Could not arm include_own_once after a restore.', exc_info=True)
     from commercial_runtime.install_support.restart import schedule_restart
     return schedule_restart()
+
+
+def _bootstrap_stage_bytes(data, relay_url):
+    """Verify and stage a copy of the shop that arrived as bytes (Android: Kotlin fetched and decrypted
+    it from Owner's mailbox). Raises BootstrapError on any refusal; stages nothing then."""
+    from commercial_runtime.sync import authority as _authority
+    from commercial_runtime.sync.bootstrap import installer
+    from commercial_runtime.sync.sync_service import local_company_id_from_registry
+    from database.bootstrap_classes import retail_spec
+    env = _authority.default_authority_env(_bootstrap_app_dir())
+    return installer.stage(
+        data, spec=retail_spec(RETAIL_SCHEMA_VERSION), app_data_dir=_bootstrap_app_dir(), relay_url=relay_url,
+        trust_store=env.trust_store, own_licence=env.own_licence,
+        expected_company_id=local_company_id_from_registry(), registry_fast_forward=None)
 
 
 def _bootstrap_on_resync(stream, client, relay_url, details):

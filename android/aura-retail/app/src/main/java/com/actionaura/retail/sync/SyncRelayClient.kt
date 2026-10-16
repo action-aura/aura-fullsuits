@@ -240,11 +240,24 @@ class SyncRelayClient(
      * Owner (or LAN hub) that predates it verifies the signature over the whole
      * body and ignores the unknown key, and a new Owner reads absence as the
      * 'legacy' stream -- an old caller is byte-for-byte what it was. */
-    fun pull(since: Long, stream: String? = null): JsonObject {
+    fun pull(since: Long, stream: String? = null, caps: List<String>? = null, includeOwn: Boolean = false): JsonObject {
         val extra = linkedMapOf<String, Any?>("since" to since)
         if (stream != null) extra["stream"] = stream
+        // SYNC-BOOT Phase 3: `caps` (what this client can do, e.g. bootstrap_v1) and `include_own` (send me my
+        // OWN events once, after a bootstrap install) ride INSIDE the signed body like `stream`, and are
+        // omitted when unset so an older Owner and every older caller see the exact bytes they always did.
+        if (caps != null && caps.isNotEmpty()) extra["caps"] = caps
+        if (includeOwn) extra["include_own"] = true
         val body = signedBody(extra)
         val result = requestJson("GET", "/api/sync/v1/pull", body)
+        raiseIfRejected(result)
+        return result
+    }
+
+    /** A signed POST to one of Owner's bootstrap-mailbox routes (SYNC-BOOT Phase 3). A `reason_code` answer
+     * raises [SyncRelayRejected] (or [SyncResyncRequired]) exactly like push/pull. */
+    fun postSigned(path: String, extra: LinkedHashMap<String, Any?>): JsonObject {
+        val result = requestJson("POST", path, signedBody(extra))
         raiseIfRejected(result)
         return result
     }
