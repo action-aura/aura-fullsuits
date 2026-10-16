@@ -2704,7 +2704,10 @@ def _migrate_add_stock_counts(conn):
                         count. Each computer only ever writes its own rows, so two computers scanning the
                         same product offline ADD (the count's quantity is the SUM over devices) instead of
                         overwriting each other. `uid` = uuid5(count, product, device) at creation and is
-                        then just an opaque row id. UNIQUE(count_uid, product_id, device_id) is the key.
+                        then just an opaque row id. UNIQUE(count_uid, product_id, device_id, origin_count_uid)
+                        is the key: when a merge moves one computer's rows from the losing count under the
+                        winner, they stay SEPARATE rows (origin tells them apart), so a replayed event can
+                        never be added twice and the count still SUMS them.
                         `system_qty_at_count` is what the system held when THIS device first counted the
                         product and never changes after; posting measures the total against the EARLIEST
                         contribution's figure. `post_unit_cost` is the cost the post booked at, kept so a
@@ -2748,13 +2751,17 @@ def _migrate_add_stock_counts(conn):
             count_uid           TEXT NOT NULL,
             product_id          TEXT NOT NULL,
             device_id           TEXT NOT NULL,   -- the computer that wrote this CONTRIBUTION (its terminal id)
+            origin_count_uid    TEXT NOT NULL,   -- the count this row was WRITTEN under (a merge moves count_uid, never this)
             counted_qty         REAL NOT NULL,   -- THIS device's part; the count's quantity is the SUM over devices
             system_qty_at_count REAL NOT NULL,   -- what the system held when THIS device first counted the product
             variance            REAL NOT NULL,   -- this part only (counted - own system); posting uses the totals
-            counted_at          TEXT,
+            counted_at          TEXT,            -- when this part was LAST written
             counted_by          TEXT,
+            first_counted_at    TEXT,            -- when this part was FIRST written = when system_qty_at_count was read; set once
             post_unit_cost      REAL,            -- unit cost the post booked at (local; NULL until posted)
-            UNIQUE (count_uid, product_id, device_id)
+            posted_variance     REAL,            -- the product's variance as last POSTED, mirrored on every row of the product
+                                                 -- (local; NULL until posted) -- the base a late contribution's correction is measured from
+            UNIQUE (count_uid, product_id, device_id, origin_count_uid)
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_count_lines_company_count "

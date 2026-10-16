@@ -142,9 +142,10 @@ def test_3_rival_counts_started_offline_converge_and_scans_add_up(tmp_path):
         assert heads[loser]["status"] == "merged" and heads[loser]["merged_into"] == winner, (who, heads)
         parts = s.sql(who, "SELECT count_uid, counted_qty FROM stock_count_lines WHERE product_id=?", (s.p1,))
         assert sorted(p["counted_qty"] for p in parts) == [5.0, 5.0] and {p["count_uid"] for p in parts} == {winner}, (who, parts)
-    # a merged count can no longer be scanned or posted, on either computer
+    # a merged count can no longer be POSTED, on either computer (a scan on it is followed to the winner:
+    # proved in retail_stock_take_test.py test_7a)
     for who in ('a', 'b'):
-        r = s.http(who, 'POST', f'/stock-counts/{loser}/lines', {"product_id": s.p1, "quantity": 1})
+        r = s.http(who, 'POST', f'/stock-counts/{loser}/post')
         assert r["status_code"] == 409 and r["body"]["code"] == "STOCK_COUNT_MERGED", (who, r)
     r = s.http('a', 'POST', f'/stock-counts/{winner}/post')
     assert r["status_code"] == 200, r
@@ -167,3 +168,62 @@ def test_4_the_same_product_counted_on_both_computers_is_two_contributions_that_
         lines = s.http(who, 'GET', f'/stock-counts/{uid}')["body"]["data"]["lines"]
         assert sorted((ln["product_id"], ln["counted_qty"]) for ln in lines) == sorted(
             [(s.p1, 13.0), (s.p2, 9.0)]), (who, lines)
+
+
+def _books(s):
+    books = {who: {a['code']: a['balance'] for a in _tb(s, who)['accounts']} for who in ('a', 'b')}
+    assert books['a'] == books['b'], books
+    return books['a']
+
+
+def test_5_a_scan_that_reaches_the_main_computer_after_the_post_is_corrected_once(tmp_path):
+    """HIGH (round 3): A (main) counts 6 of 10 and posts (-4). B scanned 2 more OFFLINE before it heard
+    of the post. When B's scan arrives, A books +2 (total 8 vs 10 = -2, already posted -4): on-hand 8
+    and 5910 = 4.000 on BOTH computers; syncing again changes nothing."""
+    s = _provision(tmp_path)
+    uid = _start_and_count_on_a(s)                       # A: 6 of product one, synced
+    s.pull('b')
+    r = s.http('b', 'POST', f'/stock-counts/{uid}/lines', {"product_id": s.p1, "quantity": 2})   # offline on B
+    assert r["status_code"] == 200, r
+    assert s.http('a', 'POST', f'/stock-counts/{uid}/post')["status_code"] == 200
+    assert _on_hand(s, 'a', s.p1) == 6
+    s.settle()
+    for who in ('a', 'b'):
+        assert _on_hand(s, who, s.p1) == 8, (who, _on_hand(s, who, s.p1))
+    after_first = _books(s)
+    assert after_first['5910'] == 4.0 and after_first['1200'] == 36.0       # (-4 then +2) x 2.000; 40 - 4
+    late = s.sql('a', "SELECT quantity FROM inventory_movements WHERE notes LIKE ? ORDER BY quantity",
+                 (f"Stock count {uid[:8]} (late)",))
+    assert [m["quantity"] for m in late] == [2.0]
+    s.settle()                                           # re-sync: nothing moves again
+    assert [_on_hand(s, w, s.p1) for w in ('a', 'b')] == [8, 8] and _books(s) == after_first
+    assert len(s.sql('a', "SELECT 1 FROM inventory_movements WHERE notes LIKE ?",
+                     (f"Stock count {uid[:8]} (late)",))) == 1
+
+
+def test_6_a_rival_count_started_before_the_post_is_merged_into_it_and_cannot_be_posted_again(tmp_path):
+    """HIGH (round 3): B starts its own count of the Warehouse offline and scans 4; A (main) counts 6 and
+    posts. When B's count reaches A it started BEFORE the post, so it is merged into the posted count
+    (not left open): 6 + 4 = 10 against 10 = no net difference (the +4 late correction cancels the -4).
+    A rival started AFTER the post is a legitimate new count and stays open."""
+    s = _provision(tmp_path)
+    ua = s.http('a', 'POST', '/stock-counts', {"branch_id": _wh(s, 'a')})["body"]["data"]["uid"]
+    ub = s.http('b', 'POST', '/stock-counts', {"branch_id": _wh(s, 'b')})["body"]["data"]["uid"]
+    assert s.http('a', 'POST', f'/stock-counts/{ua}/lines', {"product_id": s.p1, "quantity": 6, "mode": "set"})["status_code"] == 200
+    assert s.http('b', 'POST', f'/stock-counts/{ub}/lines', {"product_id": s.p1, "quantity": 4, "mode": "set"})["status_code"] == 200
+    assert s.http('a', 'POST', f'/stock-counts/{ua}/post')["status_code"] == 200       # A has not heard of B's count
+    s.settle()
+    for who in ('a', 'b'):
+        heads = {r["uid"]: r for r in s.sql(who, "SELECT uid, status, merged_into FROM stock_counts")}
+        assert heads[ua]["status"] == "posted" and heads[ub]["status"] == "merged" and heads[ub]["merged_into"] == ua, (who, heads)
+        assert _on_hand(s, who, s.p1) == 10, (who, _on_hand(s, who, s.p1))
+        r = s.http(who, 'POST', f'/stock-counts/{ub}/post')
+        assert r["status_code"] == 409, (who, r)                                         # cannot be posted again
+    _books(s)
+    # ... and a count started AFTER the post (B had already heard of it) is a legitimate new one.
+    new = s.http('b', 'POST', '/stock-counts', {"branch_id": _wh(s, 'b')})
+    assert new["status_code"] == 200, new
+    s.settle()
+    for who in ('a', 'b'):
+        status = s.sql(who, "SELECT status FROM stock_counts WHERE uid=?", (new["body"]["data"]["uid"],))
+        assert status == [{"status": "open"}], (who, status)
