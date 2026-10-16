@@ -214,6 +214,15 @@ async function testBelowZeroWarningAndMergedNote(src = SRC) {
   const dialog = loaded.body.children[0].innerHTML;
   assert.ok(dialog.includes('id="st-post-warn"') && dialog.includes('Tea Box') && dialog.includes('-3'),
     'the confirmation names the product that will end below zero');
+  const mv = JSON.parse(JSON.stringify(COUNT_OPEN));
+  mv.data.totals.moved_during_count = [{ product_id: 'p1', name: 'Olive Oil 1L' }];
+  mv.data.lines[0].moved_during_count = true;
+  const r3 = { get: (url) => url === `${API}/stock-counts` ? { data: [{ uid: 'c-open-1', status: 'open', branch_name: 'Main', line_count: 2, started_at: '2026-10-16T10:00:00Z' }] } : mv, post: () => ({}) };
+  const { host: h3, loaded: l3 } = await openThrough(src, r3, 'c-open-1');
+  assert.ok(h3.innerHTML.includes('class="st-moved"'), 'the line says stock moved during the count');
+  h3._q['#st-post'].onclick();
+  assert.ok(l3.body.children[0].innerHTML.includes('id="st-post-moved"') && l3.body.children[0].innerHTML.includes('Olive Oil 1L'),
+    'the confirmation recommends a recount for that product');
   const merged = JSON.parse(JSON.stringify(COUNT_OPEN));
   merged.data.count.status = 'merged';
   const r2 = { get: (url) => url === `${API}/stock-counts` ? { data: [{ uid: 'c-open-1', status: 'merged', branch_name: 'Main', line_count: 0, started_at: '2026-10-16T10:00:00Z' }] } : merged, post: () => ({}) };
@@ -269,6 +278,8 @@ function mutate(find, replace) {
     testNonMainComputerCannotPostAndSaysWhy(mutate("(lines.length && canPost ? '' : ' disabled')", "(lines.length ? '' : ' disabled')")));
   await mustFail('no below-zero warning in the dialog => warning test fails', () =>
     testBelowZeroWarningAndMergedNote(mutate("(tot.below_zero && tot.below_zero.length ?", "(false ?")));
+  await mustFail('no moved-during-count note in the dialog => warning test fails', () =>
+    testBelowZeroWarningAndMergedNote(mutate("(tot.moved_during_count && tot.moved_during_count.length ?", "(false ?")));
   await mustFail('shortage painted green => sign/class test fails', () =>
     testOpenCountScreen(mutate("function varianceClass(v) { return v > 0 ? 'ret-badge-green' : (v < 0 ? 'ret-badge-red' : 'ret-badge-blue'); }", "function varianceClass(v) { return 'ret-badge-green'; }")));
   console.log('PASS: retail_stock_take_ui_test.js');

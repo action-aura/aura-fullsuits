@@ -310,3 +310,11 @@ def test_two_parts_of_one_computer_from_two_merged_counts_are_added_not_overwrit
     rows = _parts(get_conn)
     assert sorted(p["counted_qty"] for p in rows) == [3.0, 5.0] and {p["count_uid"] for p in rows} == {LOW}
     assert sum(p["counted_qty"] for p in rows) == 8.0
+    # devA keeps scanning: its moved-in part is now written against the winner but still carries its
+    # ORIGIN, so the update finds that row (3 -> 4), never the computer's other row (5).
+    upd = _line(HIGH, "devA", 4.0, T3)
+    upd["event_type"] = "update"
+    upd["payload"]["count_uid"] = LOW
+    upd["payload"]["origin_count_uid"] = HIGH
+    _apply(get_conn, upd)
+    assert sorted(p["counted_qty"] for p in _parts(get_conn)) == [4.0, 5.0]

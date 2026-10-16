@@ -2922,5 +2922,7 @@
   "This count was joined with another one started at the same time. Open the joined count to carry on.": "تم دمج هذا الجرد مع جرد آخر بدأ في الوقت نفسه. افتح الجرد المدموج للمتابعة.",
   "product(s) will end below zero:": "منتج(ات) سينتهي رصيدها تحت الصفر:",
   "Only the shop's main computer can post a stock count. You can keep scanning here; post it on the main computer.": "الجهاز الرئيسي للمحل وحده يستطيع ترحيل جرد المخزون. يمكنك متابعة المسح هنا ثم ترحيله من الجهاز الرئيسي.",
-  "Another computer started a count of this branch at the same time, so the two were joined into one. Use the joined count.": "بدأ جهاز آخر جردًا لهذا الفرع في الوقت نفسه، فتم دمج الجردين في واحد. استخدم الجرد المدموج."
+  "Another computer started a count of this branch at the same time, so the two were joined into one. Use the joined count.": "بدأ جهاز آخر جردًا لهذا الفرع في الوقت نفسه، فتم دمج الجردين في واحد. استخدم الجرد المدموج.",
+  "Stock moved during the count": "تحرّك المخزون أثناء الجرد",
+  "Stock moved during the count, recount recommended:": "تحرّك المخزون أثناء الجرد، يُنصح بإعادة العدّ:"
 }

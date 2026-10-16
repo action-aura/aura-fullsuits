@@ -129,6 +129,10 @@
     state.openUid = uid;
     var d = await RS()._get(API + '/stock-counts/' + encodeURIComponent(uid));
     if (d.status !== 'success') { toast(d.message || t('Count not found'), 'error'); return render(state.host); }
+    // A count that was joined into another (two computers started one at once) hands over to the winner.
+    if (d.data.count.status === 'merged' && d.data.count.merged_into && d.data.count.merged_into !== uid) {
+      return openCount(d.data.count.merged_into);
+    }
     state.detail = d.data;
     draw();
   }
@@ -155,7 +159,8 @@
         esc(t('Difference')) + '</th><th>' + esc(t('Value')) + '</th></tr></thead><tbody>' +
         (lines.length ? lines.map(function (l) {
           return '<tr><td>' + bdi(l.product_name || l.product_id) +
-            '<div style="color:var(--text-muted);font-size:12px">' + bdi(l.barcode || l.sku || '') + '</div></td>' +
+            '<div style="color:var(--text-muted);font-size:12px">' + bdi(l.barcode || l.sku || '') + '</div>' +
+            (l.moved_during_count ? '<div class="st-moved" style="font-size:12px">' + esc(t('Stock moved during the count')) + '</div>' : '') + '</td>' +
             '<td>' + esc(qty(l.system_qty_at_count)) + '</td>' +
             '<td>' + esc(qty(l.counted_qty)) + '</td>' +
             (isOpen ? '<td><input type="number" min="0" step="any" style="width:90px;min-block-size:var(--touch-target-min)" data-st-set="' + esc(l.product_id) +
@@ -203,7 +208,7 @@
     var d = await RS()._post(API + '/stock-counts/' + encodeURIComponent(state.openUid) + '/lines',
       { product_id: m.product.id, quantity: q > 0 ? q : 1, mode: 'add' });
     if (d.status !== 'success') { toast(d.message || t('Could not record this count.'), 'error'); return; }
-    await openCount(state.openUid);
+    await openCount((d.data && d.data.count_uid) || state.openUid);   // the server follows a joined count
   }
 
   async function setLine(productId, value) {
@@ -212,7 +217,7 @@
     var d = await RS()._post(API + '/stock-counts/' + encodeURIComponent(state.openUid) + '/lines',
       { product_id: productId, quantity: v, mode: 'set' });
     if (d.status !== 'success') toast(d.message || t('Could not record this count.'), 'error');
-    await openCount(state.openUid);
+    await openCount((d.data && d.data.count_uid) || state.openUid);
   }
 
   async function cancelCount() {
@@ -235,6 +240,9 @@
           '<p id="st-post-warn" style="color:var(--danger,#b00020)"><strong>' + esc(tot.below_zero.length) + '</strong> ' +
           esc(t('product(s) will end below zero:')) + ' ' + tot.below_zero.map(function (b) { return bdi(b.name || b.product_id) + ' (' + esc(qty(b.will_be)) + ')'; }).join(', ') + '. ' +
           esc(t('That is allowed, but check them.')) + '</p>' : '') +
+        (tot.moved_during_count && tot.moved_during_count.length ?
+          '<p id="st-post-moved"><strong>' + esc(t('Stock moved during the count, recount recommended:')) + '</strong> ' +
+          tot.moved_during_count.map(function (b) { return bdi(b.name || b.product_id); }).join(', ') + '.</p>' : '') +
         '<table class="ret-table"><tbody>' +
           '<tr><td>' + esc(t('Products counted')) + '</td><td><strong>' + esc(tot.lines) + '</strong></td></tr>' +
           '<tr><td>' + esc(t('Units over')) + '</td><td><strong>' + esc(qty(tot.gain_qty)) + '</strong></td></tr>' +
