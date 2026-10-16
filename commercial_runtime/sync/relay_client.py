@@ -218,6 +218,16 @@ class SyncRelayClient:
         except requests.exceptions.RequestException as exc:
             raise NetworkError("NETWORK_UNAVAILABLE", str(exc)) from exc
 
+    def post_signed_json(self, path: str, extra: dict, *, timeout_seconds: Optional[float] = None) -> dict:
+        """POST a signed body and return the parsed JSON answer, raising `RelayRejected`
+        for a `reason_code` answer -- the shape of every Owner bootstrap-mailbox route
+        (SYNC-BOOT Phase 3). `timeout_seconds` is for the chunk routes, which carry up
+        to 4 MiB of base64 inside the signed body."""
+        body = self._signed_body(extra)
+        result = self._request("POST", path, body, timeout_seconds=timeout_seconds)
+        self._raise_if_rejected(result)
+        return result
+
     def _signed_body(self, extra: dict) -> dict:
         # A fresh nonce and current timestamp on EVERY call -- never reused,
         # never cached -- exactly like LicensingClient's _post_signed sites.
@@ -238,7 +248,7 @@ class SyncRelayClient:
                 result["reason_code"], f"Sync relay rejected the request: {result['reason_code']}", details
             )
 
-    def _request(self, method: str, path: str, json_body: dict) -> dict:
+    def _request(self, method: str, path: str, json_body: dict, *, timeout_seconds: Optional[float] = None) -> dict:
         url = self._config.base_url + path
         last_error: Optional[Exception] = None
 
@@ -253,7 +263,7 @@ class SyncRelayClient:
                     method,
                     url,
                     json=json_body,
-                    timeout=self._config.timeout_seconds,
+                    timeout=timeout_seconds or self._config.timeout_seconds,
                     verify=self._config.verify_tls,
                     headers=headers,
                 )

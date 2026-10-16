@@ -1057,17 +1057,19 @@ def _retail_bootstrap_hooks():
     further down this module exist; they resolve when called."""
     from commercial_runtime.sync.bootstrap.hooks import BootstrapHooks
     return BootstrapHooks(
-        # `bootstrap_producer_v1` = "I act on bootstrap requests a hub piggybacks on my pull". NOT
-        # `bootstrap_v1` (= "I can fetch a copy from Owner"): that needs Owner's mailbox (Phase 3),
-        # and advertising it early would let a later retention gate believe this client can recover.
-        caps=('bootstrap_producer_v1',),
+        # `bootstrap_producer_v1` = "I act on bootstrap requests a relay piggybacks on my pull".
+        # `bootstrap_v1` = "I can fetch a copy of the shop from Owner's mailbox" -- true since
+        # SYNC-BOOT Phase 3 (transport_owner.OwnerRequester); the Phase 4 retention gate reads it.
+        caps=('bootstrap_v1', 'bootstrap_producer_v1'),
         include_own_once=lambda: _bootstrap_include_own_pending('retail'),
         include_own_done=lambda: _bootstrap_include_own_done('retail'),
         reapply_outbox_pending=lambda: _bootstrap_reapply_pending(),
         reapply_outbox_done=lambda: _bootstrap_reapply_done(),
         on_resync_required=lambda stream, client, relay_url, details: _bootstrap_on_resync(
             stream, client, relay_url, details),
-        on_bootstrap_requests=lambda requests: _bootstrap_on_requests(requests))
+        on_bootstrap_requests=lambda requests: _bootstrap_on_requests(requests),
+        on_mailbox_requests=lambda requests, client, relay_url: _bootstrap_on_mailbox_requests(
+            requests, client, relay_url))
 
 
 def _registry_bootstrap_hooks():
@@ -3325,6 +3327,9 @@ def _bootstrap_on_resync(stream, client, relay_url, details):
         from database.bootstrap_classes import retail_spec
         ports, known = _lan_hub_signals()
         if not is_lan_hub_url(relay_url, hub_ports=ports, known_hub_urls=known):
+            # Owner's cloud relay: ask its mailbox. A peer builds the copy, so this WAITS (a
+            # background poller, resumed from a state file after a restart) instead of staging now.
+            _start_owner_requester(client, relay_url)
             return False
         env = _authority.default_authority_env(_bootstrap_app_dir())
         try:
@@ -3345,6 +3350,169 @@ def _bootstrap_on_resync(stream, client, relay_url, details):
     except Exception:
         log.exception('Bootstrap request failed unexpectedly.')
         return False
+
+
+_OWNER_REQUESTER_LOCK = threading.Lock()
+_OWNER_REQUESTER_THREAD = None
+#: Test seam (the acceptance harness sets it): run the Owner-mailbox work INLINE and do not
+#: auto-start the requester's poller, so a short-lived device process can drive each step
+#: itself and a test can interleave several computers deterministically. Never set in production.
+_BOOTSTRAP_INLINE = False
+
+
+def _make_owner_requester(client, relay_url):
+    """The `OwnerRequester` for this computer against `client`'s relay -- one construction, used by
+    the background poller and by the harness's stepwise driver."""
+    from commercial_runtime.sync import authority as _authority
+    from commercial_runtime.sync.bootstrap import transport_owner
+    from commercial_runtime.sync.sync_service import local_company_id_from_registry
+    from database.bootstrap_classes import retail_spec
+    env = _authority.default_authority_env(_bootstrap_app_dir())
+
+    def _staged(record):
+        logging.getLogger(__name__).warning(
+            'Bootstrap: a copy of the shop from Owner (complete up to relay position %s) is staged; it is '
+            'installed at the next start.', record.get('as_of'))
+        if not _BOOTSTRAP_INLINE:
+            from commercial_runtime.install_support.restart import schedule_restart
+            schedule_restart()
+
+    return transport_owner.OwnerRequester(
+        transport_owner.MailboxApi(client), spec=retail_spec(RETAIL_SCHEMA_VERSION),
+        app_data_dir=_bootstrap_app_dir(), relay_url=relay_url, trust_store=env.trust_store,
+        own_licence=env.own_licence, expected_company_id=local_company_id_from_registry(),
+        app_version=str(APP_VERSION), after_staged=_staged)
+
+
+def _start_owner_requester(client, relay_url):
+    """SYNC-BOOT Phase 3: RESYNC_REQUIRED from Owner's cloud relay -> poll its bootstrap mailbox
+    until a peer has produced a copy, then stage it and ask for the restart that installs it. One
+    poller per process; NEVER RAISES (a till keeps selling while it waits)."""
+    global _OWNER_REQUESTER_THREAD
+    log = logging.getLogger(__name__)
+    try:
+        if _BOOTSTRAP_INLINE or not hasattr(client, 'post_signed_json'):
+            return False
+        with _OWNER_REQUESTER_LOCK:
+            if _OWNER_REQUESTER_THREAD is not None and _OWNER_REQUESTER_THREAD.is_alive():
+                return False
+            requester = _make_owner_requester(client, relay_url)
+            thread = threading.Thread(
+                target=lambda: log.warning('Bootstrap requester finished: %s', requester.run()),
+                name='aura-bootstrap-requester', daemon=True)
+            _OWNER_REQUESTER_THREAD = thread
+            thread.start()
+        return True
+    except Exception:
+        log.exception('Could not start the bootstrap requester.')
+        return False
+
+
+_MAILBOX_WORKER_LOCK = threading.Lock()
+_MAILBOX_SIGHTINGS = {}
+#: A non-main computer lets the main claim first: it only steps in once it has seen the same
+#: request this many times (pulls), i.e. the main has had two ticks and did not.
+_MAILBOX_PEER_PATIENCE = 3
+
+
+def _is_main_computer():
+    try:
+        from commercial_runtime.identity.device_registry import get_assignment
+        from commercial_runtime.sync import authority as _authority
+        from commercial_runtime.sync.sync_service import local_company_id_from_registry
+        company_id = local_company_id_from_registry()
+        device_id = _authority._local_device_id(_bootstrap_app_dir())
+        if not company_id or not device_id:
+            return False
+        reg = get_registry_conn()
+        try:
+            assignment = get_assignment(reg, company_id)
+        finally:
+            reg.close()
+        return bool(assignment and str(assignment['device_id']) == device_id)
+    except Exception:
+        return False
+
+
+def _bootstrap_on_mailbox_requests(requests, client, relay_url):
+    """Owner told this producer-capable computer that others wait. Two jobs, both done on a worker
+    thread so the pull that delivered the news is never held up by a 50 MB copy:
+      * the MAIN computer re-announces authority (staff, till numbers) for a registry request or a
+        retail copy that is READY, then tells Owner (`fulfil`);
+      * a computer that holds the shop builds, encrypts and uploads the copy for an OPEN retail
+        request -- the main first, anyone else after `_MAILBOX_PEER_PATIENCE` sightings.
+    NEVER RAISES."""
+    log = logging.getLogger(__name__)
+    try:
+        if not requests or not hasattr(client, 'post_signed_json'):
+            return
+        if not _MAILBOX_WORKER_LOCK.acquire(blocking=False):
+            return                                     # a previous batch is still being worked on
+    except Exception:
+        return
+
+    def _work():
+        try:
+            from commercial_runtime.sync import authority as _authority
+            from commercial_runtime.sync.bootstrap import transport_owner
+            from commercial_runtime.sync.bootstrap.producer import build_bootstrap
+            from commercial_runtime.sync.sync_service import local_company_id_from_registry, resync_streams_snapshot
+            from database.bootstrap_classes import retail_spec
+            from database.schema import _get_path
+            api = transport_owner.MailboxApi(client)
+            live = {r['request_id'] for r in requests}
+            for stale in [k for k in _MAILBOX_SIGHTINGS if k not in live]:
+                _MAILBOX_SIGHTINGS.pop(stale, None)
+            is_main = None
+            for req in requests:
+                rid = req['request_id']
+                wants_authority = req.get('stream') == 'registry' or req.get('status') in ('READY', 'DELIVERED')
+                if wants_authority:
+                    if is_main is None:
+                        is_main = _is_main_computer()
+                    if is_main:
+                        report = _force_main_reannounce('Owner request %s' % rid)
+                        if report and report.get('ran'):
+                            api.fulfil(rid)
+                    continue
+                if req.get('stream') != 'retail' or req.get('status') != 'OPEN':
+                    continue
+                seen = _MAILBOX_SIGHTINGS[rid] = _MAILBOX_SIGHTINGS.get(rid, 0) + 1
+                if is_main is None:
+                    is_main = _is_main_computer()
+                if not is_main and seen < _MAILBOX_PEER_PATIENCE:
+                    continue
+                if 'retail' in resync_streams_snapshot():
+                    continue                           # we are behind the prune ourselves: our copy would be too
+                theirs = req.get('requester_schema_version')
+                if isinstance(theirs, int) and theirs < RETAIL_SCHEMA_VERSION:
+                    continue                           # they cannot read a copy newer than themselves
+                company_id = local_company_id_from_registry()
+                if not company_id:
+                    continue
+                signer = _authority.local_signer_or_none(_bootstrap_app_dir())
+
+                def _build(requester, _signer=signer, _company=company_id):
+                    return build_bootstrap(
+                        spec=retail_spec(RETAIL_SCHEMA_VERSION), source_path=_get_path('retail'),
+                        company_id=_company, signer=_signer, expected_relay_url=relay_url,
+                        requester=requester)
+
+                outcome = transport_owner.produce_for(api, req, build=_build, schema_version=RETAIL_SCHEMA_VERSION)
+                log.warning('Bootstrap: request %s -> %s', rid, outcome)
+        except Exception:
+            log.warning('Bootstrap: answering Owner mailbox requests failed (they stay open).', exc_info=True)
+        finally:
+            _MAILBOX_WORKER_LOCK.release()
+
+    try:
+        if _BOOTSTRAP_INLINE:
+            _work()
+        else:
+            threading.Thread(target=_work, name='aura-bootstrap-producer', daemon=True).start()
+    except Exception:
+        _MAILBOX_WORKER_LOCK.release()
+        log.exception('Could not start the bootstrap producer thread.')
 
 
 def _force_main_reannounce(reason):

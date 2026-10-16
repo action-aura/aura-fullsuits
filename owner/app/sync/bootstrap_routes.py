@@ -55,7 +55,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db_session
 from app.models.sync import BOOTSTRAP_OPEN_STATUSES, SyncBootstrapRequest, SyncDeviceCursor, SyncEvent
-from app.sync.routes import SyncAuthError, _authenticate, _error, bp
+from app.sync.routes import SyncAuthError, _authenticate, _error, _license_pruned_through, bp
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +118,13 @@ def _view(row: SyncBootstrapRequest) -> dict:
         # Public transport facts only (ephemeral public key, salt, counts, hashes).
         "manifest": {k: v for k, v in manifest.items() if k != "authority_fulfilled"},
     }
+
+
+def _claim_view(row: SyncBootstrapRequest) -> dict:
+    """What the producer gets back from a claim: the request plus the requester's
+    PUBLIC key -- the one thing it needs to encrypt the copy to. (Public by
+    construction; it is not in `_view` because nobody else needs it.)"""
+    return {**_view(row), "enc_pubkey": row.enc_pubkey}
 
 
 def _authenticate_or_error(body):
@@ -344,7 +351,7 @@ def bootstrap_claim():
         # The requester can migrate a copy forward but cannot read a newer one.
         return _reply("SCHEMA_NEWER")
     if row.status == "CLAIMED" and row.producer_installation_id == installation.id and not _lease_lapsed(row):
-        return jsonify(_view(row)), 200        # the same producer asking again: idempotent
+        return jsonify(_claim_view(row)), 200  # the same producer asking again: idempotent
     # A producer must itself have pulled the shop at least up to the requester's
     # own events, or its copy would be missing them.
     producer_cursor = db_session.get(SyncDeviceCursor, (installation.id, "retail"))
@@ -370,7 +377,7 @@ def bootstrap_claim():
     _blob_dir(row).mkdir(parents=True, exist_ok=True)
     db_session.commit()
     db_session.refresh(row)
-    return jsonify(_view(row)), 200
+    return jsonify(_claim_view(row)), 200
 
 
 def _claim_holder_row(body, installation, license_id):
@@ -463,15 +470,19 @@ def bootstrap_complete():
     names = sorted(p.name for p in _blob_dir(row).glob("*.chunk")) if _blob_dir(row).is_dir() else []
     if names != [f"{i:06d}.chunk" for i in range(count)]:
         return _reply("CHUNKS_INCOMPLETE")
-    if as_of < row.min_as_of:
-        # The copy does not contain events the requester itself pushed. Back to
-        # OPEN with the bytes removed, so a better-placed peer can try.
+    pruned_through = _license_pruned_through(license_id)
+    if as_of < row.min_as_of or as_of < pruned_through:
+        # Either the copy does not contain events the requester itself pushed, or
+        # it is itself BELOW what Owner has pruned -- the requester would resume
+        # from `as_of`, be told RESYNC_REQUIRED again and ask again, forever (a
+        # producer that is itself stuck behind the prune holds exactly such a copy).
+        # Back to OPEN with the bytes removed, so a better-placed peer can try.
         row.status = "OPEN"
         row.producer_installation_id = None
         row.claim_expires_at = None
         _remove_blob(row.id)
         db_session.commit()
-        return _reply("AS_OF_TOO_OLD", min_as_of=row.min_as_of)
+        return _reply("AS_OF_TOO_OLD", min_as_of=max(row.min_as_of, pruned_through))
     hashes, total = [], 0
     for i in range(count):
         data = _chunk_path(row, i).read_bytes()
