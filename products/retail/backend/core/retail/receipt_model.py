@@ -59,6 +59,7 @@ AR_LABELS = {
     "Promotions": "العروض الترويجية",
     "Discount": "الخصم",
     "Tax": "الضريبة",
+    "Tax (included)": "الضريبة (شاملة)",
     "Total": "الإجمالي",
     "Paid": "المدفوع",
     "Rounding": "التقريب",
@@ -301,7 +302,11 @@ def build_receipt_model(
         lines.append(_row(label, _negative(money(manual_discount))))
     tax = float(sale.get("tax_amount") or 0)
     if tax > 0:
-        lines.append(_row(tr("Tax"), money(tax)))
+        # TAXINC: on a tax-inclusive sale the tax is already inside the total, so the row
+        # must say so -- a plain "Tax" row under a subtotal reads as an extra charge.
+        inclusive = pricing.header_is_tax_inclusive(
+            sale.get("subtotal"), sale.get("discount_amount"), tax, sale.get("total"), currency)
+        lines.append(_row(tr("Tax (included)") if inclusive else tr("Tax"), money(tax)))
     lines.append(_row(tr("Total"), money(sale.get("total")), bold=True))
     # MONEY-5: the cash rounding, signed ("Rounding -JD 0.007"). NULL / 0 prints nothing -- an old
     # sale, a card sale and a shop with rounding off look exactly as before.

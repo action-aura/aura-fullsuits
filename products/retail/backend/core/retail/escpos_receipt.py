@@ -343,7 +343,9 @@ def render_receipt(
 
     tax = sale.get("tax_amount") or 0
     if tax > 0:
-        out += _ascii(_row("Tax", money_format.format_money(tax, currency), width_chars)) + b"\n"
+        # TAXINC: tax already inside the total on a tax-inclusive sale -- say so on paper.
+        label = "Tax (incl.)" if sale.get("tax_inclusive") else "Tax"
+        out += _ascii(_row(label, money_format.format_money(tax, currency), width_chars)) + b"\n"
 
     out += ESC + b"E\x01"  # emphasis (bold) on, for the total line only
     out += _ascii(_row("Total", money_format.format_money(sale.get("total", 0), currency), width_chars)) + b"\n"

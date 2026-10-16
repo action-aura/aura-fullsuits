@@ -405,7 +405,10 @@ def test_tax_settings_default_is_after_discount():
     assert r.status_code == 200
     data = r.get_json()["data"]
     assert data["tax_calculation_mode"] == "after_discount"
-    assert set(data["available_modes"]) == {"after_discount", "before_discount"}
+    # TAXINC added "inclusive". This can no longer catch the mode list silently
+    # regaining or losing an entry other than inclusive; retail_taxinc_test.py
+    # asserts the exact three-mode set from the route as well.
+    assert set(data["available_modes"]) == {"after_discount", "before_discount", "inclusive"}
 
 
 def test_tax_settings_can_be_changed_and_persists():

@@ -1596,11 +1596,12 @@ def top_products(conn, cid, period, branch_id=None, limit=10, currency=None):
                si.unit_price AS unit_price,
                COALESCE(si.discount_pct,0) AS discount_pct,
                COALESCE(si.tax_rate,0) AS tax_rate,
+               si.line_total AS stored_taxable,
                COUNT(*) AS line_count
         FROM sale_items si
         JOIN sales s ON si.sale_id=s.id
         WHERE {sale_where}
-        GROUP BY si.product_id, si.quantity, si.unit_price, si.discount_pct, si.tax_rate
+        GROUP BY si.product_id, si.quantity, si.unit_price, si.discount_pct, si.tax_rate, si.line_total
     """, sale_params).fetchall()
 
     ret_where, ret_params = _scope(cid, period, boundary, branch_id, alias='r')
@@ -1659,9 +1660,18 @@ def top_products(conn, cid, period, branch_id=None, limit=10, currency=None):
     for row in sales:
         count = int(row['line_count'] or 0)
         units = float(row['quantity'] or 0)
+        # TAXINC: price the line under the mode it was SOLD under (recovered from
+        # its stored taxable amount), so flipping the company setting does not
+        # re-price inclusive history. Inclusive lines are quantized at the shop's
+        # currency (its total is the shelf figure, to the fil); the two exclusive
+        # modes keep the historic call exactly as it was.
+        line_mode = pricing.historical_line_mode(
+            mode, float(row['unit_price'] or 0), units, float(row['discount_pct'] or 0),
+            float(row['tax_rate'] or 0), row['stored_taxable'], currency)
         line_total = pricing.calculate_line(
             float(row['unit_price'] or 0), units,
-            float(row['discount_pct'] or 0), float(row['tax_rate'] or 0), mode=mode)['total']
+            float(row['discount_pct'] or 0), float(row['tax_rate'] or 0), mode=line_mode,
+            currency=currency if line_mode == pricing.TAX_INCLUSIVE else None)['total']
         entry = totals.setdefault(row['pid'], {'units': 0.0, 'revenue': 0.0})
         entry['units'] += units * count
         entry['revenue'] += line_total * count

@@ -9889,8 +9889,18 @@ def create_sale():
         # docstring (core/retail/general_ledger.py) for why this balances
         # and the one documented sub-epsilon edge case it tolerates.
         ar_amount_for_gl = balance_due if (is_credit and balance_due > _eps and customer_id) else 0.0
-        revenue_amount = float(
-            (Decimal(str(subtotal)) - Decimal(str(discount))).quantize(_quant, rounding=ROUND_HALF_UP))
+        # TAXINC: in TAX_INCLUSIVE mode the header's subtotal and discount are
+        # INCLUSIVE figures (the shelf price and the cut off it, tax inside), so
+        # subtotal - discount is the whole TOTAL, tax included. Booking that as
+        # revenue next to Cr Tax Payable would credit the tax twice and unbalance
+        # the journal; revenue is what is left of the total once tax is carved
+        # out. The two exclusive modes keep the historic expression untouched.
+        if mode == tax_engine.TAX_INCLUSIVE:
+            revenue_amount = float(
+                (Decimal(str(total)) - Decimal(str(tax))).quantize(_quant, rounding=ROUND_HALF_UP))
+        else:
+            revenue_amount = float(
+                (Decimal(str(subtotal)) - Decimal(str(discount))).quantize(_quant, rounding=ROUND_HALF_UP))
         # MONEY-4a / D1: ONE business date for the sale AND its COGS journal below.
         gl_business_date = _gl_business_date(conn, cid)
         # MONEY-4a / D3: the part of what was retained that arrived as a VOUCHER is not cash.
@@ -11129,7 +11139,7 @@ def create_return():
                 # snapshot, not the product's cost today -- see resolved_
                 # items.append's own comment a few lines down.
                 sold = cur.execute(
-                    "SELECT id, product_id, quantity, unit_price, discount_pct, tax_rate, unit_cost "
+                    "SELECT id, product_id, quantity, unit_price, discount_pct, tax_rate, unit_cost, line_total "
                     "FROM sale_items WHERE id=? AND sale_id=?", (sale_item_id, sale_id)
                 ).fetchone()
                 if not sold:
@@ -11166,7 +11176,7 @@ def create_return():
                 # `unit_cost` added, same reason as the sale_item_id branch
                 # immediately above.
                 sale_lines_for_product = cur.execute(
-                    "SELECT id, quantity, unit_price, discount_pct, tax_rate, unit_cost "
+                    "SELECT id, quantity, unit_price, discount_pct, tax_rate, unit_cost, line_total "
                     "FROM sale_items WHERE sale_id=? AND product_id=?", (sale_id, pid)
                 ).fetchall()
                 if not sale_lines_for_product:
@@ -11216,9 +11226,19 @@ def create_return():
                     f'already claimed earlier in this request {already_claimed}).'}), 400
             claimed_this_request[claim_key] = already_claimed + qty
 
+            # TAXINC: re-price the line under the mode it was SOLD under, not the
+            # company's current setting. The owner can flip the setting after the
+            # sale; a sale rung tax-inclusive and returned after a switch back to
+            # exclusive would otherwise refund a different amount than was paid
+            # (0.250 paid -> 0.290 refunded at 16%). The mode is recovered from the
+            # line's stored taxable amount -- see pricing.historical_line_mode.
+            line_mode = tax_engine.historical_line_mode(
+                mode, float(sold['unit_price']), float(sold['quantity']),
+                float(sold['discount_pct'] or 0), float(sold['tax_rate'] or 0),
+                sold['line_total'], currency)
             calc = tax_engine.calculate_line(
                 float(sold['unit_price']), qty, float(sold['discount_pct'] or 0),
-                float(sold['tax_rate'] or 0), mode=mode, currency=currency)
+                float(sold['tax_rate'] or 0), mode=line_mode, currency=currency)
             # ── MONEY-5 item 4 -- A LINE RETURNED IN PARTS REFUNDS EXACTLY WHAT IT COST ────────
             # Measured (UI-3a verifier, 33 of 156 fuzzed sales): each part used to be re-priced from
             # the stored per-line % and rounded ON ITS OWN, so the parts of one line summed to 1-3
@@ -11232,7 +11252,7 @@ def create_return():
             _qtq = tax_engine.currency_quantum(currency)
             _line_cost = Decimal(str(tax_engine.calculate_line(
                 float(sold['unit_price']), float(sold['quantity']), float(sold['discount_pct'] or 0),
-                float(sold['tax_rate'] or 0), mode=mode, currency=currency)['total']))
+                float(sold['tax_rate'] or 0), mode=line_mode, currency=currency)['total']))
             _value_before = (Decimal(str(refunded_value_before or 0))
                              + claimed_value_this_request.get(claim_key, Decimal('0')))
             _value_left = max(_line_cost - _value_before, Decimal('0'))
@@ -17545,10 +17565,17 @@ def printer_receipt_payload():
         # Same join shape as get_sale's own sale_items query above (product
         # name resolved through the join, never a raw product_id on paper).
         items = conn.execute("""
-            SELECT si.id, si.product_id, si.quantity, si.line_total, p.name as product_name
+            SELECT si.id, si.product_id, si.quantity, si.line_total, si.unit_price,
+                   si.discount_pct, si.tax_rate, p.name as product_name
             FROM sale_items si LEFT JOIN products p ON si.product_id=p.id
             WHERE si.sale_id=?
         """, (sale_id,)).fetchall()
+        # TAXINC: a tax-inclusive sale prints each line at the amount the customer pays
+        # for it (shelf price less discount, tax inside) -- `line_total` is the TAXABLE
+        # figure, which would put ex-tax numbers above an inclusive total.
+        _rcpt_currency = (_settings(conn, cid).get('base_currency') or tax_engine.DEFAULT_BASE_CURRENCY)
+        _tax_inclusive = tax_engine.header_is_tax_inclusive(
+            sale['subtotal'], sale['discount_amount'], sale['tax_amount'], sale['total'], _rcpt_currency)
         # EXTRAS: snapshot names only (see get_sale); printed as priceless
         # sub-rows by render_receipt.
         extras_by_item = modifier_engine.read_sale_modifiers(conn, cid, [i['id'] for i in items])
@@ -17569,12 +17596,18 @@ def printer_receipt_payload():
                     'name': item['product_name'],
                     'product_id': item['product_id'],
                     'quantity': item['quantity'],
-                    'line_total': item['line_total'],
+                    'line_total': (
+                        tax_engine.calculate_line(
+                            float(item['unit_price']), float(item['quantity']),
+                            float(item['discount_pct'] or 0), float(item['tax_rate'] or 0),
+                            mode=tax_engine.TAX_INCLUSIVE, currency=_rcpt_currency)['total']
+                        if _tax_inclusive else item['line_total']),
                     'modifiers': extras_by_item.get(item['id'], []),
                     'applied_promotion': promo_by_item.get(item['id']),
                 }
                 for item in items
             ],
+            'tax_inclusive': _tax_inclusive,
             'subtotal': sale['subtotal'],
             'discount_amount': sale['discount_amount'],
             'tax_amount': sale['tax_amount'],

@@ -111,13 +111,41 @@ def build_document(conn, outbox_row) -> EInvoiceDocument:
     # them -- fixed now rather than left as a landmine.
     currency = settings.get_setting(conn, company_id, 'currency')
 
-    lines = []
+    # TAXINC: each line is priced under the mode it was SOLD under (recovered from its
+    # stored taxable `line_total`), so a sale rung tax-inclusive still files correctly
+    # after the owner flips the setting. The mode is one per sale, so one inclusive
+    # line makes the whole document inclusive.
+    priced = []
     for item in item_rows:
+        line_mode = tax_engine.historical_line_mode(
+            tax_mode, float(item['unit_price']), float(item['quantity']),
+            float(item['discount_pct'] or 0), float(item['tax_rate'] or 0),
+            item['line_total'], currency)
         calc = tax_engine.calculate_line(
             float(item['unit_price']), float(item['quantity']),
             float(item['discount_pct'] or 0), float(item['tax_rate'] or 0),
-            mode=tax_mode, currency=currency,
+            mode=line_mode, currency=currency,
         )
+        priced.append((item, line_mode, calc))
+    inclusive_sale = any(m == tax_engine.TAX_INCLUSIVE for _i, m, _c in priced)
+
+    lines = []
+    for item, _line_mode, calc in priced:
+        if inclusive_sale:
+            # The authority's invoice is ex-tax: the line is its TAXABLE amount, the
+            # unit price is that amount / quantity (the net price the buyer really
+            # paid for, discount already folded in), and the tax is the exact
+            # remainder of the shelf price -- so extension + tax == the shelf total to
+            # the fil. `unit_price` is deliberately NOT rounded to a currency unit:
+            # taxable/qty is rarely a whole fil and ISTD recomputes qty x price.
+            qty = float(item['quantity'])
+            lines.append(EInvoiceLine(
+                description=item['product_name'], quantity=qty,
+                unit_price=(calc['taxable_amount'] / qty) if qty else 0.0,
+                discount_amount=0.0, tax_amount=calc['tax'], line_total=calc['taxable_amount'],
+                tax_rate=float(item['tax_rate'] or 0), tax_category=tax_category_for_rate(item['tax_rate']),
+            ))
+            continue
         lines.append(EInvoiceLine(
             description=item['product_name'], quantity=float(item['quantity']),
             unit_price=float(item['unit_price']), discount_amount=calc['discount_amount'],
@@ -159,8 +187,11 @@ def build_document(conn, outbox_row) -> EInvoiceDocument:
         buyer_name=buyer_name,
         buyer_id=buyer_id,
         lines=tuple(lines),
-        subtotal=float(sale['subtotal']),
-        discount_total=float(sale['discount_amount']),
+        # Inclusive: the stored header is in shelf (tax-inside) terms, which is not what
+        # the document's LineExtension/Allowance/TaxExclusive amounts mean. Rebuild the
+        # ex-tax view from the lines (they sum to the sale's total together with the tax).
+        subtotal=(sum(l.line_total for l in lines) if inclusive_sale else float(sale['subtotal'])),
+        discount_total=(0.0 if inclusive_sale else float(sale['discount_amount'])),
         tax_total=float(sale['tax_amount']),
         grand_total=float(sale['total']),
         **istd,
@@ -260,19 +291,27 @@ def _build_return_document(conn, outbox_row) -> EInvoiceDocument:
     ).fetchall():
         if ri['sale_item_id']:
             si = conn.execute(
-                "SELECT si.unit_price, si.discount_pct, si.tax_rate, p.name AS product_name FROM sale_items si "
+                "SELECT si.unit_price, si.discount_pct, si.tax_rate, si.quantity AS sold_qty, si.line_total AS sold_taxable, "
+                "p.name AS product_name FROM sale_items si "
                 "JOIN products p ON p.id=si.product_id WHERE si.id=? AND si.sale_id=?",
                 (ri['sale_item_id'], sale['id'])).fetchone()
         else:
             si = conn.execute(
-                "SELECT si.unit_price, si.discount_pct, si.tax_rate, p.name AS product_name FROM sale_items si "
+                "SELECT si.unit_price, si.discount_pct, si.tax_rate, si.quantity AS sold_qty, si.line_total AS sold_taxable, "
+                "p.name AS product_name FROM sale_items si "
                 "JOIN products p ON p.id=si.product_id WHERE si.sale_id=? AND si.product_id=? ORDER BY si.id LIMIT 1",
                 (sale['id'], ri['product_id'])).fetchone()
         if not si:
             raise SaleNotFoundError(f"Return {ret['id']}: no matching sale line for product {ri['product_id']}.")
+        # TAXINC: the mode the SOLD line was priced under, not today's setting (see
+        # pricing.historical_line_mode); the credit note must reverse what was filed.
+        line_mode = tax_engine.historical_line_mode(
+            mode, float(si['unit_price']), float(si['sold_qty']), float(si['discount_pct'] or 0),
+            float(si['tax_rate'] or 0), si['sold_taxable'], currency)
         calc = tax_engine.calculate_line(
             float(si['unit_price']), float(ri['quantity']), float(si['discount_pct'] or 0),
-            float(si['tax_rate'] or 0), mode=mode, currency=currency)
+            float(si['tax_rate'] or 0), mode=line_mode, currency=currency)
+        calc = dict(calc, _inclusive=(line_mode == tax_engine.TAX_INCLUSIVE))
         stored = ri['line_total'] if ri['line_total'] is not None else calc['total']
         parts.append((si, ri, calc, Decimal(str(stored)).quantize(quantum, rounding=ROUND_HALF_UP)))
 
@@ -288,6 +327,19 @@ def _build_return_document(conn, outbox_row) -> EInvoiceDocument:
         taxes[-1] = max(taxes[-1], Decimal('0'))
     lines, total = [], Decimal('0')
     for (si, ri, calc, stored_total), tax in zip(parts, taxes):
+        if calc.get('_inclusive'):
+            # Inclusive: the refund `stored_total` is in shelf-price terms (tax inside), so the
+            # ex-tax extension is stored_total - tax -- no discount line is needed and
+            # extension + tax == the refund to the fil. unit_price = extension / qty (as above).
+            qty = Decimal(str(ri['quantity']))
+            extension = stored_total - tax
+            total += stored_total
+            lines.append(EInvoiceLine(
+                description=si['product_name'], quantity=float(qty),
+                unit_price=float(extension / qty) if qty else 0.0,
+                discount_amount=0.0, tax_amount=float(tax), line_total=float(extension),
+                tax_rate=float(si['tax_rate'] or 0), tax_category=tax_category_for_rate(si['tax_rate'])))
+            continue
         gross = (Decimal(str(ri['quantity'])) * Decimal(str(si['unit_price']))).quantize(
             quantum, rounding=ROUND_HALF_UP)
         discount = max(gross + tax - stored_total, Decimal('0'))
