@@ -14889,6 +14889,16 @@ const RetailSystem = {
       const q = resp.quotation || {};
       const lines = resp.lines || [];
       const label = t(this._QUOTATION_STATUS_LABEL[q.status] || q.status);
+      // TAXINC: a quotation records the mode it was priced under (`tax_mode`). For an inclusive
+      // one `line_total` is the TAXABLE amount, which would sit above an inclusive Total as
+      // numbers that do not add up; show what the customer pays per line (shelf price less
+      // discount, tax inside) and say the tax is included, like the receipts do.
+      const qInclusive = q.tax_mode === 'inclusive';
+      const lineShown = (l) => {
+        if (!qInclusive) return l.line_total;
+        const gross = this._roundMoney((Number(l.unit_price) || 0) * (Number(l.quantity) || 0));
+        return this._roundMoney(gross - this._roundMoney(gross * (Number(l.discount_pct) || 0) / 100));
+      };
       let variance = null;
       try { variance = q.conversion_variance_json ? JSON.parse(q.conversion_variance_json) : null; } catch (e) { /* malformed -- show nothing rather than throw */ }
       const overlay = document.createElement('div');
@@ -14916,13 +14926,13 @@ const RetailSystem = {
               <td>${this._esc(l.quantity)}</td>
               <td>${this._fmt(l.unit_price)}</td>
               <td>${this._esc(l.discount_pct)}</td>
-              <td style="font-weight:600">${this._fmt(l.line_total)}</td>
+              <td style="font-weight:600">${this._fmt(lineShown(l))}</td>
             </tr>`).join('')}</tbody>
           </table>
           <div style="text-align:end;margin-top:14px;color:var(--text-primary)">
             <div>${t('Subtotal')}: ${this._fmt(q.subtotal)}</div>
             <div>${t('Discount')}: ${this._fmt(q.discount_amount)}</div>
-            <div>${t('Tax')}: ${this._fmt(q.tax_amount)}</div>
+            <div>${t(qInclusive ? 'Tax (included)' : 'Tax')}: ${this._fmt(q.tax_amount)}</div>
             <div style="font-weight:700;font-size:16px">${t('Total')}: ${this._fmt(q.total)}</div>
           </div>
           ${variance ? `<div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border-default)">
