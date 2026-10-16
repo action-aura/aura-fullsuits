@@ -8328,3 +8328,6 @@ Single-writer resource: `RETAIL_SCHEMA_VERSION`. v55 is MONEY-5's (unmerged). On
 9. Install is at the NEXT start; the launcher's supervised restart is requested after staging, a dev run needs a manual restart.
 
 **What Phase 3 needs:** Owner revision B (mailbox, encrypted chunks) and the same `request_and_stage`/`installer` on top of it; Android requester side (Kotlin builds the Owner calls; the staged-swap route); caps: advertise `bootstrap_v1` only when the Owner path exists; make Owner honour and echo `include_own`; Owner `fast_forward_to` for the registry stream; the desktop pinned hub transport if desktops should join hubs. The strict xfail's `_join_bootstrap` stub is still the Phase 3 replacement point.
+
+## 2026-10-16 — retail schema v57 CLAIMED (STOCK-TAKE: stock counts + allow-negative-stock setting)
+Single-writer resource: `RETAIL_SCHEMA_VERSION`. v56 is SYNC-BOOT Phase 2's (merged in rc.13). v57 belongs to branch `feat/stock-take` (off 350db44d): `stock_counts` + `stock_count_lines` tables. TAXINC (tax-inclusive pricing, branch `feat/taxinc`) takes NO schema version — it is a pricing mode stored in the existing synced company setting `tax_calculation_mode`. SYNC-BOOT Phase 3 (`feat/sync-boot-p3`) takes no retail version. Anything else needing a retail schema change claims v58+ here first.
