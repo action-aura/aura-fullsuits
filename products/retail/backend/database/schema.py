@@ -1435,7 +1435,13 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # and from which seq it is complete: a pull below either is answered 409 RESYNC_REQUIRED instead of a silent partial
 # history. No other table; no data backfill (pruned_through 0 = nothing pruned yet, which is true of every hub that
 # ran with the SYNC-JOIN 0-floor stop-gap).
-RETAIL_SCHEMA_VERSION = 56
+# v57 (2026-10-16, STOCK-TAKE -- claimed in ROADMAP.md "retail schema v57 CLAIMED for STOCK-TAKE"): counting the
+# shelf. Two new tables and nothing else: `stock_counts` (one count of one branch: open -> posted | cancelled) and
+# `stock_count_lines` (one row per product counted, UNIQUE(count_uid, product_id)). Both company- and branch-scoped.
+# Posting writes ordinary inventory movements through the SAME path a manual adjustment uses (Dr/Cr 5910), with
+# uids derived from (count, product) so the same count posted on two computers moves the stock once. No data
+# backfill: no count exists before this step. Appended LAST and shape-gated.
+RETAIL_SCHEMA_VERSION = 57
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2680,6 +2686,79 @@ def _migrate_retail_schema(conn):
     # chain, which runs on every upgrade): hub tests and tools build a hub database with that step alone and
     # need the v56 shape from it, and a second call here could only ever be a no-op (shape-gated). A
     # mutation that removed this second call survived for exactly that reason, so it was removed.
+    # v56 -> v57 (STOCK-TAKE): appended LAST. Two new tables; nothing above derives from them and they
+    # derive from nothing but `branches` / `products` ids as plain text. See the v57 comment on
+    # RETAIL_SCHEMA_VERSION.
+    _migrate_add_stock_counts(conn)
+
+
+def _migrate_add_stock_counts(conn):
+    """One-time migration (schema -> v57, STOCK-TAKE). See the v57 comment on RETAIL_SCHEMA_VERSION
+    for the why; this docstring is the mechanics.
+
+    `stock_counts`      one count of ONE branch. `uid` is its wire identity (uuid4, UNIQUE); `status` is
+                        'open' | 'posted' | 'cancelled' (CHECKed, so a typo is an error and not a ghost
+                        state). `branch_id` is the LOCAL branch id (the wire carries the branch uid).
+                        posted_* / cancelled_* are the set-once stamps of the two terminal states.
+    `stock_count_lines` one CONTRIBUTION: what ONE computer (`device_id`) counted of one product in one
+                        count. Each computer only ever writes its own rows, so two computers scanning the
+                        same product offline ADD (the count's quantity is the SUM over devices) instead of
+                        overwriting each other. `uid` = uuid5(count, product, device) at creation and is
+                        then just an opaque row id. UNIQUE(count_uid, product_id, device_id) is the key.
+                        `system_qty_at_count` is what the system held when THIS device first counted the
+                        product and never changes after; posting measures the total against the EARLIEST
+                        contribution's figure. `post_unit_cost` is the cost the post booked at, kept so a
+                        posted count keeps showing the value of the journal it made.
+    status 'merged'     two computers started a count of the same branch while offline; the one with the
+                        smaller uid wins and the other becomes 'merged' (`merged_into` = winner), its
+                        contributions moved under the winner. Derived identically on every computer.
+                        company_id / branch_id are denormalised from the header so every read can filter
+                        on them directly -- a line is never read through a header it was not scoped to.
+    `product_id` is the products.id TEXT (a UUID, the repo's product reference), not a foreign key: a
+    line synced ahead of its product is parked by the apply, not rejected by SQLite.
+
+    CREATE ... IF NOT EXISTS throughout: replaying the chain is byte-identical. No backfill (no count
+    exists before this step) and no sync event is queued (nothing to announce yet)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stock_counts (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            uid          TEXT NOT NULL UNIQUE,
+            company_id   TEXT NOT NULL,
+            branch_id    INTEGER NOT NULL,
+            status       TEXT NOT NULL DEFAULT 'open'
+                         CHECK (status IN ('open', 'posted', 'cancelled', 'merged')),
+            note         TEXT,
+            started_by   TEXT,
+            started_at   TEXT,
+            posted_at    TEXT,
+            posted_by    TEXT,
+            cancelled_at TEXT,
+            cancelled_by TEXT,
+            merged_into  TEXT                -- winner's uid when status='merged' (derived locally, never on the wire)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_counts_company_branch "
+                 "ON stock_counts(company_id, branch_id, status)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stock_count_lines (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            uid                 TEXT NOT NULL UNIQUE,
+            company_id          TEXT NOT NULL,
+            branch_id           INTEGER NOT NULL,
+            count_uid           TEXT NOT NULL,
+            product_id          TEXT NOT NULL,
+            device_id           TEXT NOT NULL,   -- the computer that wrote this CONTRIBUTION (its terminal id)
+            counted_qty         REAL NOT NULL,   -- THIS device's part; the count's quantity is the SUM over devices
+            system_qty_at_count REAL NOT NULL,   -- what the system held when THIS device first counted the product
+            variance            REAL NOT NULL,   -- this part only (counted - own system); posting uses the totals
+            counted_at          TEXT,
+            counted_by          TEXT,
+            post_unit_cost      REAL,            -- unit cost the post booked at (local; NULL until posted)
+            UNIQUE (count_uid, product_id, device_id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_count_lines_company_count "
+                 "ON stock_count_lines(company_id, count_uid)")
 
 
 def _migrate_add_site_stream_cursors_and_prune_state(conn):

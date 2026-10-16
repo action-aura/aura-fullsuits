@@ -207,7 +207,11 @@ function assertTableEqualsBefore(shellSrc, hubSrc) {
     // The two INTENDED new hub names. 'hub:branches' replaces the old gear-menu Branches row, and
     // 'hub:plan-devices' now also exists (as a small door pane) for the delegated manager whom the old gear menu
     // let into "License & devices". Each is expected EXACTLY for the roles that had the old door -- never for anyone else.
-    const TWINS = { 'hub:branches': 'branches', 'hub:plan-devices': 'plan-devices' };
+    // STOCK-TAKE UPDATE: 'stocktake' is a NEW sidebar destination, gated by the SAME capability as 'transfers'
+    // ('retail.stock.adjust'). It is expected EXACTLY for the roles that could open 'transfers' before, and
+    // missing for such a role counts as LOST -- so the new door can neither leak to a cashier nor be absent
+    // from a stock-adjust role. What this stops catching: nothing; it is the same equality, with one named twin.
+    const TWINS = { 'hub:branches': 'branches', 'hub:plan-devices': 'plan-devices', 'stocktake': 'transfers' };
     const gained = sorted(after).filter((d) => !before.has(d) && !(TWINS[d] && before.has(TWINS[d])));
     for (const [hubName, old] of Object.entries(TWINS)) if (before.has(old) && !after.has(hubName)) lost.push(hubName);
     assert.deepStrictEqual({ lost, gained }, { lost: [], gained: [] },

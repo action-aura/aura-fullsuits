@@ -500,6 +500,8 @@ const RetailSystem = {
       // nav entry comment and the STOCK TRANSFERS section below for the
       // capability reasoning.
       case 'transfers': return this._renderTransfers(c);
+      // STOCK-TAKE (schema v57): the screen lives in stock-take.js (a self-contained feature file).
+      case 'stocktake': return window.RetailStockTake ? window.RetailStockTake.render(c) : undefined;
       // ci-hardening-w0.3 continuation ("the doorway"): see app-shell.js's
       // nav entry comment and _renderBranches below for the full story --
       // create_branch (retail_api.py) has been complete and gated since

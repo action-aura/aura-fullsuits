@@ -187,6 +187,7 @@ from core.retail import purchase_orders as po_core
 # W3b: the deterministic transfer-movement uids and the forward-only state rank,
 # shared with the sync apply (which carries its own pinned-equal copy).
 from core.retail import stock_transfers as xfer_core
+from core.retail import stock_counts as count_core
 from core.retail import stock_books
 # W2a: the one rule that refreshes the loyalty cache and the deterministic
 # opening-row uid, shared with the importer and the sync apply.
@@ -2831,6 +2832,103 @@ def list_product_variants(pid):
     conn.close()
     return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
 
+class _StockFloorRefused(Exception):
+    """A removal that would take a balance below zero; carries the on-hand figure for the message."""
+    def __init__(self, on_hand):
+        super().__init__(on_hand)
+        self.on_hand = on_hand
+
+
+def _write_stock_adjustment(conn, cid, pid, bid, qty, reason, adj_kind, *, movement_uid=None,
+                            enforce_floor=True):
+    """THE one place a manual stock correction is written: balance + 'ADJ' movement + books + sync event.
+
+    Extracted verbatim from `adjust_stock` for STOCK-TAKE so a posted stock count goes through the
+    SAME path (movement, Dr/Cr 5910 or the 'added' opening entry, the `inventory_movement` event)
+    and not a second implementation that could drift from it. The caller owns the transaction
+    (BEGIN IMMEDIATE ... commit) and the product/branch validation.
+
+    `movement_uid=None` mints a random uid, exactly what adjust_stock always did. A stock count
+    passes a uid derived from (count, product): the movement is inserted FIRST, `ON CONFLICT(uid)
+    DO NOTHING`, and the balance, the books and the outbox are touched ONLY when that insert really
+    wrote a row -- so the same count posted on two computers (or twice) moves the stock once.
+    The books are idempotent on the same uid too (gl `_post_once` is keyed on it).
+
+    `enforce_floor=False` is for the count: the shelf is the truth, and a sale that landed between
+    the count and the post can legitimately leave the corrected balance below zero (that is an
+    oversell the shop already made, not a count error to refuse).
+
+    Returns `(wrote, new_on_hand)`. Raises `_StockFloorRefused` (nothing written) when the floor
+    applies and the removal does not fit."""
+    conn.execute("""
+        INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
+        VALUES (?,?,?,0)
+    """, (cid, pid, bid))
+    current = conn.execute(
+        "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
+        (cid, pid, bid)
+    ).fetchone()
+    on_hand = float(current['quantity_on_hand'] or 0) if current else 0.0
+    # Epsilon, not a bare `< 0`: quantity_on_hand is REAL and is
+    # ACCUMULATED by repeated `quantity_on_hand + ?` UPDATEs, so a
+    # fractional-unit product legitimately sits at 0.7999999999999999
+    # after 0.7 + 0.1. An exact comparison rejects "remove the 0.8 that
+    # is there" as if it were an oversell. Same constant the reconciler
+    # and the bulk importer compare with (stock_reconciliation.py), so
+    # all three agree on what "zero" means.
+    if enforce_floor and on_hand + qty < -stock_reconciliation.DEFAULT_TOLERANCE:
+        raise _StockFloorRefused(on_hand)
+
+    # v13 stamp. Of every movement type this file writes, THIS is the one
+    # that most needs it: an 'ADJ' row has no sale, no return and no PO
+    # behind it -- somebody simply declared that the shop has a different
+    # amount of something than it thought. "Who?" is the entire question,
+    # and until v13 the only answer was a free-text `created_by`.
+    actor, terminal, utc_now = _stamp()
+    movement_type = 'stock_in' if qty > 0 else 'stock_out'
+    if movement_uid is None:
+        movement_uid = _new_uid()
+    # STOCK-BOOKS B5: value the adjustment at what a unit costs HERE and now
+    # (branch average -> company average -> cost price), not at the product's
+    # typed cost_price: a unit received at 3.000 on a 2.000 product must
+    # leave the books at 3.000. The movement carries that cost (it used to
+    # say 0), and the books move Inventory against Shrinkage (5910).
+    adj_currency = _company_currency(conn, cid)
+    adj_cost = float(stock_books.effective_unit_cost(conn, cid, pid, bid, adj_currency))
+    ins = conn.execute("""
+        INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
+                                         uid,actor_user_uid,terminal_id,created_at_utc)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING
+    """, (cid, pid, bid,
+          movement_type,
+          qty, adj_cost, 'ADJ', reason, _uid(),
+          movement_uid, actor, terminal, utc_now))
+    if ins.rowcount != 1:
+        return False, on_hand       # this very movement already exists here: nothing moves twice
+    conn.execute("""
+        UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?
+        WHERE company_id=? AND product_id=? AND branch_id=?
+    """, (qty, cid, pid, bid))
+    if adj_kind == 'added':
+        # REHEARSAL-1007 B3: keyed 'opening_entry' on the movement uid, which
+        # stock_books's tie already recognises (_MOVEMENT_KEYED_JOURNALS).
+        gl.post_opening_entry(conn, cid, bid, movement_uid, qty, adj_cost, 'ADJ', adj_currency,
+                              business_date=_gl_business_date(conn, cid))
+    else:
+        gl.post_stock_adjustment(conn, cid, bid, movement_uid, qty, adj_cost, 'ADJ', adj_currency,
+                                 business_date=_gl_business_date(conn, cid))
+    # Wave B: queue the matching sync event -- see create_sale's own
+    # inventory_movement emission for the shape every writer shares.
+    _queue_sync_event(conn.cursor(), 'inventory_movement', movement_uid, 'create', {
+        'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': _branch_uid(conn, bid),
+        'movement_type': movement_type, 'quantity': qty, 'unit_cost': adj_cost,
+        'reference': 'ADJ', 'notes': reason, 'created_by': _uid(),
+        'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+    })
+    return True, on_hand + qty
+
+
 @retail_bp.route('/products/<string:pid>/stock-adjust', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -2972,71 +3070,13 @@ def adjust_stock(pid):
                 }), 403
             bid = branch['id']
 
-        conn.execute("""
-            INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
-            VALUES (?,?,?,0)
-        """, (cid, pid, bid))
-        current = conn.execute(
-            "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
-            (cid, pid, bid)
-        ).fetchone()
-        on_hand = float(current['quantity_on_hand'] or 0) if current else 0.0
-        # Epsilon, not a bare `< 0`: quantity_on_hand is REAL and is
-        # ACCUMULATED by repeated `quantity_on_hand + ?` UPDATEs, so a
-        # fractional-unit product legitimately sits at 0.7999999999999999
-        # after 0.7 + 0.1. An exact comparison rejects "remove the 0.8 that
-        # is there" as if it were an oversell. Same constant the reconciler
-        # and the bulk importer compare with (stock_reconciliation.py), so
-        # all three agree on what "zero" means.
-        if on_hand + qty < -stock_reconciliation.DEFAULT_TOLERANCE:
+        try:
+            _write_stock_adjustment(conn, cid, pid, bid, qty, reason, adj_kind)
+        except _StockFloorRefused as floor:
             conn.rollback()
             return jsonify({'status': 'error',
                             'message': f'Cannot remove {abs(qty)} of "{product["name"]}" -- '
-                                       f'only {on_hand} on hand at this branch.'}), 400
-
-        conn.execute("""
-            UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?
-            WHERE company_id=? AND product_id=? AND branch_id=?
-        """, (qty, cid, pid, bid))
-        # v13 stamp. Of every movement type this file writes, THIS is the one
-        # that most needs it: an 'ADJ' row has no sale, no return and no PO
-        # behind it -- somebody simply declared that the shop has a different
-        # amount of something than it thought. "Who?" is the entire question,
-        # and until v13 the only answer was a free-text `created_by`.
-        actor, terminal, utc_now = _stamp()
-        movement_type = 'stock_in' if qty > 0 else 'stock_out'
-        movement_uid = _new_uid()
-        # STOCK-BOOKS B5: value the adjustment at what a unit costs HERE and now
-        # (branch average -> company average -> cost price), not at the product's
-        # typed cost_price: a unit received at 3.000 on a 2.000 product must
-        # leave the books at 3.000. The movement carries that cost (it used to
-        # say 0), and the books move Inventory against Shrinkage (5910).
-        adj_currency = _company_currency(conn, cid)
-        adj_cost = float(stock_books.effective_unit_cost(conn, cid, pid, bid, adj_currency))
-        conn.execute("""
-            INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
-                                             uid,actor_user_uid,terminal_id,created_at_utc)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (cid, pid, bid,
-              movement_type,
-              qty, adj_cost, 'ADJ', reason, _uid(),
-              movement_uid, actor, terminal, utc_now))
-        if adj_kind == 'added':
-            # REHEARSAL-1007 B3: keyed 'opening_entry' on the movement uid, which
-            # stock_books's tie already recognises (_MOVEMENT_KEYED_JOURNALS).
-            gl.post_opening_entry(conn, cid, bid, movement_uid, qty, adj_cost, 'ADJ', adj_currency,
-                                  business_date=_gl_business_date(conn, cid))
-        else:
-            gl.post_stock_adjustment(conn, cid, bid, movement_uid, qty, adj_cost, 'ADJ', adj_currency,
-                                     business_date=_gl_business_date(conn, cid))
-        # Wave B: queue the matching sync event -- see create_sale's own
-        # inventory_movement emission for the shape every writer shares.
-        _queue_sync_event(conn.cursor(), 'inventory_movement', movement_uid, 'create', {
-            'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': _branch_uid(conn, bid),
-            'movement_type': movement_type, 'quantity': qty, 'unit_cost': adj_cost,
-            'reference': 'ADJ', 'notes': reason, 'created_by': _uid(),
-            'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
-        })
+                                       f'only {floor.on_hand} on hand at this branch.'}), 400
         # branch is now in the audit detail: without it, an audit row for a
         # multi-branch company could never answer "which balance moved?".
         _audit(conn, 'STOCK_ADJUSTED', 'product', pid, f'qty={qty}, branch={bid}, reason={reason}')
@@ -3053,6 +3093,563 @@ def adjust_stock(pid):
     finally:
         conn.close()
     return jsonify({'status': 'success', 'new_stock': new_qty, 'branch_id': bid})
+
+# ── Stock take (schema v57, STOCK-TAKE) ──────────────────────────────────────
+# Counting the shelf and posting the difference. ROADMAP.md "retail schema v57 CLAIMED for
+# STOCK-TAKE"; schema.py `_migrate_add_stock_counts` carries the table design.
+#
+# THE SHAPE. A count belongs to ONE branch and is 'open' until somebody posts or cancels it.
+# Lines are added by scanning (`barcode`) or typing (`product_id`); a re-scan ADDS to the line's
+# counted quantity. The first time a product is counted the line captures `system_qty_at_count`
+# (what the system held right then) and never changes it, so the variance is "what the shelf had
+# MINUS what the system said when I counted it" -- sales rung after the count and before the post
+# are real and survive the correction. Products nobody counted are NOT touched: a partial count
+# (one aisle) is the normal case, not a count that says "everything else is zero".
+#
+# POSTING reuses `_write_stock_adjustment` (the extracted body of `adjust_stock`), so a variance
+# is an ordinary movement + Dr/Cr 5910 (Shrinkage and Adjustments) + `inventory_movement` event --
+# no second stock path. Its movement uid is a pure function of (count, product), so the same count
+# posted twice, or on two computers before they sync, moves the stock ONCE: the second insert
+# collides on the unique `uid` index and writes nothing.
+#
+# CONTRIBUTIONS: each computer writes only its own row per (count, product), the count's quantity is the
+# SUM over computers, and only the main computer posts (see `post_stock_count`).
+#
+# SYNC. The header and each line travel as METADATA (`stock_count`, `stock_count_line`); applying
+# them never moves stock or posts books -- those travel only as `inventory_movement` / `gl_journal`
+# events, exactly like stock transfers. The payload dicts at every `_queue_sync_event` call below are
+# LITERAL because the payload-coverage ratchet reads their keys from literal dicts only.
+#
+# CAPABILITY: CAP_STOCK_ADJUST on every route, reads included -- a count's variance value reveals
+# cost, which the plain stock list does not. Every query is company_id-scoped, and a branch-scoped
+# caller only ever sees or touches their own branch's counts.
+
+def _stock_count_scope_refusal(conn, cid, branch_id):
+    """None when the caller may use `branch_id`'s counts; otherwise a ready-to-return 403.
+    Fail CLOSED when the scope cannot be read, like `_resolve_working_branch`."""
+    try:
+        scope_uid = session_branch_scope()
+    except BranchScopeLookupError:
+        return jsonify({'status': 'error', 'message': 'Could not verify your branch access. Try again.'}), 403
+    if scope_uid is None:
+        return None
+    row = conn.execute("SELECT uid FROM branches WHERE id=? AND company_id=?", (branch_id, cid)).fetchone()
+    if not row or _canon_branch_uid(conn, cid, row['uid']) != _canon_branch_uid(conn, cid, scope_uid):
+        return jsonify({'status': 'error', 'message': 'You may only use your own branch.'}), 403
+    return None
+
+
+def _stock_count_load(conn, cid, count_uid):
+    """The count header, scoped to THIS company -- another company's uid is simply 'not found'."""
+    return conn.execute("SELECT * FROM stock_counts WHERE uid=? AND company_id=?",
+                        (count_uid, cid)).fetchone()
+
+
+def _stock_count_resolve_product(conn, cid, data):
+    """`(product_row, error_response)` for a line request naming `product_id` or a scanned
+    `barcode` (barcode, then SKU, exact before NOCASE -- the same ladder as /products/lookup).
+    A deleted product, an unknown code, or a parent with variants (it holds no stock of its own)
+    is refused with a plain message."""
+    cols = "id, name, sku, barcode, parent_product_id"
+    pid = str(data.get('product_id') or '').strip()
+    code = str(data.get('barcode') or data.get('code') or '').strip()
+    row = None
+    if pid:
+        row = conn.execute(f"SELECT {cols} FROM products WHERE id=? AND company_id=? "
+                           "AND deleted_at_utc IS NULL", (pid, cid)).fetchone()
+    elif code:
+        for col, collate in (('barcode', ''), ('barcode', ' COLLATE NOCASE'),
+                             ('sku', ''), ('sku', ' COLLATE NOCASE')):
+            row = conn.execute(f"SELECT {cols} FROM products WHERE company_id=? AND deleted_at_utc IS NULL "
+                               f"AND {col}=?{collate}", (cid, code)).fetchone()
+            if row is not None:
+                break
+    else:
+        return None, (jsonify({'status': 'error', 'message': 'Give a product_id or a barcode.'}), 400)
+    if row is None:
+        return None, (jsonify({'status': 'error', 'code': 'PRODUCT_NOT_FOUND',
+                               'message': 'Product not found.'}), 404)
+    if conn.execute("SELECT 1 FROM products c WHERE c.parent_product_id=? AND c.company_id=? "
+                    "AND c.deleted_at_utc IS NULL AND c.status='active'", (row['id'], cid)).fetchone():
+        return None, (jsonify({'status': 'error', 'code': 'PRODUCT_HAS_VARIANTS',
+                               'message': f'"{row["name"]}" has variants -- count a specific variant.'}), 400)
+    return row, None
+
+
+STOCK_COUNT_NEEDS_MAIN = 'STOCK_COUNT_NEEDS_MAIN'
+
+
+def _stock_count_device_id():
+    """This computer's key for its count contributions: its terminal id, else its device uuid,
+    else a fixed 'local' (a bare dev install with neither still counts, as one computer)."""
+    try:
+        return local_terminal_id() or device_context.peek_local_device_uuid() or 'local'
+    except Exception:
+        return 'local'
+
+
+def _stock_count_aggregate(conn, cid, count, me):
+    """One entry per PRODUCT of `count`, folded from the per-computer contributions.
+
+    A contribution is what ONE computer counted (see schema.py `_migrate_add_stock_counts`), so two
+    computers scanning the same product offline ADD instead of overwriting each other:
+      counted_qty          SUM over computers
+      this_device_qty      THIS computer's part (`me` = its terminal id), what a typed number sets
+      system_qty_at_count  the EARLIEST contribution's figure -- the stock the system held when the
+                           product was first counted anywhere (ties broken by device id, so every
+                           computer picks the same one)
+    The variance a post books is total counted minus that figure."""
+    rows = conn.execute(
+        "SELECT * FROM stock_count_lines WHERE company_id=? AND count_uid=? "
+        "ORDER BY counted_at, device_id, id", (cid, count['uid'])).fetchall()
+    by_product = {}
+    for r in rows:
+        e = by_product.get(r['product_id'])
+        if e is None:
+            by_product[r['product_id']] = {
+                'product_id': r['product_id'], 'counted_qty': Decimal(str(r['counted_qty'])),
+                'this_device_qty': Decimal(str(r['counted_qty'])) if r['device_id'] == me else Decimal('0'),
+                'system_qty_at_count': float(r['system_qty_at_count']), 'counted_at': r['counted_at'],
+                'contributions': 1, 'post_unit_cost': r['post_unit_cost']}
+        else:
+            e['counted_qty'] += Decimal(str(r['counted_qty']))
+            if r['device_id'] == me:
+                e['this_device_qty'] += Decimal(str(r['counted_qty']))
+            e['counted_at'] = max(e['counted_at'] or '', r['counted_at'] or '')
+            e['contributions'] += 1
+            if e['post_unit_cost'] is None:
+                e['post_unit_cost'] = r['post_unit_cost']
+    out = []
+    for e in by_product.values():
+        e['counted_qty'] = float(e['counted_qty'])
+        e['this_device_qty'] = float(e['this_device_qty'])
+        e['variance'] = count_core.variance(e['counted_qty'], e['system_qty_at_count'])
+        out.append(e)
+    return out
+
+
+def _stock_count_lines_view(conn, cid, count):
+    """Aggregated lines joined to product name/sku/barcode, valued in money, plus totals.
+
+    VALUE: an OPEN count is valued at today's unit cost (what a post would book); a POSTED one at
+    the cost it really booked -- the line's stored `post_unit_cost`, else (a computer that only
+    received the count) the unit cost on the synced correction movement -- so the number shown
+    for a posted count is the one in its 5910 journal forever, not a re-pricing.
+    Returns `(lines, totals)`; `totals['below_zero']` lists products a post would leave under zero."""
+    currency = _company_currency(conn, cid)
+    me = _stock_count_device_id()
+    posted = count['status'] == 'posted'
+    lines, gain, short, value, below = [], 0.0, 0.0, Decimal('0'), []
+    for e in _stock_count_aggregate(conn, cid, count, me):
+        prod = conn.execute("SELECT name, sku, barcode FROM products WHERE id=? AND company_id=?",
+                            (e['product_id'], cid)).fetchone()
+        bal = conn.execute("SELECT quantity_on_hand FROM inventory_balances "
+                           "WHERE company_id=? AND product_id=? AND branch_id=?",
+                           (cid, e['product_id'], count['branch_id'])).fetchone()
+        on_hand = float(bal['quantity_on_hand'] or 0) if bal else 0.0
+        unit_cost = None
+        if posted:
+            unit_cost = e['post_unit_cost']
+            if unit_cost is None:
+                mv = conn.execute("SELECT unit_cost FROM inventory_movements WHERE company_id=? AND uid=?",
+                                  (cid, count_core.count_movement_uid(count['uid'], e['product_id']))).fetchone()
+                unit_cost = mv['unit_cost'] if mv else None
+        unit_cost = Decimal(str(unit_cost)) if unit_cost is not None else \
+            stock_books.effective_unit_cost(conn, cid, e['product_id'], count['branch_id'], currency)
+        # `_stock_amount` is an ABSOLUTE amount; the sign of a count's value is the sign of its
+        # variance (overage positive, shortage negative), so a shortage reads as money lost.
+        v = gl._stock_amount(e['variance'], unit_cost, currency)
+        if e['variance'] < 0:
+            v = -v
+        d = dict(e)
+        d.update({'product_name': prod['name'] if prod else None, 'sku': prod['sku'] if prod else None,
+                  'barcode': prod['barcode'] if prod else None, 'unit_cost': float(unit_cost),
+                  'variance_value': float(v), 'on_hand_now': on_hand,
+                  'ends_at': float(Decimal(str(on_hand)) + Decimal(str(e['variance'])))})
+        lines.append(d)
+        value += v
+        if e['variance'] > 0:
+            gain += e['variance']
+        elif e['variance'] < 0:
+            short += -e['variance']
+        if not posted and d['ends_at'] < -stock_reconciliation.DEFAULT_TOLERANCE and abs(e['variance']) >= stock_reconciliation.DEFAULT_TOLERANCE:
+            below.append({'product_id': e['product_id'], 'name': d['product_name'], 'will_be': d['ends_at']})
+    lines.sort(key=lambda x: (x['counted_at'] or '', x['product_id']))
+    totals = {'lines': len(lines), 'gain_qty': gain, 'short_qty': short, 'variance_value': float(value),
+              'below_zero': below}
+    return lines, totals
+
+
+def _stock_count_visible_branch_ids(conn, cid):
+    """None = every branch of the company; otherwise the set of local branch ids a branch-scoped
+    caller may see. One scope read and one branches read for a whole list (not one per row)."""
+    try:
+        scope_uid = session_branch_scope()
+    except BranchScopeLookupError:
+        return set()                                   # fail closed: see nothing
+    if scope_uid is None:
+        return None
+    want = _canon_branch_uid(conn, cid, scope_uid)
+    return {r['id'] for r in conn.execute("SELECT id, uid FROM branches WHERE company_id=?", (cid,)).fetchall()
+            if _canon_branch_uid(conn, cid, r['uid']) == want}
+
+
+def _stock_count_merged_refusal(count):
+    return jsonify({'status': 'error', 'code': 'STOCK_COUNT_MERGED', 'merged_into': count['merged_into'],
+                    'message': 'Another computer started a count of this branch at the same time, so the two '
+                               'were joined into one. Use the joined count.'}), 409
+
+
+@retail_bp.route('/stock-counts', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_STOCK_ADJUST)
+def list_stock_counts():
+    """Counts of this company, newest first; `?status=open|posted|cancelled|merged`, `?branch_id=`."""
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        sql = ("SELECT c.*, b.name AS branch_name, "
+               "(SELECT COUNT(DISTINCT l.product_id) FROM stock_count_lines l WHERE l.company_id=c.company_id "
+               "  AND l.count_uid=c.uid) AS line_count "
+               "FROM stock_counts c LEFT JOIN branches b ON b.id=c.branch_id AND b.company_id=c.company_id "
+               "WHERE c.company_id=?")
+        params = [cid]
+        status = request.args.get('status')
+        if status in ('open', 'posted', 'cancelled', 'merged'):
+            sql += " AND c.status=?"
+            params.append(status)
+        if request.args.get('branch_id'):
+            sql += " AND c.branch_id=?"
+            params.append(request.args.get('branch_id'))
+        sql += " ORDER BY c.started_at DESC, c.id DESC"
+        rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+        # A branch-scoped caller sees only their own branch's counts (reads are filtered, not refused).
+        visible = _stock_count_visible_branch_ids(conn, cid)
+        if visible is not None:
+            rows = [r for r in rows if r['branch_id'] in visible]
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'data': rows})
+
+
+@retail_bp.route('/stock-counts/<string:count_uid>', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_STOCK_ADJUST)
+def get_stock_count(count_uid):
+    """One count: header, per-product lines (total, this computer's part, variance, value) and totals."""
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        count = _stock_count_load(conn, cid, count_uid)
+        if not count:
+            return jsonify({'status': 'error', 'message': 'Stock count not found'}), 404
+        refusal = _stock_count_scope_refusal(conn, cid, count['branch_id'])
+        if refusal:
+            return refusal
+        lines, totals = _stock_count_lines_view(conn, cid, count)
+        return jsonify({'status': 'success', 'data': {
+            'count': dict(count), 'lines': lines, 'totals': totals, 'this_device': _stock_count_device_id(),
+            'can_post': count['status'] == 'open' and _local_device_is_main(cid)}})
+    finally:
+        conn.close()
+
+
+@retail_bp.route('/stock-counts', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.stock.adjust", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def start_stock_count():
+    """Open a count for one branch. Body: `{branch_id?, note?}` (no branch = the working branch).
+
+    ONE open count per branch ON THIS COMPUTER: a second start is refused with 409 and the open
+    count's uid, so a second person JOINS the count in progress. Two computers that start one while
+    offline each hold their own; the sync apply joins them (smaller uid wins, see
+    `SyncService._converge_open_stock_counts`) and only the main computer may post."""
+    data = request.json or {}
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        bid, err = _resolve_working_branch(conn, cid, data.get('branch_id'))
+        if err:
+            conn.rollback()
+            return err
+        existing = conn.execute("SELECT uid FROM stock_counts WHERE company_id=? AND branch_id=? "
+                                "AND status='open'", (cid, bid)).fetchone()
+        if existing:
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'STOCK_COUNT_ALREADY_OPEN',
+                            'message': 'A count is already open for this branch. Continue it, or post / cancel it first.',
+                            'count_uid': existing['uid']}), 409
+        actor, _terminal, utc_now = _stamp()
+        count_uid = _new_uid()
+        note = str(data.get('note') or '').strip()[:500] or None
+        conn.execute(
+            "INSERT INTO stock_counts (uid, company_id, branch_id, status, note, started_by, started_at) "
+            "VALUES (?,?,?,'open',?,?,?)", (count_uid, cid, bid, note, actor, utc_now))
+        _queue_sync_event(conn.cursor(), 'stock_count', count_uid, 'create', {
+            'uid': count_uid, 'branch_uid': _branch_uid(conn, bid), 'note': note,
+            'started_by': actor, 'started_at': utc_now,
+        })
+        _audit(conn, 'STOCK_COUNT_STARTED', 'stock_count', count_uid, f'branch={bid}')
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("start_stock_count failed: %s", exc)
+        return jsonify({'status': 'error', 'message': 'Could not start the count.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'data': {'uid': count_uid, 'branch_id': bid}})
+
+
+@retail_bp.route('/stock-counts/<string:count_uid>/lines', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.stock.adjust", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def count_stock_line(count_uid):
+    """Count one product on THIS computer. Body: `{barcode | product_id, quantity?, mode?}`.
+
+    Each computer only ever writes its OWN contribution row for a product, so two computers
+    counting the same product at once add up rather than overwrite. `mode='add'` (default, quantity
+    defaults to 1): a scan -- added to THIS computer's part. `mode='set'`: a typed figure -- THIS
+    computer's part becomes exactly `quantity` (0 is a real count). The count's quantity for the
+    product is the sum of every computer's part. The first time THIS computer counts a product it
+    captures what the system holds for the branch right now; later scans never change it."""
+    data = request.json or {}
+    cid = _cid()
+    mode = str(data.get('mode') or 'add').lower()
+    if mode not in ('add', 'set'):
+        return jsonify({'status': 'error', 'message': "mode must be 'add' or 'set'."}), 400
+    try:
+        qty = float(data.get('quantity', 1))
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Invalid quantity.'}), 400
+    if qty != qty or qty in (float('inf'), float('-inf')) or qty < 0 or (mode == 'add' and qty == 0):
+        return jsonify({'status': 'error', 'message': 'Quantity must be greater than zero '
+                        "(zero is allowed only when setting a figure)."}), 400
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        count = _stock_count_load(conn, cid, count_uid)
+        if not count:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Stock count not found'}), 404
+        refusal = _stock_count_scope_refusal(conn, cid, count['branch_id'])
+        if refusal:
+            conn.rollback()
+            return refusal
+        if count['status'] == 'merged':
+            conn.rollback()
+            return _stock_count_merged_refusal(count)
+        if count['status'] != 'open':
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'STOCK_COUNT_CLOSED',
+                            'message': f'This count is {count["status"]}; it can no longer be changed.'}), 409
+        product, err = _stock_count_resolve_product(conn, cid, data)
+        if err:
+            conn.rollback()
+            return err
+        actor, _terminal, utc_now = _stamp()
+        device = _stock_count_device_id()
+        line_uid = count_core.line_uid(count_uid, product['id'], device)
+        line = conn.execute("SELECT * FROM stock_count_lines WHERE company_id=? AND count_uid=? "
+                            "AND product_id=? AND device_id=?",
+                            (cid, count_uid, product['id'], device)).fetchone()
+        if line is None:
+            bal = conn.execute("SELECT quantity_on_hand FROM inventory_balances "
+                               "WHERE company_id=? AND product_id=? AND branch_id=?",
+                               (cid, product['id'], count['branch_id'])).fetchone()
+            system_qty = float(bal['quantity_on_hand'] or 0) if bal else 0.0
+            counted = qty
+            conn.execute(
+                "INSERT INTO stock_count_lines (uid, company_id, branch_id, count_uid, product_id, device_id, "
+                "counted_qty, system_qty_at_count, variance, counted_at, counted_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (line_uid, cid, count['branch_id'], count_uid, product['id'], device, counted, system_qty,
+                 count_core.variance(counted, system_qty), utc_now, actor))
+            is_new_line = True
+        else:
+            line_uid = line['uid']                    # a moved row keeps its original id
+            system_qty = float(line['system_qty_at_count'])
+            counted = qty if mode == 'set' else float(Decimal(str(line['counted_qty'])) + Decimal(str(qty)))
+            conn.execute(
+                "UPDATE stock_count_lines SET counted_qty=?, variance=?, counted_at=?, counted_by=? "
+                "WHERE company_id=? AND count_uid=? AND product_id=? AND device_id=?",
+                (counted, count_core.variance(counted, system_qty), utc_now, actor,
+                 cid, count_uid, product['id'], device))
+            is_new_line = False
+        # Two literal call sites (create / update), each with a LITERAL payload dict: the
+        # payload-coverage ratchet reads entity type, event type and keys from literals only.
+        if is_new_line:
+            _queue_sync_event(conn.cursor(), 'stock_count_line', line_uid, 'create', {
+                'uid': line_uid, 'count_uid': count_uid, 'product_id': product['id'], 'device_id': device,
+                'counted_qty': counted, 'system_qty_at_count': system_qty, 'counted_at': utc_now,
+                'counted_by': actor,
+            })
+        else:
+            _queue_sync_event(conn.cursor(), 'stock_count_line', line_uid, 'update', {
+                'uid': line_uid, 'count_uid': count_uid, 'product_id': product['id'], 'device_id': device,
+                'counted_qty': counted, 'system_qty_at_count': system_qty, 'counted_at': utc_now,
+                'counted_by': actor,
+            })
+        agg = [e for e in _stock_count_aggregate(conn, cid, count, device) if e['product_id'] == product['id']][0]
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("count_stock_line(%s) failed: %s", count_uid, exc)
+        return jsonify({'status': 'error', 'message': 'Could not record this count.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'data': {
+        'product_id': product['id'], 'product_name': product['name'],
+        'counted_qty': agg['counted_qty'], 'this_device_qty': agg['this_device_qty'],
+        'system_qty_at_count': agg['system_qty_at_count'], 'variance': agg['variance']}})
+
+
+@retail_bp.route('/stock-counts/<string:count_uid>/cancel', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.stock.adjust", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def cancel_stock_count(count_uid):
+    """Throw an open count away. No stock moves. A cancelled count is final; a POSTED count cannot
+    be cancelled (its movements are real -- correct it with another count or an adjustment)."""
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        count = _stock_count_load(conn, cid, count_uid)
+        if not count:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Stock count not found'}), 404
+        refusal = _stock_count_scope_refusal(conn, cid, count['branch_id'])
+        if refusal:
+            conn.rollback()
+            return refusal
+        if count['status'] == 'merged':
+            conn.rollback()
+            return _stock_count_merged_refusal(count)
+        if count['status'] == 'cancelled':
+            conn.rollback()
+            return jsonify({'status': 'success', 'data': {'already_cancelled': True}})
+        if count['status'] != 'open':
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'STOCK_COUNT_CLOSED',
+                            'message': 'A posted count cannot be cancelled.'}), 409
+        actor, _terminal, utc_now = _stamp()
+        conn.execute("UPDATE stock_counts SET status='cancelled', cancelled_at=?, cancelled_by=? "
+                     "WHERE uid=? AND company_id=? AND status='open'", (utc_now, actor, count_uid, cid))
+        _queue_sync_event(conn.cursor(), 'stock_count', count_uid, 'update', {
+            'uid': count_uid, 'status': 'cancelled', 'posted_at': None, 'posted_by': None,
+            'cancelled_at': utc_now, 'cancelled_by': actor,
+        })
+        _audit(conn, 'STOCK_COUNT_CANCELLED', 'stock_count', count_uid, '')
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("cancel_stock_count(%s) failed: %s", count_uid, exc)
+        return jsonify({'status': 'error', 'message': 'Could not cancel the count.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'data': {'already_cancelled': False}})
+
+
+@retail_bp.route('/stock-counts/<string:count_uid>/post', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.stock.adjust", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def post_stock_count(count_uid):
+    """Turn every counted product's variance into a stock movement and close the count.
+
+    ONLY THE MAIN COMPUTER MAY POST (409 STOCK_COUNT_NEEDS_MAIN elsewhere; other computers start,
+    scan and view). Why: counts are written on several computers at once, and two computers that
+    each posted their own view of the shelf would each correct the SAME shelf -- the movement uid is
+    derived from (count, product) so a repeat of one count collapses, but two different counts of
+    one shelf would not. One poster, one count (the sync apply joins rival open counts), one
+    correction.
+
+    IDEMPOTENT: posting an already-posted count answers 200 `already_posted` and writes nothing. A
+    cancelled count answers 409; a merged one 409 naming the winner. Each non-zero variance (TOTAL
+    counted across computers minus the earliest system figure) goes through `_write_stock_adjustment`
+    ('count' kind: Dr/Cr 5910) under `count_movement_uid(count, product)`. Products with no
+    contribution are untouched. A product that was deleted since it was counted is skipped and
+    reported. The unit cost each correction booked at is stored on its lines. A product that ends
+    below zero is allowed (the shelf is the truth) and reported. One transaction: any failure writes
+    nothing."""
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        count = _stock_count_load(conn, cid, count_uid)
+        if not count:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Stock count not found'}), 404
+        refusal = _stock_count_scope_refusal(conn, cid, count['branch_id'])
+        if refusal:
+            conn.rollback()
+            return refusal
+        if count['status'] == 'posted':
+            lines, totals = _stock_count_lines_view(conn, cid, count)
+            conn.rollback()
+            return jsonify({'status': 'success', 'data': {'already_posted': True, 'totals': totals}})
+        if count['status'] == 'merged':
+            conn.rollback()
+            return _stock_count_merged_refusal(count)
+        if count['status'] != 'open':
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'STOCK_COUNT_CLOSED',
+                            'message': 'This count was cancelled; it cannot be posted.'}), 409
+        if not _local_device_is_main(cid):
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': STOCK_COUNT_NEEDS_MAIN, 'message':
+                            "Only the shop's main computer can post a stock count. You can keep scanning here; "
+                            "post it on the main computer."}), 409
+        lines, totals = _stock_count_lines_view(conn, cid, count)
+        moved, skipped_deleted = 0, []
+        for line in lines:
+            product = conn.execute("SELECT deleted_at_utc FROM products WHERE id=? AND company_id=?",
+                                   (line['product_id'], cid)).fetchone()
+            if product is None or product['deleted_at_utc'] is not None:
+                if abs(line['variance']) >= stock_reconciliation.DEFAULT_TOLERANCE:
+                    skipped_deleted.append(line['product_name'] or line['product_id'])
+                continue
+            muid = count_core.count_movement_uid(count_uid, line['product_id'])
+            if abs(line['variance']) >= stock_reconciliation.DEFAULT_TOLERANCE:
+                wrote, _ = _write_stock_adjustment(
+                    conn, cid, line['product_id'], count['branch_id'], line['variance'],
+                    f'Stock count {count_uid[:8]}', 'count', movement_uid=muid, enforce_floor=False)
+                moved += 1 if wrote else 0
+                mv = conn.execute("SELECT unit_cost FROM inventory_movements WHERE company_id=? AND uid=?",
+                                  (cid, muid)).fetchone()
+                cost = mv['unit_cost'] if mv else line['unit_cost']
+            else:
+                cost = line['unit_cost']
+            conn.execute("UPDATE stock_count_lines SET post_unit_cost=? WHERE company_id=? AND count_uid=? "
+                         "AND product_id=?", (cost, cid, count_uid, line['product_id']))
+        actor, _terminal, utc_now = _stamp()
+        conn.execute("UPDATE stock_counts SET status='posted', posted_at=?, posted_by=? "
+                     "WHERE uid=? AND company_id=? AND status='open'", (utc_now, actor, count_uid, cid))
+        _queue_sync_event(conn.cursor(), 'stock_count', count_uid, 'update', {
+            'uid': count_uid, 'status': 'posted', 'posted_at': utc_now, 'posted_by': actor,
+            'cancelled_at': None, 'cancelled_by': None,
+        })
+        _audit(conn, 'STOCK_COUNT_POSTED', 'stock_count', count_uid,
+               f'lines={totals["lines"]}, moved={moved}, value={totals["variance_value"]}')
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("post_stock_count(%s) failed: %s", count_uid, exc)
+        return jsonify({'status': 'error', 'message': 'Could not post the count.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'data': {
+        'already_posted': False, 'movements_written': moved, 'totals': totals,
+        'below_zero': totals['below_zero'], 'skipped_deleted': skipped_deleted}})
+
 
 # ── Customers ─────────────────────────────────────────────────────────────────
 
@@ -25164,6 +25761,9 @@ _SYNC_REVIEW_KINDS = {
     'gl_journal_line': 'A line of an accounting entry',
     'stock_transfer': 'A stock transfer from another computer',
     'stock_transfer_item': 'A line of a stock transfer',
+    # STOCK-TAKE (schema v57): a shelf count from another computer.
+    'stock_count': 'A stock count from another computer',
+    'stock_count_line': 'A line of a stock count',
     # W2a (schema v48): a loyalty points entry from another computer.
     'loyalty_entry': 'Loyalty points from another computer',
     # Track S (retail v42 + 1e7194cb): the engine parks these too -- a till
@@ -25259,6 +25859,8 @@ _SYNC_REVIEW_REASONS = {
     # W3b verify F4: the item-update apply parks with this reason when its line is not here yet
     # (its en/ar locale sentences were missing).
     'missing_parent:stock_transfer_item': ('the transfer line it belongs to has not reached this computer yet', True),
+    # STOCK-TAKE (schema v57): a count line or a count update that outran its count.
+    'missing_parent:stock_count': ('the stock count it belongs to has not reached this computer yet', True),
     'transfer_sent_after_cancel': ('a transfer was cancelled on one computer while another computer sent it. The stock did leave, so the transfer counts as sent. Check that the goods are where you expect', False),
     'transfer_received_and_recalled': ('a transfer was received on one computer while another computer brought it back. Both moved stock, so the same goods may be counted twice. A person needs to correct the stock and the books (the stock in transit and the shrinkage accounts)', False),
     'transfer_sent_twice': ('two computers sent the same transfer and recorded a different cost for it. The lower cost was kept on every computer and the duplicate send was reversed in the books', False),

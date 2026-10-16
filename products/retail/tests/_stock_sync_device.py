@@ -405,9 +405,27 @@ def main() -> None:
             # vocabulary has no dedicated op for (stock transfers). Additive --
             # no existing op changes. {"op":"http","method":"POST","path":"/stock-transfers",
             # "json":{...}} -> {"status_code":.., "body":..}; `path` is relative to /api/sub/retail.
-            r = client.open(f"{API}{action['path']}", method=action.get("method", "GET"),
+            # STOCK-TAKE: a path that already starts with /api/ is absolute (the main-computer claim).
+            _url = action["path"] if action["path"].startswith("/api/") else f"{API}{action['path']}"
+            r = client.open(_url, method=action.get("method", "GET"),
                             json=action.get("json"))
             results.append({"status_code": r.status_code, "body": r.get_json()})
+
+        elif op == "make_main":
+            # STOCK-TAKE: make THIS computer the shop's main (admin) device straight in the registry --
+            # a harness computer joined through bootstrap, so the public claim route refuses it
+            # (JOINED_DEVICE_CANNOT_CLAIM). Additive; nothing else uses it.
+            from commercial_runtime.identity import device_context as _dc, device_registry as _dr
+            from commercial_runtime.identity.registry_db import get_conn as _rc
+            _conn = _rc()
+            try:
+                _cid = local_company_id_from_registry()
+                _dev = _dc.resolve_local_device(_conn, _cid)
+                _dr.set_admin_device(_conn, _cid, _dev["id"])
+                _conn.commit()
+            finally:
+                _conn.close()
+            results.append({"ok": True})
 
         elif op == "push":
             service.push_once()
