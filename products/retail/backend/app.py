@@ -3514,6 +3514,7 @@ def _bootstrap_on_mailbox_requests(requests, client, relay_url):
         try:
             from commercial_runtime.sync import authority as _authority
             from commercial_runtime.sync.bootstrap import transport_owner
+            from commercial_runtime.sync.bootstrap.errors import BootstrapError
             from commercial_runtime.sync.bootstrap.producer import build_bootstrap
             from commercial_runtime.sync.sync_service import local_company_id_from_registry, resync_streams_snapshot
             from database.bootstrap_classes import retail_spec
@@ -3548,6 +3549,13 @@ def _bootstrap_on_mailbox_requests(requests, client, relay_url):
                     continue                           # they cannot read a copy newer than themselves
                 company_id = local_company_id_from_registry()
                 if not company_id:
+                    continue
+                try:
+                    from commercial_runtime.sync.bootstrap.producer import check_source_single_company
+                    check_source_single_company(_get_path('retail'), retail_spec(RETAIL_SCHEMA_VERSION))
+                except BootstrapError as exc:
+                    # Before claiming: the request stays OPEN for a computer that can build it.
+                    log.warning('Bootstrap: NOT building a copy for request %s -- %s', rid, exc.message)
                     continue
                 signer = _authority.local_signer_or_none(_bootstrap_app_dir())
 

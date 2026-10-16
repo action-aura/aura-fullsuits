@@ -105,8 +105,11 @@ class Shop:
             c.execute("INSERT INTO products (id, sku, name, sell_price) VALUES ('p1','SKU-1','Coffee',2.5)")
             c.execute("INSERT INTO products (id, sku, name, sell_price) VALUES ('p2','SKU-2','Tea',1.5)")
             c.execute("INSERT INTO customers (id, name) VALUES ('c1','Ayman')")
+            # company_id 1 = the same single company every other SYNCED row of this fixture carries (their
+            # column default). The producer refuses a database holding SEVERAL companies, so a fixture that
+            # mixed COMPANY with the default would be a multi-company install and build nothing.
             c.execute("INSERT INTO inventory_balances (company_id, product_id, branch_id, quantity_on_hand) "
-                      "VALUES (?, 'p1', 1, 40)", (COMPANY,)) if self._has("inventory_balances") else None
+                      "VALUES (1, 'p1', 1, 40)") if self._has("inventory_balances") else None
             # a PARKED event (an authority event nobody could verify yet): it must travel
             c.execute("INSERT INTO sync_apply_quarantine (entity_id, entity_type, event_type, payload, reason) "
                       "VALUES ('e-parked','user','update','{\"x\":1}','unsigned_authority_event')")
@@ -686,3 +689,21 @@ def test_a_blocked_install_is_not_counted_as_a_failure(hub, late, spec, world):
         assert installer.apply_staged(late.app, spec)["status"] == "blocked"
     st = installer.status(late.app, spec)
     assert st["install_failures"] == 0 and st["pending_staged"] is True      # a drawer resolves itself
+
+
+def test_a_producer_refuses_to_build_from_an_install_that_holds_more_than_one_company(hub, spec, world, tmp_path):
+    """One install can host several companies and `_scrub` works by table class, never by company: a copy
+    would hand every other company's rows to a computer that belongs to one. Both directions: one company
+    builds (every other test in this file); a second company's row makes it refuse BEFORE shipping anything.
+    MUTATION: drop `require_single_company(conn, spec)` from build_bootstrap (and the source pre-check) ->
+    the copy is built and contains OTHER-CO's customer -> red."""
+    assert producer.foreign_company_ids(hub.conn(), spec) == ["1"]
+    producer.check_source_single_company(str(hub.db), spec)                       # allow half: passes silently
+    hub.run("INSERT INTO customers (id, name, company_id) VALUES ('c-other', 'Other Co Customer', 'OTHER-CO')")
+    assert producer.foreign_company_ids(hub.conn(), spec) == ["1", "OTHER-CO"]
+    with pytest.raises(BootstrapError) as exc:
+        build(hub, spec, world)
+    assert exc.value.reason_code == errors.MULTI_COMPANY_INSTALL
+    with pytest.raises(BootstrapError) as pre:
+        producer.check_source_single_company(str(hub.db), spec)                    # the cheap check before claiming
+    assert pre.value.reason_code == errors.MULTI_COMPANY_INSTALL

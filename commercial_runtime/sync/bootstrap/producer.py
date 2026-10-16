@@ -105,6 +105,45 @@ def take_snapshot(source_path: str, copy_path: str) -> str:
     return "backup_snapshot"
 
 
+def foreign_company_ids(conn: sqlite3.Connection, spec: classes.BootstrapSpec) -> list:
+    """Distinct company ids found in the rows the copy would CARRY (SYNCED / DERIVED tables), sorted.
+    One entry on a normal install; more than one means this install hosts several companies."""
+    seen = set()
+    for table in classes.user_tables(conn):
+        if spec.class_of(table) not in classes.KEEP_IN_COPY:
+            continue
+        if "company_id" not in classes.table_columns(conn, table):
+            continue
+        for (value,) in conn.execute(f'SELECT DISTINCT company_id FROM "{table}" WHERE company_id IS NOT NULL'):
+            seen.add(str(value))
+    return sorted(seen)
+
+
+def require_single_company(conn: sqlite3.Connection, spec: classes.BootstrapSpec) -> None:
+    """Refuse to build from a database that holds more than one company.
+
+    `_scrub` empties tables by CLASS and never filters by company: on an install that hosts several
+    companies (one install can) the copy would hand every other company's products, customers, sales and
+    ledgers to the requester -- a computer that only belongs to ONE of them. Until a per-company scrub
+    exists the safe answer is to build nothing; the request simply stays open for another producer."""
+    companies = foreign_company_ids(conn, spec)
+    if len(companies) > 1:
+        raise BootstrapError(
+            errors.MULTI_COMPANY_INSTALL,
+            f"this install holds {len(companies)} companies; a shop copy built from it would leak the others, "
+            "so this computer will not build one (another computer in the shop can)")
+
+
+def check_source_single_company(source_path: str, spec: classes.BootstrapSpec) -> None:
+    """[require_single_company] on the live database, read-only -- cheap enough to run BEFORE claiming a
+    request, so a refusing producer never takes the claim (and its 30 minute lease) from one that can build."""
+    conn = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True, timeout=30)
+    try:
+        require_single_company(conn, spec)
+    finally:
+        conn.close()
+
+
 def _scrub(conn: sqlite3.Connection, spec: classes.BootstrapSpec) -> dict:
     """Empty every table (or row) the copy must not carry. Returns
     {table: rows_removed} for the manifest's audit trail."""
@@ -177,6 +216,7 @@ def build_bootstrap(
                     errors.PRODUCER_NOT_ON_RELAY,
                     f"this computer's cursor belongs to relay {row['relay_url']!r}, not {expected_relay_url!r}")
             schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            require_single_company(conn, spec)          # before anything is scrubbed or shipped
             removed = _scrub(conn, spec)
             conn.commit()
             conn.execute("VACUUM")          # free pages would still hold the scrubbed bytes
