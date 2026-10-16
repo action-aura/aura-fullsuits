@@ -34,6 +34,13 @@ def _run(app, *args):
     return app.test_cli_runner().invoke(args=["commercial", "housekeeping", *args])
 
 
+@pytest.fixture(autouse=True)
+def _empty_bootstrap_dir(app, tmp_path):
+    # SYNC-BOOT Phase 3: the sweep looks at the blob directory; an empty one makes
+    # the exact-dict assertions below independent of whatever other tests left.
+    app.config["SYNC_BOOTSTRAP_DIRECTORY"] = str(tmp_path / "bootstrap")
+
+
 def test_apply_calls_each_function_exactly_once(app, calls):
     result = _run(app, "--apply")
     assert result.exit_code == 0, result.output
@@ -43,6 +50,7 @@ def test_apply_calls_each_function_exactly_once(app, calls):
         "idempotency_records_purged": 3, "rate_limit_counters_purged": 4,
         # SEC-09: real (unstubbed) privacy rules over an empty database.
         "email_bodies_cleared": 0, "login_attempts_purged": 0,
+        "sync_bootstrap": {"expired": 0, "leases_reset": 0, "blobs_removed": 0},
     }
 
 
@@ -53,7 +61,7 @@ def test_dry_run_calls_no_deleting_path_and_reports_counts(app, calls):
     report = json.loads(result.output)
     assert report["dry_run"] is True
     assert set(report) == {"dry_run", "quotes_expired", "nonces_purged", "idempotency_records_purged", "rate_limit_counters_purged",
-                         "email_bodies_cleared", "login_attempts_purged"}
+                         "email_bodies_cleared", "login_attempts_purged", "sync_bootstrap"}
 
 
 def test_dry_run_counts_are_real_and_nothing_is_deleted(app):
