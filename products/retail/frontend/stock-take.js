@@ -4,11 +4,16 @@
  * a list of counts, and (for the open one) a scan box, the counted lines with their variance,
  * and Post / Cancel.
  *
- * HOW A COUNT READS. The person scans (or types a SKU / name) and each scan ADDS one to that
- * product's counted quantity; typing a number into a line's Counted box REPLACES it. The system
- * quantity beside it is frozen the first time the product is counted, so the variance is "what is
- * on the shelf minus what the system said when I counted". Products nobody counted are not touched
- * when the count is posted -- counting one aisle is normal.
+ * HOW A COUNT READS. The person scans (or types a SKU / name) and each scan ADDS one to THIS
+ * computer's part of that product's count; typing a number into the "This computer" box REPLACES
+ * this computer's part only. Several computers can count at once: "Counted" is the total of all of
+ * them, and each computer only ever changes its own part. The system quantity is frozen the first
+ * time the product is counted, so the variance is "what is on the shelf minus what the system said
+ * when I counted". Products nobody counted are not touched when the count is posted.
+ *
+ * ONLY THE MAIN COMPUTER POSTS. The server says (`can_post`); elsewhere the Post button is off and
+ * a sentence says why. Rival counts of one branch (two computers started one offline) are joined by
+ * the server; a joined count shows its status and a pointer, and cannot be scanned.
  *
  * Posting asks first and shows what it will do: how many lines move, how many units come and go,
  * and the net money value. The server is the authority on everything (it re-reads cost and stock);
@@ -52,8 +57,8 @@
   }
   function money(n) { var v = +n || 0; return (v > 0 ? '+' : '') + v.toFixed(dp()); }
   function varianceClass(v) { return v > 0 ? 'ret-badge-green' : (v < 0 ? 'ret-badge-red' : 'ret-badge-blue'); }
-  var STATUS_LABEL = { open: 'Open', posted: 'Posted', cancelled: 'Cancelled' };
-  var STATUS_COLOR = { open: 'blue', posted: 'green', cancelled: 'red' };
+  var STATUS_LABEL = { open: 'Open', posted: 'Posted', cancelled: 'Cancelled', merged: 'Joined' };
+  var STATUS_COLOR = { open: 'blue', posted: 'green', cancelled: 'red', merged: 'blue' };
 
   // Match what was typed/scanned to a product: exact barcode or SKU first (a scan), then a single
   // name match (a typed name). More than one name match is refused rather than guessed.
@@ -131,6 +136,7 @@
   function draw() {
     var host = state.host, c = state.detail.count, lines = state.detail.lines, tot = state.detail.totals;
     var isOpen = c.status === 'open';
+    var canPost = !!state.detail.can_post;
     host.innerHTML =
       '<div class="ret-hdr">' +
         '<button class="ret-btn ret-btn-ghost" id="st-back" type="button">← ' + esc(t('All counts')) + '</button>' +
@@ -145,18 +151,19 @@
           '<input id="st-qty" type="number" value="1" min="0" step="any" /></div>' +
           '<button class="ret-btn ret-btn-primary" type="submit">' + esc(t('Add')) + '</button></form></div>' : '') +
       '<div class="sub-chart-card"><div style="overflow-x:auto"><table class="ret-table" id="st-lines"><thead><tr>' +
-        '<th>' + esc(t('Product')) + '</th><th>' + esc(t('System')) + '</th><th>' + esc(t('Counted')) + '</th><th>' +
+        '<th>' + esc(t('Product')) + '</th><th>' + esc(t('System')) + '</th><th>' + esc(t('Counted (all computers)')) + '</th>' + (isOpen ? '<th>' + esc(t('This computer')) + '</th>' : '') + '<th>' +
         esc(t('Difference')) + '</th><th>' + esc(t('Value')) + '</th></tr></thead><tbody>' +
         (lines.length ? lines.map(function (l) {
           return '<tr><td>' + bdi(l.product_name || l.product_id) +
             '<div style="color:var(--text-muted);font-size:12px">' + bdi(l.barcode || l.sku || '') + '</div></td>' +
             '<td>' + esc(qty(l.system_qty_at_count)) + '</td>' +
-            '<td>' + (isOpen ? '<input type="number" min="0" step="any" style="width:90px" data-st-set="' + esc(l.product_id) +
-              '" value="' + esc(qty(l.counted_qty)) + '" aria-label="' + esc(t('Counted')) + '" />' : esc(qty(l.counted_qty))) + '</td>' +
+            '<td>' + esc(qty(l.counted_qty)) + '</td>' +
+            (isOpen ? '<td><input type="number" min="0" step="any" style="width:90px" data-st-set="' + esc(l.product_id) +
+              '" value="' + esc(qty(l.this_device_qty)) + '" aria-label="' + esc(t('This computer')) + '" /></td>' : '') +
             '<td><span class="ret-badge ' + varianceClass(l.variance) + '">' + esc(signed(l.variance)) + '</span></td>' +
             '<td>' + esc(money(l.variance_value)) + '</td></tr>';
         }).join('') :
-          '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:24px">' + esc(t('Nothing counted yet.')) + '</td></tr>') +
+          '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px">' + esc(t('Nothing counted yet.')) + '</td></tr>') +
       '</tbody></table></div></div>' +
       '<div class="sub-chart-card" style="padding:14px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">' +
         '<div><strong>' + esc(tot.lines) + '</strong> ' + esc(t('products counted')) + '</div>' +
@@ -164,8 +171,10 @@
         '<div>' + esc(t('Short')) + ': <strong>' + esc(qty(tot.short_qty)) + '</strong></div>' +
         '<div>' + esc(t('Net value')) + ': <strong>' + esc(money(tot.variance_value)) + '</strong></div>' +
         (isOpen ? '<div style="margin-inline-start:auto"><button class="ret-btn ret-btn-danger" id="st-cancel" type="button">' + esc(t('Cancel count')) +
-          '</button> <button class="ret-btn ret-btn-primary" id="st-post" type="button"' + (lines.length ? '' : ' disabled') + '>' + esc(t('Post count')) + '</button></div>' : '') +
-      '</div>';
+          '</button> <button class="ret-btn ret-btn-primary" id="st-post" type="button"' + (lines.length && canPost ? '' : ' disabled') + '>' + esc(t('Post count')) + '</button></div>' : '') +
+      '</div>' +
+      (isOpen && !canPost ? '<p id="st-main-only" style="color:var(--text-muted);padding:0 4px">' + esc(t('Only the main computer can post a count. Keep scanning here, then post it on the main computer.')) + '</p>' : '') +
+      (c.status === 'merged' ? '<p id="st-merged" style="color:var(--text-muted);padding:0 4px">' + esc(t('This count was joined with another one started at the same time. Open the joined count to carry on.')) + '</p>' : '');
     host.querySelector('#st-back').onclick = function () { render(host); };
     host.querySelector('#st-refresh').onclick = function () { openCount(state.openUid); };
     if (!isOpen) return;
@@ -222,6 +231,10 @@
       '<div class="ret-modal" id="st-post-dialog" role="dialog" aria-modal="true" aria-labelledby="st-post-title">' +
         '<h3 id="st-post-title">' + esc(t('Post this count?')) + '</h3>' +
         '<p>' + esc(t('Your stock will be changed to match what you counted. Products you did not count stay as they are.')) + '</p>' +
+        (tot.below_zero && tot.below_zero.length ?
+          '<p id="st-post-warn" style="color:var(--danger,#b00020)"><strong>' + esc(tot.below_zero.length) + '</strong> ' +
+          esc(t('product(s) will end below zero:')) + ' ' + tot.below_zero.map(function (b) { return bdi(b.name || b.product_id) + ' (' + esc(qty(b.will_be)) + ')'; }).join(', ') + '. ' +
+          esc(t('That is allowed, but check them.')) + '</p>' : '') +
         '<table class="ret-table"><tbody>' +
           '<tr><td>' + esc(t('Products counted')) + '</td><td><strong>' + esc(tot.lines) + '</strong></td></tr>' +
           '<tr><td>' + esc(t('Units over')) + '</td><td><strong>' + esc(qty(tot.gain_qty)) + '</strong></td></tr>' +
@@ -242,12 +255,15 @@
       close();
       if (d.status !== 'success') { toast(d.message || t('Could not post the count.'), 'error'); return; }
       toast(t('Count posted. Your stock now matches the shelf.'), 'success');
+      if (d.data && d.data.skipped_deleted && d.data.skipped_deleted.length) {
+        toast(t('Skipped deleted products:') + ' ' + d.data.skipped_deleted.join(', '), 'error');
+      }
       openCount(state.openUid);
     };
   }
 
   window.RetailStockTake = {
-    render: render, matchProduct: matchProduct, qty: qty, signed: signed, money: money,
+    render: render, open: openCount, matchProduct: matchProduct, qty: qty, signed: signed, money: money,
     _state: state
   };
 })();

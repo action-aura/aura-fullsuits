@@ -2914,5 +2914,13 @@
   "Posted": "Posted",
   "A stock count from another computer": "A stock count from another computer",
   "A line of a stock count": "A line of a stock count",
-  "the stock count it belongs to has not reached this computer yet": "the stock count it belongs to has not reached this computer yet"
+  "the stock count it belongs to has not reached this computer yet": "the stock count it belongs to has not reached this computer yet",
+  "Counted (all computers)": "Counted (all computers)",
+  "Only the main computer can post a count. Keep scanning here, then post it on the main computer.": "Only the main computer can post a count. Keep scanning here, then post it on the main computer.",
+  "Skipped deleted products:": "Skipped deleted products:",
+  "That is allowed, but check them.": "That is allowed, but check them.",
+  "This count was joined with another one started at the same time. Open the joined count to carry on.": "This count was joined with another one started at the same time. Open the joined count to carry on.",
+  "product(s) will end below zero:": "product(s) will end below zero:",
+  "Only the shop's main computer can post a stock count. You can keep scanning here; post it on the main computer.": "Only the shop's main computer can post a stock count. You can keep scanning here; post it on the main computer.",
+  "Another computer started a count of this branch at the same time, so the two were joined into one. Use the joined count.": "Another computer started a count of this branch at the same time, so the two were joined into one. Use the joined count."
 }

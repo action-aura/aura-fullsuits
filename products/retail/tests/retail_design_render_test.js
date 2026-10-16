@@ -102,6 +102,7 @@ const dom = require('./retail_surface_domlite.js');
 
 const FRONTEND = path.join(__dirname, '..', 'frontend');
 const RETAIL_JS = path.join(FRONTEND, 'subsystem-retail.js');
+const STOCK_TAKE_JS = path.join(FRONTEND, 'stock-take.js');
 const APP_SHELL_JS = path.join(__dirname, '..', 'frontend', 'app-shell.js');
 const ICONS_JS = path.join(__dirname, '..', 'frontend', 'icons.js');
 const TODAY_JS = path.join(__dirname, '..', 'frontend', 'today.js');
@@ -1315,6 +1316,26 @@ const CASH_FLOW = {
  * state — which is the one state with no badges, no money and no dates in it,
  * i.e. exactly the rows this corpus exists to look at.
  */
+// STOCK-TAKE (v57): an open count with an overage, a shortage and a line two computers added up, in a
+// list that also holds a posted and a joined ('merged') count, so every status colour is a real element.
+const STOCK_COUNT_LIST = [
+  { uid: 'c0a1b2c3-0000-4000-8000-000000000001', status: 'open', branch_name: 'Main', line_count: 3, started_at: '2026-10-16T09:00:00Z' },
+  { uid: 'c0a1b2c3-0000-4000-8000-000000000002', status: 'posted', branch_name: 'Main', line_count: 12, started_at: '2026-10-01T09:00:00Z' },
+  { uid: 'c0a1b2c3-0000-4000-8000-000000000003', status: 'merged', branch_name: 'Main', line_count: 0, started_at: '2026-10-16T09:01:00Z' },
+  { uid: 'c0a1b2c3-0000-4000-8000-000000000004', status: 'cancelled', branch_name: 'Main', line_count: 1, started_at: '2026-09-20T09:00:00Z' },
+];
+const STOCK_COUNT_DETAIL = {
+  count: { uid: 'c0a1b2c3-0000-4000-8000-000000000001', status: 'open', branch_id: 1 },
+  can_post: true,
+  this_device: 'till-1',
+  lines: [
+    { product_id: 'p1', product_name: 'Olive Oil 1L', barcode: '6290001', system_qty_at_count: 10, counted_qty: 12, this_device_qty: 5, variance: 2, unit_cost: 2, variance_value: 4 },
+    { product_id: 'p2', product_name: 'Tea Box', barcode: '6290003', system_qty_at_count: 10, counted_qty: 7, this_device_qty: 7, variance: -3, unit_cost: 3, variance_value: -9 },
+    { product_id: 'p3', product_name: 'Rice 5kg', barcode: '6290009', system_qty_at_count: 4, counted_qty: 4, this_device_qty: 4, variance: 0, unit_cost: 5, variance_value: 0 },
+  ],
+  totals: { lines: 3, gain_qty: 2, short_qty: 3, variance_value: -5, below_zero: [] },
+};
+
 function apiResponseFor(url) {
   const u = String(url);
   const ok = (data, meta) => ({ status: 'success', data, meta });
@@ -1366,6 +1387,9 @@ function apiResponseFor(url) {
   // modal a payload with no `transfer` and no `items` -- an empty modal
   // that still renders, and still passes. Same ordering discipline as
   // /sales/<id> above its own list.
+  // STOCK-TAKE: detail BEFORE list, same ordering discipline as /stock-transfers below.
+  if (/\/stock-counts\/[A-Za-z0-9-]{6,}/.test(u)) return { status: 'success', data: STOCK_COUNT_DETAIL };
+  if (/\/stock-counts/.test(u)) return ok(STOCK_COUNT_LIST);
   if (/\/stock-transfers\/[A-Za-z0-9-]{6,}/.test(u)) return ok(TABLE_DATA.stockTransferDetail);
   if (/\/stock-transfers/.test(u)) return ok(TABLE_DATA.stockTransfers);
   // Aseel-parity wave A-PAR (schema v33). `_renderQuotations`/
@@ -1552,7 +1576,7 @@ function loadRetailSystem(capabilities, extraFiles) {
     vm.runInContext(fs.readFileSync(extra, 'utf8'), sandbox, { filename: extra });
   }
   assert.ok(sandbox.RetailSystem, 'subsystem-retail.js did not expose window.RetailSystem');
-  return { RetailSystem: sandbox.RetailSystem, els, chartHosts, injected, namedQueries, overlays };
+  return { RetailSystem: sandbox.RetailSystem, RetailStockTake: sandbox.RetailStockTake, els, chartHosts, injected, namedQueries, overlays };
 }
 
 /**
@@ -1825,6 +1849,12 @@ async function buildCorpus() {
     // for the Reports page. See the TRIAL_BALANCE fixture for why its
     // numbers are a real, balanced, tying ledger rather than placeholders.
     ['trial-balance', (rs, c) => rs._renderTrialBalance(c)],
+    // STOCK-TAKE (schema v57): the screen lives in its own feature file (stock-take.js), loaded into the
+    // sandbox the way the browser has it (third element). It enters the corpus in the same breath it was
+    // built, so its status badges, signed variance chips, editable boxes and buttons are MEASURED for
+    // contrast and touch size, not exempted. Two renders: the list, and an open count.
+    ['stocktake', async (rs, c, ctx) => { c.querySelector = () => ({ focus() {}, select() {} }); await ctx.RetailStockTake.render(c); }, [STOCK_TAKE_JS]],
+    ['stocktake-count', async (rs, c, ctx) => { c.querySelector = () => ({ focus() {}, select() {} }); await ctx.RetailStockTake.render(c); await ctx.RetailStockTake.open('c0a1b2c3-0000-4000-8000-000000000001'); }, [STOCK_TAKE_JS]],
   ];
   // 'retail.employees' added alongside 'retail.reports' for the `branches`
   // entry above (create_branch's own @mt_require_capability(CAP_EMPLOYEES)
@@ -1843,10 +1873,10 @@ async function buildCorpus() {
   // the capability the real owner/manager role that measurement was taken
   // under actually holds. Exceptions (_exqStockRows) already gates on the
   // same capability and is unaffected: it is not in this shared list.
-  for (const [name, render] of listScreens) {
-    const ctx = loadRetailSystem(['retail.reports', 'retail.employees', 'retail.stock.adjust']);
+  for (const [name, render, extraFiles] of listScreens) {
+    const ctx = loadRetailSystem(['retail.reports', 'retail.employees', 'retail.stock.adjust'], extraFiles);
     const content = makeStub();
-    await render(ctx.RetailSystem, content);
+    await render(ctx.RetailSystem, content, ctx);
     await settle();
     screens.push(screenFrom(name, ctx, content.innerHTML));
   }
@@ -2175,6 +2205,8 @@ const DECLARED_SCREENS = [
   // immediately after 'payables' because that is where buildCorpus() renders
   // it.
   'trial-balance',
+  // STOCK-TAKE: the list, then an open count, in BUILD order right after 'trial-balance'.
+  'stocktake', 'stocktake-count',
   // Schema v39 income statement -- same route rendered TWICE, like
   // 'dashboard'/'cashier-landing' at the top of this list, because the
   // cost_basis_incomplete honesty banner is ON in one render and OFF in the
@@ -2248,6 +2280,8 @@ const SCREEN_ROUTES = {
   scanner: 'scanner',
   'stock-accuracy': 'stock-accuracy',
   transfers: 'transfers',
+  stocktake: 'stocktake',
+  'stocktake-count': 'stocktake',
   quotations: 'quotations',
   cheques: 'cheques',
   receivables: 'receivables',
@@ -2331,17 +2365,6 @@ const ROUTE_EXCLUSIONS = {
     'retail_promotions_ui_test.js. Adding it here needs a fixture route plus ' +
     'a corpus entry, not just a render call — the same shape as the ' +
     'exceptions exclusion above.',
-  // STOCK-TAKE (schema v57). The screen is NOT a RetailSystem method: the router delegates to
-  // window.RetailStockTake (frontend/stock-take.js, a self-contained feature file like employees.js
-  // and modifiers-settings.js), which this corpus does not load, and it fetches GET .../stock-counts
-  // that the fixture does not route. Its own coverage is retail_stock_take_ui_test.js (list, open
-  // count, scan matching, variance signs, the post confirmation figures). What this exclusion means
-  // this corpus can no longer catch: a contrast / touch-target defect on that one screen.
-  stocktake:
-    'The router delegates to window.RetailStockTake (stock-take.js), a separate feature file this ' +
-    'corpus does not load, over GET .../stock-counts, which this fixture does not route. Its own ' +
-    'coverage is retail_stock_take_ui_test.js. Adding it here needs the feature file loaded plus ' +
-    'two fixture routes and a corpus entry, not just a render call.',
 };
 
 /** Every `case '<id>':` in RetailSystem.render(), read out of the product. */

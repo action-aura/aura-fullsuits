@@ -76,11 +76,12 @@ const COUNT_OPEN = {
   status: 'success',
   data: {
     count: { uid: 'c-open-1', status: 'open', branch_id: 1 },
+    can_post: true,
     lines: [
-      { product_id: 'p1', product_name: 'Olive Oil 1L', barcode: '6290001', system_qty_at_count: 10, counted_qty: 12, variance: 2, variance_value: 4 },
-      { product_id: 'p3', product_name: 'Tea Box', barcode: '6290003', system_qty_at_count: 10, counted_qty: 7, variance: -3, variance_value: -9 },
+      { product_id: 'p1', product_name: 'Olive Oil 1L', barcode: '6290001', system_qty_at_count: 10, counted_qty: 12, this_device_qty: 5, variance: 2, variance_value: 4 },
+      { product_id: 'p3', product_name: 'Tea Box', barcode: '6290003', system_qty_at_count: 10, counted_qty: 7, this_device_qty: 7, variance: -3, variance_value: -9 },
     ],
-    totals: { lines: 2, gain_qty: 2, short_qty: 3, variance_value: -5 },
+    totals: { lines: 2, gain_qty: 2, short_qty: 3, variance_value: -5, below_zero: [] },
   },
 };
 const withStatus = (base, status) => ({
@@ -140,6 +141,8 @@ async function testOpenCountScreen(src = SRC) {
   assert.ok(html.includes('id="st-code"') && html.includes('id="st-post"') && html.includes('id="st-cancel"'),
     'an open count has the scan box, Post and Cancel');
   assert.ok(html.includes('data-st-set="p1"') && html.includes('data-st-set="p3"'), 'counted boxes are editable');
+  assert.ok(/data-st-set="p1"[^>]*value="5"/.test(html), "the box holds THIS computer's part (5), not the total (12)");
+  assert.ok(/<td>12<\/td>/.test(html), 'the total across computers is shown beside it');
   assert.ok(html.includes('+2') && html.includes('-3'), 'overage and shortage carry opposite signs');
   assert.ok(/ret-badge-green">\+2/.test(html) && /ret-badge-red">-3/.test(html), 'overage green, shortage red');
   assert.ok(html.includes('-5.000'), 'the net value is the server figure with the shop decimals');
@@ -185,6 +188,41 @@ async function testPostConfirmationShowsServerFigures(src = SRC) {
   console.log('PASS: Post asks first and shows the server figures; confirming posts once');
 }
 
+async function testNonMainComputerCannotPostAndSaysWhy(src = SRC) {
+  const data = JSON.parse(JSON.stringify(COUNT_OPEN));
+  data.data.can_post = false;
+  const routes = {
+    get: (url) => url === `${API}/stock-counts` ? { data: [{ uid: 'c-open-1', status: 'open', branch_name: 'Main', line_count: 2, started_at: '2026-10-16T10:00:00Z' }] } : data,
+    post: () => ({ status: 'success' }),
+  };
+  const { host } = await openThrough(src, routes, 'c-open-1');
+  assert.ok(/id="st-post"[^>]*disabled/.test(host.innerHTML), 'Post is off on a computer that is not the main one');
+  assert.ok(host.innerHTML.includes('id="st-main-only"') && host.innerHTML.includes('main computer'), 'and a sentence says why');
+  assert.ok(host.innerHTML.includes('id="st-code"'), 'scanning still works there');
+  console.log('PASS: a non-main computer can scan but not post, and is told why');
+}
+
+async function testBelowZeroWarningAndMergedNote(src = SRC) {
+  const data = JSON.parse(JSON.stringify(COUNT_OPEN));
+  data.data.totals.below_zero = [{ product_id: 'p3', name: 'Tea Box', will_be: -3 }];
+  const routes = {
+    get: (url) => url === `${API}/stock-counts` ? { data: [{ uid: 'c-open-1', status: 'open', branch_name: 'Main', line_count: 2, started_at: '2026-10-16T10:00:00Z' }] } : data,
+    post: () => ({ status: 'success', data: {} }),
+  };
+  const { host, loaded } = await openThrough(src, routes, 'c-open-1');
+  host._q['#st-post'].onclick();
+  const dialog = loaded.body.children[0].innerHTML;
+  assert.ok(dialog.includes('id="st-post-warn"') && dialog.includes('Tea Box') && dialog.includes('-3'),
+    'the confirmation names the product that will end below zero');
+  const merged = JSON.parse(JSON.stringify(COUNT_OPEN));
+  merged.data.count.status = 'merged';
+  const r2 = { get: (url) => url === `${API}/stock-counts` ? { data: [{ uid: 'c-open-1', status: 'merged', branch_name: 'Main', line_count: 0, started_at: '2026-10-16T10:00:00Z' }] } : merged, post: () => ({}) };
+  const { host: h2 } = await openThrough(src, r2, 'c-open-1');
+  assert.ok(h2.innerHTML.includes('id="st-merged"') && !h2.innerHTML.includes('id="st-code"') && !h2.innerHTML.includes('id="st-post"'),
+    'a joined count explains itself and offers no scanning or posting');
+  console.log('PASS: below-zero products are named in the confirmation; a joined count is read-only with a note');
+}
+
 function testWiring() {
   const index = fs.readFileSync(path.join(FRONTEND, 'index.html'), 'utf8');
   const shell = fs.readFileSync(path.join(FRONTEND, 'app-shell.js'), 'utf8');
@@ -218,6 +256,8 @@ function mutate(find, replace) {
   await testOpenCountScreen();
   await testPostedCountIsReadOnly();
   await testPostConfirmationShowsServerFigures();
+  await testNonMainComputerCannotPostAndSaysWhy();
+  await testBelowZeroWarningAndMergedNote();
   testWiring();
   await mustFail('a name that matches two products is guessed => scan test fails', () =>
     testMatchProduct(mutate("return { error: byName.length > 1 || exact.length > 1 ? 'ambiguous' : 'none' };", "return byName.length ? { product: byName[0] } : { error: 'none' };")));
@@ -225,6 +265,10 @@ function mutate(find, replace) {
     testPostedCountIsReadOnly(mutate("(isOpen ? '<div style=\"margin-inline-start:auto\"><button class=\"ret-btn ret-btn-danger\" id=\"st-cancel\"", "(true ? '<div style=\"margin-inline-start:auto\"><button class=\"ret-btn ret-btn-danger\" id=\"st-cancel\"")));
   await mustFail('Post posts immediately without asking => confirmation test fails', () =>
     testPostConfirmationShowsServerFigures(mutate("host.querySelector('#st-post').onclick = confirmPost;", "host.querySelector('#st-post').onclick = async function () { await RS()._post(API + '/stock-counts/' + encodeURIComponent(state.openUid) + '/post', {}); };")));
+  await mustFail('Post enabled on a non-main computer => non-main test fails', () =>
+    testNonMainComputerCannotPostAndSaysWhy(mutate("(lines.length && canPost ? '' : ' disabled')", "(lines.length ? '' : ' disabled')")));
+  await mustFail('no below-zero warning in the dialog => warning test fails', () =>
+    testBelowZeroWarningAndMergedNote(mutate("(tot.below_zero && tot.below_zero.length ?", "(false ?")));
   await mustFail('shortage painted green => sign/class test fails', () =>
     testOpenCountScreen(mutate("function varianceClass(v) { return v > 0 ? 'ret-badge-green' : (v < 0 ? 'ret-badge-red' : 'ret-badge-blue'); }", "function varianceClass(v) { return 'ret-badge-green'; }")));
   console.log('PASS: retail_stock_take_ui_test.js');

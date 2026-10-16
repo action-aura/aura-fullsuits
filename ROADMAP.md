@@ -8344,3 +8344,13 @@ Single-writer resource: `RETAIL_SCHEMA_VERSION`. v56 is SYNC-BOOT Phase 2's (mer
 - A post does not refuse a corrected balance that lands below zero (a sale between count and post): the shelf is the truth. A manual adjustment still refuses.
 - A count's lines cannot be deleted (set 0 instead); the post does not wait for a sibling's lines to arrive (residual: posting on B before A's last scan reaches B posts without it; the later scan is then ignored because the count is closed).
 - Arabic strings are "native speaker to confirm".
+
+### STOCK-TAKE fix round (adversarial review, same branch, v57 changed in place -- unmerged)
+- Counts are per-computer CONTRIBUTIONS (`stock_count_lines` key = count + product + device): scans on two computers ADD (5 + 5 = 10), a typed number sets only that computer's part; a post measures the total against the EARLIEST contribution's system figure.
+- ONLY THE MAIN COMPUTER POSTS (`_local_device_is_main`, 409 `STOCK_COUNT_NEEDS_MAIN`, EN+AR); other computers start, scan, view. A fresh install with no device row cannot post until it is the main computer (same rule as the audit log).
+- Rival OPEN counts of one branch (started offline on two computers) converge on every computer: smallest uid wins, the other becomes `merged` (`merged_into`), its contributions move under the winner, late lines are redirected; a merged count cannot be scanned, posted or cancelled. Derived locally, never announced.
+- `post_unit_cost` stored on each line at post, so a posted count keeps the value of its 5910 journal; a receiving computer reads the synced movement's cost.
+- A count whose branch has not arrived PARKS (`missing_parent:branch`) instead of using the default branch. (Residual: that review sentence still says "promotion" -- cosmetic.)
+- Post and the confirm dialog report products that will end below zero (still allowed) and products deleted since they were counted (skipped).
+- List route filters branch scope with one read, not one per row. The design-render exemption is gone: stock-take.js is loaded into the corpus (list + open count) and measured.
+- Residual, recorded: if the main computer POSTS a count and a rival open count for the same branch only reaches it afterwards, that rival is no longer merged (the winner is already posted) and could be posted later against the same shelf; a person should cancel it.
