@@ -8331,3 +8331,16 @@ Single-writer resource: `RETAIL_SCHEMA_VERSION`. v55 is MONEY-5's (unmerged). On
 
 ## 2026-10-16 — retail schema v57 CLAIMED (STOCK-TAKE: stock counts + allow-negative-stock setting)
 Single-writer resource: `RETAIL_SCHEMA_VERSION`. v56 is SYNC-BOOT Phase 2's (merged in rc.13). v57 belongs to branch `feat/stock-take` (off 350db44d): `stock_counts` + `stock_count_lines` tables. TAXINC (tax-inclusive pricing, branch `feat/taxinc`) takes NO schema version — it is a pricing mode stored in the existing synced company setting `tax_calculation_mode`. SYNC-BOOT Phase 3 (`feat/sync-boot-p3`) takes no retail version. Anything else needing a retail schema change claims v58+ here first.
+
+## 2026-10-16 - STOCK-TAKE CASHED IN (branch `feat/stock-take`, schema v57)
+**Done**
+- Part A, allow negative stock: ALREADY shipped by MONEY-5 (`allow_negative_stock` setting, create_sale path shared with `behind_on_sync`, synced via `_queue_setting_sync_event`, Settings toggle EN+AR, `retail_money5_negative_stock_test.py`). Re-verified: 6 pass; dropping the `and not allow_negative_stock` guard turns 2 red. No code changed.
+- Part B, stock take: tables `stock_counts` / `stock_count_lines` (v57, real-chain migration test); routes `/stock-counts` (start / list / get / count line by barcode, SKU or product id, `add` = re-scan adds, `set` = typed figure / post / cancel), all CAP_STOCK_ADJUST, company- and branch-scoped; the first count of a product freezes `system_qty_at_count`; one open count per branch (a second start answers 409 with the open uid so another computer joins it).
+- Posting goes through `_write_stock_adjustment` (the body of `adjust_stock`, extracted, not copied): Dr/Cr 5910 at the unit cost here; movement uid = uuid5(count, product), insert-first `ON CONFLICT DO NOTHING`, so post twice / on two computers moves stock once (two-OS-process test). Uncounted products untouched. A posted count is immutable; posting again answers `already_posted`.
+- Sync: `stock_count` + `stock_count_line` metadata types (apply idempotent, forward-only status open < cancelled < posted, line set-once system figure, newest `counted_at` wins, closed counts never change). Added to bootstrap_classes as SYNCED and to the payload-coverage ratchet.
+- Desktop screen Stock > Stock Take (`frontend/stock-take.js`, EN+AR, confirm shows lines / units over / short / net value).
+**Not done / decisions**
+- Android has NO stock-take screen (out of scope); it still syncs the data because the backend is embedded.
+- A post does not refuse a corrected balance that lands below zero (a sale between count and post): the shelf is the truth. A manual adjustment still refuses.
+- A count's lines cannot be deleted (set 0 instead); the post does not wait for a sibling's lines to arrive (residual: posting on B before A's last scan reaches B posts without it; the later scan is then ignored because the count is closed).
+- Arabic strings are "native speaker to confirm".

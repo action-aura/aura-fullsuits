@@ -164,6 +164,11 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'send_stock_transfer': CAP_STOCK,
     'receive_stock_transfer': CAP_STOCK,
     'cancel_stock_transfer': CAP_STOCK,
+    # STOCK-TAKE (schema v57): the shelf-count routes -- the same authority as a manual adjustment.
+    'start_stock_count': CAP_STOCK,
+    'count_stock_line': CAP_STOCK,
+    'post_stock_count': CAP_STOCK,
+    'cancel_stock_count': CAP_STOCK,
     # Retiring a customer is master-data maintenance, not selling -- see the
     # comment on the route for why it splits from its create/update siblings.
     'delete_customer': CAP_STOCK,
@@ -459,6 +464,9 @@ EXPECTED_READ_CAPABILITIES = {
     'report_by_employee': CAP_REPORTS,
     'daily_cash': CAP_REPORTS,
     'aging_report': CAP_REPORTS,
+    # STOCK-TAKE (schema v57): a count's variance value reveals cost, so its reads are stock-adjust gated.
+    'list_stock_counts': CAP_STOCK,
+    'get_stock_count': CAP_STOCK,
     # The accounting CSV exports (launch-readiness "no journal export, no CSV
     # dump" fix): same disclosure tier as every other report route in this
     # table -- they are the SAME sales/payments/cash-session figures
