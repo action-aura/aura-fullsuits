@@ -227,21 +227,37 @@ class OwnerRequester:
 
     # -- loop --------------------------------------------------------------
     def run(self, *, poll_seconds: float = DEFAULT_POLL_SECONDS, sleep: Callable[[float], None] = time.sleep,
-            stop: Optional[threading.Event] = None, max_failures: int = MAX_FAILURES) -> str:
+            stop: Optional[threading.Event] = None, max_failures: int = MAX_FAILURES,
+            max_retries: int = MAX_FAILURES) -> str:
         """Poll until staged. -> 'staged' | 'gave_up' | 'stopped'. A failure
         (Owner unreachable, a copy refused) is retried with growing waits; after
         `max_failures` in a row it stops until the next start rather than hammer
-        Owner or re-download a copy that keeps being refused."""
+        Owner or re-download a copy that keeps being refused.
+
+        'retry' (Owner forgot the request, or answered a terminal FAILED/EXPIRED) is NOT progress: it used to
+        `continue` straight into the next step() with no sleep and without touching the failure counter, so an
+        Owner that kept answering FAILED made this loop mint keys and call Owner forever. A retry now waits
+        with the same growing back-off and counts toward its own cap (`max_retries`), ending in 'gave_up'."""
         failures = 0
+        retries = 0
         wait = poll_seconds
         while stop is None or not stop.is_set():
             try:
                 outcome = self.step()
-                failures, wait = 0, poll_seconds
+                failures = 0
                 if outcome == "staged":
                     return outcome
                 if outcome == "retry":
-                    continue
+                    retries += 1
+                    logger.warning("Bootstrap request was reset by Owner (%d/%d)", retries, max_retries)
+                    if retries >= max_retries:
+                        return "gave_up"
+                    wait = min(MAX_POLL_SECONDS, wait * 2)
+                else:
+                    # requested / waiting: waiting for a peer is normal, so the wait shrinks back -- but the
+                    # retry count is NOT reset: "ask, get forgotten, ask, get forgotten ..." alternates
+                    # requested with retry and must still end.
+                    wait = poll_seconds
             except (BootstrapError, RelayRejected, SyncRelayClientError) as exc:
                 failures += 1
                 logger.warning("Bootstrap request step failed (%s) [%d/%d]",
