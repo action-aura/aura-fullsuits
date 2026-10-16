@@ -1476,6 +1476,10 @@ EXCLUSIONS = {
         'variance': "Derived: counted_qty - system_qty_at_count. The apply "
                     "branch recomputes it from the two quantities that DO "
                     "travel and never trusts a figure off the wire.",
+        'posted_variance': "Local record of the variance THIS computer's post (or "
+                           "late correction) booked, mirrored on every row of the "
+                           "product; it is the base the next late correction is "
+                           "measured from, and only the main computer ever uses it.",
         'post_unit_cost': "Local record of the unit cost THIS computer's post "
                           "booked at. A receiving computer reads the cost off "
                           "the synced correction movement (same uid), so it is "

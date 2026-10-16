@@ -367,7 +367,7 @@ def test_3d_get_shows_lines_value_and_totals(client):
     data = _get(client, uid)['data']
     assert data['count']['status'] == 'open' and data['count']['note'] == 'aisle 1'
     assert data['totals'] == {'lines': 2, 'gain_qty': 2.0, 'short_qty': 3.0, 'variance_value': -5.0,
-                              'below_zero': []}
+                              'below_zero': [], 'moved_during_count': []}
     by = {ln['product_id']: ln for ln in data['lines']}
     assert by[a]['variance_value'] == 4.0 and by[b]['variance_value'] == -9.0
     listed = client.get(f'{API}/stock-counts?status=open').get_json()['data']
@@ -516,3 +516,92 @@ def test_6f_a_merged_count_cannot_be_scanned_posted_or_cancelled(client):
               client.post(f'{API}/stock-counts/{uid}/post'), client.post(f'{API}/stock-counts/{uid}/cancel')):
         assert r.status_code == 409 and r.get_json()['code'] == 'STOCK_COUNT_MERGED'
         assert r.get_json()['merged_into'] == winner
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 7 -- round 3: joined counts are followed, late scans after a post, movement during a count
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _insert_joined_loser(cid, winner_uid):
+    """A second count of the branch that the sync apply has already joined into `winner_uid`."""
+    conn = get_retail_conn()
+    try:
+        branch = conn.execute("SELECT branch_id FROM stock_counts WHERE uid=?", (winner_uid,)).fetchone()[0]
+        loser = str(uuid.uuid4())
+        conn.execute("INSERT INTO stock_counts (uid, company_id, branch_id, status, merged_into, started_at) "
+                     "VALUES (?,?,?,'merged',?,'2026-10-16T00:00:00+00:00')", (loser, cid, branch, winner_uid))
+        conn.commit()
+        return loser
+    finally:
+        conn.close()
+
+
+def test_7a_a_scan_on_a_joined_count_is_recorded_on_the_winner_and_says_so(client):
+    cid = client.test_company_id
+    pid, _ = _seed_product(client, initial_stock=10)
+    winner = _start(client)
+    loser = _insert_joined_loser(cid, winner)
+    out = _count(client, loser, product_id=pid, quantity=4, mode='set')['data']
+    assert out['count_uid'] == winner and out['counted_qty'] == 4
+    data = _get(client, winner)['data']
+    assert data['lines'][0]['counted_qty'] == 4
+    assert _get(client, loser)['data']['lines'] == [], 'nothing was filed under the joined count'
+
+
+def test_7b_a_scan_redirected_into_a_POSTED_count_books_a_late_correction_on_the_main_computer(client, monkeypatch):
+    """A posted a count (6 of 10 -> -4). Another computer's scan reaches a count that was joined into
+    it: dev-B counted 2 more. Total 8 against the earliest figure 10 = -2, already posted -4 -> +2."""
+    cid = client.test_company_id
+    pid, _ = _seed_product(client, cost_price=2.0, initial_stock=10)
+    winner = _start(client)
+    _as_device(monkeypatch, 'dev-A')
+    _count(client, winner, product_id=pid, quantity=6, mode='set')
+    _post(client, winner)
+    assert _on_hand(cid, pid) == 6 and _bal(cid, gl.ACCOUNT_SHRINKAGE) == 8.0
+    loser = _insert_joined_loser(cid, winner)
+    _as_device(monkeypatch, 'dev-B')
+    out = _count(client, loser, product_id=pid, quantity=2)['data']
+    assert out['count_uid'] == winner
+    assert _on_hand(cid, pid) == 8, 'the late scan corrected the stock on the main computer'
+    assert _bal(cid, gl.ACCOUNT_SHRINKAGE) == 4.0                                # -4 then +2, x 2.000
+    assert _tie(client)['status'] == 'ties', _tie(client)
+    _count(client, loser, product_id=pid, quantity=1)                            # another late scan: +1
+    assert _on_hand(cid, pid) == 9
+    # a count addressed DIRECTLY at the posted uid is still closed
+    _count(client, winner, expect=409, product_id=pid, quantity=1)
+
+
+def test_7c_a_late_scan_on_a_computer_that_is_not_main_books_nothing(client, monkeypatch):
+    cid = client.test_company_id
+    pid, _ = _seed_product(client, initial_stock=10)
+    winner = _start(client)
+    _count(client, winner, product_id=pid, quantity=6, mode='set')
+    _post(client, winner)
+    loser = _insert_joined_loser(cid, winner)
+    monkeypatch.setattr(device_context, 'local_device_is_admin', lambda conn, cid: False)
+    _as_device(monkeypatch, 'dev-B')
+    _count(client, loser, product_id=pid, quantity=2)
+    assert _on_hand(cid, pid) == 6, 'only the main computer books a correction'
+
+
+def test_7d_a_sale_between_two_computers_contributions_is_flagged_for_a_recount(client, monkeypatch):
+    """Shelf 5 + 5, system 10. Front counted (5), a sale of 2, back counted (3): the variance (-2)
+    would end the books at 6 when the shelf holds 8. The product is flagged; no sale -> not flagged."""
+    cid = client.test_company_id
+    moved, _ = _seed_product(client, name='Sold In The Middle', initial_stock=10)
+    calm, _ = _seed_product(client, name='Nothing Moved', initial_stock=10)
+    uid = _start(client)
+    _as_device(monkeypatch, 'dev-front')
+    _count(client, uid, product_id=moved, quantity=5, mode='set')
+    _count(client, uid, product_id=calm, quantity=5, mode='set')
+    _sell(client, moved, 2)
+    _as_device(monkeypatch, 'dev-back')
+    _count(client, uid, product_id=moved, quantity=3, mode='set')
+    _count(client, uid, product_id=calm, quantity=5, mode='set')
+    data = _get(client, uid)['data']
+    flags = {ln['product_name']: ln['moved_during_count'] for ln in data['lines']}
+    assert flags == {'Sold In The Middle': True, 'Nothing Moved': False}, flags
+    assert [m['name'] for m in data['totals']['moved_during_count']] == ['Sold In The Middle']
+    out = _post(client, uid)['data']
+    assert [m['name'] for m in out['moved_during_count']] == ['Sold In The Middle']
+    assert _on_hand(cid, moved) == 6, 'the earliest baseline is kept: the flag is the safety net'

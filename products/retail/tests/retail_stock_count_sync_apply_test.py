@@ -230,15 +230,83 @@ def test_a_computers_newer_value_replaces_only_its_own_and_replays_change_nothin
     assert (b["counted_qty"], b["system_qty_at_count"]) == (5.0, 12.0)
 
 
-def test_a_posted_count_is_immutable_and_a_late_line_still_completes_the_record(get_conn):
+def test_a_cancelled_count_is_immutable_and_a_late_line_still_completes_the_record(get_conn):
     _apply(get_conn, _count(LOW))
     _apply(get_conn, _line(LOW, "devA", 5.0, T1))
-    _apply(get_conn, _count_update(LOW, "posted"))
-    assert _heads(get_conn)[LOW]["status"] == "posted"
-    _apply(get_conn, _count_update(LOW, "cancelled"))                  # lower rank: ignored
-    assert _heads(get_conn)[LOW]["status"] == "posted"
+    _apply(get_conn, _count_update(LOW, "cancelled"))
+    assert _heads(get_conn)[LOW]["status"] == "cancelled"
     late = _line(LOW, "devA", 9.0, T3)
     late["event_type"] = "update"
     _apply(get_conn, late)                                             # existing contribution: frozen
     _apply(get_conn, _line(LOW, "devB", 3.0, T3))                      # missing one: recorded
     assert [(p["device_id"], p["counted_qty"]) for p in _parts(get_conn)] == [("devA", 5.0), ("devB", 3.0)]
+
+
+def test_a_posted_count_takes_late_contributions_and_never_loses_to_a_lower_status(get_conn):
+    """A POSTED count is no longer frozen: a late row is recorded (and the main computer books its
+    correction through the hook, proved in the two-computer test). A 'cancelled' that arrives after
+    'posted' is a lower rank and changes nothing."""
+    _apply(get_conn, _count(LOW))
+    _apply(get_conn, _line(LOW, "devA", 5.0, T1))
+    _apply(get_conn, _count_update(LOW, "posted"))
+    _apply(get_conn, _count_update(LOW, "cancelled"))
+    assert _heads(get_conn)[LOW]["status"] == "posted"
+    late = _line(LOW, "devA", 9.0, T3)
+    late["event_type"] = "update"
+    _apply(get_conn, late)
+    _apply(get_conn, _line(LOW, "devB", 3.0, T3))
+    assert [(p["device_id"], p["counted_qty"]) for p in _parts(get_conn)] == [("devA", 9.0), ("devB", 3.0)]
+
+
+def _count_at(uid, started_at):
+    ev = _count(uid)
+    ev["payload"]["started_at"] = started_at
+    return ev
+
+
+def _post_at(uid, posted_at):
+    ev = _count_update(uid, "posted")
+    ev["payload"]["posted_at"] = posted_at
+    return ev
+
+
+@pytest.mark.parametrize("rival_after_post", [True, False])
+def test_an_open_rival_that_started_before_the_post_is_merged_into_the_posted_count(get_conn, rival_after_post):
+    """HIGH (round 3): the main computer posted P (the LARGER uid); the rival R (smaller uid, which would
+    normally win a merge) was started on another computer BEFORE that post. Whichever order the pieces
+    reach this computer in, R must not stay open (it could be posted again): it is merged INTO the
+    posted count and its rows move there."""
+    P, R = HIGH, LOW
+    posted_side = [lambda: _apply(get_conn, _count_at(P, T1)),
+                   lambda: _apply(get_conn, _line(P, "devA", 5.0, T1))]
+    rival_side = [lambda: _apply(get_conn, _count_at(R, T1)),
+                  lambda: _apply(get_conn, _line(R, "devB", 4.0, T2))]
+    post = [lambda: _apply(get_conn, _post_at(P, T3))]
+    for step in (posted_side + post + rival_side) if rival_after_post else (posted_side + rival_side + post):
+        step()
+    heads = _heads(get_conn)
+    assert heads[P]["status"] == "posted" and heads[R]["status"] == "merged" and heads[R]["merged_into"] == P, heads
+    assert sorted((p["count_uid"], p["device_id"]) for p in _parts(get_conn)) == [(P, "devA"), (P, "devB")]
+
+
+def test_an_open_count_started_AFTER_the_post_is_a_legitimate_new_count(get_conn):
+    _apply(get_conn, _count_at(LOW, T1))
+    _apply(get_conn, _line(LOW, "devA", 5.0, T1))
+    _apply(get_conn, _post_at(LOW, T2))
+    _apply(get_conn, _count_at(HIGH, T3))                              # started after the post
+    heads = _heads(get_conn)
+    assert heads[LOW]["status"] == "posted" and heads[HIGH]["status"] == "open" and not heads[HIGH]["merged_into"]
+
+
+def test_two_parts_of_one_computer_from_two_merged_counts_are_added_not_overwritten_or_doubled(get_conn):
+    """LOW: devA scanned 5 into LOW and 3 into HIGH (it joined the shop's count later). After the
+    merge both rows survive under LOW and the count SUMS them (8); replaying either event adds nothing."""
+    _apply(get_conn, _count(LOW))
+    _apply(get_conn, _count(HIGH))
+    first = _line(LOW, "devA", 5.0, T1)
+    late = _line(HIGH, "devA", 3.0, T2)                                # addressed to the merged loser
+    for ev in (first, late, late, first):
+        _apply(get_conn, ev)
+    rows = _parts(get_conn)
+    assert sorted(p["counted_qty"] for p in rows) == [3.0, 5.0] and {p["count_uid"] for p in rows} == {LOW}
+    assert sum(p["counted_qty"] for p in rows) == 8.0

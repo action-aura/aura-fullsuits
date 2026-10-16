@@ -1211,6 +1211,20 @@ def resync_streams_snapshot() -> dict:
 _FLOOD_WARNED: set = set()
 
 
+
+#: STOCK-TAKE: called after a contribution lands on a POSTED count (and for each product a rival
+#: count's rows are moved into one). commercial_runtime cannot import products code, so retail_api
+#: registers the function at import (`set_stock_count_late_hook`); it books the correction on the MAIN
+#: computer only and does nothing elsewhere. Signature: (conn, company_id, count_uid, product_id,
+#: device_id, counted_at) -> bool.
+_STOCK_COUNT_LATE_HOOK = None
+
+
+def set_stock_count_late_hook(fn) -> None:
+    global _STOCK_COUNT_LATE_HOOK
+    _STOCK_COUNT_LATE_HOOK = fn
+
+
 class SyncService:
     def __init__(
         self,
@@ -7605,45 +7619,61 @@ class SyncService:
         return True
 
     def _converge_open_stock_counts(self, conn, company_id, branch_id) -> None:
-        """Join rival OPEN counts of one branch: the smallest uid wins, every other becomes
-        status 'merged' (`merged_into` = winner) and its contributions move under the winner.
+        """Join rival counts of one branch so a shelf is only ever corrected from ONE count.
 
-        WHY. Two computers can each start a count of one branch while offline. Left alone, both
-        get scanned, and the shelf is corrected twice from two views of it. The rule is pure
-        (smallest uid) and runs on every computer whenever it holds two open counts of a branch,
-        so all computers reach the same single count whatever order things arrived in; nothing
-        is announced about the merge itself -- it is derived. Lines that arrive later for a
-        merged count are redirected to the winner (`_resolve_stock_count`).
+        1. Two or more OPEN counts: the smallest uid wins, every other becomes 'merged'
+           (`merged_into` = winner) and its contributions move under the winner.
+        2. An OPEN count against a POSTED one: if the open one was STARTED at or before the posted
+           one's `posted_at`, it counted the same shelf the post already corrected, so it too is
+           merged -- into the posted count -- and each product it carries reaches the late-correction
+           hook (the main computer books the difference; nobody can post it again). One started
+           AFTER the post is a legitimate new count and is left alone.
 
-        A contribution moves as it is. If the SAME computer already has one for that product
-        under the winner (it scanned into both), the two parts add and the earlier system figure
-        and later timestamp are kept. Twin of `core/retail/stock_counts.py::merge_winner`."""
+        WHY. Two computers can each start a count of one branch while offline, and the main
+        computer can post before the other one's has reached it. Left alone, both get posted and the
+        shelf is corrected twice from two views of it. The rules are pure (smallest uid; started
+        vs posted timestamps) and run on every computer whenever it holds the pieces, so all
+        computers reach the same state in any arrival order; nothing is announced about the merge
+        itself -- it is derived. Lines that arrive later for a merged count are redirected to the
+        winner (`_resolve_stock_count`).
+
+        A moved contribution keeps its row and its `origin_count_uid`, so a computer's two parts
+        (one from each merged count) stay two rows that the count SUMS; replaying the event that
+        created either finds its own row and adds nothing. Twin of
+        `core/retail/stock_counts.py::merge_winner`."""
+        def _merge(loser, winner):
+            conn.execute("UPDATE stock_counts SET status='merged', merged_into=? WHERE uid=? AND company_id=?",
+                         (winner, loser, company_id))
+            conn.execute("UPDATE stock_count_lines SET count_uid=? WHERE company_id=? AND count_uid=?",
+                         (winner, company_id, loser))
+
         opens = [r[0] for r in conn.execute(
             "SELECT uid FROM stock_counts WHERE company_id=? AND branch_id=? AND status='open' "
             "ORDER BY uid", (company_id, branch_id)).fetchall()]
-        if len(opens) < 2:
-            return
-        winner = opens[0]
         for loser in opens[1:]:
-            conn.execute("UPDATE stock_counts SET status='merged', merged_into=? WHERE uid=? AND company_id=?",
-                         (winner, loser, company_id))
-            for r in conn.execute("SELECT * FROM stock_count_lines WHERE company_id=? AND count_uid=?",
-                                  (company_id, loser)).fetchall():
-                twin = conn.execute(
-                    "SELECT * FROM stock_count_lines WHERE company_id=? AND count_uid=? AND product_id=? "
-                    "AND device_id=?", (company_id, winner, r["product_id"], r["device_id"])).fetchone()
-                if twin is None:
-                    conn.execute("UPDATE stock_count_lines SET count_uid=? WHERE id=?", (winner, r["id"]))
-                    continue
-                counted = Decimal(str(twin["counted_qty"])) + Decimal(str(r["counted_qty"]))
-                first = twin if (twin["counted_at"] or "") <= (r["counted_at"] or "") else r
-                system = Decimal(str(first["system_qty_at_count"]))
-                conn.execute(
-                    "UPDATE stock_count_lines SET counted_qty=?, system_qty_at_count=?, variance=?, "
-                    "counted_at=? WHERE id=?",
-                    (float(counted), float(system), float(counted - system),
-                     max(twin["counted_at"] or "", r["counted_at"] or ""), twin["id"]))
-                conn.execute("DELETE FROM stock_count_lines WHERE id=?", (r["id"],))
+            _merge(loser, opens[0])
+        if not opens:
+            return
+        survivor = conn.execute("SELECT uid, started_at FROM stock_counts WHERE uid=? AND company_id=?",
+                                (opens[0], company_id)).fetchone()
+        if not survivor["started_at"]:
+            return
+        posted = conn.execute(
+            "SELECT uid FROM stock_counts WHERE company_id=? AND branch_id=? AND status='posted' "
+            "AND posted_at IS NOT NULL AND posted_at>=? ORDER BY posted_at, uid LIMIT 1",
+            (company_id, branch_id, survivor["started_at"])).fetchone()
+        if posted is None:
+            return
+        moved = conn.execute(
+            "SELECT product_id, device_id, counted_at FROM stock_count_lines WHERE company_id=? AND count_uid=? "
+            "ORDER BY counted_at, device_id", (company_id, survivor["uid"])).fetchall()
+        _merge(survivor["uid"], posted["uid"])
+        if _STOCK_COUNT_LATE_HOOK is not None:
+            latest = {}
+            for r in moved:
+                latest[r["product_id"]] = (r["device_id"], r["counted_at"])
+            for product_id, (device_id, counted_at) in sorted(latest.items()):
+                _STOCK_COUNT_LATE_HOOK(conn, company_id, posted["uid"], product_id, device_id, counted_at)
 
     def _resolve_stock_count(self, conn, company_id, count_uid):
         """The live count a uid stands for: follows `merged_into` (a few hops at most) so a line
@@ -7664,7 +7694,7 @@ class SyncService:
         own, so the header must say so on every computer. Never moves stock."""
         uid = p.get("uid") or ev.get("entity_id")
         local = conn.execute(
-            "SELECT status, posted_at, posted_by, cancelled_at, cancelled_by FROM stock_counts "
+            "SELECT status, posted_at, posted_by, cancelled_at, cancelled_by, branch_id FROM stock_counts "
             "WHERE uid=? AND company_id=?", (uid, local_company_id)).fetchone()
         if local is None:
             return self._quarantine_apply_event(
@@ -7688,23 +7718,32 @@ class SyncService:
                 "cancelled_by=? WHERE uid=? AND company_id=?",
                 (status, merged["posted_at"], merged["posted_by"], merged["cancelled_at"],
                  merged["cancelled_by"], uid, local_company_id))
+            if status == "posted":
+                # A count that started BEFORE this one was posted and is still open here is a rival
+                # of it (see `_converge_open_stock_counts`).
+                self._converge_open_stock_counts(conn, local_company_id, local["branch_id"])
         return True
 
     def _apply_stock_count_line(self, conn, ev: dict, p: dict, local_company_id) -> bool:
         """`stock_count_line` create/update: ONE computer's contribution (`device_id`) to one
-        product of one count. Both event types are the SAME upsert keyed on (count, product,
-        device): a computer only ever writes its own rows, so contributions from different
+        product of one count. Both event types are the SAME upsert keyed on (count, product, device,
+        origin): a computer only ever writes its own rows, so contributions from different
         computers never overwrite each other -- the count's quantity is their sum -- and the only
         merge needed is the single writer's own newer value replacing its older one.
+        `origin_count_uid` is the count the row was WRITTEN under: when a merge moved the row, a
+        replayed event for it still finds it (and a second part of the same computer, written under
+        the other merged count, is a different row that is added, never double-counted).
 
         The parent count is looked up INSIDE the receiver's company (a line carries no company of
         its own), FOLLOWING a merge to the winner, and parked until it arrives; the product is a
         plain text id, so an absent one is parked rather than raised.
 
-        `system_qty_at_count` is SET-ONCE; `counted_qty` / `counted_at` / `counted_by` follow the
-        newest `counted_at` of that writer. A line for a count that is no longer open is inserted
-        if missing (the record stays complete) but never changes an existing one: a posted count is
-        immutable. The variance is derived here, never trusted from the wire."""
+        `system_qty_at_count` and `first_counted_at` are SET-ONCE; `counted_qty` / `counted_at` /
+        `counted_by` follow the newest `counted_at` of that writer. An OPEN or POSTED count takes
+        the row; for a POSTED one the late-correction hook then books the difference on the main
+        computer (nowhere else). A CANCELLED count is immutable: a row is inserted if missing (the
+        record stays complete) but an existing one never changes. The variance is derived here,
+        never trusted from the wire."""
         cid = local_company_id or self._get_local_company_id()
         count_uid = p.get("count_uid")
         count = self._resolve_stock_count(conn, cid, count_uid) if count_uid else None
@@ -7718,29 +7757,33 @@ class SyncService:
                 conn, ev, reason="missing_parent:product",
                 detail=f"product_id={product_id!r} not found locally")
         device_id = p.get("device_id") or ""
+        origin = p.get("origin_count_uid") or count_uid
         counted = Decimal(str(p.get("counted_qty") or 0))
         system = Decimal(str(p.get("system_qty_at_count") or 0))
         existing = conn.execute(
             "SELECT counted_at, system_qty_at_count FROM stock_count_lines "
-            "WHERE company_id=? AND count_uid=? AND product_id=? AND device_id=?",
-            (cid, count["uid"], product_id, device_id)).fetchone()
+            "WHERE company_id=? AND count_uid=? AND product_id=? AND device_id=? AND origin_count_uid=?",
+            (cid, count["uid"], product_id, device_id, origin)).fetchone()
+        changed = False
         if existing is None:
             conn.execute(
                 "INSERT INTO stock_count_lines (uid, company_id, branch_id, count_uid, product_id, device_id, "
-                "counted_qty, system_qty_at_count, variance, counted_at, counted_by) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(uid) DO NOTHING",
+                "origin_count_uid, counted_qty, system_qty_at_count, variance, counted_at, first_counted_at, "
+                "counted_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(uid) DO NOTHING",
                 (p.get("uid") or ev.get("entity_id"), cid, count["branch_id"], count["uid"], product_id,
-                 device_id, float(counted), float(system), float(counted - system),
-                 p.get("counted_at"), p.get("counted_by")))
-            return True
-        if count["status"] != "open":
-            return True                               # a closed count is immutable
-        if (p.get("counted_at") or "") > (existing["counted_at"] or ""):
+                 device_id, origin, float(counted), float(system), float(counted - system),
+                 p.get("counted_at"), p.get("first_counted_at") or p.get("counted_at"), p.get("counted_by")))
+            changed = True
+        elif count["status"] in ("open", "posted") and \
+                (p.get("counted_at") or "") > (existing["counted_at"] or ""):
             conn.execute(
                 "UPDATE stock_count_lines SET counted_qty=?, variance=?, counted_at=?, counted_by=? "
-                "WHERE company_id=? AND count_uid=? AND product_id=? AND device_id=?",
+                "WHERE company_id=? AND count_uid=? AND product_id=? AND device_id=? AND origin_count_uid=?",
                 (float(counted), float(counted - Decimal(str(existing["system_qty_at_count"]))),
-                 p.get("counted_at"), p.get("counted_by"), cid, count["uid"], product_id, device_id))
+                 p.get("counted_at"), p.get("counted_by"), cid, count["uid"], product_id, device_id, origin))
+            changed = True
+        if changed and count["status"] == "posted" and _STOCK_COUNT_LATE_HOOK is not None:
+            _STOCK_COUNT_LATE_HOOK(conn, cid, count["uid"], product_id, device_id, p.get("counted_at"))
         return True
 
     def _apply_payment_po_link(self, conn, ev: dict, p: dict, local_company_id,

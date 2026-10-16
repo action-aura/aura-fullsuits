@@ -158,7 +158,7 @@
             '<div style="color:var(--text-muted);font-size:12px">' + bdi(l.barcode || l.sku || '') + '</div></td>' +
             '<td>' + esc(qty(l.system_qty_at_count)) + '</td>' +
             '<td>' + esc(qty(l.counted_qty)) + '</td>' +
-            (isOpen ? '<td><input type="number" min="0" step="any" style="width:90px" data-st-set="' + esc(l.product_id) +
+            (isOpen ? '<td><input type="number" min="0" step="any" style="width:90px;min-block-size:var(--touch-target-min)" data-st-set="' + esc(l.product_id) +
               '" value="' + esc(qty(l.this_device_qty)) + '" aria-label="' + esc(t('This computer')) + '" /></td>' : '') +
             '<td><span class="ret-badge ' + varianceClass(l.variance) + '">' + esc(signed(l.variance)) + '</span></td>' +
             '<td>' + esc(money(l.variance_value)) + '</td></tr>';

@@ -106,7 +106,7 @@ def test_a_v56_database_upgrades_through_the_real_chain_to_v57():
     lcols = {r['name'] for r in _rows(db, 'PRAGMA table_info("stock_count_lines")')}
     assert {'uid', 'company_id', 'branch_id', 'count_uid', 'product_id', 'counted_qty',
             'system_qty_at_count', 'variance', 'counted_at', 'counted_by', 'device_id',
-            'post_unit_cost'} <= lcols
+            'post_unit_cost', 'origin_count_uid', 'first_counted_at', 'posted_variance'} <= lcols
     assert 'merged_into' in cols
     assert _rows(db, "SELECT * FROM branches ORDER BY id") == before, 'existing rows are untouched'
 
@@ -122,13 +122,14 @@ def test_constraints_refuse_a_bad_status_a_second_line_and_a_duplicate_uid():
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("INSERT INTO stock_counts (uid, company_id, branch_id) VALUES ('u1','c',1)")
         ins = ("INSERT INTO stock_count_lines (uid, company_id, branch_id, count_uid, product_id, counted_qty, "
-               "system_qty_at_count, variance, device_id) VALUES (?,?,?,?,?,?,?,?,?)")
-        conn.execute(ins, ('l1', 'c', 1, 'u1', 'p1', 3, 5, -2, 'devA'))
-        conn.execute(ins, ('l3', 'c', 1, 'u1', 'p1', 4, 5, -1, 'devB'))  # another computer's part: allowed
+               "system_qty_at_count, variance, device_id, origin_count_uid) VALUES (?,?,?,?,?,?,?,?,?,?)")
+        conn.execute(ins, ('l1', 'c', 1, 'u1', 'p1', 3, 5, -2, 'devA', 'u1'))
+        conn.execute(ins, ('l3', 'c', 1, 'u1', 'p1', 4, 5, -1, 'devB', 'u1'))  # another computer's part: allowed
+        conn.execute(ins, ('l4', 'c', 1, 'u1', 'p1', 2, 5, -3, 'devA', 'u0'))  # same computer, other ORIGIN (a merged-in part)
         with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(ins, ('l2', 'c', 1, 'u1', 'p1', 4, 5, -1, 'devA'))  # same (count, product, device)
+            conn.execute(ins, ('l2', 'c', 1, 'u1', 'p1', 4, 5, -1, 'devA', 'u1'))  # same (count, product, device, origin)
         with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(ins, ('l1', 'c', 1, 'u1', 'p2', 4, 5, -1, 'devA'))  # same uid
+            conn.execute(ins, ('l1', 'c', 1, 'u1', 'p2', 4, 5, -1, 'devA', 'u1'))  # same uid
         conn.execute("UPDATE stock_counts SET status='merged', merged_into='u0' WHERE uid='u1'")  # allowed
     finally:
         conn.close()
@@ -140,7 +141,8 @@ def test_replaying_the_whole_chain_changes_no_row():
     try:
         conn.execute("INSERT INTO stock_counts (uid, company_id, branch_id, note) VALUES ('u1','c',1,'n')")
         conn.execute("INSERT INTO stock_count_lines (uid, company_id, branch_id, count_uid, product_id, "
-                     "counted_qty, system_qty_at_count, variance, device_id) VALUES ('l1','c',1,'u1','p1',3,5,-2,'d')")
+                     "counted_qty, system_qty_at_count, variance, device_id, origin_count_uid) "
+                     "VALUES ('l1','c',1,'u1','p1',3,5,-2,'d','u1')")
         conn.commit()
     finally:
         conn.close()

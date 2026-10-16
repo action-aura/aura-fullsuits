@@ -64,6 +64,13 @@ def count_movement_uid(count_uid: str, product_id: str) -> str:
     return str(uuid.uuid5(_STOCK_COUNT_NAMESPACE, f"{count_uid}:{product_id}:post"))
 
 
+def late_movement_uid(count_uid: str, product_id: str, device_id: str, counted_at: str) -> str:
+    """The uid of the correction a LATE contribution (one that reached the main computer after the
+    count was posted) books: a function of the count, the product and the contribution's writer and
+    timestamp, so applying the same late event twice moves the stock once."""
+    return str(uuid.uuid5(_STOCK_COUNT_NAMESPACE, f"{count_uid}:{product_id}:late:{device_id}:{counted_at}"))
+
+
 def merge_winner(uid_a: str, uid_b: str) -> str:
     """Of two OPEN counts of one branch, the one that survives: the smaller uid. Pure and
     symmetric, so every computer picks the same one whatever order the counts reached it."""

@@ -172,6 +172,9 @@ _CHECK_SAFE_VALUES = {
     # 'supplier'); same reasoning as above -- the table stays inside the guard,
     # the override only picks a valid value.
     ('party_balance_adjustments', 'party_type'): 'customer',
+    # v57's `stock_counts.status` is CHECK IN ('open','posted','cancelled','merged'); same reasoning --
+    # the table stays inside the guard, the override only picks a valid value.
+    ('stock_counts', 'status'): 'open',
 }
 
 
