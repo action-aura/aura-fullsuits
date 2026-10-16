@@ -439,6 +439,7 @@ def register_cli(app: Flask) -> None:
         from app.licensing_service import idempotency, ratelimit, replay
         from app.models.commercial_sales import Quote
         from app.models.licensing_service import ExternalIdempotencyRecord, RateLimitCounter, SecurityNonceRecord
+        from app.sync import bootstrap_routes
 
         now = datetime.now(timezone.utc)
         counter_cutoff = now - timedelta(days=1)
@@ -453,6 +454,9 @@ def register_cli(app: Flask) -> None:
                 # SEC-09 (privacy): see app/privacy_retention.py.
                 "email_bodies_cleared": privacy_retention.clear_old_email_bodies(),
                 "login_attempts_purged": privacy_retention.purge_old_login_attempts(),
+                # SYNC-BOOT Phase 3: expire unfinished bootstrap requests and delete
+                # every encrypted blob nobody may read again.
+                "sync_bootstrap": bootstrap_routes.sweep(apply=True),
             }
         else:
             def _count(model, *conditions) -> int:
@@ -468,6 +472,7 @@ def register_cli(app: Flask) -> None:
                 "rate_limit_counters_purged": _count(RateLimitCounter, RateLimitCounter.window_start < counter_cutoff),
                 "email_bodies_cleared": privacy_retention.count_email_bodies_to_clear(),
                 "login_attempts_purged": privacy_retention.count_login_attempts_to_purge(),
+                "sync_bootstrap": bootstrap_routes.sweep(apply=False),
             }
         click.echo(json.dumps(result, indent=2))
 

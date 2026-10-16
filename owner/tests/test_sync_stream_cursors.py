@@ -262,7 +262,14 @@ def test_pull_below_pruned_through_is_told_to_resync(app, client, seeded, signin
     for stream in ("retail", "registry", None):
         r = _pull_stream(client, kb, ib, 0, stream=stream)
         assert r.status_code == 409, stream
-        assert r.get_json() == {"reason_code": "RESYNC_REQUIRED", "pruned_through": 3}
+        expected = {"reason_code": "RESYNC_REQUIRED", "pruned_through": 3}
+        if stream == "registry":
+            # SYNC-BOOT Phase 3 (plan 2.2): the registry stream is never copied, so Owner also names where
+            # its log ends NOW for the device to skip to. In this fixture 3 events were pushed and all 3
+            # pruned, so the log ends at max(remaining top = 0, pruned_through = 3) = 3 -- an EXACT body,
+            # so an extra key or a wrong number is still caught (retail and legacy stay exact too).
+            expected = {**expected, "fast_forward_to": 3}
+        assert r.get_json() == expected
 
 
 def test_resync_required_writes_no_cursor(app, client, seeded, signing_key):

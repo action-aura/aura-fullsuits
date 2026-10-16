@@ -66,6 +66,7 @@ services:
       # run_backup.sh can never drift from where the app really writes.
       OWNER_EXPENSE_ATTACHMENT_DIR: /app/owner/var/expense-attachments
       OWNER_RELEASE_ARTIFACT_DIR: /app/owner/var/release-artifacts
+      OWNER_SYNC_BOOTSTRAP_DIR: /app/owner/var/sync-bootstrap
     volumes:
       # Named volume backed by the VM's own real disk -- this is the ENTIRE
       # point of this host choice. It survives container restarts, image
@@ -78,6 +79,11 @@ services:
       # every `up -d --build` redeploy (found 2026-10-10).
       - owner_expense_attachments:/app/owner/var/expense-attachments
       - owner_release_artifacts:/app/owner/var/release-artifacts
+      # SYNC-BOOT Phase 3: encrypted shop copies in transit between two devices.
+      # Transient (deleted on ack / after 72 h) and deliberately NOT in
+      # run_backup.sh: a backup of it would be a second, longer-lived copy of a
+      # shop's data for no benefit (a lost blob just means the device asks again).
+      - owner_sync_bootstrap:/app/owner/var/sync-bootstrap
       # Read-only. scripts/deploy/restore_signing_key.py registers an
       # EXISTING signing key's metadata in a fresh database before
       # activating it (see docs/ops/free-hosting-owner.md section 4.4a --
@@ -136,5 +142,6 @@ volumes:
   owner_backups:
   owner_expense_attachments:
   owner_release_artifacts:
+  owner_sync_bootstrap:
   caddy_data:
   caddy_config:

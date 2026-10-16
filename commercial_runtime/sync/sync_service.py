@@ -1598,7 +1598,7 @@ class SyncService:
                     raise
                 self.apply_pull_result(conn, result)
                 conn.commit()
-                self._after_pull(result, include_own)
+                self._after_pull(result, include_own, client, relay_url)
             finally:
                 conn.close()
 
@@ -1619,7 +1619,7 @@ class SyncService:
         """Installs `bootstrap.hooks.BootstrapHooks` (SYNC-BOOT Phase 2)."""
         self._bootstrap_hooks = hooks
 
-    def _after_pull(self, result: dict, include_own: bool) -> None:
+    def _after_pull(self, result: dict, include_own: bool, client=None, relay_url: Optional[str] = None) -> None:
         """Post-commit bookkeeping of a successful pull: stop asking for own
         events once a relay has HONOURED the request (it echoes `include_own`; one
         that ignores the field does not, and we keep asking), and hand any
@@ -1631,7 +1631,15 @@ class SyncService:
             self._hook(hooks, "include_own_done")
         requests = result.get("bootstrap_requests")
         if requests:
-            self._hook(hooks, "on_bootstrap_requests", list(requests))
+            # A request carrying a `request_id` lives in Owner's mailbox (SYNC-BOOT
+            # Phase 3) and needs the relay client to answer; a hub's has none and keeps
+            # its Phase 2 path untouched.
+            mailbox = [r for r in requests if isinstance(r, dict) and r.get("request_id")]
+            hub = [r for r in requests if not (isinstance(r, dict) and r.get("request_id"))]
+            if hub:
+                self._hook(hooks, "on_bootstrap_requests", hub)
+            if mailbox:
+                self._hook(hooks, "on_mailbox_requests", mailbox, client, relay_url)
 
     def _reapply_own_outbox_once(self, conn) -> None:
         """After a bootstrap install: the copy was taken before this device's

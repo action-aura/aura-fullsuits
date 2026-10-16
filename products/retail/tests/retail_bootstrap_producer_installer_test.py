@@ -105,8 +105,11 @@ class Shop:
             c.execute("INSERT INTO products (id, sku, name, sell_price) VALUES ('p1','SKU-1','Coffee',2.5)")
             c.execute("INSERT INTO products (id, sku, name, sell_price) VALUES ('p2','SKU-2','Tea',1.5)")
             c.execute("INSERT INTO customers (id, name) VALUES ('c1','Ayman')")
+            # company_id 1 = the same single company every other SYNCED row of this fixture carries (their
+            # column default). The producer refuses a database holding SEVERAL companies, so a fixture that
+            # mixed COMPANY with the default would be a multi-company install and build nothing.
             c.execute("INSERT INTO inventory_balances (company_id, product_id, branch_id, quantity_on_hand) "
-                      "VALUES (?, 'p1', 1, 40)", (COMPANY,)) if self._has("inventory_balances") else None
+                      "VALUES (1, 'p1', 1, 40)") if self._has("inventory_balances") else None
             # a PARKED event (an authority event nobody could verify yet): it must travel
             c.execute("INSERT INTO sync_apply_quarantine (entity_id, entity_type, event_type, payload, reason) "
                       "VALUES ('e-parked','user','update','{\"x\":1}','unsigned_authority_event')")
@@ -578,3 +581,165 @@ def test_the_registry_cursor_is_fast_forwarded_never_rewound(hub, late, spec, wo
         assert c.execute("SELECT last_seq, relay_url FROM sync_cursor").fetchone() == (12, DEVICE_URL)
     finally:
         c.close()
+
+
+# ── SYNC-BOOT Phase 3, Android: file staging, status, install-failure cap ───
+
+def test_staging_from_a_file_matches_staging_from_bytes_and_never_loads_the_database(hub, late, spec, world, tmp_path, monkeypatch):
+    """A phone must not hold a whole shop in memory: the path form hashes the database member in steps and
+    copies it out, never calling ZipFile.read on it. MUTATION: make verify_package read the member
+    (db_bytes = zf.read(...)) in the path form -> the patched read raises -> red."""
+    built = build(hub, spec, world)
+    zip_path = tmp_path / "copy.zip"
+    zip_path.write_bytes(built.data)
+    real_read = zipfile.ZipFile.read
+
+    def guarded(self, name, *a, **k):
+        if name == "retail.db":
+            raise AssertionError("the database member was loaded into memory")
+        return real_read(self, name, *a, **k)
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", guarded)
+    verified = installer.verify_package(
+        str(zip_path), spec=spec, trust_store=world.trust_store, own_licence=world.licence, expected_company_id=COMPANY)
+    assert verified.db_bytes is None and verified.zip_path == str(zip_path)
+    record = installer.stage(
+        str(zip_path), spec=spec, app_data_dir=late.app, relay_url=DEVICE_URL, trust_store=world.trust_store,
+        own_licence=world.licence, expected_company_id=COMPANY)
+    monkeypatch.undo()
+    staged = (installer.staging_dir(late.app) / "retail.db").read_bytes()
+    assert staged == unzip_db(built.data, tmp_path).read_bytes() and record["as_of"] == AS_OF
+
+    tampered = tmp_path / "bad.zip"                                  # the other direction: a bad file is refused
+    tampered.write_bytes(_rezip(built.data, db_bytes=b"SQLite format 3\0" + b"x" * 5000))
+    with pytest.raises(BootstrapError) as exc:
+        installer.verify_package(
+            str(tampered), spec=spec, trust_store=world.trust_store, own_licence=world.licence, expected_company_id=COMPANY)
+    assert exc.value.reason_code == errors.CHECKSUM_MISMATCH
+
+
+def test_status_says_whether_a_copy_can_be_staged_is_already_staged_and_how_installs_went(hub, late, spec, world):
+    clean = installer.status(late.app, spec)
+    assert clean == {"can_stage": True, "block_reason": None, "pending_staged": False, "install_failures": 0,
+                     "needs_support": False, "last_install_failure": None}
+    late.run("INSERT INTO cash_sessions (id, company_id, branch_id, status) VALUES ('my-cs','co',1,'open')")
+    drawer = installer.status(late.app, spec)
+    assert drawer["can_stage"] is False and errors.OPEN_CASH_SESSION in drawer["block_reason"]
+    late.run("UPDATE cash_sessions SET status='closed' WHERE id='my-cs'")
+    stage(late, spec, world, build(hub, spec, world))
+    assert installer.status(late.app, spec)["pending_staged"] is True
+
+
+def test_three_failed_installs_discard_the_copy_and_ask_for_support_and_a_success_resets_the_count(hub, late, spec, world, monkeypatch):
+    """The re-request/restart loop is capped: a copy that cannot be installed must not be re-requested and
+    re-installed forever. MUTATION: raise MAX_INSTALL_FAILURES to 99 -> the third assertion block goes red;
+    drop the success reset -> the last block goes red."""
+    built = build(hub, spec, world)
+    stage(late, spec, world, built)
+    real_check = installer.check_staged_database
+
+    def broken(path, spec_):
+        raise BootstrapError(errors.MIGRATION_FAILED, "boom")
+
+    monkeypatch.setattr(installer, "check_staged_database", broken)
+    for n in (1, 2):
+        assert installer.apply_staged(late.app, spec)["status"] == "failed"
+        st = installer.status(late.app, spec)
+        assert st["install_failures"] == n and st["needs_support"] is False and st["pending_staged"] is True
+    assert installer.apply_staged(late.app, spec)["status"] == "failed"      # the third
+    st = installer.status(late.app, spec)
+    assert st["needs_support"] is True and st["pending_staged"] is False and "boom" in st["last_install_failure"]
+    assert not installer.staging_dir(late.app).exists()
+    assert installer.apply_staged(late.app, spec) is None                    # nothing left to retry
+
+    # the other direction: one failure, then a good install -> the counter is back to zero
+    marker = installer.read_marker(late.app)
+    marker.pop("install_failures"); marker.pop("last_install_failure")
+    installer.write_marker(late.app, marker)
+    monkeypatch.setattr(installer, "check_staged_database", real_check)
+    stage(late, spec, world, built)
+    monkeypatch.setattr(installer, "check_staged_database", broken)
+    assert installer.apply_staged(late.app, spec)["status"] == "failed"
+    assert installer.status(late.app, spec)["install_failures"] == 1
+    monkeypatch.setattr(installer, "check_staged_database", real_check)
+    assert installer.apply_staged(late.app, spec)["status"] == "installed"
+    st = installer.status(late.app, spec)
+    assert st["install_failures"] == 0 and st["last_install_failure"] is None
+
+
+def test_the_stage_file_path_must_be_inside_the_download_directory(tmp_path):
+    """MUTATION: return Path(path) without the check -> the outside and `..` cases stop raising -> red."""
+    inside = tmp_path / "dl"
+    inside.mkdir()
+    ok = inside / "copy.zip"
+    ok.write_bytes(b"x")
+    assert installer.require_inside(inside, ok) == ok.resolve()
+    outside = tmp_path / "other.zip"
+    outside.write_bytes(b"x")
+    for bad in (outside, inside / ".." / "other.zip", inside, tmp_path / "dl-evil" / "copy.zip"):
+        with pytest.raises(BootstrapError) as exc:
+            installer.require_inside(inside, bad)
+        assert exc.value.reason_code == errors.BAD_PACKAGE
+
+
+def test_a_blocked_install_is_not_counted_as_a_failure(hub, late, spec, world):
+    stage(late, spec, world, build(hub, spec, world))
+    late.run("INSERT INTO cash_sessions (id, company_id, branch_id, status) VALUES ('my-cs','co',1,'open')")
+    for _ in range(5):
+        assert installer.apply_staged(late.app, spec)["status"] == "blocked"
+    st = installer.status(late.app, spec)
+    assert st["install_failures"] == 0 and st["pending_staged"] is True      # a drawer resolves itself
+
+
+def test_a_producer_refuses_to_build_from_an_install_that_holds_more_than_one_company(hub, spec, world, tmp_path):
+    """One install can host several companies and `_scrub` works by table class, never by company: a copy
+    would hand every other company's rows to a computer that belongs to one. Both directions: one company
+    builds (every other test in this file); a second company's row makes it refuse BEFORE shipping anything.
+    MUTATION: drop `require_single_company(conn, spec)` from build_bootstrap (and the source pre-check) ->
+    the copy is built and contains OTHER-CO's customer -> red."""
+    assert producer.foreign_company_ids(hub.conn(), spec) == ["1"]
+    producer.check_source_single_company(str(hub.db), spec)                       # allow half: passes silently
+    hub.run("INSERT INTO customers (id, name, company_id) VALUES ('c-other', 'Other Co Customer', 'OTHER-CO')")
+    assert producer.foreign_company_ids(hub.conn(), spec) == ["1", "OTHER-CO"]
+    with pytest.raises(BootstrapError) as exc:
+        build(hub, spec, world)
+    assert exc.value.reason_code == errors.MULTI_COMPANY_INSTALL
+    with pytest.raises(BootstrapError) as pre:
+        producer.check_source_single_company(str(hub.db), spec)                    # the cheap check before claiming
+    assert pre.value.reason_code == errors.MULTI_COMPANY_INSTALL
+
+
+# ── a copy older than the device's own cursor is never installed ────────────
+
+def _set_cursor(late, last_seq, relay_url):
+    late.run("UPDATE sync_cursor SET last_seq=?, relay_url=? WHERE id=1", (last_seq, relay_url))
+
+
+def test_a_copy_older_than_the_devices_own_cursor_on_the_same_relay_is_refused_at_staging(hub, late, spec, world):
+    """Defense in depth beside Owner's complete(): the device's own cursor is the authority on what it has
+    already applied. Allow halves: equal / lower cursor, and a cursor on ANOTHER relay (a separate sequence
+    space), are staged. MUTATION: delete the _refuse_if_behind_own_cursor call in stage() -> red."""
+    built = build(hub, spec, world)                                   # as_of == AS_OF (7)
+    _set_cursor(late, AS_OF + 43, DEVICE_URL)
+    with pytest.raises(BootstrapError) as exc:
+        stage(late, spec, world, built)
+    assert exc.value.reason_code == errors.COPY_BEHIND_CURSOR
+    assert installer.pending(late.app) is None and not installer.staging_dir(late.app).exists()
+    for seq, relay in ((AS_OF, DEVICE_URL), (3, DEVICE_URL), (500, "https://some-other-relay")):
+        _set_cursor(late, seq, relay)
+        assert stage(late, spec, world, built)["as_of"] == AS_OF
+        installer.pending_path(late.app).unlink()
+
+
+def test_a_staged_copy_that_the_cursor_overtook_is_discarded_not_installed_and_not_counted_as_a_failure(hub, late, spec, world):
+    """The device kept pulling while the copy waited for a quiet moment. MUTATION: delete the check in
+    apply_staged -> the stale copy is installed over newer data -> red."""
+    stage(late, spec, world, build(hub, spec, world))
+    before = late.db.read_bytes()
+    _set_cursor(late, AS_OF + 100, DEVICE_URL)
+    mid = late.db.read_bytes()
+    report = installer.apply_staged(late.app, spec)
+    assert report["status"] == "stale"
+    assert late.db.read_bytes() == mid and mid != before              # the live database was not touched
+    assert installer.pending(late.app) is None and not installer.staging_dir(late.app).exists()
+    assert installer.status(late.app, spec)["install_failures"] == 0

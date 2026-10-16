@@ -679,17 +679,32 @@ def pull():
     # liveness/caps for a device we just refused would hide that it is stuck).
     pruned_through = _license_pruned_through(license_id)
     if since < pruned_through:
-        return jsonify({"reason_code": "RESYNC_REQUIRED", "pruned_through": pruned_through}), 409
+        refusal = {"reason_code": "RESYNC_REQUIRED", "pruned_through": pruned_through}
+        if stream == "registry":
+            # The registry stream is never copied (authority is signed, not
+            # copied): the device skips to where the log ends NOW and the MAIN
+            # computer's fresh signed re-announce -- pushed after this moment, so
+            # above this number -- supplies the staff list. Same contract as the
+            # LAN hub's 409. Recording the request is what lets the main see it.
+            from app.sync import bootstrap_routes
+            refusal["fast_forward_to"] = bootstrap_routes._licence_max_seq(license_id)
+            bootstrap_routes.record_registry_request(installation, license_id)
+        return jsonify(refusal), 409
+    include_own = body.get("include_own") is True
 
     try:
-        rows = db_session.execute(
+        query = (
             select(SyncEvent)
             .where(SyncEvent.license_id == license_id)
             .where(SyncEvent.seq > since)
-            .where(SyncEvent.device_id != installation.id)
-            .order_by(SyncEvent.seq)
-            .limit(500)
-        ).scalars().all()
+        )
+        if not include_own:
+            # Normally a device never gets its own events back. SYNC-BOOT
+            # `include_own` (once, after a bootstrap install or a same-installation
+            # restore) lifts that: the database it now holds was taken before
+            # events it pushed since, and nothing else would ever return them.
+            query = query.where(SyncEvent.device_id != installation.id)
+        rows = db_session.execute(query.order_by(SyncEvent.seq).limit(500)).scalars().all()
         if rows:
             # A real seq from a row that genuinely exists -- nothing to bound.
             cursor = rows[-1].seq
@@ -756,7 +771,7 @@ def pull():
         current_app.logger.exception("Internal failure during sync pull.")
         return _error("INTERNAL_ERROR", 500)
 
-    return jsonify({
+    response = {
         "events": [{
             "id": str(r.id),
             "entity_type": r.entity_type,
@@ -767,4 +782,25 @@ def pull():
             "seq": r.seq,
         } for r in rows],
         "cursor": cursor,
-    }), 200
+    }
+    if include_own:
+        # Echoed so the device clears its one-shot flag only when Owner REALLY
+        # honoured it (an Owner that predates the field would not echo).
+        response["include_own"] = True
+    if caps and "bootstrap_producer_v1" in caps:
+        # Only producer-capable pullers hear about other devices' requests; an
+        # old client never sees the extra key at all.
+        try:
+            from app.sync import bootstrap_routes
+            pending = bootstrap_routes.pending_for(installation, license_id)
+        except Exception:  # noqa: BLE001 -- a hint must never fail a pull
+            db_session.rollback()
+            current_app.logger.warning("Could not list bootstrap requests.", exc_info=True)
+            pending = []
+        if pending:
+            response["bootstrap_requests"] = pending
+    return jsonify(response), 200
+
+
+# The bootstrap mailbox routes share this blueprint; importing them registers them.
+from app.sync import bootstrap_routes  # noqa: E402,F401

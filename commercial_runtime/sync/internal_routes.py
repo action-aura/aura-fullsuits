@@ -115,6 +115,7 @@ def make_sync_internal_blueprint(
     shared_secret: str,
     blueprint_name: str = "sync_internal",
     url_prefix: str = "/api/sync",
+    bootstrap=None,
 ) -> Blueprint:
     """`blueprint_name`/`url_prefix` default to the ONLY values this
     function has ever used, so the existing (retail-stream) call site in
@@ -132,6 +133,13 @@ def make_sync_internal_blueprint(
     would still collide on `url_prefix`, and vice versa.
     """
     bp = Blueprint(blueprint_name, __name__, url_prefix=url_prefix)
+    # SYNC-BOOT Phase 3 (Android requester). `bootstrap` is the RETAIL stream's seam to the shared
+    # bootstrap package (Kotlin builds and signs the Owner-mailbox calls itself, because Python never
+    # holds the device key; it hands the DECRYPTED copy here, as a FILE, to be verified and staged). Object with
+    # info() -> dict (schema_version, can_stage, block_reason, pending_staged, install_failures, needs_support),
+    # stage_file(path: str, relay_url: str) -> dict (raises BootstrapError),
+    # include_own_pending() -> bool, include_own_done(), reapply_outbox(sync_service, conn). None (the registry stream, every older caller)
+    # registers none of the routes below and leaves /_internal/cursor byte-for-byte what it was.
 
     def _authorized() -> bool:
         provided = request.headers.get("X-Aura-Internal-Secret", "")
@@ -243,13 +251,25 @@ def make_sync_internal_blueprint(
         conn = get_conn()
         try:
             with sync_service._lock:
+                if bootstrap is not None:
+                    # After a bootstrap install the copy was taken before this phone's still-unpushed
+                    # writes; the installer carried the outbox rows over, and the relay never sends a
+                    # device its own events, so re-apply them to the new database ONCE (the rows stay in
+                    # the outbox and still get pushed). The desktop does this inside pull_once; Android's
+                    # Kotlin loop never calls pull_once, and /_internal/cursor is the first local call of
+                    # every pull, so it is done here. A no-op unless an install armed it.
+                    bootstrap.reapply_outbox(sync_service, conn)
                 if relay_url is not None:
                     sync_service.ensure_cursor_matches_relay(conn, relay_url)
                     conn.commit()
                 since = sync_service.read_cursor(conn)
         finally:
             conn.close()
-        return jsonify({"installation_id": installation_id, "since": since}), 200
+        body = {"installation_id": installation_id, "since": since}
+        if bootstrap is not None:
+            # Asked for once, after a bootstrap install or a restore (see BootstrapHooks.include_own_once).
+            body["include_own"] = bool(bootstrap.include_own_pending())
+        return jsonify(body), 200
 
     @bp.route("/_internal/pull-apply", methods=["POST"])
     def internal_pull_apply():
@@ -278,5 +298,43 @@ def make_sync_internal_blueprint(
         finally:
             conn.close()
         return jsonify({"result": "SUCCESS"}), 200
+
+    if bootstrap is not None:
+        @bp.route("/_internal/bootstrap/info", methods=["GET"])
+        def internal_bootstrap_info():
+            """What Kotlin needs BEFORE it spends bandwidth on a copy: the schema this build runs, whether a
+            copy could be staged right now (an open cash drawer refuses one), whether one is already staged,
+            and how many installs in a row have failed (see installer.status)."""
+            if not _authorized():
+                return _forbidden()
+            return jsonify(bootstrap.info()), 200
+
+        @bp.route("/_internal/bootstrap/stage-file", methods=["POST"])
+        def internal_bootstrap_stage_file():
+            """Kotlin downloaded, verified and DECRYPTED a copy of the shop from Owner's mailbox into a file
+            (chunk by chunk: a phone never holds a whole shop in memory); verify it (signed manifest, same
+            shop, schema, no open drawer) and park it for the next start. A refusal is a normal outcome and
+            says why; nothing is staged then."""
+            if not _authorized():
+                return _forbidden()
+            from commercial_runtime.sync.bootstrap.errors import BootstrapError
+
+            body = request.get_json(silent=True)
+            path = body.get("path") if isinstance(body, dict) else None
+            if not isinstance(path, str) or not path:
+                return jsonify({"reason_code": "INVALID_REQUEST", "detail": "Expected {path, relay_url}."}), 400
+            try:
+                record = bootstrap.stage_file(path, str(body.get("relay_url") or ""))
+            except BootstrapError as exc:
+                return jsonify({"reason_code": exc.reason_code, "detail": exc.message}), 409
+            return jsonify({"result": "SUCCESS", "as_of": record.get("as_of")}), 200
+
+        @bp.route("/_internal/bootstrap/include-own-done", methods=["POST"])
+        def internal_bootstrap_include_own_done():
+            """Owner echoed include_own: the one-shot is spent."""
+            if not _authorized():
+                return _forbidden()
+            bootstrap.include_own_done()
+            return jsonify({"result": "SUCCESS"}), 200
 
     return bp

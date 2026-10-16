@@ -19,6 +19,7 @@ UNCLASSIFIED_TABLE = "UNCLASSIFIED_TABLE"        # a table nobody gave a class (
 PRODUCER_NOT_ON_RELAY = "PRODUCER_NOT_ON_RELAY"  # the copy's own cursor is bound to a different relay
 NO_SIGNER = "NO_SIGNER"                          # this computer cannot sign the manifest
 PRODUCER_FAILED = "PRODUCER_FAILED"
+MULTI_COMPANY_INSTALL = "MULTI_COMPANY_INSTALL"  # this database holds more than one company: a copy would leak the others
 # Installer side:
 BAD_PACKAGE = "BAD_PACKAGE"                      # not a zip / wrong members / unreadable manifest
 MANIFEST_NOT_TRUSTED = "MANIFEST_NOT_TRUSTED"    # signature missing, forged, or from another licence
@@ -28,3 +29,4 @@ SCHEMA_NEWER = "SCHEMA_NEWER"                    # copy is newer than this build
 MIGRATION_FAILED = "MIGRATION_FAILED"
 OPEN_CASH_SESSION = "OPEN_CASH_SESSION"          # a drawer is open: swapping would erase uncounted money
 NOT_STAGED = "NOT_STAGED"
+COPY_BEHIND_CURSOR = "COPY_BEHIND_CURSOR"        # the copy is older than what this device already applied from the same relay

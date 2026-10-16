@@ -145,12 +145,24 @@ def clear_reapply_outbox(app_data_dir) -> None:
 
 @dataclass(frozen=True)
 class VerifiedPackage:
+    """A package that passed every check. Either the database is held in memory (`db_bytes`, the
+    bytes path every desktop transport uses) or it is still INSIDE the zip on disk (`zip_path`, the
+    Android path: a phone must not hold a whole shop in RAM) -- [write_db] copies it out either way."""
     manifest: dict
-    db_bytes: bytes
+    db_bytes: Optional[bytes] = None
+    zip_path: Optional[str] = None
+    db_member: str = ""
+
+    def write_db(self, dest: Path) -> None:
+        if self.db_bytes is not None:
+            Path(dest).write_bytes(self.db_bytes)
+            return
+        with zipfile.ZipFile(self.zip_path, "r") as zf, zf.open(self.db_member) as src, open(dest, "wb") as out:
+            shutil.copyfileobj(src, out, 1024 * 1024)
 
 
 def verify_package(
-    data: bytes,
+    data,
     *,
     spec: classes.BootstrapSpec,
     trust_store,
@@ -158,12 +170,17 @@ def verify_package(
     expected_company_id: Optional[str],
 ) -> VerifiedPackage:
     """Everything that can be checked WITHOUT touching this device: shape, the
-    signature, the shop, the schema, the checksum. Raises `BootstrapError`."""
-    if len(data) > MAX_PACKAGE_BYTES:
+    signature, the shop, the schema, the checksum. Raises `BootstrapError`.
+
+    `data` is the zip's bytes, or a PATH to the zip (str / os.PathLike): the path form hashes the
+    database member in 1 MiB steps and never holds it in memory (SYNC-BOOT Phase 3, Android)."""
+    from_path = isinstance(data, (str, os.PathLike))
+    size = os.path.getsize(data) if from_path else len(data)
+    if size > MAX_PACKAGE_BYTES:
         raise BootstrapError(errors.BAD_PACKAGE, "the package is larger than any shop copy should be")
     try:
-        zf = zipfile.ZipFile(io.BytesIO(data), "r")
-    except zipfile.BadZipFile as exc:
+        zf = zipfile.ZipFile(str(data) if from_path else io.BytesIO(data), "r")
+    except (zipfile.BadZipFile, OSError) as exc:
         raise BootstrapError(errors.BAD_PACKAGE, f"not a valid zip: {exc}") from exc
     with zf:
         if set(zf.namelist()) != {MANIFEST_NAME, spec.db_name}:
@@ -174,7 +191,16 @@ def verify_package(
             envelope = json.loads(zf.read(MANIFEST_NAME))
         except ValueError as exc:
             raise BootstrapError(errors.BAD_PACKAGE, f"the manifest is not JSON: {exc}") from exc
-        db_bytes = zf.read(spec.db_name)
+        if from_path:
+            digest, db_size = hashlib.sha256(), 0
+            with zf.open(spec.db_name) as member:
+                for block in iter(lambda: member.read(1024 * 1024), b""):
+                    digest.update(block)
+                    db_size += len(block)
+            db_bytes = None
+        else:
+            db_bytes = zf.read(spec.db_name)
+            digest, db_size = hashlib.sha256(db_bytes), len(db_bytes)
 
     if not isinstance(envelope, dict) or not isinstance(envelope.get("payload"), dict):
         raise BootstrapError(errors.BAD_PACKAGE, "the manifest envelope is malformed")
@@ -199,8 +225,10 @@ def verify_package(
     as_of = manifest.get("as_of")
     if not isinstance(as_of, int) or isinstance(as_of, bool) or as_of < 0:
         raise BootstrapError(errors.BAD_PACKAGE, "the manifest names no valid relay position")
-    if hashlib.sha256(db_bytes).hexdigest() != manifest.get("db_sha256") or len(db_bytes) != manifest.get("db_size"):
+    if digest.hexdigest() != manifest.get("db_sha256") or db_size != manifest.get("db_size"):
         raise BootstrapError(errors.CHECKSUM_MISMATCH, "the database does not match its signed checksum")
+    if from_path:
+        return VerifiedPackage(manifest=manifest, zip_path=str(data), db_member=spec.db_name)
     return VerifiedPackage(manifest=manifest, db_bytes=db_bytes)
 
 
@@ -225,6 +253,30 @@ def open_blockers(live_db_path: str, spec: classes.BootstrapSpec) -> list:
         return out
     finally:
         conn.close()
+
+
+def _refuse_if_behind_own_cursor(live_db_path: str, spec: classes.BootstrapSpec, as_of: int, relay_url: str) -> None:
+    """Defense in depth: never install a copy that is OLDER than what this device has already applied from
+    the SAME relay. Installing it would rewind the database below events the device already holds and set
+    its cursor back, silently undoing applied work. Owner's `complete` refuses a copy below its prune point,
+    but the device does not trust that alone: its own cursor is the authority on what it already has.
+    Cursors from different relays (cloud vs a LAN hub) are separate sequence spaces and are not compared."""
+    if not os.path.exists(live_db_path):
+        return
+    conn = sqlite3.connect(live_db_path, timeout=30)
+    try:
+        if spec.cursor_table not in classes.user_tables(conn):
+            return
+        row = conn.execute(f'SELECT last_seq, relay_url FROM "{spec.cursor_table}" WHERE id = 1').fetchone()
+    finally:
+        conn.close()
+    if row is None or row[1] != relay_url or row[0] is None:
+        return
+    if int(row[0]) > int(as_of):
+        raise BootstrapError(
+            errors.COPY_BEHIND_CURSOR,
+            f"the copy is complete only up to relay position {as_of} but this computer has already applied "
+            f"up to {row[0]} from the same relay; installing it would lose that work")
 
 
 def _refuse_if_blocked(live_db_path: str, spec: classes.BootstrapSpec) -> None:
@@ -280,7 +332,7 @@ def check_staged_database(path: str, spec: classes.BootstrapSpec) -> None:
 
 
 def stage(
-    data: bytes,
+    data,
     *,
     spec: classes.BootstrapSpec,
     app_data_dir,
@@ -303,6 +355,8 @@ def stage(
         data, spec=spec, trust_store=trust_store, own_licence=own_licence,
         expected_company_id=expected_company_id)
     _refuse_if_blocked(_live_db_path(app, spec), spec)
+    _refuse_if_behind_own_cursor(
+        _live_db_path(app, spec), spec, int(verified.manifest["as_of"]), relay_url)
 
     stage_dir = staging_dir(app)
     if stage_dir.exists():
@@ -310,7 +364,7 @@ def stage(
     stage_dir.mkdir(parents=True, exist_ok=True)
     staged_db = stage_dir / spec.db_name
     try:
-        staged_db.write_bytes(verified.db_bytes)
+        verified.write_db(staged_db)
         if verified.manifest["schema_version"] == spec.schema_version:
             check_staged_database(str(staged_db), spec)
         else:
@@ -428,6 +482,60 @@ def _fast_forward_registry(app_data_dir, seq: Optional[int], relay_url: str) -> 
         conn.close()
 
 
+#: After this many FAILED installs of the same staged copy (not 'blocked': that is a drawer, which resolves
+#: itself) the copy is thrown away and the device stops asking for another: a corrupt or unmigratable copy
+#: would otherwise be re-requested and re-installed forever. A person has to look (needs_support).
+MAX_INSTALL_FAILURES = 3
+
+
+def _note_install_failure(app: Path, why: str) -> int:
+    marker = read_marker(app)
+    failures = int(marker.get("install_failures") or 0) + 1
+    marker["install_failures"] = failures
+    marker["last_install_failure"] = why
+    write_marker(app, marker)
+    if failures >= MAX_INSTALL_FAILURES:
+        pending_path(app).unlink(missing_ok=True)
+        shutil.rmtree(staging_dir(app), ignore_errors=True)
+        logger.error("bootstrap: %d failed installs in a row (%s); the staged copy was discarded and this "
+                     "computer will not ask for another until support clears it", failures, why)
+    return failures
+
+
+def require_inside(directory, path) -> Path:
+    """`path` resolved, provided it is a file inside `directory` (symlinks and `..` followed). The Android
+    stage-file route takes a path from the Kotlin side; it must never become a way to stage -- or, since the
+    file is deleted afterwards, to delete -- anything outside the app's own download directory."""
+    base = Path(directory).resolve()
+    target = Path(path).resolve()
+    if base not in target.parents:
+        raise BootstrapError(errors.BAD_PACKAGE, "the copy is not in the download directory")
+    return target
+
+
+def status(app_data_dir, spec: classes.BootstrapSpec) -> dict:
+    """What a requester that cannot see this device's files needs to know before it spends 50 MB of
+    bandwidth (Android's Kotlin loop, via /_internal/bootstrap/info):
+      can_stage / block_reason  -- an open cash drawer refuses a copy at stage AND at swap, so asking
+                                   for one now would only download a copy that is then refused;
+      pending_staged            -- a copy is already staged (a crash between staging and the requester
+                                   recording it must not start a second request);
+      install_failures / needs_support -- consecutive failed installs; at MAX_INSTALL_FAILURES the
+                                   requester stops and says so."""
+    app = Path(app_data_dir)
+    blockers = open_blockers(_live_db_path(app, spec), spec)
+    marker = read_marker(app)
+    failures = int(marker.get("install_failures") or 0)
+    return {
+        "can_stage": not blockers,
+        "block_reason": (f"{errors.OPEN_CASH_SESSION}: " + ", ".join(f"{t}: {n}" for t, n in blockers)) if blockers else None,
+        "pending_staged": pending(app) is not None,
+        "install_failures": failures,
+        "needs_support": failures >= MAX_INSTALL_FAILURES,
+        "last_install_failure": marker.get("last_install_failure"),
+    }
+
+
 def apply_staged(app_data_dir, spec: classes.BootstrapSpec, *, migrate_fn: Optional[Callable[[str], None]] = None,
                  now: Optional[datetime] = None) -> Optional[dict]:
     """Swap a staged copy in. Call at start, BEFORE any database of this product
@@ -446,12 +554,25 @@ def apply_staged(app_data_dir, spec: classes.BootstrapSpec, *, migrate_fn: Optio
         if not staged_db.exists():
             pending_path(app).unlink(missing_ok=True)
             report["why"] = "staged copy missing"
+            _note_install_failure(app, report["why"])
             return report
         try:
             _refuse_if_blocked(live, spec)
         except BootstrapError as exc:
             report.update(status="blocked", why=exc.message)
             logger.warning("bootstrap: install postponed -- %s", exc.message)
+            return report
+
+        try:
+            # The cursor may have moved since staging (the device kept pulling while it waited for a quiet moment).
+            _refuse_if_behind_own_cursor(live, spec, int(record["as_of"]), str(record["relay_url"]))
+        except BootstrapError as exc:
+            # Not a failed install: the copy is simply STALE and the device no longer needs it. Throw it away
+            # and do not count it toward the give-up cap.
+            pending_path(app).unlink(missing_ok=True)
+            shutil.rmtree(staging_dir(app), ignore_errors=True)
+            report.update(status="stale", why=exc.message)
+            logger.warning("bootstrap: staged copy discarded -- %s", exc.message)
             return report
 
         copy_version = record.get("copy_schema_version")
@@ -517,6 +638,8 @@ def apply_staged(app_data_dir, spec: classes.BootstrapSpec, *, migrate_fn: Optio
             "bootstrap_id": record.get("bootstrap_id"), "as_of": record.get("as_of"),
             "installed_at": (now or datetime.now(timezone.utc)).isoformat(),
         })
+        marker.pop("install_failures", None)
+        marker.pop("last_install_failure", None)
         write_marker(app, marker)
         pending_path(app).unlink(missing_ok=True)
         shutil.rmtree(staging_dir(app), ignore_errors=True)
@@ -528,8 +651,13 @@ def apply_staged(app_data_dir, spec: classes.BootstrapSpec, *, migrate_fn: Optio
     except BootstrapError as exc:
         report["why"] = exc.message
         logger.error("bootstrap: install failed -- %s; the old database is untouched", exc.message)
+        _note_install_failure(app, exc.message)
         return report
     except Exception as exc:  # noqa: BLE001 -- boot must never die on this
         report["why"] = f"{type(exc).__name__}: {exc}"
         logger.exception("bootstrap: install failed unexpectedly; the old database is untouched")
+        try:
+            _note_install_failure(app, report["why"])
+        except Exception:  # noqa: BLE001
+            logger.exception("bootstrap: could not record the failed install")
         return report

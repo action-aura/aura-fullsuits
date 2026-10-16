@@ -35,15 +35,23 @@ THE SCENARIO (both tests share it up to the fork):
      (what a real join leaves on it) and pulls until there is nothing more.
   5. C must hold A's products, A's customer and A's sale.
 
-SYNC-BOOT PHASE 1 CHANGED WHAT C SEES. Owner now records how far it has pruned and
-answers a pull below that point with 409 RESYNC_REQUIRED instead of a silent,
-gap-free-looking partial stream. So in the pruned scenario C is now TOLD it is
-behind (`test_late_joiner_after_prune_is_told_to_resync`, which passes today).
-It still cannot be given the history: there is no bootstrap until Phase 3. The
-strict xfail below therefore now fails where a real join would call for one -- at
-`_join_bootstrap`, which raises AssertionError("no bootstrap ...") -- and keeps
-failing with an AssertionError for the same reason as before. Phase 3 replaces
-`_join_bootstrap` with the real thing and removes the xfail.
+SYNC-BOOT PHASE 1 made Owner TELL a computer that is behind its pruned range
+(409 RESYNC_REQUIRED, `test_late_joiner_after_prune_is_told_to_resync`) instead of
+handing it a silent, gap-free-looking partial stream. SYNC-BOOT PHASE 3 is what the
+computer does about it, and `test_late_joiner_after_production_prune_receives_the_shops_history`
+is the ACCEPTANCE GATE for the whole programme (no xfail any more):
+
+  * every computer is a signed identity (AURA_ACCEPT_SIGNED: a DPAPI device key and an
+    Owner-signed lease), A is the shop's MAIN computer, and all of them sync BOTH
+    streams (retail + registry) through the one real Owner;
+  * B and C JOIN through the real activation-time seed (`join_seed` =
+    `company_rebind.rebind_company_id_after_activation`), with nothing patched in;
+  * C is told to resync on both streams, asks Owner's mailbox for a copy, A (the main)
+    claims it, builds it from its own database, encrypts it to C's single-use key and
+    uploads it; A also re-announces the shop's authority (staff, till numbers) signed;
+    C downloads, verifies and stages the copy, restarts (a fresh process: the staged
+    copy is installed before any database opens), pulls on from the copy's position;
+  * C must then hold A's products, customer and sale AND sign A's owner in.
 
 WHAT THIS DOES NOT COVER: the Android client's transport (Kotlin), the LAN hub
 (site relay) path -- which has the same shape of pruning in
@@ -145,7 +153,10 @@ class _Computer:
         return run_accept_device(
             _DEVICE_PY, self.dir, self.dir / "_unused_relay.db", actions, timeout=_DEVICE_TIMEOUT,
             options={"owner_relay": {"base_url": self.owner.base_url, "installation_id": self.installation_id,
-                                     "device_key_b64": self.key_b64}},
+                                     "device_key_b64": self.key_b64},
+                     # The shipped shape: a cursor per stream, both streams over the one Owner, and
+                     # the bootstrap hooks production wires (see _accept_device.py, Phase 3 notes).
+                     "stream_labels": True, "registry_owner_relay": True, "owner_bootstrap": True},
         )
 
     def select(self, sql: str, params=None) -> list:
@@ -159,24 +170,13 @@ class _Computer:
         return self.run([{"op": "pull"} for _ in range(rounds)])
 
     def pull_until_quiet(self, rounds: int = 4) -> None:
-        """Owner hands back at most 500 rows per pull; a few pulls in one process
-        drain anything this scenario can produce. If Owner says this computer is
-        behind its pruned range, a real join has to ask for a bootstrap."""
-        results = self.pull_results(rounds)
-        if any(r.get("resync_required") for r in results):
-            _join_bootstrap(self, results)
-
-
-def _join_bootstrap(computer, results) -> None:
-    """What a joining computer does when Owner answers RESYNC_REQUIRED: request a
-    bootstrap (a peer's consistent copy of the shop) and install it. Phase 3 of
-    SYNC-BOOT builds that. Until then this is the honest place to fail -- with an
-    AssertionError, so the strict xfail below stays an xfail of the SAME kind --
-    rather than carrying on with a partial history."""
-    refused = next(r for r in results if r.get("resync_required"))
-    raise AssertionError(
-        "no bootstrap exists yet (SYNC-BOOT Phase 3): Owner told this computer to resync "
-        f"(pruned through seq {refused.get('pruned_through')}) and there is nothing to resync FROM")
+        """Both streams, a few rounds in one process: Owner hands back at most 500 rows
+        per pull, and registry events (staff, devices) must land before anything that
+        needs them. A computer that is PRESENT when history is pushed must never be
+        told to resync -- that would be the harness lying about the control."""
+        results = self.run([{"op": op} for _ in range(rounds) for op in ("reg_pull", "pull")])
+        refused = [r for r in results if r.get("resync_required")]
+        assert not refused, f"a computer that was never behind was told to resync: {refused}"
 
 
 def _event_count(app, license_id) -> int:
@@ -196,19 +196,34 @@ def shop(app, client, seeded, signing_key, tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("AURA_SITE_RELAY_ENABLED", "0")
     monkeypatch.setenv("AURA_BACKUP_SCHEDULER", "0")
+    # Every computer of the shop signs and verifies for real, under ONE licence id -- which is
+    # also the shop's company id once a computer has activated (company_rebind).
+    public_licence = f"LIC-LATEJOIN-{uuid.uuid4().hex[:8]}"
+    monkeypatch.setenv("AURA_ACCEPT_SIGNED", "1")
+    monkeypatch.setenv("AURA_ACCEPT_SIGNED_LICENCE", public_licence)
 
     actor_id = make_staff(app, "sync-late-join@example.com")
     license_id, full_key = make_license(app, actor_id, device_limit=3, product_code="AURA_RETAIL")
+    # The mailbox's encrypted blobs live in this test's own directory, never in the repo tree.
+    app.config["SYNC_BOOTSTRAP_DIRECTORY"] = str(tmp_path / "owner-mailbox")
     owner = _OwnerOverHttp(app)
     try:
         a, b, c = (_Computer(tmp_path, n, owner) for n in ("a", "b", "c"))
         a.activate(client, full_key)
         b.activate(client, full_key)
 
-        # -- A founds the shop and trades -----------------------------------
+        # -- A founds the shop, becomes its MAIN computer, and trades ---------
         sku_1, sku_2 = f"LATE-A1-{uuid.uuid4().hex[:6]}", f"LATE-A2-{uuid.uuid4().hex[:6]}"
-        [created] = a.run([{"op": "create_shop", "price": 10.0, "initial_stock": 50}])
+        [created] = a.run([{"op": "create_shop", "price": 10.0, "initial_stock": 50, "company_id": public_licence,
+                            "admin_created": True, "with_uid": True}])
         login = {"op": "login", "email": created["email"], "password": created["password"]}
+        _, announced, claimed = a.run([login, {"op": "announce", "reason": "changed"}, {"op": "claim_main"}])
+        assert claimed["status_code"] == 200, claimed
+        # The founding computer's users reach other computers ONLY as the main's signed re-announce
+        # (create_admin writes the row directly; there is no `user` event until then). In production
+        # this is the heartbeat tick; the harness calls the same seam.
+        [reannounce] = a.run([{"op": "app_announce", "reason": "heartbeat"}])
+        assert reannounce["marker"] is not None, "the main computer did not re-announce its authority state"
         _, p2, cust = a.run([
             login,
             {"op": "create_product", "name": "Late Join Second Product", "sku": sku_2, "price": 4.0,
@@ -223,7 +238,7 @@ def shop(app, client, seeded, signing_key, tmp_path, monkeypatch):
             "items": [{"product_id": created["product_id"], "quantity": 2}],
             "payment_method": "cash", "customer_id": customer_id, "idempotency_key": str(uuid.uuid4())}}])
         assert sale["status_code"] == 200, sale
-        a.run([{"op": "push"}])
+        a.run([{"op": "push"}, {"op": "reg_push"}])
 
         a_products = {r["sku"]: r["id"] for r in a.select("SELECT sku, id FROM products")}
         a_customers = {r["name"]: r["id"] for r in a.select("SELECT name, id FROM customers")}
@@ -232,8 +247,9 @@ def shop(app, client, seeded, signing_key, tmp_path, monkeypatch):
         assert a_customers.get("Late Join Customer"), a_customers
         assert len(a_sales) == 1, a_sales
 
-        # -- B joins NOW, receives the history, and trades too --------------
-        [boot] = b.run([{"op": "bootstrap"}])
+        # -- B joins NOW (the real join seed), receives the history, and trades too ---
+        [seed] = b.run([{"op": "join_seed"}])
+        assert seed["seeded_company_settings"] is True and seed["status"] != "failed", seed
         b.pull_until_quiet()
         # HARNESS GUARD: the transport really carries history to a computer that
         # is present when it is pushed. If B does not hold A's rows here, every
@@ -244,16 +260,18 @@ def shop(app, client, seeded, signing_key, tmp_path, monkeypatch):
         assert a_sales <= b_sales, (a_sales, b_sales)
 
         sku_b = f"LATE-B1-{uuid.uuid4().hex[:6]}"
-        [_, pb] = b.run([{"op": "login", "email": boot["email"], "password": boot["password"]},
+        # B signs in with A's owner account: it arrived over the registry stream, signed by A.
+        [_, pb] = b.run([{"op": "login", "email": created["email"], "password": created["password"]},
                          {"op": "create_product", "name": "B Product", "sku": sku_b, "price": 3.0}])
         assert pb["status_code"] == 200, pb
-        b.run([{"op": "push"}])
+        b.run([{"op": "push"}, {"op": "reg_push"}])
         a.pull_until_quiet()
         b.pull_until_quiet()
 
         yield {
             "app": app, "client": client, "full_key": full_key, "license_id": license_id,
-            "a": a, "b": b, "c": c, "company_id": created["company_id"],
+            "a": a, "b": b, "c": c, "company_id": created["company_id"], "owner_login": login,
+            "public_licence": public_licence,
             "a_products": a_products, "a_customers": a_customers, "a_sales": a_sales, "sku_b": sku_b,
         }
     finally:
@@ -272,24 +290,86 @@ def _prune_exactly_as_production_does(app) -> dict:
 
 
 def _join_c(shop) -> "_Computer":
-    """Step 4, before any pull: activate C (only now -- a computer bought later)
-    and give it the shop's company id."""
+    """Step 4, before any pull: activate C (only now -- a computer bought later) and run the REAL
+    activation-time join seed. Nothing is patched in: the shop's company id reaches C the way it
+    reaches a customer's new computer, through the licence its lease names."""
     c = shop["c"]
     c.activate(shop["client"], shop["full_key"])
-    c.run([{"op": "bootstrap"}])
-    c.run([{"op": "reg_exec", "sql": "UPDATE company_settings SET company_id=?", "params": [shop["company_id"]]},
-           {"op": "reg_exec", "sql": "UPDATE users SET company_id=?", "params": [shop["company_id"]]}])
+    [seed] = c.run([{"op": "join_seed"}])
+    assert seed["seeded_company_settings"] is True and seed["status"] != "failed", seed
+    [settings] = c.run([{"op": "reg_select", "sql": "SELECT company_id FROM company_settings"}])
+    assert settings["rows"] == [{"company_id": shop["public_licence"]}] and shop["public_licence"] == shop["company_id"], (
+        settings, shop["company_id"])
     return c
 
 
+def _bootstrap_rows(shop, c) -> list:
+    """Owner's mailbox rows for C, with whether their encrypted bytes are still on Owner's disk."""
+    with shop["app"].app_context():
+        from app.extensions import db_session
+        from app.models.sync import SyncBootstrapRequest
+
+        db_session.expire_all()
+        base = Path(shop["app"].config["SYNC_BOOTSTRAP_DIRECTORY"])
+        rows = db_session.query(SyncBootstrapRequest).filter(
+            SyncBootstrapRequest.requester_installation_id == uuid.UUID(c.installation_id)
+        ).order_by(SyncBootstrapRequest.created_at).all()
+        return [{"stream": r.stream, "status": r.status,
+                 "producer": str(r.producer_installation_id) if r.producer_installation_id else None,
+                 "blob_present": (base / str(r.id)).exists()} for r in rows]
+
+
+def _the_mailbox_hands_c_the_shop(shop, c) -> dict:
+    """C was told RESYNC_REQUIRED on both streams. Run the shipped recovery with each computer
+    doing exactly what production code does, one process at a time:
+
+      C   asks Owner's mailbox for a copy                       (OwnerRequester)
+      A   (the MAIN computer) sees the request in its pull, claims it, builds the copy from its own
+          database, encrypts it to C's key, uploads it          (app._bootstrap_on_mailbox_requests)
+      A   sees the READY copy / the registry request in its next pull, re-announces the shop's
+          authority signed, tells Owner, and pushes it         (force_main_reannounce)
+      C   downloads, verifies, decrypts and STAGES the copy    (installer.stage)
+      C   restarts: a fresh process installs it before any database opens.
+    Returns what was observed along the way."""
+    a = shop["a"]
+    obs: dict = {}
+    obs["c_requested"] = c.run([{"op": "mailbox_step"}])[0]
+    assert obs["c_requested"]["outcome"] == "requested", obs["c_requested"]
+    a.run([{"op": "pull"}])
+    # Owner's own record is the evidence that A really produced: READY, claimed by A, bytes on disk.
+    rows = _bootstrap_rows(shop, c)
+    assert [(r["stream"], r["status"], r["producer"]) for r in rows if r["stream"] == "retail"] == [
+        ("retail", "READY", a.installation_id)], rows
+    a.run([{"op": "pull"}, {"op": "push"}, {"op": "reg_push"}])
+    obs["c_staged"] = c.run([{"op": "mailbox_step"}])[0]
+    assert obs["c_staged"]["outcome"] == "staged", obs["c_staged"]
+    # ...and the ack deleted the bytes the moment C had its own staged copy.
+    obs["rows_after"] = _bootstrap_rows(shop, c)
+    assert [r["status"] for r in obs["rows_after"] if r["stream"] == "retail"] == ["DELIVERED"]         or [r["status"] for r in obs["rows_after"] if r["stream"] == "retail"] == ["FULFILLED"], obs["rows_after"]
+    assert not any(r["blob_present"] for r in obs["rows_after"]), obs["rows_after"]
+    obs["c_before_restart"] = c.run([{"op": "mailbox_state"}])[0]
+    return obs
+
+
 def _join_c_and_read(shop) -> dict:
-    """Step 4: join C, pull until quiet, and read what it holds."""
+    """Step 4: join C, let it sync, and read what it holds -- including whether the shop's owner
+    can sign in on it. If Owner tells C it is behind, the recovery above runs first."""
     c = _join_c(shop)
-    c.pull_until_quiet()
+    first = c.run([{"op": "pull"}, {"op": "reg_pull"}])
+    mailbox = None
+    if first[0].get("resync_required"):
+        assert first[1].get("ok") is True, first[1]      # the registry stream skipped ahead, did not stop
+        mailbox = _the_mailbox_hands_c_the_shop(shop, c)
+    # (after a copy: this is a NEW process = the restart; before it, a plain catch-up)
+    c.pull_until_quiet(rounds=3)
+    login = c.run([shop["owner_login"]])[0]
     return {
         "skus": {r["sku"] for r in c.select("SELECT sku FROM products")},
         "customers": {r["id"] for r in c.select("SELECT id FROM customers")},
         "sales": {r["uid"] for r in c.select("SELECT uid FROM sales")},
+        "owner_login_ok": login.get("ok") is True,
+        "mailbox": mailbox,
+        "quarantine": c.run([{"op": "quarantine_rows"}, {"op": "reg_quarantine_rows"}]),
     }
 
 
@@ -305,6 +385,8 @@ def test_control_late_joiner_without_prune_receives_the_shops_history(shop):
     assert shop["sku_b"] in held["skus"], held["skus"]
     assert set(shop["a_customers"].values()) <= held["customers"], (shop["a_customers"], held["customers"])
     assert shop["a_sales"] <= held["sales"], (shop["a_sales"], held["sales"])
+    assert held["owner_login_ok"] is True
+    assert held["mailbox"] is None, "no prune -> nobody should have needed a bootstrap"
 
 
 def test_late_joiner_after_prune_is_told_to_resync(shop):
@@ -350,24 +432,15 @@ def test_late_joiner_after_prune_is_told_to_resync(shop):
         assert rows == [], [(r.stream, r.last_acked_seq) for r in rows]
 
 
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError,
-    reason=(
-        "SYNC-JOIN gap (measured 2026-10-13): Owner's nightly `sync prune-events --apply` deletes every "
-        "event all CURRENTLY active devices have acked; a computer activated afterwards pulls from 0 and "
-        "Owner has no snapshot to give it, so it never receives the shop's earlier products, customers "
-        "or sales. Since SYNC-BOOT Phase 1 Owner at least TELLS it (RESYNC_REQUIRED, see the test above), "
-        "but there is no bootstrap to give it the history yet. See the module docstring; remove this mark "
-        "when a bootstrap exists."
-    ),
-)
 def test_late_joiner_after_production_prune_receives_the_shops_history(shop):
-    """THE PROOF. Same shop, but the production prune runs before C is bought.
+    """THE ACCEPTANCE GATE (SYNC-JOIN gap, measured 2026-10-13; closed by SYNC-BOOT). Same shop,
+    but the production prune runs before C is bought. This was a strict xfail until the bootstrap
+    existed; it now has to PASS: C holds A's products, customer and sale, B's product, and the
+    shop's owner signs in on it.
 
-    The prune's own effect is checked with pytest.fail (NOT assert) so that a
-    prune that deleted nothing turns this test RED instead of being swallowed as
-    the expected xfail: the xfail must only ever stand for "C did not get the
-    history", never for "the scenario did not happen"."""
+    The prune's own effect is checked with pytest.fail (NOT assert) so that a prune that deleted
+    nothing turns this test RED instead of passing vacuously: "C got the history" only means
+    something if the history had really been pruned away first."""
     app, license_id = shop["app"], shop["license_id"]
     before = _event_count(app, license_id)
     report = _prune_exactly_as_production_does(app)
@@ -379,7 +452,11 @@ def test_late_joiner_after_production_prune_receives_the_shops_history(shop):
         pytest.fail(f"the production prune deleted nothing ({before} -> {after}, report {report}); "
                     "the scenario did not happen, so nothing below would mean anything")
 
+    pruned_floor = _pruned_through(app, license_id)
+    assert pruned_floor > 0
     held = _join_c_and_read(shop)
+    # The recovery really ran (not a lucky replay): C was told to resync, A produced, C staged.
+    assert held["mailbox"] is not None, "C was never told to resync, so no bootstrap was exercised"
     # B's own product event has a seq above every Owner cursor (A acked up to it
     # only by RECEIVING it; B's cursor sits at A's last event), so it survives
     # the prune and C must get it. That proves C's sync works at all here, so
@@ -395,3 +472,109 @@ def test_late_joiner_after_production_prune_receives_the_shops_history(shop):
     assert not any(missing.values()), (
         f"late joiner is missing the shop's history: {missing} "
         f"(owner_sync_events for the licence: {before} -> {after} after the prune)")
+    assert held["owner_login_ok"], "C holds the data but the shop's owner cannot sign in on it"
+    # Nothing was parked: a copy that needed events the prune deleted would show up here.
+    assert held["quarantine"][0]["rows"] == [] and held["quarantine"][1]["rows"] == [], held["quarantine"]
+
+
+def _sales_of(computer) -> list:
+    return sorted(r["uid"] for r in computer.select("SELECT uid FROM sales"))
+
+
+def test_device_offline_beyond_window_rebootstraps_without_losing_its_own_sale(shop):
+    """Plan 2.4. B trades while it cannot reach Owner (sale S1, never pushed), Owner prunes past it
+    while it is away, and when it is back it is told to resync. Recovery must neither lose S1 nor
+    S2 (made after it asked for the copy, still unpushed at install) nor double-count either:
+    S1 is pushed first (so the copy A builds contains it), S2 rides the carried outbox through the
+    install and is pushed afterwards, and A ends up with both exactly once.
+    MUTATION: make installer._carry_outbox return 0 -> S2 vanishes from B -> red."""
+    app, license_id, a, b = shop["app"], shop["license_id"], shop["a"], shop["b"]
+    login = shop["owner_login"]
+    sku = sorted(shop["a_products"])[0]
+
+    def sell(computer):
+        [pid] = [r["id"] for r in computer.select("SELECT id FROM products WHERE sku=?", [sku])]
+        [_, sale] = computer.run([login, {"op": "sell", "product_id": pid, "quantity": 1}])
+        assert sale["status_code"] == 200, sale
+        # local integer ids differ between computers; the sale's uid is what travels
+        return computer.select("SELECT uid FROM sales WHERE id=?", [sale["sale_id"]])[0]["uid"]
+
+    s1 = sell(b)                                              # B is "offline": nothing pushed
+    before = _sales_of(b)
+    # While B is away A trades on, and Owner (with only A listening) prunes everything A has seen.
+    a.run([login, {"op": "create_product", "name": "While B Was Away", "sku": f"AWAY-{uuid.uuid4().hex[:6]}",
+                   "price": 2.0}, {"op": "push"}, {"op": "reg_push"}, {"op": "pull"}, {"op": "pull"}])
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.installations import Installation
+
+        inst = db_session.get(Installation, uuid.UUID(b.installation_id))
+        inst.status = "SUSPENDED"          # not syncable -> does not pin the prune (what 'away for weeks' amounts to)
+        db_session.commit()
+    report = _prune_exactly_as_production_does(app)
+    assert report.get("dry_run") is False
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.installations import Installation
+
+        db_session.get(Installation, uuid.UUID(b.installation_id)).status = "ACTIVE"
+        db_session.commit()
+    assert _pruned_through(app, license_id) > 0
+
+    # B is back. Pulling is refused; pushing still works (S1 reaches Owner first).
+    back = b.run([{"op": "pull"}, {"op": "reg_pull"}, {"op": "push"}, {"op": "reg_push"}])
+    assert back[0].get("resync_required") is True, back[0]
+    assert b.run([{"op": "mailbox_step"}])[0]["outcome"] == "requested"
+    s2 = sell(b)                                              # made after the request; stays unpushed
+    a.run([{"op": "pull"}])                                   # A sees S1 and builds the copy
+    a.run([{"op": "pull"}, {"op": "push"}, {"op": "reg_push"}])
+    assert b.run([{"op": "mailbox_step"}])[0]["outcome"] == "staged"
+    # Restart (fresh process installs the copy) and carry on.
+    b.run([{"op": "pull"}, {"op": "reg_pull"}, {"op": "push"}, {"op": "pull"}, {"op": "pull"}])
+    a.pull_until_quiet()
+    for who in (a, b):
+        uids = _sales_of(who)
+        assert len(uids) == len(set(uids))
+        assert s1 in uids and s2 in uids, (who.dir.name, s1, s2, uids)
+    assert set(before) <= set(_sales_of(b))
+
+
+def test_restore_same_installation_recovers_own_events(shop):
+    """Plan 2.4: a backup restore puts an OLD database back under the SAME installation, and Owner
+    never sends a device its own events -- so the sale rung up (and pushed) after the backup would
+    be gone for good. Restore arms include_own_once; Owner honours it once.
+    Both directions on the same snapshot: without the marker the sale does not come back; with it
+    it does. MUTATION: drop the include_own branch in owner/app/sync/routes.py pull -> red."""
+    import shutil
+
+    b, login = shop["b"], shop["owner_login"]
+    sku = sorted(shop["a_products"])[0]
+    snap = b.dir.parent / "b-snapshot"
+    shutil.copytree(b.dir / "database", snap)                 # the "backup" (B is not running)
+    [pid] = [r["id"] for r in b.select("SELECT id FROM products WHERE sku=?", [sku])]
+    [_, sale] = b.run([login, {"op": "sell", "product_id": pid, "quantity": 1}])
+    assert sale["status_code"] == 200, sale
+    b.run([{"op": "push"}, {"op": "reg_push"}])
+    sold = sale["sale_id"]
+    assert sold in {r["id"] for r in b.select("SELECT id FROM sales")}
+
+    def restore():
+        shutil.rmtree(b.dir / "database")
+        shutil.copytree(snap, b.dir / "database")
+
+    restore()
+    assert sold not in {r["id"] for r in b.select("SELECT id FROM sales")}, "the restore did not roll the sale back"
+    b.run([{"op": "pull"}, {"op": "pull"}, {"op": "reg_pull"}])
+    assert sold not in {r["id"] for r in b.select("SELECT id FROM sales")},         "without the marker Owner must NOT return a device's own events (that is the loss include_own_once fixes)"
+
+    restore()
+    b.run([{"op": "mark_include_own"}, {"op": "pull"}, {"op": "pull"}, {"op": "reg_pull"}])
+    assert sold in {r["id"] for r in b.select("SELECT id FROM sales")}, "the restored device did not get its own sale back"
+    again = b.run([{"op": "pull"}, {"op": "bootstrap_state"}])
+    assert not again[1]["marker"].get("include_own_once"), "the one-shot was honoured by Owner and must be cleared"
+
+
+def _pruned_through(app, license_id) -> int:
+    with app.app_context():
+        from app.sync.routes import _license_pruned_through
+        return _license_pruned_through(license_id)

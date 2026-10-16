@@ -17,6 +17,11 @@ that raises is logged and ignored -- a bootstrap nicety must never stop a pull
   on_bootstrap_requests(requests)
                                  a hub told this (producer-capable) device that
                                  other devices are waiting on the main computer
+  on_mailbox_requests(requests, client, relay_url)
+                                 Owner's mailbox told this device that another
+                                 device waits for a copy (request_id given): the
+                                 product claims and builds it, and/or -- if it is
+                                 the main computer -- re-announces authority
 """
 from __future__ import annotations
 
@@ -34,3 +39,4 @@ class BootstrapHooks:
     reapply_outbox_done: Optional[Callable[[], None]] = None
     on_resync_required: Optional[Callable[[str, object, str, dict], bool]] = None
     on_bootstrap_requests: Optional[Callable[[list], None]] = None
+    on_mailbox_requests: Optional[Callable[[list, object, str], None]] = None

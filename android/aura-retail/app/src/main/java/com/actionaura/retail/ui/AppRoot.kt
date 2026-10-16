@@ -185,6 +185,10 @@ fun AppRoot() {
             // network call, so unlike the two try/catches above there is no
             // failure path here to swallow.
             val hubRelayBaseUrl = HubPrefs.getBaseUrl(ctx).takeIf { HubPrefs.isConfigured(ctx) }
+            // SYNC-BOOT Phase 3: once a copy of the shop from Owner's mailbox is staged, restart the app so
+            // the embedded backend's init_app() installs it (see AppRestart). Registered before start() so no
+            // tick can stage a copy with nobody listening.
+            SyncCoordinator.setBootstrapStagedHandler { com.actionaura.retail.AppRestart.restart(ctx) }
             SyncCoordinator.start(ctx, persistedSyncRelayBaseUrl, hubRelayBaseUrl)
 
             // Periodic licence check-in. Before this, checkIn() was reachable

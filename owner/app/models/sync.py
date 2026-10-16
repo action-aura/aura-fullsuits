@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, BigInteger, Identity, Index, Integer, Text
+from sqlalchemy import DateTime, ForeignKey, String, BigInteger, Identity, Index, Integer, Text, text
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -188,4 +188,76 @@ class SyncQuarantineEvent(Base, UUIDPKMixin, TimestampMixin):
         # license_id on every run; the console's default list view filters
         # by status too -- this composite index covers both access patterns.
         Index("ix_owner_sync_quarantine_license_status", "license_id", "status"),
+    )
+
+
+#: Statuses in which a bootstrap request still blocks a second one for the same
+#: (requester, stream) -- the partial unique index below is built from this list.
+BOOTSTRAP_OPEN_STATUSES = ("OPEN", "CLAIMED", "READY", "DELIVERED")
+
+
+class SyncBootstrapRequest(Base, UUIDPKMixin, TimestampMixin):
+    """SYNC-BOOT Phase 3: one row per "a device needs a fresh copy of the shop".
+
+    A device whose pull is refused with RESYNC_REQUIRED cannot be replayed the
+    history Owner already pruned, so it asks a peer that HOLDS the shop's data for
+    a consistent copy and Owner is only the mailbox between them: the producer
+    uploads an ENCRYPTED copy in chunks, the requester downloads it and acks, and
+    the bytes are deleted. The row carries the lifecycle:
+
+        OPEN       waiting for a producer
+        CLAIMED    one producer holds a 30-minute lease (first claim wins)
+        READY      every chunk uploaded and counted; the requester may download
+        DELIVERED  the requester acked and the bytes are gone (data half done)
+        FULFILLED  the data half AND the authority half are done. The authority
+                   half is the MAIN computer re-announcing users, permissions and
+                   numbering books, signed -- authority is never copied. A
+                   registry-stream request has no data half: OPEN -> FULFILLED.
+        EXPIRED    nobody finished within `expires_at` (72 h); blob removed
+        FAILED     superseded by a newer request from the same device, or refused
+
+    OPEN, CLAIMED, READY and DELIVERED count as "open": at most one such row per
+    (requester installation, stream) -- a device retrying every ten seconds is
+    one request, not a pile. `enc_pubkey` is the requester's single-use X25519
+    public key; Owner never sees a private key, so it cannot read the copy it
+    carries. The encrypted bytes live on a filesystem directory
+    (OWNER_SYNC_BOOTSTRAP_DIR, never Neon, never in backups); `blob_ref` names
+    this request's subdirectory. `manifest` holds the PUBLIC transport facts the
+    requester needs to decrypt (ephemeral key, salt, chunk count, sizes) plus
+    whether the authority half has been fulfilled -- not secrets."""
+
+    __tablename__ = "owner_sync_bootstrap_requests"
+
+    license_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_licenses.id"), nullable=False)
+    requester_installation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_installations.id"), nullable=False
+    )
+    stream: Mapped[str] = mapped_column(String(16), nullable=False)          # retail | registry
+    reason: Mapped[str] = mapped_column(String(32), nullable=False, default="join")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="OPEN")
+    # The highest seq of the requester's OWN events: the copy must contain them,
+    # because Owner never sends a device its own events back.
+    min_as_of: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    # Registry requests: where the registry stream resumes (the licence's top seq
+    # when asked); the main computer's fresh re-announce lands after it.
+    fast_forward_to: Mapped[int | None] = mapped_column(BigInteger)
+    requester_schema_version: Mapped[int | None] = mapped_column(Integer)
+    requester_app_version: Mapped[str | None] = mapped_column(String(64))
+    enc_pubkey: Mapped[str] = mapped_column(String(64), nullable=False)
+    producer_installation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_installations.id")
+    )
+    claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    manifest: Mapped[dict | None] = mapped_column(JSONB)
+    blob_ref: Mapped[str | None] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index(
+            "uq_owner_sync_bootstrap_open_per_requester_stream",
+            "requester_installation_id", "stream",
+            unique=True,
+            postgresql_where=text("status IN ('OPEN','CLAIMED','READY','DELIVERED')"),
+        ),
+        Index("ix_owner_sync_bootstrap_license_status", "license_id", "status"),
     )

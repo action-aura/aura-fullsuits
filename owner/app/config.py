@@ -78,6 +78,9 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_MAX_REQUEST_BYTES",
         "OWNER_MAX_CONTENT_LENGTH_BYTES",
         "OWNER_RELEASE_ARTIFACT_DIR",
+        "OWNER_SYNC_BOOTSTRAP_DIR",
+        "OWNER_TEST_SYNC_BOOTSTRAP_DIR",
+        "OWNER_SYNC_BOOTSTRAP_MAX_BYTES",
         "OWNER_TEST_RELEASE_ARTIFACT_DIR",
         "OWNER_RELEASE_DOWNLOAD_TOKEN_TTL_SECONDS",
         # Phase 9R M2 additions
@@ -195,6 +198,15 @@ class BaseConfig:
     RELEASE_ARTIFACT_DIRECTORY = os.environ.get(
         "OWNER_RELEASE_ARTIFACT_DIR", os.path.join(os.getcwd(), "var", "release-artifacts")
     )
+    # -- SYNC-BOOT Phase 3: the bootstrap mailbox's encrypted blobs. A named
+    # compose volume on the VM's disk, NEVER the database (Neon's free quota) and
+    # NEVER in run_backup.sh: the bytes are a transient, end-to-end encrypted copy
+    # of a shop, deleted on ack or after 72 h.
+    SYNC_BOOTSTRAP_DIRECTORY = os.environ.get(
+        "OWNER_SYNC_BOOTSTRAP_DIR", os.path.join(os.getcwd(), "var", "sync-bootstrap")
+    )
+    # Ceiling on ONE request's total ciphertext (a shop database, zipped).
+    SYNC_BOOTSTRAP_MAX_BYTES = int(os.environ.get("OWNER_SYNC_BOOTSTRAP_MAX_BYTES", str(512 * 1024 * 1024)))
     RELEASE_DOWNLOAD_TOKEN_TTL_SECONDS = int(os.environ.get("OWNER_RELEASE_DOWNLOAD_TOKEN_TTL_SECONDS", "300"))  # 5m
 
     WTF_CSRF_TIME_LIMIT = None
@@ -479,6 +491,9 @@ class TestingConfig(BaseConfig):
     )
     RELEASE_ARTIFACT_DIRECTORY = os.environ.get(
         "OWNER_TEST_RELEASE_ARTIFACT_DIR", os.path.join(_OWNER_ROOT, "var", "release-artifacts-test")
+    )
+    SYNC_BOOTSTRAP_DIRECTORY = os.environ.get(
+        "OWNER_TEST_SYNC_BOOTSTRAP_DIR", os.path.join(_OWNER_ROOT, "var", "sync-bootstrap-test")
     )
     REPLAY_PROTECTION_REQUIRED = True
     DISTRIBUTED_RATE_LIMIT_REQUIRED = True

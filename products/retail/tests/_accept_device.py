@@ -88,6 +88,22 @@ SYNC-BOOT Phase 2 additions (OPT-IN, `hub` option only):
   * `bootstrap_state` -- the pending/staged copy, the marker, and the stream health.
   A device "restarts" by being run again: `init_app()` installs a staged copy before it opens a database.
 
+SYNC-BOOT Phase 3 additions (OPT-IN, owner_relay runs only):
+
+  * `owner_bootstrap` -- both services carry the SAME bootstrap hooks production wires and the product's
+    `_BOOTSTRAP_INLINE` seam is on: Owner-mailbox work (a producer answering a request, the main computer
+    re-announcing) runs inside the `pull` op instead of on a background thread, and the requester's poller
+    is not started -- the test drives it with `mailbox_step`. A device process is short-lived; this is
+    what lets a test interleave several computers deterministically. Everything ELSE is production code.
+  * `create_shop` takes `company_id` (the licence's public id, which is what a real founding computer's
+    company id becomes at activation), `admin_created` (the `ADMIN_CREATED` audit row `create_admin`
+    writes on a founding computer; the claim-main route refuses a computer without it) and `with_uid`.
+  * `join_seed` -- the REAL activation-time join: `company_rebind.rebind_company_id_after_activation()`
+    reading the lease this process was provisioned with. Seeds `company_settings` and the
+    `JOINED_DEVICE_SEEDED` mark exactly as a computer that joined an existing shop gets them.
+  * `mailbox_step` -- one `OwnerRequester.step()` of this computer's request for a copy of the shop.
+  * `mailbox_state` -- the requester's state file (never its private key) and the staged copy.
+
 Run as a bare subprocess, same contract as its ancestors:
     python _accept_device.py <app_data_dir> <relay_db_path> <actions_path> <output_path> [<options_json>]
 """
@@ -316,6 +332,12 @@ def main() -> None:
     if options.get("hub"):
         service.set_bootstrap_hooks(_app_module._retail_bootstrap_hooks())
         registry_service.set_bootstrap_hooks(_app_module._registry_bootstrap_hooks())
+    if options.get("owner_bootstrap"):
+        assert options.get("owner_relay"), "owner_bootstrap needs owner_relay"
+        _app_module._BOOTSTRAP_INLINE = True
+        service.set_bootstrap_hooks(_app_module._retail_bootstrap_hooks())
+        if registry_service is not None:
+            registry_service.set_bootstrap_hooks(_app_module._registry_bootstrap_hooks())
 
     API = "/api/sub/retail"
     client = flask_app.test_client()
@@ -332,15 +354,26 @@ def main() -> None:
         _log_start = len(_CAPTURED_LOGS)
 
         if op == "create_shop":
-            company_id = str(uuid.uuid4())
+            company_id = action.get("company_id") or str(uuid.uuid4())
             email = action.get("email") or f"device-{uuid.uuid4().hex[:8]}@test.local"
             password = action.get("password", "DeviceStockPW1")
             conn = registry_conn()
-            conn.execute(
-                "INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status, "
-                "require_password_change) VALUES (?,?,?,?,?,?,?,0)",
-                (str(uuid.uuid4()), company_id, "EMP-0001", email, hash_password(password), "admin", "active"),
-            )
+            if action.get("with_uid"):
+                conn.execute(
+                    "INSERT INTO users (id, uid, company_id, employee_id, email, password_hash, role, status, "
+                    "require_password_change) VALUES (?,?,?,?,?,?,?,?,0)",
+                    (str(uuid.uuid4()), str(uuid.uuid4()), company_id, "EMP-0001", email,
+                     hash_password(password), "admin", "active"))
+            else:
+                conn.execute(
+                    "INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status, "
+                    "require_password_change) VALUES (?,?,?,?,?,?,?,0)",
+                    (str(uuid.uuid4()), company_id, "EMP-0001", email, hash_password(password), "admin", "active"),
+                )
+            if action.get("admin_created"):
+                conn.execute(
+                    "INSERT INTO audit_logs (company_id, action, entity_type, entity_id) "
+                    "VALUES (?, 'ADMIN_CREATED', 'user', 'owner')", (company_id,))
             conn.commit()
             conn.close()
             _login(email, password)
@@ -885,6 +918,36 @@ def main() -> None:
             _app_module._joined_hub_store().save(
                 url=action["url"], spki_pin=action["pin"], hub_installation_id=action["hub_installation_id"])
             results.append({"ok": True})
+
+        elif op == "join_seed":
+            from commercial_runtime.identity.company_rebind import rebind_company_id_after_activation
+            results.append(rebind_company_id_after_activation())
+
+        elif op == "mailbox_step":
+            from commercial_runtime.sync.bootstrap.errors import BootstrapError
+            from commercial_runtime.sync.relay_client import SyncRelayClientError
+            requester = _app_module._make_owner_requester(relay, relay.base_url)
+            try:
+                results.append({"outcome": requester.step()})
+            except (BootstrapError, SyncRelayClientError) as exc:
+                results.append({"outcome": "error", "reason_code": getattr(exc, "reason_code", type(exc).__name__),
+                                "message": str(exc)})
+
+        elif op == "mark_include_own":
+            # What the backup blueprint's restart hook does after a restore (app._after_backup_restore),
+            # minus the restart: arm include_own_once for both streams.
+            from commercial_runtime.sync.bootstrap import installer as _inst3
+            _inst3.mark_include_own_once(Path(app_data_dir), "backup-restore")
+            results.append({"ok": True})
+
+        elif op == "mailbox_state":
+            from commercial_runtime.sync.bootstrap import installer as _inst2
+            from commercial_runtime.sync.bootstrap import transport_owner as _to
+            _sp = _to.state_path(Path(app_data_dir))
+            _st = json.loads(_sp.read_text(encoding="utf-8")) if _sp.exists() else None
+            if _st:
+                _st = {k: v for k, v in _st.items() if k != "private_b64"}
+            results.append({"state": _st, "pending": _inst2.pending(Path(app_data_dir))})
 
         elif op == "bootstrap_state":
             from commercial_runtime.sync.bootstrap import installer as _inst
