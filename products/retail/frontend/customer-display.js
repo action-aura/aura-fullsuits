@@ -594,7 +594,7 @@
           promoRow.hidden = true;
         }
       }
-      setText('cd-tax-label', t('Tax'));
+      setText('cd-tax-label', t(msg.taxIncluded ? 'Tax (included)' : 'Tax'));
       setText('cd-tax-value', msg.tax);
       var discRow = byId('cd-discount-row');
       if (discRow) {

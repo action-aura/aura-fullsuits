@@ -249,7 +249,7 @@ const RetailSystem = {
   // Bumped by _beginRender(); see the "Render generation guard" section
   // below (just above the Router) for what this exists to stop.
   _renderGeneration: 0,
-  // 'after_discount' (default) | 'before_discount' — loaded from
+  // 'after_discount' (default) | 'before_discount' | 'inclusive' — loaded from
   // GET /api/sub/retail/settings/tax by _loadPOSData(). Kept in exact sync
   // with core/retail/pricing.py's two formulas; see the comment above
   // _recalc() below before changing either side.
@@ -1711,6 +1711,9 @@ const RetailSystem = {
       // discount -- null below half a minor unit for the identical reason.
       promotions: totals.promotions > halfMinor ? this._fmt(totals.promotions) : null,
       tax: this._fmt(totals.tax || 0),
+      // TAXINC: only present on an inclusive sale (key omitted otherwise, so every other
+      // payload is byte-identical to before): tells the display the tax is inside the total.
+      ...(totals.taxInclusive ? { taxIncluded: true } : {}),
       total: this._fmt(totals.total || 0),
       // THE CASH TRAP, third echo of it (create_sale's heading, _recalc's
       // comment, now here): points are a TENDER, not a discount. `total` is
@@ -3620,9 +3623,18 @@ const RetailSystem = {
   // The cart's figures if `shares` (minor units, per line) were taken off the lines.
   _cartTotalsAt(grossM, rates, shares) {
     const before = this._taxMode === 'before_discount';
+    // TAXINC: inclusive mirrors pricing.py -- the share comes off the inclusive gross, the
+    // tax is the exact remainder after carving taxable out of the net, total = net.
+    const inclusive = this._taxMode === 'inclusive';
     let taxM = 0, discM = 0, totalM = 0;
     grossM.forEach((g, k) => {
       const s = shares ? shares[k] : 0;
+      if (inclusive) {
+        const netM = g - s;
+        const taxableInM = this._toMinor(this._roundMoney(this._fromMinor(netM) / (1 + rates[k] / 100)));
+        taxM += netM - taxableInM; discM += s; totalM += netM;
+        return;
+      }
       const taxableM = before ? g : g - s;
       const lineTaxM = this._toMinor(this._roundMoney(this._fromMinor(taxableM) * (rates[k] / 100)));
       taxM += lineTaxM; discM += s; totalM += g - s + lineTaxM;
@@ -5899,7 +5911,7 @@ const RetailSystem = {
             <div class="pos-sum-row" id="pos-discamt-row" style="display:none">
               <span>${t('Discount')}</span><span class="pos-sum-val money" id="pos-discamt-value">${this._esc(this._moneyDigits(0))}</span>
             </div>
-            <div class="pos-sum-row"><span>${t('Tax')}</span><span class="pos-sum-val money" id="pos-tax">${this._esc(this._moneyDigits(0))}</span></div>
+            <div class="pos-sum-row"><span id="pos-tax-label">${t('Tax')}</span><span class="pos-sum-val money" id="pos-tax">${this._esc(this._moneyDigits(0))}</span></div>
             <div class="pos-total-band">
               <span class="pos-grand-label">${t('Total')}</span>
               <span class="pos-grand-value money" id="pos-total">${this._esc(this._moneyDigits(0))}</span>
@@ -6254,6 +6266,7 @@ const RetailSystem = {
       // Company's configured tax-calculation policy (core/retail/pricing.py
       // is the authoritative spec for what these two modes compute).
       this._taxMode = (taxSettings && taxSettings.data && taxSettings.data.tax_calculation_mode) || 'after_discount';
+      this._taxModeLoaded = true;
       // Currency rides on the same response (see _currencySymbol's own note).
       // Guarded rather than assigned blindly: a response that predates this
       // field -- an older backend behind a newer till during a staged rollout
@@ -8031,6 +8044,12 @@ const RetailSystem = {
     const discPct = Math.min(100, Math.max(0, parseFloat(document.getElementById('pos-disc')?.value || 0)));
     const manualFrac = discPct / 100;
     const beforeDiscount = this._taxMode === 'before_discount';
+    // TAXINC: 'inclusive' -- the shelf price already contains the tax. Mirrors
+    // core/retail/pricing.py::calculate_line's TAX_INCLUSIVE branch: discount comes off the
+    // INCLUSIVE gross, taxable = round(net / (1 + rate)), tax = net - taxable (the exact
+    // remainder), total = net. So `total = subtotal - discAmt` here, NOT `+ tax` (the tax
+    // is already inside), and it equals the server's round(price*qty) to the fil.
+    const inclusive = this._taxMode === 'inclusive';
     // UI-3a: an applied amount / new-total discount replaces the per-line % maths below with
     // the exact minor-unit distribution create_sale will use (see _cartDiscPlan). null when
     // nothing is applied -- then every line below is byte-for-byte what it was.
@@ -8072,8 +8091,14 @@ const RetailSystem = {
         lineDiscAmt = this._fromMinor(cartPlan.shares[lineIdx]);
         lineFrac = gross > 0 ? lineDiscAmt / gross : 0;
       }
-      const taxableBase = beforeDiscount ? gross : (gross - lineDiscAmt);
-      const lineTax = this._roundMoney(taxableBase * (i.tax_rate / 100));
+      let lineTax;
+      if (inclusive) {
+        const net = this._roundMoney(gross - lineDiscAmt);
+        lineTax = this._roundMoney(net - this._roundMoney(net / (1 + i.tax_rate / 100)));
+      } else {
+        const taxableBase = beforeDiscount ? gross : (gross - lineDiscAmt);
+        lineTax = this._roundMoney(taxableBase * (i.tax_rate / 100));
+      }
       subtotal += gross;
       tax += lineTax;
       if (lineFrac > lineManualFrac && !(cartPlan && cartPlan.shares)) winnerPromotions += lineDiscAmt; else winnerDiscount += lineDiscAmt;
@@ -8085,7 +8110,7 @@ const RetailSystem = {
     // disagree with each other or with the receipt (which reads these exact
     // numbers back off the completed sale).
     const discAmt = winnerDiscount + winnerPromotions;
-    const total   = subtotal - discAmt + tax;
+    const total   = inclusive ? this._roundMoney(subtotal - discAmt) : subtotal - discAmt + tax;
     const manualDiscAmt = winnerDiscount;
 
     // ── Loyalty point redemption (launch-readiness wave 1, schema v27) ──────
@@ -8120,12 +8145,15 @@ const RetailSystem = {
     // in the new Promotions/Discount($) rows and _customerDisplayCartPayload
     // below, none of which existed before this item.
     this._currentTotals = { subtotal, discount: discAmt, tax, total, loyaltyValue, amountDue,
-      manualDiscount: manualDiscAmt, promotions: winnerPromotions };
+      manualDiscount: manualDiscAmt, promotions: winnerPromotions, taxInclusive: inclusive };
     // All three spans already carry `.money` in the POS template, so the amount
     // IS the money element -- _setMoney fills it in and marks a negative on
     // that same element rather than leaving the cue to whatever wraps it.
     this._setMoney(document.getElementById('pos-sub'),   subtotal);
     this._setMoney(document.getElementById('pos-tax'),   tax);
+    // TAXINC: say the tax is inside the total, or the row reads as an extra charge.
+    const taxLabelEl = document.getElementById('pos-tax-label');
+    if (taxLabelEl) taxLabelEl.textContent = inclusive ? t('Tax (included)') : t('Tax');
     this._setMoney(document.getElementById('pos-total'), total);
     // retail-hardware-viewports Step 9 (docs/design/phone-ui-redesign.md
     // §3.1): the peek bar is a MIRROR of #pos-total, never a second source
@@ -10763,6 +10791,20 @@ const RetailSystem = {
   // from the manual %; summing each bucket reconstructs the exact same split
   // _recalc()'s own `manualDiscount`/`promotions` fields compute live, from
   // data the response already returns.
+  // TAXINC: no column records the tax mode, but a stored sale header tells on itself:
+  // inclusive stores shelf-price terms, so subtotal - discount == total (the tax is already
+  // inside), while both exclusive modes have total = subtotal - discount + tax. Mirror of
+  // core/retail/pricing.py::header_is_tax_inclusive. Only used to LABEL the tax row.
+  _saleTaxIncluded(saleData) {
+    const s = saleData || {};
+    const tax = Number(s.tax_amount) || 0;
+    const half = this._halfMinorUnit();
+    if (!(tax > half)) return false;
+    const disc = s.discount_amount != null ? Number(s.discount_amount) || 0
+      : (s.lines || []).reduce((a, l) => a + (Number(l.discount_amount) || 0), 0);
+    return Math.abs((Number(s.subtotal) || 0) - disc - (Number(s.total) || 0)) <= half;
+  },
+
   _saleDiscountBreakdown(saleData) {
     let promotions = 0, discount = 0;
     (saleData.lines || []).forEach(l => {
@@ -11031,7 +11073,7 @@ const RetailSystem = {
               <span style="color:var(--text-secondary)">${this._discountLabelHtml(saleData, t)}</span><span style="color:var(--text-money-positive);white-space:nowrap">-${this._fmt(receiptDiscountAmt)}</span>
             </div>` : ''}
             ${saleData.tax_amount > 0 ? `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-              <span style="color:var(--text-secondary)">${t('Tax')}</span><span style="color:var(--text-money);white-space:nowrap">${this._fmt(saleData.tax_amount)}</span>
+              <span style="color:var(--text-secondary)">${t(this._saleTaxIncluded(saleData) ? 'Tax (included)' : 'Tax')}</span><span style="color:var(--text-money);white-space:nowrap">${this._fmt(saleData.tax_amount)}</span>
             </div>` : ''}
             <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
               <span style="color:var(--text-secondary)">Total</span><span style="color:var(--text-money);font-weight:700;white-space:nowrap">${this._fmt(saleData.total)}</span>
@@ -11651,7 +11693,7 @@ const RetailSystem = {
       <div class="rcpt-line"><span>${rt('Subtotal')}</span><span>${this._fmt(saleData.subtotal)}</span></div>
       ${printDiscBreakdown.promotions > printHalfMinorUnit ? `<div class="rcpt-line"><span>${rt('Promotions')}</span><span>-${this._fmt(printDiscBreakdown.promotions)}</span></div>` : ''}
       ${printDiscBreakdown.discount > printHalfMinorUnit ? `<div class="rcpt-line"><span>${this._discountLabelHtml(saleData, rt)}</span><span>-${this._fmt(printDiscBreakdown.discount)}</span></div>` : ''}
-      ${saleData.tax_amount > 0 ? `<div class="rcpt-line"><span>${rt('Tax')}</span><span>${this._fmt(saleData.tax_amount)}</span></div>` : ''}
+      ${saleData.tax_amount > 0 ? `<div class="rcpt-line"><span>${rt(this._saleTaxIncluded(saleData) ? 'Tax (included)' : 'Tax')}</span><span>${this._fmt(saleData.tax_amount)}</span></div>` : ''}
       <div class="rcpt-line rcpt-bold"><span>${rt('Total')}</span><span>${this._fmt(saleData.total)}</span></div>
       ${this._roundingText(saleData) ? `<div class="rcpt-line"><span>${rt('Rounding')}</span><span dir="ltr">${this._roundingText(saleData)}</span></div>` : ''}
       ${printTenderHtml || `<div class="rcpt-line"><span>${rt('Paid')}</span><span>${this._fmt(saleData.amount_paid)}</span></div>`}
@@ -11965,6 +12007,9 @@ const RetailSystem = {
       const resp = await this._get('/api/sub/retail/settings/tax');
       const raw = resp && resp.data && resp.data.default_tax_rate;
       if (raw != null) defaultTaxRate = raw;
+      // TAXINC: the same response names the mode; the price label below needs it.
+      const m = resp && resp.data && resp.data.tax_calculation_mode;
+      if (m) { this._taxMode = m; this._taxModeLoaded = true; }
     } catch (e) { /* stays 0 -- matches create_product's own no-default fallback */ }
     // Existing products are untouched by this: `_openEditProduct` below
     // passes the product's OWN stored `p.tax_rate` into this same modal, and
@@ -12010,7 +12055,24 @@ const RetailSystem = {
   // breakout" shape retail_products_table_name_xss_test.js already proved
   // for the Stock/Delete buttons one screen over -- this form had the same
   // defect in its own, separate call sites, never wired through this._esc().
+  // TAXINC: with prices that include tax the box holds the SHELF price, so the label must say
+  // so -- an owner typing the ex-tax figure into an inclusive shop is the exact mistake this
+  // mode exists to remove. `_taxMode` is a POS-load cache; Products is reachable with no till
+  // ever mounted, so the first product dialog of a session fetches it once and relabels.
+  _syncProductPriceLabel() {
+    if (this._taxModeLoaded) return;
+    this._taxModeLoaded = true;
+    Promise.resolve().then(() => this._get('/api/sub/retail/settings/tax')).then(resp => {
+      const m = resp && resp.data && resp.data.tax_calculation_mode;
+      if (!m) return;
+      this._taxMode = m;
+      const lab = document.querySelector && document.querySelector('label[for="pm-sell"]');
+      if (lab) lab.textContent = t(m === 'inclusive' ? 'Price (incl. tax) *' : 'Sell Price *');
+    }).catch(() => { this._taxModeLoaded = false; });
+  },
+
   _showProductModal(p, catOpts, supOpts, parentOpts) {
+    this._syncProductPriceLabel();
     const isEdit = !!p.id;
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
@@ -12033,7 +12095,7 @@ const RetailSystem = {
         </div>
         <div class="ret-field-row3">
           <div class="ret-field"><label for="pm-cost">${t('Cost Price')}</label><input type="number" id="pm-cost" value="${p.cost_price||0}" step="0.01" min="0" /></div>
-          <div class="ret-field"><label for="pm-sell">${t('Sell Price *')}</label><input type="number" id="pm-sell" value="${p.sell_price||0}" step="0.01" min="0" /></div>
+          <div class="ret-field"><label for="pm-sell">${t(this._taxMode === 'inclusive' ? 'Price (incl. tax) *' : 'Sell Price *')}</label><input type="number" id="pm-sell" value="${p.sell_price||0}" step="0.01" min="0" /></div>
           <div class="ret-field"><label for="pm-tax">${t('Tax Rate %')}</label><input type="number" id="pm-tax" value="${p.tax_rate||0}" step="0.1" min="0" /></div>
         </div>
         <div class="ret-field-row3">

@@ -525,11 +525,20 @@
   }
 
   // ── tax ────────────────────────────────────────────────────────────────────
+  // TAXINC: one plain line saying what "Prices already include tax" does, shown only when picked.
+  function syncTaxModeHint() {
+    const hint = $('tax-mode-inclusive-hint');
+    const sel = $('tax-mode');
+    if (hint && sel) hint.hidden = sel.value !== 'inclusive';
+  }
+
   async function loadTaxMode() {
     try {
       const resp = await R()._get('/api/sub/retail/settings/tax');
       const d = (resp && resp.data) || {};
-      $('tax-mode').value = d.tax_calculation_mode === 'before_discount' ? 'before_discount' : 'after_discount';
+      $('tax-mode').value = (d.tax_calculation_mode === 'before_discount' || d.tax_calculation_mode === 'inclusive')
+        ? d.tax_calculation_mode : 'after_discount';
+      syncTaxModeHint();
     } catch (e) { console.error(e); }
   }
 
@@ -1620,13 +1629,18 @@
   const SAMPLE_TAX_RATE = 16; // percent: Jordan's general sales tax, an invented shop
   function sampleLineFigures(gross, discount, mode) {
     const rnd = (v) => R()._roundMoney(v);
+    if (mode === 'inclusive') {
+      // TAXINC: tax is inside the net; total is the net itself (mirror of TAX_INCLUSIVE).
+      const net = rnd(gross - discount);
+      return { tax: rnd(net - rnd(net / (1 + SAMPLE_TAX_RATE / 100))), total: net };
+    }
     const taxable = mode === 'before_discount' ? gross : gross - discount;
     const tax = rnd(taxable * SAMPLE_TAX_RATE / 100);
     return { tax, total: rnd(gross - discount + tax) };
   }
   function sampleSale(lang, taxMode) {
     const L = lang === 'ar' ? 'ar' : 'en';
-    const mode = taxMode === 'before_discount' ? 'before_discount' : 'after_discount';
+    const mode = (taxMode === 'before_discount' || taxMode === 'inclusive') ? taxMode : 'after_discount';
     const tr = (s) => R()._translateForLang(s, L);
     const lines = [
       { name: tr('Sample item'), quantity: 2, unit_price: 1.5, discount_amount: 0, applied_promotion: null },
@@ -1782,8 +1796,11 @@
             <select id="tax-mode">
               <option value="after_discount">${esc(t('After the discount'))}</option>
               <option value="before_discount">${esc(t('Before the discount'))}</option>
+              <option value="inclusive">${esc(t('Prices already include tax'))}</option>
             </select>
           </div>
+          <p class="sh-card-lead" id="tax-mode-inclusive-hint" hidden style="margin-top:10px">${esc(t('The price on the shelf is exactly what the customer pays. The tax is worked out from inside it.'))}
+            ${esc(t('Switching this does not change the numbers already saved on your products.'))}</p>
         </div>
         <div id="sh-tax-default-slot"></div>
         <div class="sub-chart-card" id="tax-category-card">
@@ -2381,7 +2398,7 @@
     if (t0.dataset && t0.dataset.tillInput !== undefined) { tillTyped(t0); return; }
     if (t0.id === 'credit-mode') syncCreditLimitVisibility();
     // The sample receipt's tax follows the selected mode (F14).
-    if (t0.id === 'tax-mode') schedulePreview();
+    if (t0.id === 'tax-mode') { syncTaxModeHint(); schedulePreview(); }
     if (t0.id && t0.id.indexOf('num-') === 0) {
       if (t0.id === 'num-branch-code') {
         // Letters only (A-Z): the server refuses digits, so they never get typed in.
