@@ -24,7 +24,7 @@ additive and forward-compatible for both.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
@@ -81,7 +81,15 @@ def resolve_commercial_assertion_fields(subscription: Subscription, *, as_of: da
     past_due_since = _past_due_since(subscription)
     commercial_grace_end = None
     if past_due_since is not None and policy is not None:
-        commercial_grace_end = past_due_since + timedelta(days=policy.payment_grace_days)
+        # Do the arithmetic in UTC. psycopg hands back timestamptz values in the
+        # connection's time zone as a DST-aware ZoneInfo, and adding days to that is
+        # wall-clock arithmetic: a grace window that crosses a DST change came out an
+        # hour long or short (measured 2026-10-16 on an Asia/Hebron laptop: 10 days
+        # + 1 h). Production Neon runs in UTC, so this only bit DST-zone databases,
+        # but the grace window is a span of elapsed time, not of wall-clock days.
+        commercial_grace_end = (
+            past_due_since.astimezone(timezone.utc) + timedelta(days=policy.payment_grace_days)
+        )
 
     return {
         "commercial_policy_version": policy.policy_version if policy is not None else None,
