@@ -9414,6 +9414,7 @@ def _seed_retail(conn, cur, company_id=1):
         subtotal = Decimal('0')
         discount_total = Decimal('0')
         tax_total = Decimal('0')
+        total_sum = Decimal('0')
         sale_num += 1
         sn = f'S-{sale_num}'
         cur.execute(
@@ -9436,6 +9437,7 @@ def _seed_retail(conn, cur, company_id=1):
             subtotal += Decimal(str(_calc['gross']))
             discount_total += Decimal(str(_calc['discount_amount']))
             tax_total += Decimal(str(_calc['tax']))
+            total_sum += Decimal(str(_calc['total']))
             cur.execute(
                 "INSERT INTO sale_items (sale_id,product_id,quantity,unit_price,discount_pct,tax_rate,line_total) VALUES (?,?,?,?,?,?,?)",
                 (sid, pid, qty, price, disc, trate, line)
@@ -9447,7 +9449,10 @@ def _seed_retail(conn, cur, company_id=1):
         subtotal_f = float(subtotal.quantize(_seed_quant, rounding=ROUND_HALF_UP))
         discount_f = float(discount_total.quantize(_seed_quant, rounding=ROUND_HALF_UP))
         tax_f = float(tax_total.quantize(_seed_quant, rounding=ROUND_HALF_UP))
-        total_f = float((subtotal - discount_total + tax_total).quantize(_seed_quant, rounding=ROUND_HALF_UP))
+        # TAXINC: the sum of calculate_line's own per-line totals, NOT subtotal - discount + tax --
+        # that identity is false in the tax-inclusive mode (the tax is already inside the total).
+        # Identical for both older modes, where the per-line identity makes the two equal.
+        total_f = float(total_sum.quantize(_seed_quant, rounding=ROUND_HALF_UP))
         cur.execute(
             "UPDATE sales SET subtotal=?,discount_amount=?,tax_amount=?,total=?,amount_paid=?,change_amount=0 WHERE id=?",
             (subtotal_f, discount_f, tax_f, total_f, total_f, sid)

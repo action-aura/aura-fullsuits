@@ -1853,6 +1853,7 @@
   "Already used: {list}": "Already used: {list}",
   "An example for till {n}. This computer is not switched on, so it still uses the long numbers.": "An example for till {n}. This computer is not switched on, so it still uses the long numbers.",
   "Before the discount": "Before the discount",
+  "The discount cannot be more than the cart total.": "The discount cannot be more than the cart total.",
   "Prices already include tax": "Prices already include tax",
   "The price on the shelf is exactly what the customer pays. The tax is worked out from inside it.": "The price on the shelf is exactly what the customer pays. The tax is worked out from inside it.",
   "Switching this does not change the numbers already saved on your products.": "Switching this does not change the numbers already saved on your products.",

@@ -143,7 +143,8 @@ def _price_with_shares(lines, shares, gross_minor, quant, calc_line):
     return pcts, calcs
 
 
-def apply_cart_discount(lines, discount: Decimal, quant: Decimal, calc_line, zero_calcs=None):
+def apply_cart_discount(lines, discount: Decimal, quant: Decimal, calc_line, zero_calcs=None,
+                        tax_inclusive=False):
     """Spread `discount` (Decimal on the minor grid, ex-tax) over `lines`.
 
     lines     -- [(unit_price, quantity, tax_rate)] already priced by create_sale.
@@ -159,7 +160,11 @@ def apply_cart_discount(lines, discount: Decimal, quant: Decimal, calc_line, zer
         raise CartDiscountError(CODE_BAD_AMOUNT, 'The discount must be more than zero.')
     if want > sum(gross_minor):
         raise CartDiscountError(
-            CODE_BAD_AMOUNT, 'The discount cannot be more than the cart total before tax.',
+            CODE_BAD_AMOUNT,
+            # TAXINC: with tax-inclusive prices the ceiling IS the cart total (tax inside it),
+            # not a figure "before tax" -- the old wording would send the cashier hunting for one.
+            'The discount cannot be more than the cart total.' if tax_inclusive
+            else 'The discount cannot be more than the cart total before tax.',
             {'max_discount': float(Decimal(sum(gross_minor)) * quant)})
     shares, residue_line = distribute_minor(gross_minor, want)
     pcts, calcs = _price_with_shares(lines, shares, gross_minor, quant, calc_line)

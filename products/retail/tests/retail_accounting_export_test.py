@@ -365,6 +365,7 @@ def test_export_sales_csv_is_well_formed_with_a_header_row():
         'cashier', 'payment_method', 'sale_status', 'product_id', 'product_name', 'sku',
         'quantity', 'unit_price', 'discount_pct', 'tax_rate', 'line_total',
         'sale_subtotal', 'sale_discount_amount', 'sale_tax_amount', 'sale_total', 'sale_amount_paid',
+        'sale_tax_inclusive',   # TAXINC: appended last; positions of every older column unchanged
     ]
     assert len(rows) == 1, rows
     assert len(rows[0]) == len(header)

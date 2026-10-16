@@ -9029,7 +9029,8 @@ def create_sale():
                 else:
                     _cd_amount = cart_disc.parse_amount(cart_discount_amount, _cd_quant)
                     _cd_pcts, _cd_calcs, _cd_shares = cart_disc.apply_cart_discount(
-                        _cd_lines, _cd_amount, _cd_quant, _calc_line)
+                        _cd_lines, _cd_amount, _cd_quant, _calc_line,
+                        tax_inclusive=(mode == tax_engine.TAX_INCLUSIVE))
             except cart_disc.CartDiscountError as cde:
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'code': cde.code, 'message': cde.message,
@@ -23385,6 +23386,12 @@ def export_sales_csv():
         'cashier', 'payment_method', 'sale_status', 'product_id', 'product_name', 'sku',
         'quantity', 'unit_price', 'discount_pct', 'tax_rate', 'line_total',
         'sale_subtotal', 'sale_discount_amount', 'sale_tax_amount', 'sale_total', 'sale_amount_paid',
+        # TAXINC: 1 when the sale was priced tax-INCLUSIVE. Without it the same four sale_* columns
+        # mean two different things: subtotal - discount + tax == total on an exclusive sale,
+        # subtotal - discount == total (tax already inside) on an inclusive one, and an importer
+        # cannot tell which from the numbers alone. Same header inference as
+        # pricing.header_is_tax_inclusive, done in SQL; appended LAST so existing positions hold.
+        'sale_tax_inclusive',
     ]
     money_columns = [
         'unit_price', 'line_total',
@@ -23395,18 +23402,21 @@ def export_sales_csv():
         "COALESCE(c.name,'Walk-in'), s.cashier, s.payment_method, s.status, "
         "si.product_id, p.name, p.sku, "
         "si.quantity, si.unit_price, si.discount_pct, si.tax_rate, si.line_total, "
-        "s.subtotal, s.discount_amount, s.tax_amount, s.total, s.amount_paid "
+        "s.subtotal, s.discount_amount, s.tax_amount, s.total, s.amount_paid, "
+        "CASE WHEN s.tax_amount > ?1 AND ABS(s.subtotal - s.discount_amount - s.total) <= ?1 "
+        "THEN 1 ELSE 0 END "
         "FROM sales s "
         "JOIN sale_items si ON si.sale_id = s.id "
         "LEFT JOIN customers c ON s.customer_id = c.id "
         "LEFT JOIN products p ON si.product_id = p.id "
-        "WHERE s.company_id=? AND s.created_at >= date(?) AND s.created_at < date(?, '+1 day') "
+        "WHERE s.company_id=?2 AND s.created_at >= date(?3) AND s.created_at < date(?4, '+1 day') "
         "ORDER BY s.id, si.id"
     )
     conn = get_retail_conn()
     currency = _company_currency(conn, cid)
+    _half_unit = float(tax_engine.currency_quantum(currency) / 2)
     return _stream_csv_export(
-        conn, sql, (cid, date_from, date_to), header, money_columns,
+        conn, sql, (_half_unit, cid, date_from, date_to), header, money_columns,
         f'sales_export_{date_from}_{date_to}.csv', currency,
     )
 

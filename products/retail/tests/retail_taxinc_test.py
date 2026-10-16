@@ -497,3 +497,63 @@ def test_emitted_xml_reconciles_qty_times_price_for_inclusive_sale_and_credit_no
             assert l['allow'] >= 0 and l['allow'] < l['qty'] * D('0.001') + D('0.0005'), l
         # and the total payable still equals the shelf price / refund
         assert abs(doc.grand_total - float(D('0.250') * qty)) < 1e-9
+
+
+def test_sales_csv_flags_inclusive_sales_so_the_four_sale_columns_are_interpretable():
+    import csv
+    import io
+    from datetime import date, timedelta
+    client, cid, pid = _make_shop(price=0.250)
+    _set_mode(client, "inclusive")
+    inc = _sell(client, pid, 3)
+    _set_mode(client, "after_discount")
+    exc = _sell(client, pid, 3)
+    d0, d1 = (date.today() - timedelta(days=1)).isoformat(), (date.today() + timedelta(days=1)).isoformat()
+    r = client.get(f"/api/sub/retail/reports/export/sales?date_from={d0}&date_to={d1}")
+    assert r.status_code == 200, r.data[:300]
+    rows = list(csv.reader(io.StringIO(r.data.decode('utf-8-sig'))))
+    header, body = rows[0], rows[1:]
+    flag = {int(row[header.index('sale_id')]): row[header.index('sale_tax_inclusive')] for row in body}
+    assert flag[inc['id']] == '1' and flag[exc['id']] == '0', flag
+    # and the flag really does select the identity that holds
+    for row in body:
+        sub_, dis, tax, tot = (D(row[header.index(c)]) for c in
+                               ('sale_subtotal', 'sale_discount_amount', 'sale_tax_amount', 'sale_total'))
+        if row[header.index('sale_tax_inclusive')] == '1':
+            assert sub_ - dis == tot
+        else:
+            assert sub_ - dis + tax == tot
+
+
+def test_cart_discount_over_the_total_error_is_mode_correct():
+    client, cid, pid = _make_shop(price=0.250)
+    _set_mode(client, "inclusive")
+    r = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}], 'amount_paid': 9, 'payment_method': 'cash',
+        'idempotency_key': str(uuid.uuid4()), 'cart_discount_amount': 5.0, 'discount_reason': 'x'})
+    assert r.status_code == 400, r.get_json()
+    assert 'before tax' not in r.get_json()['message'], r.get_json()
+    _set_mode(client, "after_discount")
+    r = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}], 'amount_paid': 9, 'payment_method': 'cash',
+        'idempotency_key': str(uuid.uuid4()), 'cart_discount_amount': 5.0, 'discount_reason': 'x'})
+    assert 'before tax' in r.get_json()['message'], r.get_json()
+
+
+def test_demo_seeder_totals_reconcile_in_inclusive_mode():
+    """The demo seeder summed subtotal - discount + tax for the header total, which is false in
+    inclusive mode. Seed a company already set to inclusive and check every seeded sale."""
+    client, cid, pid = _make_shop()
+    conn = get_retail_conn()
+    conn.execute("INSERT OR REPLACE INTO retail_settings (company_id, skey, svalue) VALUES (?, 'tax_calculation_mode', 'inclusive')", (cid,))
+    conn.commit()
+    from database import schema as _schema
+    seed = getattr(_schema, '_seed_retail', None)
+    assert seed is not None
+    seed(conn, conn.cursor(), cid)
+    conn.commit()
+    rows = conn.execute("SELECT subtotal, discount_amount, tax_amount, total FROM sales WHERE company_id=?", (cid,)).fetchall()
+    conn.close()
+    assert len(rows) > 5
+    for sub_, dis, tax, tot in rows:
+        assert D(str(sub_)) - D(str(dis)) == D(str(tot)), (sub_, dis, tax, tot)

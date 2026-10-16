@@ -3925,7 +3925,9 @@ const RetailSystem = {
         const near = [plan.nearestBelowM, plan.nearestAboveM].filter(x => x != null).map(x => this._fmt(this._fromMinor(x)));
         err.textContent = t('That exact total cannot be reached. Nearest: {n}').replace('{n}', near.join(' / '));
       } else if (plan.code === 'TOO_BIG') {
-        err.textContent = t('The discount cannot be more than the cart total before tax.');
+        err.textContent = this._taxMode === 'inclusive'
+          ? t('The discount cannot be more than the cart total.')
+          : t('The discount cannot be more than the cart total before tax.');
       } else if (plan.code === 'TARGET_HIGH') {
         err.textContent = t('The new total cannot be higher than the current total.');
       }
