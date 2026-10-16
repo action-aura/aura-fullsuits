@@ -403,9 +403,9 @@ def test_einvoice_totals_are_consistent_for_an_inclusive_sale():
     assert abs(doc.subtotal - doc.discount_total + doc.tax_total - doc.grand_total) < 0.0005
     assert abs(doc.grand_total - 0.750) < 1e-9
     line = doc.lines[0]
-    assert abs(line.line_total - 0.647) < 1e-9 and abs(line.tax_amount - 0.103) < 1e-9, line
-    assert abs(line.unit_price - line.line_total / 3) < 1e-12        # PriceAmount = taxable / qty
-    assert abs(sum(l.line_total + l.tax_amount for l in doc.lines) - doc.grand_total) < 0.0005
+    # extension = line_total - allowance = taxable 0.647; tax 0.103
+    assert abs(line.line_total - line.discount_amount - 0.647) < 1e-9 and abs(line.tax_amount - 0.103) < 1e-9, line
+    assert abs(sum(l.line_total - l.discount_amount + l.tax_amount for l in doc.lines) - doc.grand_total) < 0.0005
     doc_istd = type(doc)(**{**doc.__dict__, 'profile': 'ISTD_JO_1_0', 'icv': 1, 'uuid': str(uuid.uuid4()),
                             'type_name': '011', 'activity_code': '1'})
     errs = [e for e in validate_istd_document(doc_istd) if e.startswith('R-TOTAL') or e.startswith('R-LINE')]
@@ -424,10 +424,76 @@ def test_credit_note_for_an_inclusive_sale_returned_after_a_mode_flip_sums_to_th
                                   return_number=ret.get('return_number') or 'R-1') is True
     doc = _einvoice_doc(cid, return_id=ret['id'])
     assert abs(doc.grand_total - float(ret['refund_amount'])) < 0.0005
-    assert abs(sum(l.line_total + l.tax_amount for l in doc.lines) - doc.grand_total) < 0.0005
+    assert abs(sum(l.line_total - l.discount_amount + l.tax_amount for l in doc.lines) - doc.grand_total) < 0.0005
     # The inclusive shape, not merely consistent totals: the exclusive builder reaches the same
-    # sums by inventing a discount equal to the tax (gross 0.750, discount 0.103), which is
-    # self-consistent and WRONG on a credit note. Net price = taxable / qty, no allowance.
+    # sums by inventing a discount equal to the TAX (gross 0.750, discount 0.103), which is
+    # self-consistent and WRONG on a credit note. Here the allowance is only the sub-fil
+    # rounding remainder of the price (< qty fils).
     line = doc.lines[0]
-    assert line.discount_amount == 0.0, line
-    assert abs(line.unit_price - line.line_total / line.quantity) < 1e-12, line
+    assert line.discount_amount < line.quantity * 0.001, line
+
+
+# -- the EMITTED XML (not the in-memory document) must reconcile ---------------------------
+# The serializers quantize PriceAmount to the currency's minor unit, so a document can be
+# self-consistent in memory and wrong on the wire (JOD 16%, 0.250 x 7: extension 1.509,
+# PriceAmount 0.216, 7 x 0.216 = 1.512). These tests PARSE the generated XML and recompute.
+
+def _xml_lines(xml):
+    import xml.etree.ElementTree as ET
+
+    def local(e):
+        return e.tag.split('}')[-1]
+
+    def find(e, name):
+        return next((c for c in e.iter() if local(c) == name), None)
+
+    root = ET.fromstring(xml)
+    out = []
+    for ln in [e for e in root.iter() if local(e) == 'InvoiceLine']:
+        price_el = find(ln, 'Price')
+        allow = find(price_el, 'AllowanceCharge')
+        out.append({
+            'qty': D(find(ln, 'InvoicedQuantity').text),
+            'ext': D(find(ln, 'LineExtensionAmount').text),
+            'price': D(find(price_el, 'PriceAmount').text),
+            'allow': D(find(allow, 'Amount').text) if allow is not None else D(0),
+        })
+    return root, out
+
+
+def _emit(doc):
+    from commercial_runtime.einvoicing import ubl
+    from commercial_runtime.einvoicing.istd_ubl import to_istd_xml
+    generic = ubl.to_ubl_xml(doc)
+    istd = type(doc)(**{**doc.__dict__, 'profile': 'ISTD_JO_1_0', 'icv': 1, 'uuid': str(uuid.uuid4()),
+                        'type_name': '012', 'invoice_family': 'general_sales', 'activity_code': '1', 'seller_tin': doc.seller_tin or '1',
+                        'seller_name': doc.seller_name or 'S'})
+    if doc.document_kind == 'credit_note':
+        istd = type(doc)(**{**istd.__dict__, 'original_einvoice_no': 'INC-000001', 'original_uuid': str(uuid.uuid4()),
+                            'original_total': doc.grand_total, 'return_reason': 'x'})
+    return generic, to_istd_xml(istd)
+
+
+@pytest.mark.parametrize('qty', [1, 7, 100])
+def test_emitted_xml_reconciles_qty_times_price_for_inclusive_sale_and_credit_note(qty):
+    client, cid, pid = _make_shop(price=0.250)
+    _enable_einvoicing(client)
+    _set_mode(client, "inclusive")
+    sale = _sell(client, pid, qty)
+    _set_mode(client, "after_discount")
+    ret = _return_all(client, sale, pid, qty)
+    import core.retail.einvoice_adapter as adapter
+    assert adapter.enqueue_return(get_retail_conn, company_id=cid, return_id=ret['id'],
+                                  return_number=ret.get('return_number') or 'R-1') is True
+    for doc in (_einvoice_doc(cid, sale_id=sale['id']), _einvoice_doc(cid, return_id=ret['id'])):
+        generic, istd = _emit(doc)
+        _root, g_lines = _xml_lines(generic)
+        _root, i_lines = _xml_lines(istd)
+        assert g_lines and i_lines
+        for l in g_lines:                       # generic: no per-line allowance, header carries it
+            assert abs(l['qty'] * l['price'] - l['ext']) <= D('0.001'), ('generic', qty, l)
+        for l in i_lines:                       # ISTD: standard UBL identity, to the fil
+            assert abs(l['qty'] * l['price'] - l['allow'] - l['ext']) <= D('0.001'), ('istd', qty, l)
+            assert l['allow'] >= 0 and l['allow'] < l['qty'] * D('0.001') + D('0.0005'), l
+        # and the total payable still equals the shelf price / refund
+        assert abs(doc.grand_total - float(D('0.250') * qty)) < 1e-9

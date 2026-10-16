@@ -18,7 +18,7 @@ is a deliberate, documented Phase 1 judgment call, not an oversight.
 """
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 
 from core.retail import pricing as tax_engine
 from commercial_runtime.einvoicing import outbox as outbox_module
@@ -48,6 +48,25 @@ def _fetch_buyer(conn, company_id, customer_id):
     ).fetchall()
     candidates = {r['id_scheme']: r['id_value'] for r in party_rows}
     return buyer_name, select_buyer_id(candidates)
+
+
+def _inclusive_line_shape(extension: Decimal, qty: Decimal, quantum: Decimal):
+    """(price, gross, remainder) for a tax-inclusive line whose ex-tax extension is `extension`.
+
+    WHY NOT price = extension / qty UNROUNDED (the first cut): both serializers quantize
+    PriceAmount to the currency's minor unit (ubl._money / istd_ubl._amount), so JOD 16%
+    0.250 x 7 (extension 1.509) wrote PriceAmount 0.216 and 7 x 0.216 = 1.512 != 1.509 --
+    48 fils off at qty 100. The ISTD guide is silent on price precision, so more decimals
+    are NOT guessed at. Instead the price is the smallest whole minor unit that covers the
+    extension (ROUND_CEILING), `gross` = qty x price and the per-line allowance carries the
+    remainder: qty x PriceAmount - Allowance == LineExtensionAmount exactly, the standard
+    UBL identity, and the remainder is never negative (ISTD rejects a negative discount).
+    The remainder is < qty fils, i.e. rounding, not a real discount."""
+    if qty <= 0:
+        return Decimal(0), extension, Decimal(0)
+    price = (extension / qty).quantize(quantum, rounding=ROUND_CEILING)
+    gross = (qty * price).quantize(quantum, rounding=ROUND_HALF_UP)
+    return price, gross, gross - extension
 
 
 def build_document(conn, outbox_row) -> EInvoiceDocument:
@@ -132,17 +151,17 @@ def build_document(conn, outbox_row) -> EInvoiceDocument:
     lines = []
     for item, _line_mode, calc in priced:
         if inclusive_sale:
-            # The authority's invoice is ex-tax: the line is its TAXABLE amount, the
-            # unit price is that amount / quantity (the net price the buyer really
-            # paid for, discount already folded in), and the tax is the exact
-            # remainder of the shelf price -- so extension + tax == the shelf total to
-            # the fil. `unit_price` is deliberately NOT rounded to a currency unit:
-            # taxable/qty is rarely a whole fil and ISTD recomputes qty x price.
-            qty = float(item['quantity'])
+            # The authority's invoice is ex-tax: the line's extension is its TAXABLE amount
+            # and the tax is the exact remainder of the shelf price, so extension + tax ==
+            # the shelf total to the fil. See _inclusive_line_shape for how the PRICE is
+            # expressed (the serializers round PriceAmount to the currency's minor unit).
+            qty = Decimal(str(item['quantity']))
+            price, gross, remainder = _inclusive_line_shape(
+                Decimal(str(calc['taxable_amount'])), qty, tax_engine.currency_quantum(currency))
             lines.append(EInvoiceLine(
-                description=item['product_name'], quantity=qty,
-                unit_price=(calc['taxable_amount'] / qty) if qty else 0.0,
-                discount_amount=0.0, tax_amount=calc['tax'], line_total=calc['taxable_amount'],
+                description=item['product_name'], quantity=float(qty),
+                unit_price=float(price), discount_amount=float(remainder),
+                tax_amount=calc['tax'], line_total=float(gross),
                 tax_rate=float(item['tax_rate'] or 0), tax_category=tax_category_for_rate(item['tax_rate']),
             ))
             continue
@@ -191,7 +210,7 @@ def build_document(conn, outbox_row) -> EInvoiceDocument:
         # the document's LineExtension/Allowance/TaxExclusive amounts mean. Rebuild the
         # ex-tax view from the lines (they sum to the sale's total together with the tax).
         subtotal=(sum(l.line_total for l in lines) if inclusive_sale else float(sale['subtotal'])),
-        discount_total=(0.0 if inclusive_sale else float(sale['discount_amount'])),
+        discount_total=(sum(l.discount_amount for l in lines) if inclusive_sale else float(sale['discount_amount'])),
         tax_total=float(sale['tax_amount']),
         grand_total=float(sale['total']),
         **istd,
@@ -329,15 +348,16 @@ def _build_return_document(conn, outbox_row) -> EInvoiceDocument:
     for (si, ri, calc, stored_total), tax in zip(parts, taxes):
         if calc.get('_inclusive'):
             # Inclusive: the refund `stored_total` is in shelf-price terms (tax inside), so the
-            # ex-tax extension is stored_total - tax -- no discount line is needed and
-            # extension + tax == the refund to the fil. unit_price = extension / qty (as above).
+            # ex-tax extension is stored_total - tax and extension + tax == the refund to the
+            # fil. Price/allowance shape as on the sale document (_inclusive_line_shape).
             qty = Decimal(str(ri['quantity']))
             extension = stored_total - tax
             total += stored_total
+            price, gross, remainder = _inclusive_line_shape(extension, qty, quantum)
             lines.append(EInvoiceLine(
                 description=si['product_name'], quantity=float(qty),
-                unit_price=float(extension / qty) if qty else 0.0,
-                discount_amount=0.0, tax_amount=float(tax), line_total=float(extension),
+                unit_price=float(price), discount_amount=float(remainder),
+                tax_amount=float(tax), line_total=float(gross),
                 tax_rate=float(si['tax_rate'] or 0), tax_category=tax_category_for_rate(si['tax_rate'])))
             continue
         gross = (Decimal(str(ri['quantity'])) * Decimal(str(si['unit_price']))).quantize(
