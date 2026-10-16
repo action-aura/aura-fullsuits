@@ -591,3 +591,28 @@ def test_authority_fulfil_waits_for_the_copy_and_settles_in_either_order(app, cl
     assert _produce(client, kc, c, rid2, keys2.public_b64, b"e" * 1500).status_code == 200
     assert _post(client, kb, b, "ack", {"request_id": rid2}).get_json()["status"] == "DELIVERED"
     assert _post(client, ka, a, "fulfil", {"request_id": rid2}).get_json()["status"] == "FULFILLED"
+
+
+# ---------------------------------------------------------------- Phase 3 additions
+def test_a_copy_below_owners_own_prune_point_is_refused_and_the_request_reopens(app, client, seeded, signing_key, box):
+    """A producer that is itself stuck behind the prune holds a copy the requester could never
+    resume from (it would be told RESYNC_REQUIRED again, forever). Both directions: as_of below
+    pruned_through -> AS_OF_TOO_OLD + OPEN + bytes gone; as_of at/above it -> READY.
+    MUTATION: drop `or as_of < pruned_through` in bootstrap_complete -> the first half goes red."""
+    license_id, ((a, ka), (b, kb), (c, kc)) = _shop(app, client)
+    for _i in range(4):
+        _push(client, ka, a, [_make_event()])
+    _catch_up(client, [(a, ka), (b, kb), (c, kc)])
+    _mark_pruned(app, license_id, 3)
+    view, keys = _request(client, kc, c)
+    rid = view["request_id"]
+    claimed = _claim(client, kb, b, rid)
+    assert claimed.status_code == 200, claimed.get_json()
+    assert claimed.get_json()["enc_pubkey"] == keys.public_b64        # the producer learns the key to encrypt to
+    low = _produce(client, kb, b, rid, keys.public_b64, b"x" * 3000, as_of=2)
+    assert low.status_code == 409 and low.get_json()["reason_code"] == "AS_OF_TOO_OLD", low.get_json()
+    assert low.get_json()["min_as_of"] == 3
+    assert _row(app, rid)[0] == "OPEN" and not (box / rid).exists()
+    assert _claim(client, kb, b, rid).status_code == 200
+    ok = _produce(client, kb, b, rid, keys.public_b64, b"x" * 3000, as_of=3)
+    assert ok.status_code == 200 and _row(app, rid)[0] == "READY"

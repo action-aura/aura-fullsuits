@@ -933,6 +933,13 @@ def main() -> None:
                 results.append({"outcome": "error", "reason_code": getattr(exc, "reason_code", type(exc).__name__),
                                 "message": str(exc)})
 
+        elif op == "mark_include_own":
+            # What the backup blueprint's restart hook does after a restore (app._after_backup_restore),
+            # minus the restart: arm include_own_once for both streams.
+            from commercial_runtime.sync.bootstrap import installer as _inst3
+            _inst3.mark_include_own_once(Path(app_data_dir), "backup-restore")
+            results.append({"ok": True})
+
         elif op == "mailbox_state":
             from commercial_runtime.sync.bootstrap import installer as _inst2
             from commercial_runtime.sync.bootstrap import transport_owner as _to

@@ -477,6 +477,103 @@ def test_late_joiner_after_production_prune_receives_the_shops_history(shop):
     assert held["quarantine"][0]["rows"] == [] and held["quarantine"][1]["rows"] == [], held["quarantine"]
 
 
+def _sales_of(computer) -> list:
+    return sorted(r["uid"] for r in computer.select("SELECT uid FROM sales"))
+
+
+def test_device_offline_beyond_window_rebootstraps_without_losing_its_own_sale(shop):
+    """Plan 2.4. B trades while it cannot reach Owner (sale S1, never pushed), Owner prunes past it
+    while it is away, and when it is back it is told to resync. Recovery must neither lose S1 nor
+    S2 (made after it asked for the copy, still unpushed at install) nor double-count either:
+    S1 is pushed first (so the copy A builds contains it), S2 rides the carried outbox through the
+    install and is pushed afterwards, and A ends up with both exactly once.
+    MUTATION: make installer._carry_outbox return 0 -> S2 vanishes from B -> red."""
+    app, license_id, a, b = shop["app"], shop["license_id"], shop["a"], shop["b"]
+    login = shop["owner_login"]
+    sku = sorted(shop["a_products"])[0]
+
+    def sell(computer):
+        [pid] = [r["id"] for r in computer.select("SELECT id FROM products WHERE sku=?", [sku])]
+        [_, sale] = computer.run([login, {"op": "sell", "product_id": pid, "quantity": 1}])
+        assert sale["status_code"] == 200, sale
+        # local integer ids differ between computers; the sale's uid is what travels
+        return computer.select("SELECT uid FROM sales WHERE id=?", [sale["sale_id"]])[0]["uid"]
+
+    s1 = sell(b)                                              # B is "offline": nothing pushed
+    before = _sales_of(b)
+    # While B is away A trades on, and Owner (with only A listening) prunes everything A has seen.
+    a.run([login, {"op": "create_product", "name": "While B Was Away", "sku": f"AWAY-{uuid.uuid4().hex[:6]}",
+                   "price": 2.0}, {"op": "push"}, {"op": "reg_push"}, {"op": "pull"}, {"op": "pull"}])
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.installations import Installation
+
+        inst = db_session.get(Installation, uuid.UUID(b.installation_id))
+        inst.status = "SUSPENDED"          # not syncable -> does not pin the prune (what 'away for weeks' amounts to)
+        db_session.commit()
+    report = _prune_exactly_as_production_does(app)
+    assert report.get("dry_run") is False
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.installations import Installation
+
+        db_session.get(Installation, uuid.UUID(b.installation_id)).status = "ACTIVE"
+        db_session.commit()
+    assert _pruned_through(app, license_id) > 0
+
+    # B is back. Pulling is refused; pushing still works (S1 reaches Owner first).
+    back = b.run([{"op": "pull"}, {"op": "reg_pull"}, {"op": "push"}, {"op": "reg_push"}])
+    assert back[0].get("resync_required") is True, back[0]
+    assert b.run([{"op": "mailbox_step"}])[0]["outcome"] == "requested"
+    s2 = sell(b)                                              # made after the request; stays unpushed
+    a.run([{"op": "pull"}])                                   # A sees S1 and builds the copy
+    a.run([{"op": "pull"}, {"op": "push"}, {"op": "reg_push"}])
+    assert b.run([{"op": "mailbox_step"}])[0]["outcome"] == "staged"
+    # Restart (fresh process installs the copy) and carry on.
+    b.run([{"op": "pull"}, {"op": "reg_pull"}, {"op": "push"}, {"op": "pull"}, {"op": "pull"}])
+    a.pull_until_quiet()
+    for who in (a, b):
+        uids = _sales_of(who)
+        assert len(uids) == len(set(uids))
+        assert s1 in uids and s2 in uids, (who.dir.name, s1, s2, uids)
+    assert set(before) <= set(_sales_of(b))
+
+
+def test_restore_same_installation_recovers_own_events(shop):
+    """Plan 2.4: a backup restore puts an OLD database back under the SAME installation, and Owner
+    never sends a device its own events -- so the sale rung up (and pushed) after the backup would
+    be gone for good. Restore arms include_own_once; Owner honours it once.
+    Both directions on the same snapshot: without the marker the sale does not come back; with it
+    it does. MUTATION: drop the include_own branch in owner/app/sync/routes.py pull -> red."""
+    import shutil
+
+    b, login = shop["b"], shop["owner_login"]
+    sku = sorted(shop["a_products"])[0]
+    snap = b.dir.parent / "b-snapshot"
+    shutil.copytree(b.dir / "database", snap)                 # the "backup" (B is not running)
+    [pid] = [r["id"] for r in b.select("SELECT id FROM products WHERE sku=?", [sku])]
+    [_, sale] = b.run([login, {"op": "sell", "product_id": pid, "quantity": 1}])
+    assert sale["status_code"] == 200, sale
+    b.run([{"op": "push"}, {"op": "reg_push"}])
+    sold = sale["sale_id"]
+    assert sold in {r["id"] for r in b.select("SELECT id FROM sales")}
+
+    def restore():
+        shutil.rmtree(b.dir / "database")
+        shutil.copytree(snap, b.dir / "database")
+
+    restore()
+    assert sold not in {r["id"] for r in b.select("SELECT id FROM sales")}, "the restore did not roll the sale back"
+    b.run([{"op": "pull"}, {"op": "pull"}, {"op": "reg_pull"}])
+    assert sold not in {r["id"] for r in b.select("SELECT id FROM sales")},         "without the marker Owner must NOT return a device's own events (that is the loss include_own_once fixes)"
+
+    restore()
+    b.run([{"op": "mark_include_own"}, {"op": "pull"}, {"op": "pull"}, {"op": "reg_pull"}])
+    assert sold in {r["id"] for r in b.select("SELECT id FROM sales")}, "the restored device did not get its own sale back"
+    again = b.run([{"op": "pull"}, {"op": "bootstrap_state"}])
+    assert not again[1]["marker"].get("include_own_once"), "the one-shot was honoured by Owner and must be cleared"
+
+
 def _pruned_through(app, license_id) -> int:
     with app.app_context():
         from app.sync.routes import _license_pruned_through
