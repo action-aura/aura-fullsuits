@@ -578,3 +578,111 @@ def test_the_registry_cursor_is_fast_forwarded_never_rewound(hub, late, spec, wo
         assert c.execute("SELECT last_seq, relay_url FROM sync_cursor").fetchone() == (12, DEVICE_URL)
     finally:
         c.close()
+
+
+# ── SYNC-BOOT Phase 3, Android: file staging, status, install-failure cap ───
+
+def test_staging_from_a_file_matches_staging_from_bytes_and_never_loads_the_database(hub, late, spec, world, tmp_path, monkeypatch):
+    """A phone must not hold a whole shop in memory: the path form hashes the database member in steps and
+    copies it out, never calling ZipFile.read on it. MUTATION: make verify_package read the member
+    (db_bytes = zf.read(...)) in the path form -> the patched read raises -> red."""
+    built = build(hub, spec, world)
+    zip_path = tmp_path / "copy.zip"
+    zip_path.write_bytes(built.data)
+    real_read = zipfile.ZipFile.read
+
+    def guarded(self, name, *a, **k):
+        if name == "retail.db":
+            raise AssertionError("the database member was loaded into memory")
+        return real_read(self, name, *a, **k)
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", guarded)
+    verified = installer.verify_package(
+        str(zip_path), spec=spec, trust_store=world.trust_store, own_licence=world.licence, expected_company_id=COMPANY)
+    assert verified.db_bytes is None and verified.zip_path == str(zip_path)
+    record = installer.stage(
+        str(zip_path), spec=spec, app_data_dir=late.app, relay_url=DEVICE_URL, trust_store=world.trust_store,
+        own_licence=world.licence, expected_company_id=COMPANY)
+    monkeypatch.undo()
+    staged = (installer.staging_dir(late.app) / "retail.db").read_bytes()
+    assert staged == unzip_db(built.data, tmp_path).read_bytes() and record["as_of"] == AS_OF
+
+    tampered = tmp_path / "bad.zip"                                  # the other direction: a bad file is refused
+    tampered.write_bytes(_rezip(built.data, db_bytes=b"SQLite format 3\0" + b"x" * 5000))
+    with pytest.raises(BootstrapError) as exc:
+        installer.verify_package(
+            str(tampered), spec=spec, trust_store=world.trust_store, own_licence=world.licence, expected_company_id=COMPANY)
+    assert exc.value.reason_code == errors.CHECKSUM_MISMATCH
+
+
+def test_status_says_whether_a_copy_can_be_staged_is_already_staged_and_how_installs_went(hub, late, spec, world):
+    clean = installer.status(late.app, spec)
+    assert clean == {"can_stage": True, "block_reason": None, "pending_staged": False, "install_failures": 0,
+                     "needs_support": False, "last_install_failure": None}
+    late.run("INSERT INTO cash_sessions (id, company_id, branch_id, status) VALUES ('my-cs','co',1,'open')")
+    drawer = installer.status(late.app, spec)
+    assert drawer["can_stage"] is False and errors.OPEN_CASH_SESSION in drawer["block_reason"]
+    late.run("UPDATE cash_sessions SET status='closed' WHERE id='my-cs'")
+    stage(late, spec, world, build(hub, spec, world))
+    assert installer.status(late.app, spec)["pending_staged"] is True
+
+
+def test_three_failed_installs_discard_the_copy_and_ask_for_support_and_a_success_resets_the_count(hub, late, spec, world, monkeypatch):
+    """The re-request/restart loop is capped: a copy that cannot be installed must not be re-requested and
+    re-installed forever. MUTATION: raise MAX_INSTALL_FAILURES to 99 -> the third assertion block goes red;
+    drop the success reset -> the last block goes red."""
+    built = build(hub, spec, world)
+    stage(late, spec, world, built)
+    real_check = installer.check_staged_database
+
+    def broken(path, spec_):
+        raise BootstrapError(errors.MIGRATION_FAILED, "boom")
+
+    monkeypatch.setattr(installer, "check_staged_database", broken)
+    for n in (1, 2):
+        assert installer.apply_staged(late.app, spec)["status"] == "failed"
+        st = installer.status(late.app, spec)
+        assert st["install_failures"] == n and st["needs_support"] is False and st["pending_staged"] is True
+    assert installer.apply_staged(late.app, spec)["status"] == "failed"      # the third
+    st = installer.status(late.app, spec)
+    assert st["needs_support"] is True and st["pending_staged"] is False and "boom" in st["last_install_failure"]
+    assert not installer.staging_dir(late.app).exists()
+    assert installer.apply_staged(late.app, spec) is None                    # nothing left to retry
+
+    # the other direction: one failure, then a good install -> the counter is back to zero
+    marker = installer.read_marker(late.app)
+    marker.pop("install_failures"); marker.pop("last_install_failure")
+    installer.write_marker(late.app, marker)
+    monkeypatch.setattr(installer, "check_staged_database", real_check)
+    stage(late, spec, world, built)
+    monkeypatch.setattr(installer, "check_staged_database", broken)
+    assert installer.apply_staged(late.app, spec)["status"] == "failed"
+    assert installer.status(late.app, spec)["install_failures"] == 1
+    monkeypatch.setattr(installer, "check_staged_database", real_check)
+    assert installer.apply_staged(late.app, spec)["status"] == "installed"
+    st = installer.status(late.app, spec)
+    assert st["install_failures"] == 0 and st["last_install_failure"] is None
+
+
+def test_the_stage_file_path_must_be_inside_the_download_directory(tmp_path):
+    """MUTATION: return Path(path) without the check -> the outside and `..` cases stop raising -> red."""
+    inside = tmp_path / "dl"
+    inside.mkdir()
+    ok = inside / "copy.zip"
+    ok.write_bytes(b"x")
+    assert installer.require_inside(inside, ok) == ok.resolve()
+    outside = tmp_path / "other.zip"
+    outside.write_bytes(b"x")
+    for bad in (outside, inside / ".." / "other.zip", inside, tmp_path / "dl-evil" / "copy.zip"):
+        with pytest.raises(BootstrapError) as exc:
+            installer.require_inside(inside, bad)
+        assert exc.value.reason_code == errors.BAD_PACKAGE
+
+
+def test_a_blocked_install_is_not_counted_as_a_failure(hub, late, spec, world):
+    stage(late, spec, world, build(hub, spec, world))
+    late.run("INSERT INTO cash_sessions (id, company_id, branch_id, status) VALUES ('my-cs','co',1,'open')")
+    for _ in range(5):
+        assert installer.apply_staged(late.app, spec)["status"] == "blocked"
+    st = installer.status(late.app, spec)
+    assert st["install_failures"] == 0 and st["pending_staged"] is True      # a drawer resolves itself

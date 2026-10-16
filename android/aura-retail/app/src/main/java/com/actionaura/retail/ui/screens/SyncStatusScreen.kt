@@ -14,6 +14,7 @@ import com.actionaura.retail.sync.SyncCoordinator
 import com.actionaura.retail.sync.SyncHalfHealth
 import com.actionaura.retail.sync.SyncHealth
 import com.actionaura.retail.sync.SyncTier
+import com.actionaura.retail.sync.bootstrapNeedsSupportText
 import com.actionaura.retail.sync.classifySync
 import com.actionaura.retail.sync.formatRelative
 import com.actionaura.retail.sync.mostRecentSuccessMillis
@@ -137,12 +138,19 @@ private fun SyncHeadlineCard(tier: SyncTier, health: SyncHealth, now: Long) {
 
     TillCard(
         Modifier.fillMaxWidth(),
-        accent = if (tier == SyncTier.FAILING) MaterialTheme.colorScheme.error else null,
+        accent = if (tier == SyncTier.FAILING || health.bootstrapNeedsSupport) MaterialTheme.colorScheme.error else null,
     ) {
         Column(Modifier.padding(16.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = titleColor)
             Spacer(Modifier.height(6.dp))
             Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (health.bootstrapNeedsSupport) {
+                // SYNC-BOOT Phase 3: copies of the shop kept failing to install; this device stopped asking.
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    bootstrapNeedsSupportText(), style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.error)
+            }
         }
     }
 }

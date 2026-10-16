@@ -6,7 +6,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.net.URLEncoder
 
 /**
  * The production [MailboxTransport]: Owner's bootstrap-mailbox routes
@@ -53,24 +52,36 @@ class LocalBootstrapStager(
 ) : BootstrapStager {
     private fun url(path: String) = localBaseUrl.trimEnd('/') + streamPrefix + path
 
-    override fun schemaVersion(): Int {
+    override fun info(): BootstrapInfo {
         val request = Request.Builder().url(url("/_internal/bootstrap/info"))
             .header("X-Aura-Internal-Secret", internalSecret).get().build()
         http.newCall(request).execute().use { response ->
             val body = response.body?.string() ?: ""
             if (!response.isSuccessful) throw BootstrapRefused("LOCAL_ERROR", "bootstrap info returned HTTP ${response.code}")
-            return JsonParser.parseString(body).asJsonObject.get("schema_version").asInt
+            val o = JsonParser.parseString(body).asJsonObject
+            return BootstrapInfo(
+                schemaVersion = o.get("schema_version").asInt,
+                canStage = o.get("can_stage")?.takeUnless { it.isJsonNull }?.asBoolean ?: true,
+                blockReason = o.get("block_reason")?.takeUnless { it.isJsonNull }?.asString,
+                pendingStaged = o.get("pending_staged")?.takeUnless { it.isJsonNull }?.asBoolean ?: false,
+                installFailures = o.get("install_failures")?.takeUnless { it.isJsonNull }?.asInt ?: 0,
+                needsSupport = o.get("needs_support")?.takeUnless { it.isJsonNull }?.asBoolean ?: false,
+            )
         }
     }
 
-    override fun stage(zip: ByteArray, relayUrl: String) {
+    override fun stageFile(path: String, relayUrl: String) {
+        val bodyJson = JsonObject().also {
+            it.addProperty("path", path)
+            it.addProperty("relay_url", relayUrl)
+        }.toString()
         val request = Request.Builder()
-            .url(url("/_internal/bootstrap/stage?relay_url=" + URLEncoder.encode(relayUrl, "UTF-8")))
+            .url(url("/_internal/bootstrap/stage-file"))
             .header("X-Aura-Internal-Secret", internalSecret)
-            .post(zip.toRequestBody("application/octet-stream".toMediaType()))
+            .post(bodyJson.toRequestBody("application/json".toMediaType()))
             .build()
-        // Verifying and parking a whole shop (hash, write, integrity check) outlasts the 15 s the sync
-        // loop gives an ordinary local call.
+        // Verifying and parking a whole shop (hash, copy out of the zip, integrity check) outlasts the 15 s
+        // the sync loop gives an ordinary local call.
         val slow = http.newBuilder().readTimeout(5, java.util.concurrent.TimeUnit.MINUTES).build()
         slow.newCall(request).execute().use { response ->
             val body = response.body?.string() ?: ""

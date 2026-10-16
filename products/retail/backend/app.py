@@ -1401,8 +1401,8 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # the decrypted copy to /_internal/bootstrap/stage). Resolved lazily: the functions live further down.
     from types import SimpleNamespace as _Ns
     _android_bootstrap_seam = _Ns(
-        schema_version=lambda: RETAIL_SCHEMA_VERSION,
-        stage=lambda data, relay_url: _bootstrap_stage_bytes(data, relay_url),
+        info=lambda: _bootstrap_info(),
+        stage_file=lambda path, relay_url: _bootstrap_stage_file(path, relay_url),
         include_own_pending=lambda: _bootstrap_include_own_pending('retail'),
         include_own_done=lambda: _bootstrap_include_own_done('retail'),
         reapply_outbox=lambda svc, conn: _bootstrap_reapply_outbox_android(svc, conn))
@@ -3334,18 +3334,38 @@ def _bootstrap_reapply_outbox_android(sync_service, conn):
                                             exc_info=True)
 
 
-def _bootstrap_stage_bytes(data, relay_url):
-    """Verify and stage a copy of the shop that arrived as bytes (Android: Kotlin fetched and decrypted
-    it from Owner's mailbox). Raises BootstrapError on any refusal; stages nothing then."""
-    from commercial_runtime.sync import authority as _authority
+#: Where Android's Kotlin side leaves a decrypted copy for [_bootstrap_stage_file] (inside the app's own data).
+BOOTSTRAP_DOWNLOAD_SUBDIR = ('device', 'bootstrap_download')
+
+
+def _bootstrap_info():
+    """Everything Kotlin must know BEFORE it downloads a copy (see installer.status)."""
     from commercial_runtime.sync.bootstrap import installer
+    from database.bootstrap_classes import retail_spec
+    return {'schema_version': RETAIL_SCHEMA_VERSION,
+            **installer.status(_bootstrap_app_dir(), retail_spec(RETAIL_SCHEMA_VERSION))}
+
+
+def _bootstrap_stage_file(path, relay_url):
+    """Verify and stage a decrypted copy of the shop that Kotlin left on disk (Android: it fetched and
+    decrypted it chunk by chunk from Owner's mailbox, never holding it in memory). The file must live in the
+    app's own download directory -- this route must not become a way to stage an arbitrary path. The file
+    is removed afterwards whatever the outcome: a refused copy has to be fetched again anyway.
+    Raises BootstrapError on any refusal; stages nothing then."""
+    from commercial_runtime.sync import authority as _authority
+    from commercial_runtime.sync.bootstrap import errors as _errors, installer
+    from commercial_runtime.sync.bootstrap.errors import BootstrapError
     from commercial_runtime.sync.sync_service import local_company_id_from_registry
     from database.bootstrap_classes import retail_spec
-    env = _authority.default_authority_env(_bootstrap_app_dir())
-    return installer.stage(
-        data, spec=retail_spec(RETAIL_SCHEMA_VERSION), app_data_dir=_bootstrap_app_dir(), relay_url=relay_url,
-        trust_store=env.trust_store, own_licence=env.own_licence,
-        expected_company_id=local_company_id_from_registry(), registry_fast_forward=None)
+    target = installer.require_inside(Path(_bootstrap_app_dir(), *BOOTSTRAP_DOWNLOAD_SUBDIR), path)
+    try:
+        env = _authority.default_authority_env(_bootstrap_app_dir())
+        return installer.stage(
+            str(target), spec=retail_spec(RETAIL_SCHEMA_VERSION), app_data_dir=_bootstrap_app_dir(),
+            relay_url=relay_url, trust_store=env.trust_store, own_licence=env.own_licence,
+            expected_company_id=local_company_id_from_registry(), registry_fast_forward=None)
+    finally:
+        target.unlink(missing_ok=True)
 
 
 def _bootstrap_on_resync(stream, client, relay_url, details):

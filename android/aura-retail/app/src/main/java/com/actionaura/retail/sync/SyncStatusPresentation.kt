@@ -23,6 +23,13 @@ const val SYNC_DEGRADED_THRESHOLD = 3
  *  precedence that matters). */
 enum class SyncTier { NOT_CONFIGURED, NEVER_SYNCED, FAILING, CALM }
 
+/** The sentence shown when copies of the shop kept failing to install and this device stopped asking
+ *  ([SyncHealth.bootstrapNeedsSupport]). One key for both languages: [tr] picks Arabic on an Arabic till. */
+const val BOOTSTRAP_NEEDS_SUPPORT_EN =
+    "This device could not install a copy of your shop's data after several tries, so it stopped asking. Please contact Aura support."
+
+fun bootstrapNeedsSupportText(): String = tr(BOOTSTRAP_NEEDS_SUPPORT_EN)
+
 /**
  * Classifies this device's current sync health into one of four tiers, for a
  * screen to render. Precedence is load-bearing and deliberately checked in

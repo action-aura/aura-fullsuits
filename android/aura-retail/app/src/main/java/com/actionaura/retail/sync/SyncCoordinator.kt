@@ -108,6 +108,9 @@ data class SyncHealth(
      *  while pushing continues. Empty in the normal case. Defaulted so every
      *  existing constructor call is untouched. */
     val resyncRequiredStreams: Set<String> = emptySet(),
+    /** SYNC-BOOT Phase 3: copies of the shop kept failing to install. This device stopped asking for more and
+     *  needs a person (support); the screen says so in the user's language. */
+    val bootstrapNeedsSupport: Boolean = false,
 ) {
     val healthy: Boolean get() = push.healthy && pull.healthy
 }
@@ -223,6 +226,8 @@ object SyncCoordinator {
     /** Where the requester keeps its single-use key and request id (beside the device identity), set by
      *  [startLocked]. Null until the coordinator has started. */
     @Volatile private var bootstrapStateDir: File? = null
+    /** The device identity directory = the backend's app data directory (the same `filesDir/data`). */
+    @Volatile private var identityDir: File? = null
 
     /** Test seam: builds the requester for a relay instead of the real signed one. Production never assigns it. */
     internal var bootstrapRequesterOverride: ((String) -> BootstrapStepper?)? = null
@@ -231,6 +236,10 @@ object SyncCoordinator {
      *  (`init_app()` swaps it in before any database opens), so the app process must restart. The app registers
      *  that restart with [setBootstrapStagedHandler]; unset (tests, a build with no handler) it does nothing. */
     @Volatile internal var onBootstrapStaged: () -> Unit = {}
+
+    /** The backend reported too many failed installs ([RequesterOutcome.NEEDS_SUPPORT]); cleared by the next
+     *  successful retail pull. Surfaced through [health]. */
+    @Volatile internal var bootstrapNeedsSupport: Boolean = false
 
     /** Registers what to do once a copy of the shop is staged: restart the app so the backend installs it. */
     fun setBootstrapStagedHandler(handler: () -> Unit) {
@@ -256,13 +265,25 @@ object SyncCoordinator {
                 BootstrapRequester(
                     OwnerMailboxTransport(relayClient(installationId, relayBaseUrl, identity, "")),
                     LocalBootstrapStager(localBaseUrl, internalSecret, http, SyncStream.ALL.first { it.label == "retail" }.prefix),
-                    FileBootstrapStateStore(File(dir, "bootstrap-request.json")), relayBaseUrl, BuildConfig.VERSION_NAME)
+                    FileBootstrapStateStore(File(dir, "bootstrap-request.json")), relayBaseUrl, BuildConfig.VERSION_NAME,
+                    sinkFactory = {
+                        // Where the Python backend allows a copy to be staged FROM (device/bootstrap_download).
+                        FileCopySink(File(identityDir ?: dir, "device/bootstrap_download/copy.zip"))
+                    })
             }
-            when (requester.step()) {
+            val outcome = requester.step()
+            bootstrapNeedsSupport = outcome == RequesterOutcome.NEEDS_SUPPORT
+            when (outcome) {
                 RequesterOutcome.STAGED -> {
+                    // Also reached on later ticks while the app waits for a quiet moment to restart: the
+                    // handler (AppRestart) schedules at most one restart however often it is asked.
                     logError("Bootstrap: a copy of the shop is staged; it is installed when the backend next starts.", null)
                     onBootstrapStaged()
                 }
+                RequesterOutcome.NEEDS_SUPPORT ->
+                    logError("Bootstrap: copies of the shop kept failing to install; this device stopped asking and needs support.", null)
+                RequesterOutcome.BLOCKED ->
+                    logError("Bootstrap: waiting -- the backend cannot take a copy right now (an open cash drawer?).", null)
                 else -> {}
             }
         } catch (exc: Exception) {
@@ -449,6 +470,7 @@ object SyncCoordinator {
         // or DEVICE_KEY_REVOKED.
         identity = DeviceIdentity(identityDir)
         bootstrapStateDir = File(identityDir, "bootstrap")
+        this.identityDir = identityDir
         target = newTarget
         running = true
         scheduleNext()
@@ -763,6 +785,7 @@ object SyncCoordinator {
         running = running, push = pushHealth, pull = pullHealth,
         pendingCount = pendingByStream.values.sum(),
         resyncRequiredStreams = resyncRequired.keys,
+        bootstrapNeedsSupport = bootstrapNeedsSupport,
     )
 
     private fun nextDelayMillis(): Long {
@@ -1186,6 +1209,7 @@ object SyncCoordinator {
         // Any?> round-trip would NOT) -- the local route applies it via the
         // exact same SyncService.apply_pull_result() pull_once() itself uses.
         postLocal(stream.prefix + "/_internal/pull-apply", result.toString(), localBaseUrl, internalSecret)
+        if (stream.label == "retail") bootstrapNeedsSupport = false     // a pull went through: the copy worked
         // Owner echoes include_own only when it REALLY honoured it (an older Owner would not), so the flag
         // is spent only then. Done after the apply: the events were applied first.
         if (includeOwn && result.get("include_own")?.takeUnless { it.isJsonNull }?.asBoolean == true) {

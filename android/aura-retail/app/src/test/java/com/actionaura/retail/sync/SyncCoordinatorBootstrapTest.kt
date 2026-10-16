@@ -62,6 +62,7 @@ class SyncCoordinatorBootstrapTest {
         SyncCoordinator.bootstrapRequesterOverride = null
         SyncCoordinator.onBootstrapStaged = {}
         SyncCoordinator.lastBootstrapStepMillis = 0L
+        SyncCoordinator.bootstrapNeedsSupport = false
     }
 
     @After
@@ -143,6 +144,30 @@ class SyncCoordinatorBootstrapTest {
         runOnce()                        // must not throw
         assertThat(restarts).isEqualTo(0)
         assertThat(logged.any { it.contains("Bootstrap request step failed") }).isTrue()
+    }
+
+    @Test
+    fun `needs-support shows in health, is cleared by the next outcome, and never restarts`() {
+        var outcome = RequesterOutcome.NEEDS_SUPPORT
+        arm { outcome }
+        resyncAnswer()
+        runOnce()
+        clockNow += 60_000
+        runOnce()
+        assertThat(SyncCoordinator.health().bootstrapNeedsSupport).isTrue()
+        assertThat(restarts).isEqualTo(0)
+        // support cleared it on the device: the next step reports something else, the sentence goes away
+        outcome = RequesterOutcome.WAITING
+        clockNow += 60_000
+        runOnce()
+        assertThat(SyncCoordinator.health().bootstrapNeedsSupport).isFalse()
+    }
+
+    @Test
+    fun `a successful retail pull clears a stale needs-support flag`() {
+        SyncCoordinator.bootstrapNeedsSupport = true
+        runOnce()                                    // healthy tick: the copy worked, nothing to ask for
+        assertThat(SyncCoordinator.health().bootstrapNeedsSupport).isFalse()
     }
 
     @Test

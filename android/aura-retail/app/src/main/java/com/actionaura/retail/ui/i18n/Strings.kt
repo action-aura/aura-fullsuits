@@ -81,7 +81,14 @@ object AppTheme {
 fun tr(en: String): String =
     if (AppLocale.lang == AppLang.AR) AR_STRINGS[en] ?: en else en
 
+/** The Arabic text for [en], or null if there is none -- lets a plain-JVM test check a translation exists
+ *  without a Context (the active language is Compose state set from SharedPreferences). */
+internal fun arabicFor(en: String): String? = AR_STRINGS[en]
+
 private val AR_STRINGS: Map<String, String> = mapOf(
+    // ── Sync: bootstrap (SYNC-BOOT Phase 3) ───────────────────────────────────────
+    "This device could not install a copy of your shop's data after several tries, so it stopped asking. Please contact Aura support." to
+        "تعذّر على هذا الجهاز تثبيت نسخة من بيانات متجرك بعد عدّة محاولات، فتوقّف عن الطلب. يُرجى التواصل مع دعم أورا.",
     // ── Navigation / app shell ────────────────────────────────────────────────
     "Dashboard" to "لوحة التحكم",
     "POS" to "نقطة البيع",

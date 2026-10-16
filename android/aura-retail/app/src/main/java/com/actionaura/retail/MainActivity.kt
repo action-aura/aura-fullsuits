@@ -17,6 +17,17 @@ import com.actionaura.retail.ui.theme.AuraPalette
 import com.actionaura.retail.ui.theme.AuraTheme
 
 class MainActivity : ComponentActivity() {
+    // Foreground tracking for AppRestart's "is it safe to restart" gate (SYNC-BOOT Phase 3).
+    override fun onStart() {
+        super.onStart()
+        TillActivity.activityStarted()
+    }
+
+    override fun onStop() {
+        TillActivity.activityStopped()
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Restore the user's chosen language and theme before composing any UI.
         AppLocale.load(this)

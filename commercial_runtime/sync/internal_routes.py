@@ -135,8 +135,9 @@ def make_sync_internal_blueprint(
     bp = Blueprint(blueprint_name, __name__, url_prefix=url_prefix)
     # SYNC-BOOT Phase 3 (Android requester). `bootstrap` is the RETAIL stream's seam to the shared
     # bootstrap package (Kotlin builds and signs the Owner-mailbox calls itself, because Python never
-    # holds the device key; it hands the DECRYPTED copy here to be verified and staged). Object with
-    # schema_version(), stage(data: bytes, relay_url: str) -> dict (raises BootstrapError),
+    # holds the device key; it hands the DECRYPTED copy here, as a FILE, to be verified and staged). Object with
+    # info() -> dict (schema_version, can_stage, block_reason, pending_staged, install_failures, needs_support),
+    # stage_file(path: str, relay_url: str) -> dict (raises BootstrapError),
     # include_own_pending() -> bool, include_own_done(), reapply_outbox(sync_service, conn). None (the registry stream, every older caller)
     # registers none of the routes below and leaves /_internal/cursor byte-for-byte what it was.
 
@@ -301,25 +302,29 @@ def make_sync_internal_blueprint(
     if bootstrap is not None:
         @bp.route("/_internal/bootstrap/info", methods=["GET"])
         def internal_bootstrap_info():
-            """What Kotlin needs to ask Owner for a copy: the schema this build runs."""
+            """What Kotlin needs BEFORE it spends bandwidth on a copy: the schema this build runs, whether a
+            copy could be staged right now (an open cash drawer refuses one), whether one is already staged,
+            and how many installs in a row have failed (see installer.status)."""
             if not _authorized():
                 return _forbidden()
-            return jsonify({"schema_version": int(bootstrap.schema_version())}), 200
+            return jsonify(bootstrap.info()), 200
 
-        @bp.route("/_internal/bootstrap/stage", methods=["POST"])
-        def internal_bootstrap_stage():
-            """Kotlin downloaded and DECRYPTED a copy of the shop from Owner's mailbox; verify it (signed
-            manifest, same shop, schema, no open drawer) and park it for the next start. The body is the
-            zip itself. A refusal is a normal outcome and says why; nothing is staged then."""
+        @bp.route("/_internal/bootstrap/stage-file", methods=["POST"])
+        def internal_bootstrap_stage_file():
+            """Kotlin downloaded, verified and DECRYPTED a copy of the shop from Owner's mailbox into a file
+            (chunk by chunk: a phone never holds a whole shop in memory); verify it (signed manifest, same
+            shop, schema, no open drawer) and park it for the next start. A refusal is a normal outcome and
+            says why; nothing is staged then."""
             if not _authorized():
                 return _forbidden()
             from commercial_runtime.sync.bootstrap.errors import BootstrapError
 
-            data = request.get_data()
-            if not data:
-                return jsonify({"reason_code": "INVALID_REQUEST", "detail": "Expected the copy as the body."}), 400
+            body = request.get_json(silent=True)
+            path = body.get("path") if isinstance(body, dict) else None
+            if not isinstance(path, str) or not path:
+                return jsonify({"reason_code": "INVALID_REQUEST", "detail": "Expected {path, relay_url}."}), 400
             try:
-                record = bootstrap.stage(data, request.args.get("relay_url", ""))
+                record = bootstrap.stage_file(path, str(body.get("relay_url") or ""))
             except BootstrapError as exc:
                 return jsonify({"reason_code": exc.reason_code, "detail": exc.message}), 409
             return jsonify({"result": "SUCCESS", "as_of": record.get("as_of")}), 200

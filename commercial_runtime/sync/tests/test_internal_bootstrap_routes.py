@@ -46,17 +46,19 @@ def parts(tmp_path):
     c.close()
     state = SimpleNamespace(staged=[], armed=True, done=0, refuse=False)
 
-    def stage(data, relay_url):
+    def stage_file(path, relay_url):
         if state.refuse:
             raise BootstrapError(COMPANY_MISMATCH, "another shop")
-        state.staged.append((data, relay_url))
+        state.staged.append((path, relay_url))
         return {"as_of": 41}
 
     def spent():
         state.done += 1
         state.armed = False
 
-    seam = SimpleNamespace(schema_version=lambda: 56, stage=stage,
+    state.info = {"schema_version": 56, "can_stage": True, "block_reason": None, "pending_staged": False,
+                  "install_failures": 0, "needs_support": False, "last_install_failure": None}
+    seam = SimpleNamespace(info=lambda: state.info, stage_file=stage_file,
                            include_own_pending=lambda: state.armed, include_own_done=spent,
                            reapply_outbox=lambda svc, conn: None)
     get_conn = _conn_factory(db)
@@ -78,30 +80,36 @@ def test_every_bootstrap_route_needs_the_internal_secret(parts):
     client, _ = parts
     c = client()
     assert c.get("/api/sync/_internal/bootstrap/info").status_code == 403
-    assert c.post("/api/sync/_internal/bootstrap/stage", data=b"zip").status_code == 403
+    assert c.post("/api/sync/_internal/bootstrap/stage-file", json={"path": "/x"}).status_code == 403
     assert c.post("/api/sync/_internal/bootstrap/include-own-done").status_code == 403
 
 
 def test_stage_hands_the_bytes_and_relay_to_the_product_and_reports_the_position(parts):
     client, state = parts
-    r = client().post("/api/sync/_internal/bootstrap/stage?relay_url=https%3A%2F%2Fowner.example", data=b"PK-zip", headers=H)
+    r = client().post("/api/sync/_internal/bootstrap/stage-file",
+                      json={"path": "/data/device/bootstrap_download/copy.zip", "relay_url": "https://owner.example"}, headers=H)
     assert r.status_code == 200 and r.get_json() == {"result": "SUCCESS", "as_of": 41}
-    assert state.staged == [(b"PK-zip", "https://owner.example")]
+    assert state.staged == [("/data/device/bootstrap_download/copy.zip", "https://owner.example")]
 
 
 def test_a_refused_copy_is_a_409_with_its_reason_and_stages_nothing(parts):
     """Both directions of the same route: accepted above, refused here."""
     client, state = parts
     state.refuse = True
-    r = client().post("/api/sync/_internal/bootstrap/stage", data=b"zip", headers=H)
+    r = client().post("/api/sync/_internal/bootstrap/stage-file", json={"path": "/p"}, headers=H)
     assert r.status_code == 409 and r.get_json()["reason_code"] == COMPANY_MISMATCH
     assert state.staged == []
-    assert client().post("/api/sync/_internal/bootstrap/stage", data=b"", headers=H).status_code == 400
+    assert client().post("/api/sync/_internal/bootstrap/stage-file", json={}, headers=H).status_code == 400
 
 
-def test_info_reports_the_schema_this_build_runs(parts):
-    client, _ = parts
-    assert client().get("/api/sync/_internal/bootstrap/info", headers=H).get_json() == {"schema_version": 56}
+def test_info_reports_what_the_requester_must_know_before_it_downloads(parts):
+    """schema, whether a copy can be staged NOW (an open drawer refuses one), whether one is already
+    staged, and the install-failure count -- passed through whole, so a changed key shows up here."""
+    client, state = parts
+    assert client().get("/api/sync/_internal/bootstrap/info", headers=H).get_json() == state.info
+    state.info = {**state.info, "can_stage": False, "block_reason": "OPEN_CASH_SESSION: cash_sessions: 1"}
+    got = client().get("/api/sync/_internal/bootstrap/info", headers=H).get_json()
+    assert got["can_stage"] is False and got["block_reason"].startswith("OPEN_CASH_SESSION")
 
 
 def test_cursor_reports_include_own_only_while_armed_and_done_spends_it(parts):
@@ -152,7 +160,7 @@ def test_cursor_re_applies_the_carried_outbox_once_after_an_install(tmp_path):
 
     svc.set_bootstrap_hooks(BootstrapHooks(reapply_outbox_pending=lambda: pending["armed"], reapply_outbox_done=done))
     seam = SimpleNamespace(
-        schema_version=lambda: 56, stage=lambda d, r: {}, include_own_pending=lambda: False,
+        info=lambda: {}, stage_file=lambda p, r: {}, include_own_pending=lambda: False,
         include_own_done=lambda: None, reapply_outbox=lambda s, conn: s._reapply_own_outbox_once(conn))
     app = Flask(__name__)
     app.register_blueprint(make_sync_internal_blueprint(

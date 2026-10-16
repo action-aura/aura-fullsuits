@@ -127,6 +127,9 @@ fun PosScreen(snackbar: SnackbarHostState) {
     // ANDROID-3: the cart is a list of LINES (ui/pos/CartLines.kt), not a product -> qty map: a line
     // carries its modifier choice, its own price and its own percentage.
     var cartLines by remember { mutableStateOf<List<CartLine>>(emptyList()) }
+    // The restart gate (AppRestart) must never restart the app under a sale in progress.
+    androidx.compose.runtime.LaunchedEffect(cartLines.size) { com.actionaura.retail.TillActivity.cartLineCount = cartLines.size }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { com.actionaura.retail.TillActivity.cartLineCount = 0 } }
     val wide = LocalWideLayout.current
     var showCart by remember { mutableStateOf(false) }
     var charging by remember { mutableStateOf(false) }

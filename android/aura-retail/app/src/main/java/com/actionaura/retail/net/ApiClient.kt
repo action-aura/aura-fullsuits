@@ -110,6 +110,8 @@ object ApiClient {
                     else chain.proceed(req)
                 }
                 .build()
+            // AppRestart (SYNC-BOOT Phase 3) waits for the till's own backend calls to finish.
+            com.actionaura.retail.TillActivity.inFlightRequests = { client.dispatcher.runningCallsCount() }
             val retrofit = Retrofit.Builder()
                 .baseUrl(ServerBootstrap.baseUrl())
                 .client(client)
