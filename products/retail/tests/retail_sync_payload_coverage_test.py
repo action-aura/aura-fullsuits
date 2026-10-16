@@ -1453,9 +1453,13 @@ EXCLUSIONS = {
                       "value read off the incoming payload, identical to "
                       "every other synced company-scoped header in this file.",
         'branch_id': "A per-computer integer branches.id; the payload carries "
-                     "`branch_uid` instead and the apply branch resolves it to "
-                     "THIS computer's own branch through _resolve_branch_id, "
-                     "as sales and transfers do.",
+                     "`branch_uid` instead and the apply branch resolves it "
+                     "STRICTLY to THIS computer's own branch (parking the count "
+                     "as missing_parent:branch when absent, never falling back).",
+        'merged_into': "Derived locally and identically on every computer by "
+                       "the smallest-uid rule when two open counts of one branch "
+                       "meet; the merge itself is never announced, so it has no "
+                       "wire key.",
     },
     'stock_count_lines': {
         'id': "Local SQLite autoincrement primary key; a line's cross-device "
@@ -1472,6 +1476,10 @@ EXCLUSIONS = {
         'variance': "Derived: counted_qty - system_qty_at_count. The apply "
                     "branch recomputes it from the two quantities that DO "
                     "travel and never trusts a figure off the wire.",
+        'post_unit_cost': "Local record of the unit cost THIS computer's post "
+                          "booked at. A receiving computer reads the cost off "
+                          "the synced correction movement (same uid), so it is "
+                          "never sent on the line.",
     },
     # W2a (schema v48): loyalty points shared between computers. `uid`,
     # `customer_id`, `points_delta`, `entry_type`, `created_by` and `created_at`

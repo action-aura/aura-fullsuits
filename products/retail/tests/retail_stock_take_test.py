@@ -13,7 +13,10 @@ The claims, each pinned in BOTH directions where it has an allow half and a deny
   4. the movement uid is a pure function of (count, product) -- so two computers posting the same
      count move stock once (the two-computer proof is retail_stock_take_twodevice_test.py);
   5. company scoping: another company cannot read, count into, post or cancel this company's count;
-     a cashier (no stock-adjust capability) cannot start, count or post.
+     a cashier (no stock-adjust capability) cannot start, count or post;
+  6. (fix round) counts are per-computer CONTRIBUTIONS that add up; only the MAIN computer posts; a
+     posted count keeps the cost it booked at; a post reports products it leaves below zero and
+     products deleted since they were counted; a merged count cannot be scanned or posted.
 
 MUTATIONS (quoted in the commit): random movement uid instead of the derived one -> test 3b goes RED;
 drop the company_id filter in `_stock_count_load` -> test 5a goes RED.
@@ -57,12 +60,25 @@ from commercial_runtime.security.passwords import hash_password  # noqa: E402
 from database.schema import get_retail_conn  # noqa: E402
 from core.retail import general_ledger as gl  # noqa: E402
 from core.retail import stock_counts as count_core  # noqa: E402
+from commercial_runtime.identity import device_context  # noqa: E402
+import api.retail_api as retail_api_module  # noqa: E402
 
 API = '/api/sub/retail'
 
 
 def teardown_module(module):
     shutil.rmtree(DATA, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _runs_as_the_main_computer(monkeypatch):
+    """Only the main computer may post; the in-process app has no device registry row, so say so."""
+    monkeypatch.setattr(device_context, 'local_device_is_admin', lambda conn, cid: True)
+
+
+def _as_device(monkeypatch, device_id):
+    """Make this process act as another computer (the terminal id is the contribution key)."""
+    monkeypatch.setattr(retail_api_module, '_stock_count_device_id', lambda: device_id)
 
 
 # ── bootstrap (same convention as retail_stock_books_routes_test.py) ─────────
@@ -280,12 +296,16 @@ def test_2c_a_variance_may_leave_a_balance_negative_because_the_shelf_is_the_tru
     can leave the corrected balance below zero. That is an oversell the shop already made, so the
     post does not refuse it -- unlike a manual adjustment, which never drives a balance negative."""
     cid = client.test_company_id
-    pid, _ = _seed_product(client, initial_stock=10)
+    pid, _ = _seed_product(client, name='Sold Past Zero', initial_stock=10)
     uid = _start(client)
     _count(client, uid, product_id=pid, quantity=0, mode='set')      # -10
     _sell(client, pid, 3)                                            # 7 on hand
-    _post(client, uid)
+    # The screen can warn BEFORE posting: the count view lists what would end below zero.
+    pre = _get(client, uid)['data']['totals']['below_zero']
+    assert [(b['name'], b['will_be']) for b in pre] == [('Sold Past Zero', -3.0)]
+    out = _post(client, uid)['data']
     assert _on_hand(cid, pid) == -3
+    assert [(b['name'], b['will_be']) for b in out['below_zero']] == [('Sold Past Zero', -3.0)]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -346,7 +366,8 @@ def test_3d_get_shows_lines_value_and_totals(client):
     _count(client, uid, product_id=b, quantity=7, mode='set')
     data = _get(client, uid)['data']
     assert data['count']['status'] == 'open' and data['count']['note'] == 'aisle 1'
-    assert data['totals'] == {'lines': 2, 'gain_qty': 2.0, 'short_qty': 3.0, 'variance_value': -5.0}
+    assert data['totals'] == {'lines': 2, 'gain_qty': 2.0, 'short_qty': 3.0, 'variance_value': -5.0,
+                              'below_zero': []}
     by = {ln['product_id']: ln for ln in data['lines']}
     assert by[a]['variance_value'] == 4.0 and by[b]['variance_value'] == -9.0
     listed = client.get(f'{API}/stock-counts?status=open').get_json()['data']
@@ -383,3 +404,115 @@ def test_5b_a_cashier_cannot_start_count_or_post(client, cashier):
     assert cashier.post(f'{API}/stock-counts/{uid}/post').status_code == 403
     assert cashier.get(f'{API}/stock-counts/{uid}').status_code == 403
     assert _get(client, uid)['data']['lines'] == []
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 6 -- fix round: contributions, main-only post, post cost, deleted products, merged counts
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_6a_two_computers_scanning_the_same_product_ADD_and_the_post_uses_the_sum(client, monkeypatch):
+    """A scans 5, B scans 5 (each on its own computer, before they have synced) -> the count says 10,
+    not 5. System said 12, so posting moves -2 and leaves 10 on the shelf's books."""
+    cid = client.test_company_id
+    pid, barcode = _seed_product(client, initial_stock=12)
+    uid = _start(client)
+    _as_device(monkeypatch, 'dev-A')
+    _count(client, uid, barcode=barcode, quantity=5)
+    _as_device(monkeypatch, 'dev-B')
+    out = _count(client, uid, barcode=barcode, quantity=5)['data']
+    assert out['counted_qty'] == 10 and out['this_device_qty'] == 5
+    line = _get(client, uid)['data']['lines'][0]
+    assert line['counted_qty'] == 10 and line['this_device_qty'] == 5 and line['contributions'] == 2
+    # typing a number sets only THIS computer's part
+    out = _count(client, uid, product_id=pid, quantity=3, mode='set')['data']
+    assert out['counted_qty'] == 8 and out['this_device_qty'] == 3
+    _count(client, uid, product_id=pid, quantity=5, mode='set')
+    _post(client, uid)
+    assert _on_hand(cid, pid) == 10                                   # 12 + (10 - 12)
+    assert len(_count_movements(cid, uid)) == 1
+
+
+def test_6b_the_variance_is_measured_against_the_EARLIEST_system_figure(client, monkeypatch):
+    cid = client.test_company_id
+    pid, _ = _seed_product(client, initial_stock=10)
+    uid = _start(client)
+    _as_device(monkeypatch, 'dev-A')
+    _count(client, uid, product_id=pid, quantity=4, mode='set')       # A saw 10
+    _sell(client, pid, 1)                                             # now 9
+    _as_device(monkeypatch, 'dev-B')
+    _count(client, uid, product_id=pid, quantity=4, mode='set')       # B saw 9
+    line = _get(client, uid)['data']['lines'][0]
+    assert line['system_qty_at_count'] == 10 and line['counted_qty'] == 8 and line['variance'] == -2
+    _post(client, uid)
+    assert _on_hand(cid, pid) == 7                                    # 9 + (8 - 10)
+
+
+def test_6c_only_the_main_computer_may_post_and_a_refusal_changes_nothing(client, monkeypatch):
+    cid = client.test_company_id
+    pid, _ = _seed_product(client, initial_stock=10)
+    uid = _start(client)
+    _count(client, uid, product_id=pid, quantity=6, mode='set')
+    monkeypatch.setattr(device_context, 'local_device_is_admin', lambda conn, cid: False)
+    refused = _post(client, uid, expect=409)
+    assert refused['code'] == 'STOCK_COUNT_NEEDS_MAIN' and 'main computer' in refused['message']
+    assert _on_hand(cid, pid) == 10 and _get(client, uid)['data']['count']['status'] == 'open'
+    assert _get(client, uid)['data']['can_post'] is False
+    _count(client, uid, product_id=pid, quantity=1)                   # a non-main computer still scans
+    monkeypatch.setattr(device_context, 'local_device_is_admin', lambda conn, cid: True)
+    assert _get(client, uid)['data']['can_post'] is True
+    _post(client, uid)
+    assert _on_hand(cid, pid) == 7
+
+
+def test_6d_a_posted_count_keeps_showing_the_cost_it_booked_at(client):
+    cid = client.test_company_id
+    pid, _ = _seed_product(client, cost_price=2.0, initial_stock=10)
+    uid = _start(client)
+    _count(client, uid, product_id=pid, quantity=7, mode='set')       # -3 x 2.000
+    assert _post(client, uid)['data']['totals']['variance_value'] == -6.0
+    conn = get_retail_conn()
+    try:                                                              # the product is re-costed afterwards
+        conn.execute("UPDATE products SET avg_cost=9, cost_price=9 WHERE id=?", (pid,))
+        conn.execute("UPDATE inventory_balances SET avg_cost=9 WHERE product_id=?", (pid,))
+        # ... and even the correction movement's own cost is tampered with: the stored post cost wins.
+        conn.execute("UPDATE inventory_movements SET unit_cost=9 WHERE notes=?", (f'Stock count {uid[:8]}',))
+        conn.commit()
+    finally:
+        conn.close()
+    data = _get(client, uid)['data']
+    assert data['lines'][0]['unit_cost'] == 2.0 and data['totals']['variance_value'] == -6.0
+    assert _bal(cid, gl.ACCOUNT_SHRINKAGE) == 6.0                     # the journal says the same
+
+
+def test_6e_a_product_deleted_since_it_was_counted_is_skipped_and_reported(client):
+    cid = client.test_company_id
+    gone, _ = _seed_product(client, name='Gone Widget', initial_stock=10)
+    kept, _ = _seed_product(client, name='Kept Widget', initial_stock=10)
+    uid = _start(client)
+    _count(client, uid, product_id=gone, quantity=1, mode='set')
+    _count(client, uid, product_id=kept, quantity=1, mode='set')
+    conn = get_retail_conn()
+    try:
+        conn.execute("UPDATE products SET deleted_at_utc=? WHERE id=?", ('2026-10-16T00:00:00Z', gone))
+        conn.commit()
+    finally:
+        conn.close()
+    out = _post(client, uid)['data']
+    assert out['skipped_deleted'] == ['Gone Widget'] and out['movements_written'] == 1
+    assert _on_hand(cid, gone) == 10 and _on_hand(cid, kept) == 1
+
+
+def test_6f_a_merged_count_cannot_be_scanned_posted_or_cancelled(client):
+    pid, _ = _seed_product(client, initial_stock=10)
+    uid = _start(client)
+    winner = str(uuid.uuid4())
+    conn = get_retail_conn()
+    try:
+        conn.execute("UPDATE stock_counts SET status='merged', merged_into=? WHERE uid=?", (winner, uid))
+        conn.commit()
+    finally:
+        conn.close()
+    for r in (client.post(f'{API}/stock-counts/{uid}/lines', json={'product_id': pid, 'quantity': 1}),
+              client.post(f'{API}/stock-counts/{uid}/post'), client.post(f'{API}/stock-counts/{uid}/cancel')):
+        assert r.status_code == 409 and r.get_json()['code'] == 'STOCK_COUNT_MERGED'
+        assert r.get_json()['merged_into'] == winner

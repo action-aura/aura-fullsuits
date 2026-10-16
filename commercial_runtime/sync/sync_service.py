@@ -7574,22 +7574,87 @@ class SyncService:
     #: STOCK-TAKE: rank of a count's status, higher wins when two computers' views merge.
     #: Twin of `core/retail/stock_counts.py`'s `status_rank` (commercial_runtime cannot
     #: import products code); a test pins the two equal.
-    _STOCK_COUNT_STATUS_RANK = {"open": 0, "cancelled": 1, "posted": 2}
+    _STOCK_COUNT_STATUS_RANK = {"open": 0, "cancelled": 1, "merged": 1, "posted": 2}
 
     def _apply_stock_count_create(self, conn, ev: dict, p: dict, local_company_id,
                                   branch_fallback_sink) -> bool:
         """`stock_count` create: insert the header another computer started, under THIS
-        computer's company, with its branch resolved from the uid (the writer's integer
-        branch id means nothing here), exactly once (`ON CONFLICT(uid) DO NOTHING`). Status
-        starts 'open'; the writer's real state arrives as the `update` that follows."""
+        computer's company, exactly once (`ON CONFLICT(uid) DO NOTHING`). Status starts 'open';
+        the writer's real state arrives as the `update` that follows.
+
+        The branch is resolved STRICTLY from its uid: a count whose branch has not reached this
+        computer is PARKED (`missing_parent:branch`) and replayed later. The usual
+        `_resolve_branch_id` falls back to this computer's default branch, which would file a
+        count of the Warehouse under the Shop -- and a post would then correct the wrong shelf.
+
+        Afterwards, if this branch now holds more than one OPEN count (two computers started
+        one while offline), they are joined: see `_converge_open_stock_counts`."""
         uid = p.get("uid") or ev.get("entity_id")
-        bid = self._resolve_branch_id(
-            conn, local_company_id, p.get("branch_uid"), fallback_sink=branch_fallback_sink)
+        buid = p.get("branch_uid")
+        row = conn.execute("SELECT id FROM branches WHERE uid=? AND company_id=?",
+                           (buid, local_company_id)).fetchone() if buid else None
+        if row is None:
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:branch",
+                detail=f"branch_uid={buid!r} not found locally")
         conn.execute(
             "INSERT INTO stock_counts (uid, company_id, branch_id, status, note, started_by, started_at) "
             "VALUES (?,?,?,'open',?,?,?) ON CONFLICT(uid) DO NOTHING",
-            (uid, local_company_id, bid, p.get("note"), p.get("started_by"), p.get("started_at")))
+            (uid, local_company_id, row["id"], p.get("note"), p.get("started_by"), p.get("started_at")))
+        self._converge_open_stock_counts(conn, local_company_id, row["id"])
         return True
+
+    def _converge_open_stock_counts(self, conn, company_id, branch_id) -> None:
+        """Join rival OPEN counts of one branch: the smallest uid wins, every other becomes
+        status 'merged' (`merged_into` = winner) and its contributions move under the winner.
+
+        WHY. Two computers can each start a count of one branch while offline. Left alone, both
+        get scanned, and the shelf is corrected twice from two views of it. The rule is pure
+        (smallest uid) and runs on every computer whenever it holds two open counts of a branch,
+        so all computers reach the same single count whatever order things arrived in; nothing
+        is announced about the merge itself -- it is derived. Lines that arrive later for a
+        merged count are redirected to the winner (`_resolve_stock_count`).
+
+        A contribution moves as it is. If the SAME computer already has one for that product
+        under the winner (it scanned into both), the two parts add and the earlier system figure
+        and later timestamp are kept. Twin of `core/retail/stock_counts.py::merge_winner`."""
+        opens = [r[0] for r in conn.execute(
+            "SELECT uid FROM stock_counts WHERE company_id=? AND branch_id=? AND status='open' "
+            "ORDER BY uid", (company_id, branch_id)).fetchall()]
+        if len(opens) < 2:
+            return
+        winner = opens[0]
+        for loser in opens[1:]:
+            conn.execute("UPDATE stock_counts SET status='merged', merged_into=? WHERE uid=? AND company_id=?",
+                         (winner, loser, company_id))
+            for r in conn.execute("SELECT * FROM stock_count_lines WHERE company_id=? AND count_uid=?",
+                                  (company_id, loser)).fetchall():
+                twin = conn.execute(
+                    "SELECT * FROM stock_count_lines WHERE company_id=? AND count_uid=? AND product_id=? "
+                    "AND device_id=?", (company_id, winner, r["product_id"], r["device_id"])).fetchone()
+                if twin is None:
+                    conn.execute("UPDATE stock_count_lines SET count_uid=? WHERE id=?", (winner, r["id"]))
+                    continue
+                counted = Decimal(str(twin["counted_qty"])) + Decimal(str(r["counted_qty"]))
+                first = twin if (twin["counted_at"] or "") <= (r["counted_at"] or "") else r
+                system = Decimal(str(first["system_qty_at_count"]))
+                conn.execute(
+                    "UPDATE stock_count_lines SET counted_qty=?, system_qty_at_count=?, variance=?, "
+                    "counted_at=? WHERE id=?",
+                    (float(counted), float(system), float(counted - system),
+                     max(twin["counted_at"] or "", r["counted_at"] or ""), twin["id"]))
+                conn.execute("DELETE FROM stock_count_lines WHERE id=?", (r["id"],))
+
+    def _resolve_stock_count(self, conn, company_id, count_uid):
+        """The live count a uid stands for: follows `merged_into` (a few hops at most) so a line
+        written against a count that has since been joined lands on the winner."""
+        for _ in range(8):
+            row = conn.execute("SELECT uid, status, branch_id, merged_into FROM stock_counts "
+                               "WHERE uid=? AND company_id=?", (count_uid, company_id)).fetchone()
+            if row is None or row["status"] != "merged" or not row["merged_into"]:
+                return row
+            count_uid = row["merged_into"]
+        return row
 
     def _apply_stock_count_update(self, conn, ev: dict, p: dict, local_company_id) -> bool:
         """`stock_count` update: merge the state FORWARD ONLY by rank (open < cancelled <
@@ -7626,24 +7691,23 @@ class SyncService:
         return True
 
     def _apply_stock_count_line(self, conn, ev: dict, p: dict, local_company_id) -> bool:
-        """`stock_count_line` create/update: one product counted in one count. Both event
-        types are the SAME upsert keyed on (count, product), because the line's uid is a
-        function of the pair and either computer may be the first to count a product.
+        """`stock_count_line` create/update: ONE computer's contribution (`device_id`) to one
+        product of one count. Both event types are the SAME upsert keyed on (count, product,
+        device): a computer only ever writes its own rows, so contributions from different
+        computers never overwrite each other -- the count's quantity is their sum -- and the only
+        merge needed is the single writer's own newer value replacing its older one.
 
-        The parent count is looked up INSIDE the receiver's company (a line carries no
-        company of its own) and parked until it arrives; the product is a plain text id, so
-        an absent one is parked rather than raised.
+        The parent count is looked up INSIDE the receiver's company (a line carries no company of
+        its own), FOLLOWING a merge to the winner, and parked until it arrives; the product is a
+        plain text id, so an absent one is parked rather than raised.
 
-        Merge: `system_qty_at_count` is SET-ONCE (the first value stays: it is what the system
-        held when the line was first counted); `counted_qty` / `counted_at` / `counted_by`
-        follow the newest `counted_at`. A line for a count that is no longer open is inserted
-        if missing (the record stays complete) but never changes an existing line: a posted
-        count is immutable. The variance is derived here, never trusted from the wire."""
+        `system_qty_at_count` is SET-ONCE; `counted_qty` / `counted_at` / `counted_by` follow the
+        newest `counted_at` of that writer. A line for a count that is no longer open is inserted
+        if missing (the record stays complete) but never changes an existing one: a posted count is
+        immutable. The variance is derived here, never trusted from the wire."""
         cid = local_company_id or self._get_local_company_id()
         count_uid = p.get("count_uid")
-        count = conn.execute(
-            "SELECT status, branch_id FROM stock_counts WHERE uid=? AND company_id=?",
-            (count_uid, cid)).fetchone() if count_uid else None
+        count = self._resolve_stock_count(conn, cid, count_uid) if count_uid else None
         if count is None:
             return self._quarantine_apply_event(
                 conn, ev, reason="missing_parent:stock_count",
@@ -7653,19 +7717,20 @@ class SyncService:
             return self._quarantine_apply_event(
                 conn, ev, reason="missing_parent:product",
                 detail=f"product_id={product_id!r} not found locally")
+        device_id = p.get("device_id") or ""
         counted = Decimal(str(p.get("counted_qty") or 0))
         system = Decimal(str(p.get("system_qty_at_count") or 0))
         existing = conn.execute(
             "SELECT counted_at, system_qty_at_count FROM stock_count_lines "
-            "WHERE company_id=? AND count_uid=? AND product_id=?",
-            (cid, count_uid, product_id)).fetchone()
+            "WHERE company_id=? AND count_uid=? AND product_id=? AND device_id=?",
+            (cid, count["uid"], product_id, device_id)).fetchone()
         if existing is None:
             conn.execute(
-                "INSERT INTO stock_count_lines (uid, company_id, branch_id, count_uid, product_id, "
+                "INSERT INTO stock_count_lines (uid, company_id, branch_id, count_uid, product_id, device_id, "
                 "counted_qty, system_qty_at_count, variance, counted_at, counted_by) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(uid) DO NOTHING",
-                (p.get("uid") or ev.get("entity_id"), cid, count["branch_id"], count_uid, product_id,
-                 float(counted), float(system), float(counted - system),
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(uid) DO NOTHING",
+                (p.get("uid") or ev.get("entity_id"), cid, count["branch_id"], count["uid"], product_id,
+                 device_id, float(counted), float(system), float(counted - system),
                  p.get("counted_at"), p.get("counted_by")))
             return True
         if count["status"] != "open":
@@ -7673,9 +7738,9 @@ class SyncService:
         if (p.get("counted_at") or "") > (existing["counted_at"] or ""):
             conn.execute(
                 "UPDATE stock_count_lines SET counted_qty=?, variance=?, counted_at=?, counted_by=? "
-                "WHERE company_id=? AND count_uid=? AND product_id=?",
+                "WHERE company_id=? AND count_uid=? AND product_id=? AND device_id=?",
                 (float(counted), float(counted - Decimal(str(existing["system_qty_at_count"]))),
-                 p.get("counted_at"), p.get("counted_by"), cid, count_uid, product_id))
+                 p.get("counted_at"), p.get("counted_by"), cid, count["uid"], product_id, device_id))
         return True
 
     def _apply_payment_po_link(self, conn, ev: dict, p: dict, local_company_id,

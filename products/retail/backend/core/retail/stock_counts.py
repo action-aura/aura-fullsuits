@@ -35,9 +35,13 @@ _STOCK_COUNT_NAMESPACE = uuid.UUID('b3d1c9a4-5e27-4f08-9a6c-7e41d0f2a8c5')
 STATUS_OPEN = 'open'
 STATUS_CANCELLED = 'cancelled'
 STATUS_POSTED = 'posted'
+#: Derived locally on every computer (never on the wire): a second OPEN count of one branch whose uid
+#: lost to a smaller one. Its contributions live under the winner.
+STATUS_MERGED = 'merged'
 
-#: Higher wins when two computers' views of one count are merged.
-_STATUS_RANK = {STATUS_OPEN: 0, STATUS_CANCELLED: 1, STATUS_POSTED: 2}
+#: Higher wins when two computers' views of one count are merged. 'merged' ranks with 'cancelled':
+#: an incoming 'posted' still outranks it (stock really moved), anything lower is ignored.
+_STATUS_RANK = {STATUS_OPEN: 0, STATUS_CANCELLED: 1, STATUS_MERGED: 1, STATUS_POSTED: 2}
 
 
 def status_rank(status):
@@ -46,10 +50,11 @@ def status_rank(status):
     return _STATUS_RANK.get(status)
 
 
-def line_uid(count_uid: str, product_id: str) -> str:
-    """The wire identity of the line for `product_id` in `count_uid` --
-    deterministic, so a product counted on two computers is one line."""
-    return str(uuid.uuid5(_STOCK_COUNT_NAMESPACE, f"{count_uid}:{product_id}:line"))
+def line_uid(count_uid: str, product_id: str, device_id: str) -> str:
+    """The row id of ONE device's contribution for `product_id` in `count_uid`. Deterministic at
+    creation (same device + count + product = same id) and then just an opaque id: a merge moves
+    the row under another count without renaming it."""
+    return str(uuid.uuid5(_STOCK_COUNT_NAMESPACE, f"{count_uid}:{product_id}:{device_id}:line"))
 
 
 def count_movement_uid(count_uid: str, product_id: str) -> str:
@@ -57,6 +62,12 @@ def count_movement_uid(count_uid: str, product_id: str) -> str:
     `count_uid` -- the same on every computer, so posting twice (or on two
     computers) moves the stock once."""
     return str(uuid.uuid5(_STOCK_COUNT_NAMESPACE, f"{count_uid}:{product_id}:post"))
+
+
+def merge_winner(uid_a: str, uid_b: str) -> str:
+    """Of two OPEN counts of one branch, the one that survives: the smaller uid. Pure and
+    symmetric, so every computer picks the same one whatever order the counts reached it."""
+    return min(uid_a, uid_b)
 
 
 def variance(counted_qty, system_qty_at_count) -> float:
