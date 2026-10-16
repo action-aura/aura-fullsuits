@@ -69,6 +69,8 @@ RETAIL_TABLE_CLASSES = {
     "purchase_order_receipt_lines": c.SYNCED,
     "stock_transfers": c.SYNCED,
     "stock_transfer_items": c.SYNCED,
+    "stock_counts": c.SYNCED,             # STOCK-TAKE (v57): a count and its lines are the shop's record; the stock they moved travels as inventory_movements
+    "stock_count_lines": c.SYNCED,
     "cheques": c.SYNCED,
     "cheque_events": c.SYNCED,
     "reorder_requests": c.SYNCED,

@@ -994,6 +994,12 @@ TRACKED_TABLES = {
     # counts as covered; one neither carries is found.
     'stock_transfers': [('stock_transfer', 'create'), ('stock_transfer', 'update')],
     'stock_transfer_items': [('stock_transfer_item', 'create'), ('stock_transfer_item', 'update')],
+    # STOCK-TAKE (schema v57): a count's header and lines travel between computers. The header is
+    # a `create` (branch by uid, note, who/when) plus `update`s carrying the state and its stamps;
+    # a line is the SAME full snapshot on `create` and `update` (its uid is derived from count +
+    # product, so either computer may be first to count it).
+    'stock_counts': [('stock_count', 'create'), ('stock_count', 'update')],
+    'stock_count_lines': [('stock_count_line', 'create'), ('stock_count_line', 'update')],
     # W2a (schema v48): a loyalty ledger row is an immutable synced fact, so its
     # `create` is the whole baseline (no update exists). Every column of
     # `loyalty_ledger` must ride it or be excluded below with a reason. The
@@ -1436,6 +1442,37 @@ EXCLUSIONS = {
                                  "a receiver must keep it 0 or it would "
                                  "re-queue what it just pulled.",
     },
+    # STOCK-TAKE (schema v57). Every other column rides the payload as itself.
+    'stock_counts': {
+        'id': "Local SQLite autoincrement primary key; a count's cross-device "
+              "identity is its `uid`, which the payload already carries, so "
+              "the sender's own integer is meaningless on a receiving computer "
+              "and is never sent.",
+        'company_id': "Tenant-isolation key; the stock_count apply branch "
+                      "INSERTs the receiver's own local_company_id, never a "
+                      "value read off the incoming payload, identical to "
+                      "every other synced company-scoped header in this file.",
+        'branch_id': "A per-computer integer branches.id; the payload carries "
+                     "`branch_uid` instead and the apply branch resolves it to "
+                     "THIS computer's own branch through _resolve_branch_id, "
+                     "as sales and transfers do.",
+    },
+    'stock_count_lines': {
+        'id': "Local SQLite autoincrement primary key; a line's cross-device "
+              "identity is its `uid` (a pure function of count + product), "
+              "which the payload already carries, so the sender's own integer "
+              "is never sent.",
+        'company_id': "Tenant-isolation key; the stock_count_line apply branch "
+                      "stamps the receiver's own company_id (found through the "
+                      "parent count) and never reads one off the payload.",
+        'branch_id': "A per-computer integer branches.id; a line's branch is "
+                     "its parent count's, which the apply branch reads from "
+                     "the receiver's own copy of that count, so no branch "
+                     "identity needs to ride the line.",
+        'variance': "Derived: counted_qty - system_qty_at_count. The apply "
+                    "branch recomputes it from the two quantities that DO "
+                    "travel and never trusts a figure off the wire.",
+    },
     # W2a (schema v48): loyalty points shared between computers. `uid`,
     # `customer_id`, `points_delta`, `entry_type`, `created_by` and `created_at`
     # ride the payload as themselves.
@@ -1719,6 +1756,15 @@ def test_stock_transfers_outbox_payload_covers_every_column():
 
 def test_stock_transfer_items_outbox_payload_covers_every_column():
     _assert_full_coverage('stock_transfer_items')
+
+
+# STOCK-TAKE (schema v57)
+def test_stock_counts_outbox_payload_covers_every_column():
+    _assert_full_coverage('stock_counts')
+
+
+def test_stock_count_lines_outbox_payload_covers_every_column():
+    _assert_full_coverage('stock_count_lines')
 
 
 def test_loyalty_ledger_outbox_payload_covers_every_column():

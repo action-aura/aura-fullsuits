@@ -57,7 +57,9 @@ const SHELL_FILE = path.join(FRONTEND_DIR, 'app-shell.js');
 const GROUPS = [
   { label: 'Sell',    items: ['pos', 'sales', 'returns', 'scanner', 'customers', 'quotations'] },
   { label: 'Grow',    items: ['promotions'] },
-  { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
+  // STOCK-TAKE UPDATE: 'stocktake' joined the Stock group (the shelf-count screen). Same exact-list pin as before,
+  // one item longer; what this still catches: any other item appearing, vanishing or moving in the group.
+  { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers', 'stocktake'] },
   { label: 'Money',   items: ['receivables', 'payables', 'cheques'] },
   // UI-3b CHANGE: the 'Books' GROUP (trial-balance, profit-and-loss, balance-sheet, cash-flow, expenses --
   // MONEY-4b had just added 'expenses') is gone from the sidebar. Those five are TABS of the ONE "Reports &
@@ -432,7 +434,9 @@ function testAllDestinationsReachableForOwner() {
   // this assertion exists to catch ALL_DESTINATIONS drifting from the
   // product, so a count that disagrees with its own prose is the exact
   // failure it is supposed to make loud.
-  assert.strictEqual(ALL_DESTINATIONS.length, 25, "sanity: this file's own expectation list drifted from 25 reachable destinations");
+  // STOCK-TAKE UPDATE: 25 -> 26, because 'stocktake' joined the Stock group (24 grouped entries now). Same exact
+  // count pin, one higher; it still fails on any other entry appearing or vanishing.
+  assert.strictEqual(ALL_DESTINATIONS.length, 26, "sanity: this file's own expectation list drifted from 26 reachable destinations");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -2331,6 +2331,17 @@ const ROUTE_EXCLUSIONS = {
     'retail_promotions_ui_test.js. Adding it here needs a fixture route plus ' +
     'a corpus entry, not just a render call — the same shape as the ' +
     'exceptions exclusion above.',
+  // STOCK-TAKE (schema v57). The screen is NOT a RetailSystem method: the router delegates to
+  // window.RetailStockTake (frontend/stock-take.js, a self-contained feature file like employees.js
+  // and modifiers-settings.js), which this corpus does not load, and it fetches GET .../stock-counts
+  // that the fixture does not route. Its own coverage is retail_stock_take_ui_test.js (list, open
+  // count, scan matching, variance signs, the post confirmation figures). What this exclusion means
+  // this corpus can no longer catch: a contrast / touch-target defect on that one screen.
+  stocktake:
+    'The router delegates to window.RetailStockTake (stock-take.js), a separate feature file this ' +
+    'corpus does not load, over GET .../stock-counts, which this fixture does not route. Its own ' +
+    'coverage is retail_stock_take_ui_test.js. Adding it here needs the feature file loaded plus ' +
+    'two fixture routes and a corpus entry, not just a render call.',
 };
 
 /** Every `case '<id>':` in RetailSystem.render(), read out of the product. */

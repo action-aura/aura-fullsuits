@@ -1044,6 +1044,10 @@ const SubsystemApp = {
         // Promotions and Reports entries above: hiding the nav entry is not
         // the enforcement, just the invitation not to walk into a dead end.
         { id: 'transfers',  label: 'Stock Transfers',   icon: '🔁', capability: 'retail.stock.adjust' },
+        // STOCK-TAKE (schema v57): counting the shelf and posting the difference. Same gate as the
+        // transfer entry above -- every /stock-counts route is CAP_STOCK_ADJUST, reads included
+        // (a count's value reveals cost), so a cashier is not invited into a screen that 403s.
+        { id: 'stocktake',  label: 'Stock Take',        icon: '📋', capability: 'retail.stock.adjust' },
         // UI-verifier V item 9b: creating a return is CAP_REFUND end to end
         // (create_return's @mt_require_capability(CAP_REFUND)), so an
         // Accountant -- books + reports, no refund -- was invited into a
@@ -1465,7 +1469,7 @@ const SubsystemApp = {
         // for a cashier -- exactly the case the exit criteria says must
         // stay empty ("a cashier sees no ... Grow ... Connected services").
         { label: 'Grow',    items: ['promotions'] },
-        { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
+        { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers', 'stocktake'] },
         { label: 'Money',   items: ['receivables', 'payables', 'cheques'] },
         // UI-3b: the old 'Books' group (trial-balance, profit-and-loss, balance-sheet,
         // cash-flow, expenses) is GONE as a sidebar group -- those five rows are tabs of the
