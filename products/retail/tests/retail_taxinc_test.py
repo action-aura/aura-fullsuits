@@ -325,8 +325,18 @@ def test_partial_returns_after_switch_sum_to_the_paid_line():
     sale = _sell(client, pid, 3)
     paid = D(str(sale['total']))
     _set_mode(client, "before_discount")
-    refunded = sum(D(str(_return_all(client, sale, pid, 1)['refund_amount'])) for _ in range(3))
-    assert refunded == paid
+    parts = [_return_all(client, sale, pid, 1) for _ in range(3)]
+    # EACH part, not just the sum: the completing part takes the remainder, so a sum alone
+    # hides a mispriced first/second part (the mutation 'return re-prices with the current
+    # mode' passed a sum-only version of this test).
+    assert [D(str(p['refund_amount'])) for p in parts] == [D('0.333')] * 3
+    assert sum(D(str(p['refund_amount'])) for p in parts) == paid
+    # and the tax each part gives back is the inclusive tax inside it (0.333 - 0.287)
+    conn = get_retail_conn()
+    taxes = [D(str(r[0])) for r in conn.execute(
+        "SELECT tax_refunded FROM returns WHERE sale_id=? ORDER BY id", (sale['id'],)).fetchall()]
+    conn.close()
+    assert taxes[:2] == [D('0.046')] * 2, taxes
 
 
 def test_exclusive_sale_returned_after_switch_to_inclusive():
@@ -415,3 +425,9 @@ def test_credit_note_for_an_inclusive_sale_returned_after_a_mode_flip_sums_to_th
     doc = _einvoice_doc(cid, return_id=ret['id'])
     assert abs(doc.grand_total - float(ret['refund_amount'])) < 0.0005
     assert abs(sum(l.line_total + l.tax_amount for l in doc.lines) - doc.grand_total) < 0.0005
+    # The inclusive shape, not merely consistent totals: the exclusive builder reaches the same
+    # sums by inventing a discount equal to the tax (gross 0.750, discount 0.103), which is
+    # self-consistent and WRONG on a credit note. Net price = taxable / qty, no allowance.
+    line = doc.lines[0]
+    assert line.discount_amount == 0.0, line
+    assert abs(line.unit_price - line.line_total / line.quantity) < 1e-12, line
