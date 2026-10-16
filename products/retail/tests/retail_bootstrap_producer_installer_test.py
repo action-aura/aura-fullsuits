@@ -707,3 +707,39 @@ def test_a_producer_refuses_to_build_from_an_install_that_holds_more_than_one_co
     with pytest.raises(BootstrapError) as pre:
         producer.check_source_single_company(str(hub.db), spec)                    # the cheap check before claiming
     assert pre.value.reason_code == errors.MULTI_COMPANY_INSTALL
+
+
+# ── a copy older than the device's own cursor is never installed ────────────
+
+def _set_cursor(late, last_seq, relay_url):
+    late.run("UPDATE sync_cursor SET last_seq=?, relay_url=? WHERE id=1", (last_seq, relay_url))
+
+
+def test_a_copy_older_than_the_devices_own_cursor_on_the_same_relay_is_refused_at_staging(hub, late, spec, world):
+    """Defense in depth beside Owner's complete(): the device's own cursor is the authority on what it has
+    already applied. Allow halves: equal / lower cursor, and a cursor on ANOTHER relay (a separate sequence
+    space), are staged. MUTATION: delete the _refuse_if_behind_own_cursor call in stage() -> red."""
+    built = build(hub, spec, world)                                   # as_of == AS_OF (7)
+    _set_cursor(late, AS_OF + 43, DEVICE_URL)
+    with pytest.raises(BootstrapError) as exc:
+        stage(late, spec, world, built)
+    assert exc.value.reason_code == errors.COPY_BEHIND_CURSOR
+    assert installer.pending(late.app) is None and not installer.staging_dir(late.app).exists()
+    for seq, relay in ((AS_OF, DEVICE_URL), (3, DEVICE_URL), (500, "https://some-other-relay")):
+        _set_cursor(late, seq, relay)
+        assert stage(late, spec, world, built)["as_of"] == AS_OF
+        installer.pending_path(late.app).unlink()
+
+
+def test_a_staged_copy_that_the_cursor_overtook_is_discarded_not_installed_and_not_counted_as_a_failure(hub, late, spec, world):
+    """The device kept pulling while the copy waited for a quiet moment. MUTATION: delete the check in
+    apply_staged -> the stale copy is installed over newer data -> red."""
+    stage(late, spec, world, build(hub, spec, world))
+    before = late.db.read_bytes()
+    _set_cursor(late, AS_OF + 100, DEVICE_URL)
+    mid = late.db.read_bytes()
+    report = installer.apply_staged(late.app, spec)
+    assert report["status"] == "stale"
+    assert late.db.read_bytes() == mid and mid != before              # the live database was not touched
+    assert installer.pending(late.app) is None and not installer.staging_dir(late.app).exists()
+    assert installer.status(late.app, spec)["install_failures"] == 0

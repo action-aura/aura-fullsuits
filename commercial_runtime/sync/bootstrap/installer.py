@@ -255,6 +255,30 @@ def open_blockers(live_db_path: str, spec: classes.BootstrapSpec) -> list:
         conn.close()
 
 
+def _refuse_if_behind_own_cursor(live_db_path: str, spec: classes.BootstrapSpec, as_of: int, relay_url: str) -> None:
+    """Defense in depth: never install a copy that is OLDER than what this device has already applied from
+    the SAME relay. Installing it would rewind the database below events the device already holds and set
+    its cursor back, silently undoing applied work. Owner's `complete` refuses a copy below its prune point,
+    but the device does not trust that alone: its own cursor is the authority on what it already has.
+    Cursors from different relays (cloud vs a LAN hub) are separate sequence spaces and are not compared."""
+    if not os.path.exists(live_db_path):
+        return
+    conn = sqlite3.connect(live_db_path, timeout=30)
+    try:
+        if spec.cursor_table not in classes.user_tables(conn):
+            return
+        row = conn.execute(f'SELECT last_seq, relay_url FROM "{spec.cursor_table}" WHERE id = 1').fetchone()
+    finally:
+        conn.close()
+    if row is None or row[1] != relay_url or row[0] is None:
+        return
+    if int(row[0]) > int(as_of):
+        raise BootstrapError(
+            errors.COPY_BEHIND_CURSOR,
+            f"the copy is complete only up to relay position {as_of} but this computer has already applied "
+            f"up to {row[0]} from the same relay; installing it would lose that work")
+
+
 def _refuse_if_blocked(live_db_path: str, spec: classes.BootstrapSpec) -> None:
     blockers = open_blockers(live_db_path, spec)
     if blockers:
@@ -331,6 +355,8 @@ def stage(
         data, spec=spec, trust_store=trust_store, own_licence=own_licence,
         expected_company_id=expected_company_id)
     _refuse_if_blocked(_live_db_path(app, spec), spec)
+    _refuse_if_behind_own_cursor(
+        _live_db_path(app, spec), spec, int(verified.manifest["as_of"]), relay_url)
 
     stage_dir = staging_dir(app)
     if stage_dir.exists():
@@ -535,6 +561,18 @@ def apply_staged(app_data_dir, spec: classes.BootstrapSpec, *, migrate_fn: Optio
         except BootstrapError as exc:
             report.update(status="blocked", why=exc.message)
             logger.warning("bootstrap: install postponed -- %s", exc.message)
+            return report
+
+        try:
+            # The cursor may have moved since staging (the device kept pulling while it waited for a quiet moment).
+            _refuse_if_behind_own_cursor(live, spec, int(record["as_of"]), str(record["relay_url"]))
+        except BootstrapError as exc:
+            # Not a failed install: the copy is simply STALE and the device no longer needs it. Throw it away
+            # and do not count it toward the give-up cap.
+            pending_path(app).unlink(missing_ok=True)
+            shutil.rmtree(staging_dir(app), ignore_errors=True)
+            report.update(status="stale", why=exc.message)
+            logger.warning("bootstrap: staged copy discarded -- %s", exc.message)
             return report
 
         copy_version = record.get("copy_schema_version")

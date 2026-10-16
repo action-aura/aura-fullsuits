@@ -29,3 +29,4 @@ SCHEMA_NEWER = "SCHEMA_NEWER"                    # copy is newer than this build
 MIGRATION_FAILED = "MIGRATION_FAILED"
 OPEN_CASH_SESSION = "OPEN_CASH_SESSION"          # a drawer is open: swapping would erase uncounted money
 NOT_STAGED = "NOT_STAGED"
+COPY_BEHIND_CURSOR = "COPY_BEHIND_CURSOR"        # the copy is older than what this device already applied from the same relay
