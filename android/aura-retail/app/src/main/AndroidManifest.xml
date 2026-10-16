@@ -95,6 +95,21 @@
         </activity>
 
         <!--
+          Second half of the "phoenix" restart (PhoenixRestart / RestartActivity): lives in its OWN process so
+          it survives the main process exiting, then starts the app again. No UI, not in recents, not
+          exported. Emulator run 2026-10-16: an AlarmManager relaunch was blocked by Android 10+ and left
+          the user on the home screen.
+        -->
+        <activity
+            android:name=".RestartActivity"
+            android:exported="false"
+            android:process=":restart"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!--
           Receives the PackageInstaller's progress and result. exported=false:
           the system reaches it through the PendingIntent this app created
           (which carries this app's own identity), so no other app can post a

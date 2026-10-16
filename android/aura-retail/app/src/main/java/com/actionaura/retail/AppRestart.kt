@@ -1,7 +1,5 @@
 package com.actionaura.retail
 
-import android.app.AlarmManager
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Handler
@@ -12,8 +10,9 @@ import android.util.Log
 /**
  * Restarts the whole app process (SYNC-BOOT Phase 3). A staged bootstrap copy of the shop is swapped in by the
  * embedded Python backend's `init_app()` BEFORE any database opens, and that runs once per process; the Flask
- * server lives in this process, so the only clean way to run it again is a new process. The launch intent is
- * scheduled first (AlarmManager survives this process dying), then this process is ended.
+ * server lives in this process, so the only clean way to run it again is a new process. The relaunch is
+ * handed to [RestartActivity] (own process, "phoenix" pattern, see [PhoenixRestart]) and then this process
+ * is ended.
  *
  * WHEN: not at once. [RestartCoordinator] waits until the app is in the foreground and the till has been
  * idle for a minute (see [RestartGate]), and schedules at most one restart however often it is asked. If the
@@ -41,14 +40,19 @@ object AppRestart {
         c.request()
     }
 
-    /** @return false when the package has no launch intent (nothing was done). */
+    /** @return false when nothing was done (no launch intent, or not in the foreground): the staged copy
+     *  stays staged and the coordinator tries again later. */
     private fun relaunch(app: Context): Boolean {
         val launch = app.packageManager.getLaunchIntentForPackage(app.packageName) ?: return false
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        val pending = PendingIntent.getActivity(
-            app, 0, launch, PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        (app.getSystemService(Context.ALARM_SERVICE) as AlarmManager)
-            .set(AlarmManager.RTC, System.currentTimeMillis() + 500L, pending)
+        // Android 10+ blocks starting an activity from the background (and from an alarm of a dead
+        // process), so the hand-over happens NOW, while this app is in front: start RestartActivity (its
+        // own process), then let this process end. See PhoenixRestart for the 2026-10-16 evidence.
+        if (!PhoenixRestart.mayStart(TillActivity.isForeground)) return false
+        val phoenix = Intent(app, RestartActivity::class.java)
+            .addFlags(PhoenixRestart.phoenixFlags())
+            .putExtra(PhoenixRestart.EXTRA_LAUNCH_INTENT, launch)
+            .putExtra(PhoenixRestart.EXTRA_MAIN_PID, Process.myPid())
+        app.startActivity(phoenix)
         Process.killProcess(Process.myPid())
         return true
     }
