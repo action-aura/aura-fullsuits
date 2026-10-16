@@ -540,6 +540,11 @@ def bootstrap_ack():
     row = _load(body, license_id)
     if row is None or row.requester_installation_id != installation.id:
         return _reply("BOOTSTRAP_NOT_FOUND", 404)
+    if _expire_if_due(row):
+        # A READY copy past its 72 h is as good as gone (the sweep may simply not have run yet): it must
+        # not be reported as delivered. Every other lifecycle route already answers this way.
+        db_session.commit()
+        return _reply("BOOTSTRAP_EXPIRED")
     if row.status in ("DELIVERED", "FULFILLED"):
         return jsonify(_view(row)), 200         # a retried ack
     if row.status != "READY":

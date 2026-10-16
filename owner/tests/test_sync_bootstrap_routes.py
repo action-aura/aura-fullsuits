@@ -594,6 +594,20 @@ def test_authority_fulfil_waits_for_the_copy_and_settles_in_either_order(app, cl
 
 
 # ---------------------------------------------------------------- Phase 3 additions
+def test_ack_after_the_72_hours_is_expired_not_delivered(app, client, seeded, signing_key, box):
+    """A READY copy past its expiry must not be acked into DELIVERED just because the nightly sweep has
+    not run yet. Both directions: in time -> 200 DELIVERED; past expiry -> 409 BOOTSTRAP_EXPIRED, bytes gone.
+    MUTATION: drop the _expire_if_due call in bootstrap_ack -> the second half goes red."""
+    _, shop = _shop(app, client)
+    (c, kc) = shop[0]                     # the requester of _ready_request
+    fresh, _keys, _pt = _ready_request(app, client, shop)
+    assert _post(client, kc, c, "ack", {"request_id": fresh}).status_code == 200
+    late, _keys2, _pt2 = _ready_request(app, client, shop)
+    _set(app, late, expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    r = _post(client, kc, c, "ack", {"request_id": late})
+    assert r.status_code == 409 and r.get_json()["reason_code"] == "BOOTSTRAP_EXPIRED", r.get_json()
+    assert _row(app, late)[0] == "EXPIRED" and not (box / late).exists()
+
 def test_a_copy_below_owners_own_prune_point_is_refused_and_the_request_reopens(app, client, seeded, signing_key, box):
     """A producer that is itself stuck behind the prune holds a copy the requester could never
     resume from (it would be told RESYNC_REQUIRED again, forever). Both directions: as_of below
