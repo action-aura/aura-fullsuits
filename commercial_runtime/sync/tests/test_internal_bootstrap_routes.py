@@ -57,7 +57,8 @@ def parts(tmp_path):
         state.armed = False
 
     seam = SimpleNamespace(schema_version=lambda: 56, stage=stage,
-                           include_own_pending=lambda: state.armed, include_own_done=spent)
+                           include_own_pending=lambda: state.armed, include_own_done=spent,
+                           reapply_outbox=lambda svc, conn: None)
     get_conn = _conn_factory(db)
     svc = SyncService(None, get_conn, lambda: None)
 
@@ -117,3 +118,62 @@ def test_without_the_seam_nothing_changes(parts):
     c = client(with_seam=False)
     assert c.get("/api/sync/_internal/bootstrap/info", headers=H).status_code == 404
     assert "include_own" not in c.get("/api/sync/_internal/cursor", headers=H).get_json()
+
+
+# ---------------------------------------------------------------- unpushed outbox after an install (plan 2.4)
+def test_cursor_re_applies_the_carried_outbox_once_after_an_install(tmp_path):
+    """After a bootstrap install the copy predates this phone's still-unpushed writes. The installer carried
+    the outbox rows over; Android's Kotlin loop never calls pull_once, so the FIRST /_internal/cursor call
+    re-applies them to the new database -- once. The rows stay in the outbox (they still have to be pushed).
+    MUTATION: drop the `bootstrap.reapply_outbox(...)` call in the route -> the category never appears."""
+    import json
+    import uuid
+
+    from commercial_runtime.sync.bootstrap.hooks import BootstrapHooks
+    from commercial_runtime.sync.tests.test_internal_routes import _SCHEMA
+
+    db = str(tmp_path / "t.db")
+    c = sqlite3.connect(db)
+    c.executescript(_SCHEMA)
+    entity_id = str(uuid.uuid4())
+    c.execute("INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?,?,?,?,?,?)",
+              (str(uuid.uuid4()), "category", entity_id, "create",
+               json.dumps({"id": entity_id, "company_id": 1, "name": "Carried", "description": ""}),
+               "2026-10-16T00:00:00+00:00"))
+    c.commit()
+    c.close()
+    get_conn = _conn_factory(db)
+    svc = SyncService(None, get_conn, lambda: "co")
+    pending = {"armed": True, "done": 0}
+
+    def done():
+        pending["armed"] = False
+        pending["done"] += 1
+
+    svc.set_bootstrap_hooks(BootstrapHooks(reapply_outbox_pending=lambda: pending["armed"], reapply_outbox_done=done))
+    seam = SimpleNamespace(
+        schema_version=lambda: 56, stage=lambda d, r: {}, include_own_pending=lambda: False,
+        include_own_done=lambda: None, reapply_outbox=lambda s, conn: s._reapply_own_outbox_once(conn))
+    app = Flask(__name__)
+    app.register_blueprint(make_sync_internal_blueprint(
+        sync_service=svc, get_conn=get_conn, state_repository=_Repo(), shared_secret=SECRET, bootstrap=seam))
+    client = app.test_client()
+
+    def categories():
+        k = get_conn()
+        try:
+            return [r["name"] for r in k.execute("SELECT name FROM categories").fetchall()]
+        finally:
+            k.close()
+
+    assert categories() == []
+    assert client.get("/api/sync/_internal/cursor", headers=H).status_code == 200
+    assert categories() == ["Carried"] and pending["done"] == 1
+    k = get_conn(); k.execute("DELETE FROM categories"); k.commit(); k.close()
+    assert client.get("/api/sync/_internal/cursor", headers=H).status_code == 200
+    assert categories() == [], "the re-apply must happen once, not on every tick"
+    k = get_conn()
+    try:
+        assert k.execute("SELECT COUNT(*) AS n FROM sync_outbox").fetchone()["n"] == 1     # still to be pushed
+    finally:
+        k.close()

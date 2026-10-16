@@ -1404,7 +1404,8 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
         schema_version=lambda: RETAIL_SCHEMA_VERSION,
         stage=lambda data, relay_url: _bootstrap_stage_bytes(data, relay_url),
         include_own_pending=lambda: _bootstrap_include_own_pending('retail'),
-        include_own_done=lambda: _bootstrap_include_own_done('retail'))
+        include_own_done=lambda: _bootstrap_include_own_done('retail'),
+        reapply_outbox=lambda svc, conn: _bootstrap_reapply_outbox_android(svc, conn))
     app.register_blueprint(make_sync_internal_blueprint(
         sync_service=_android_sync_service,
         get_conn=_sync_get_conn,
@@ -3316,6 +3317,21 @@ def _after_backup_restore():
         logging.getLogger(__name__).warning('Could not arm include_own_once after a restore.', exc_info=True)
     from commercial_runtime.install_support.restart import schedule_restart
     return schedule_restart()
+
+
+def _bootstrap_reapply_outbox_android(sync_service, conn):
+    """Android: after a bootstrap install, re-apply this phone's carried, unpushed outbox ONCE (the
+    desktop does it inside pull_once; see internal_routes' /_internal/cursor). NEVER RAISES."""
+    try:
+        from commercial_runtime.sync.bootstrap.hooks import BootstrapHooks
+        if sync_service._bootstrap_hooks is None:
+            sync_service.set_bootstrap_hooks(BootstrapHooks(
+                reapply_outbox_pending=lambda: _bootstrap_reapply_pending(),
+                reapply_outbox_done=lambda: _bootstrap_reapply_done()))
+        sync_service._reapply_own_outbox_once(conn)
+    except Exception:
+        logging.getLogger(__name__).warning('Could not re-apply the unpushed outbox after a bootstrap install.',
+                                            exc_info=True)
 
 
 def _bootstrap_stage_bytes(data, relay_url):

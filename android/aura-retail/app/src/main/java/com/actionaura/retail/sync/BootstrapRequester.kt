@@ -61,6 +61,12 @@ class FileBootstrapStateStore(private val file: File) : BootstrapStateStore {
 
 enum class RequesterOutcome { REQUESTED, WAITING, STAGED, RETRY }
 
+/** One unit of requester progress. The coordinator depends on this, not on the concrete class, so its
+ *  restart wiring can be tested without a mailbox. */
+fun interface BootstrapStepper {
+    fun step(): RequesterOutcome
+}
+
 /**
  * Android's requester for a copy of the shop (SYNC-BOOT Phase 3), the Kotlin twin of
  * `transport_owner.OwnerRequester`: make a single-use key, ask Owner's mailbox, WAIT (a producer is
@@ -80,8 +86,8 @@ class BootstrapRequester(
     private val appVersion: String? = null,
     /** Injectable only so a test can use a key pair whose ciphertext it already holds. */
     private val newKeys: () -> RequesterKeys = BootstrapCrypto::newRequesterKeys,
-) {
-    fun step(): RequesterOutcome {
+) : BootstrapStepper {
+    override fun step(): RequesterOutcome {
         var state = store.load()?.takeIf { it.relayUrl == relayUrl }
         val view: JsonObject
         if (state == null) {

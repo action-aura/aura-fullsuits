@@ -137,7 +137,7 @@ def make_sync_internal_blueprint(
     # bootstrap package (Kotlin builds and signs the Owner-mailbox calls itself, because Python never
     # holds the device key; it hands the DECRYPTED copy here to be verified and staged). Object with
     # schema_version(), stage(data: bytes, relay_url: str) -> dict (raises BootstrapError),
-    # include_own_pending() -> bool, include_own_done(). None (the registry stream, every older caller)
+    # include_own_pending() -> bool, include_own_done(), reapply_outbox(sync_service, conn). None (the registry stream, every older caller)
     # registers none of the routes below and leaves /_internal/cursor byte-for-byte what it was.
 
     def _authorized() -> bool:
@@ -250,6 +250,14 @@ def make_sync_internal_blueprint(
         conn = get_conn()
         try:
             with sync_service._lock:
+                if bootstrap is not None:
+                    # After a bootstrap install the copy was taken before this phone's still-unpushed
+                    # writes; the installer carried the outbox rows over, and the relay never sends a
+                    # device its own events, so re-apply them to the new database ONCE (the rows stay in
+                    # the outbox and still get pushed). The desktop does this inside pull_once; Android's
+                    # Kotlin loop never calls pull_once, and /_internal/cursor is the first local call of
+                    # every pull, so it is done here. A no-op unless an install armed it.
+                    bootstrap.reapply_outbox(sync_service, conn)
                 if relay_url is not None:
                     sync_service.ensure_cursor_matches_relay(conn, relay_url)
                     conn.commit()

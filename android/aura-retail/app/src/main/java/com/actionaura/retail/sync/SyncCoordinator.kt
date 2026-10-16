@@ -225,12 +225,18 @@ object SyncCoordinator {
     @Volatile private var bootstrapStateDir: File? = null
 
     /** Test seam: builds the requester for a relay instead of the real signed one. Production never assigns it. */
-    internal var bootstrapRequesterOverride: ((String) -> BootstrapRequester?)? = null
+    internal var bootstrapRequesterOverride: ((String) -> BootstrapStepper?)? = null
 
-    /** Called once a copy is staged. The copy is installed when the embedded Python backend next STARTS, so the
-     *  app has to restart it; that wiring is on-device work (see ROADMAP, SYNC-BOOT Phase 3 gaps). */
-    internal var onBootstrapStaged: () -> Unit = {}
-    private var lastBootstrapStepMillis = 0L
+    /** Called once a copy is staged. The copy is installed when the embedded Python backend next STARTS
+     *  (`init_app()` swaps it in before any database opens), so the app process must restart. The app registers
+     *  that restart with [setBootstrapStagedHandler]; unset (tests, a build with no handler) it does nothing. */
+    @Volatile internal var onBootstrapStaged: () -> Unit = {}
+
+    /** Registers what to do once a copy of the shop is staged: restart the app so the backend installs it. */
+    fun setBootstrapStagedHandler(handler: () -> Unit) {
+        onBootstrapStaged = handler
+    }
+    internal var lastBootstrapStepMillis = 0L
     private const val BOOTSTRAP_STEP_INTERVAL_MS = 20_000L
     /** What this client can do, sent in every pull so Owner's retention rule can see it. Android is a REQUESTER only. */
     private val CAPS = listOf("bootstrap_v1")
