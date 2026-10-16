@@ -91,6 +91,9 @@ class SyncResyncRequired(
     val prunedThrough: Long?,
     message: String,
     val repeat: Boolean = false,
+    /** Where the relay says its log now ends (`fast_forward_to`), when it names one. Only the
+     * REGISTRY stream acts on it -- see [SyncCoordinator.pullOnce]. */
+    val fastForwardTo: Long? = null,
 ) : SyncRelayClientError("RESYNC_REQUIRED", message)
 
 /** Final-review Fix 2 (2026-08-07): the configured relay URL is not safe to
@@ -278,7 +281,11 @@ class SyncRelayClient(
         val reasonCode = result.get("reason_code")?.takeUnless { it.isJsonNull }?.asString
         if (reasonCode == "RESYNC_REQUIRED") {
             val prunedThrough = result.get("pruned_through")?.takeUnless { it.isJsonNull }?.asLong
-            throw SyncResyncRequired(prunedThrough, "Sync relay says this stream must resync (pruned through $prunedThrough).")
+            // `fast_forward_to` was silently dropped here until the 2026-10-16 emulator run: the phone's
+            // registry cursor stayed 0 forever. Carried now so the coordinator can apply the rule.
+            val fastForwardTo = result.get("fast_forward_to")?.takeUnless { it.isJsonNull }?.asLong
+            throw SyncResyncRequired(prunedThrough, "Sync relay says this stream must resync (pruned through $prunedThrough).",
+                fastForwardTo = fastForwardTo)
         }
         if (reasonCode != null) {
             throw SyncRelayRejected(reasonCode, "Sync relay rejected the request: $reasonCode")

@@ -299,6 +299,31 @@ def make_sync_internal_blueprint(
             conn.close()
         return jsonify({"result": "SUCCESS"}), 200
 
+    @bp.route("/_internal/registry/fast-forward", methods=["POST"])
+    def internal_registry_fast_forward():
+        """Owner answered the phone's REGISTRY pull with 409 RESYNC_REQUIRED + `fast_forward_to`.
+        Kotlin makes that relay call itself, so it hands the body here and Python applies the SAME
+        rule the desktop applies (`SyncService.fast_forward_registry_to`) -- one source of truth.
+        Without this the phone's registry cursor stayed 0 forever and it never received a user
+        (emulator run 2026-10-16). Only the registry stream ever fast-forwards; any other stream, or
+        a target that is not ahead of the cursor, answers `fast_forwarded: false` (Kotlin then parks
+        the stream as before). Idempotent: repeating the same target is a no-op that still reports
+        the cursor."""
+        if not _authorized():
+            return _forbidden()
+        body = request.get_json(silent=True)
+        target = body.get("fast_forward_to") if isinstance(body, dict) else None
+        if not isinstance(target, int) or isinstance(target, bool):
+            return jsonify({"reason_code": "INVALID_REQUEST", "detail": "Expected {fast_forward_to: int}."}), 400
+        conn = get_conn()
+        try:
+            with sync_service._lock:
+                moved = sync_service.fast_forward_registry_to(conn, target)
+                since = sync_service.read_cursor(conn)
+        finally:
+            conn.close()
+        return jsonify({"result": "SUCCESS", "fast_forwarded": bool(moved), "since": since}), 200
+
     if bootstrap is not None:
         @bp.route("/_internal/bootstrap/info", methods=["GET"])
         def internal_bootstrap_info():

@@ -1668,8 +1668,20 @@ class SyncService:
         pull). Returns True when it fast-forwarded; any other stream, or a relay
         naming no point (Owner, until its mailbox exists in Phase 3), takes the
         ordinary stop-and-report path."""
-        target = exc.details.get("fast_forward_to")
+        return self.fast_forward_registry_to(conn, exc.details.get("fast_forward_to"))
+
+    def fast_forward_registry_to(self, conn, target) -> bool:
+        """THE rule for skipping the registry stream past pruned history, shared by the desktop's
+        own pull (`_fast_forward_registry`) and the Android seam (`/_internal/registry/fast-forward`)
+        so the two platforms can never drift (emulator run 2026-10-16: Android ignored
+        `fast_forward_to`, its registry cursor stayed 0 and the phone never received a user).
+        Moves the cursor to `target` and clears the stop; returns False -- changing nothing -- for any
+        other stream, a non-integer / negative target, or a target BEHIND the current cursor (a
+        fast-forward only ever skips ahead; going back would re-open history already applied)."""
         if self._stream_label != "registry" or not isinstance(target, int) or isinstance(target, bool) or target < 0:
+            return False
+        current = self.read_cursor(conn)
+        if target < current:
             return False
         conn.execute("UPDATE sync_cursor SET last_seq = ? WHERE id = 1", (target,))
         conn.commit()

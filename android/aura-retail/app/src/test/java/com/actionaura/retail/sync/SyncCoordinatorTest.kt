@@ -405,6 +405,14 @@ internal class RoutedFakeServer {
         responses[path] = CannedResponse(status, body)
     }
 
+    private val dynamic = ConcurrentHashMap<String, (RecordedRequest) -> Pair<Int, String>>()
+
+    /** Like [on] but the answer is computed from the request (its body), for a path two streams
+     *  share and must be answered differently (SyncCoordinatorRegistryFastForwardTest). */
+    fun onDynamic(path: String, answer: (RecordedRequest) -> Pair<Int, String>) {
+        dynamic[path] = answer
+    }
+
     fun start() {
         acceptThread = Thread {
             while (!stopped) {
@@ -474,9 +482,11 @@ internal class RoutedFakeServer {
             if (n == -1) break
             read += n
         }
-        requests.add(RecordedRequest(method, path, rawTarget, String(bodyBytes, Charsets.UTF_8)))
+        val recorded = RecordedRequest(method, path, rawTarget, String(bodyBytes, Charsets.UTF_8))
+        requests.add(recorded)
 
-        val canned = responses[path] ?: CannedResponse(404, """{"error":"RoutedFakeServer: no response configured for $path"}""")
+        val canned = dynamic[path]?.invoke(recorded)?.let { CannedResponse(it.first, it.second) }
+            ?: responses[path] ?: CannedResponse(404, """{"error":"RoutedFakeServer: no response configured for $path"}""")
         val bodyOut = canned.body.toByteArray(Charsets.UTF_8)
         val head = buildString {
             append("HTTP/1.1 ").append(canned.status).append(" X\r\n")

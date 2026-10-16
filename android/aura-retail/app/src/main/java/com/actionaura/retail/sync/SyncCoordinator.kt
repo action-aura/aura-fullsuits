@@ -1194,9 +1194,26 @@ object SyncCoordinator {
             clearResyncRequired(stream.label)
         }
 
+        val client = relayClient(installationId, relayBaseUrl, identity, spkiPin)
         val result = try {
-            relayClient(installationId, relayBaseUrl, identity, spkiPin)
-                .pull(since, stream.label, CAPS, includeOwn) // raises on failure
+            try {
+                client.pull(since, stream.label, CAPS, includeOwn) // raises on failure
+            } catch (exc: SyncResyncRequired) {
+                // The REGISTRY stream is never copied (authority is signed, not copied): when Owner says
+                // RESYNC_REQUIRED and names where its log now ends, skip there and let the main computer's
+                // fresh signed re-announce supply the staff list. The RULE lives in Python
+                // (/_internal/registry/fast-forward -> SyncService.fast_forward_registry_to, the same
+                // function the desktop uses) so the two platforms cannot drift. Before this, the phone
+                // parked the stream and its cursor stayed 0 forever: no users, no login (emulator run
+                // 2026-10-16). The retail stream is untouched -- it uses the bootstrap mailbox.
+                val target = exc.fastForwardTo
+                if (stream.label != "registry" || target == null) throw exc
+                val answer = postLocal(stream.prefix + "/_internal/registry/fast-forward",
+                    """{"fast_forward_to":$target}""", localBaseUrl, internalSecret)
+                if (answer.get("fast_forwarded")?.takeUnless { it.isJsonNull }?.asBoolean != true) throw exc
+                // Resume from the new position in the same tick so the re-announced users arrive now.
+                client.pull(answer.get("since")?.asLong ?: target, stream.label, CAPS, includeOwn)
+            }
         } catch (exc: SyncResyncRequired) {
             synchronized(lock) {
                 resyncRequired = resyncRequired + (stream.label to ResyncState(relayBaseUrl, spkiPin, exc.prunedThrough))
