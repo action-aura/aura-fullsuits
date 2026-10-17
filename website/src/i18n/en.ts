@@ -33,7 +33,7 @@ export const en = {
     },
     retail: {
       title: 'Aura Retail', accent: 'Retail',
-      lead: 'The till that keeps selling offline. Barcode scanning, stock, receivables and payables, receipts in Arabic and English, and a phone that mirrors the counter.',
+      lead: 'The till that keeps selling offline. Barcode scanning, stock, receivables and payables, and a phone that mirrors the counter.',
       link: 'See Aura Retail',
     },
     clinic: {

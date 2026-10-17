@@ -20,7 +20,7 @@ export const ar: Dict = {
     retail: 'أورا ريتيل',
     clinic: 'أورا كلينك',
     gym: 'أورا جيم',
-    about: 'من نحن',
+    about: 'من نحن', // AR: drafted, native check pending
     demo: 'احجز عرضًا مجانيًا',
     switchTo: 'English',
     menu: 'القائمة', // AR: drafted, native check pending
@@ -37,7 +37,7 @@ export const ar: Dict = {
   home: {
     hero: {
       title: 'محلّك يبيع… حتى لو انقطع الإنترنت',
-      lead: 'الكاشير والمخزون والحسابات للمحلات والمعارض. يعمل على كمبيوتر المحل وعلى هاتفك، ويستمر بدون إنترنت، ويتزامن وحده عند عودة الاتصال.', // AR: drafted, native check pending
+      lead: 'الكاشير والمخزون والحسابات للمحلات والمعارض. يعمل على الكاشير وعلى هاتفك، ويستمر بدون إنترنت، ويتزامن وحده عند عودة الاتصال.', // AR: drafted, native check pending
     },
     company: {
       title: 'أكشن أورا', accent: 'أورا',
@@ -45,7 +45,7 @@ export const ar: Dict = {
     },
     retail: {
       title: 'أورا ريتيل', accent: 'ريتيل',
-      lead: 'الكاشير الذي يكمل البيع بدون إنترنت. قارئ باركود، ومخزون، وما لك وما عليك، وإيصالات بالعربية والإنجليزية، وهاتف يعرض ما يجري على الطاولة.', // AR: drafted, native check pending
+      lead: 'الكاشير الذي يكمل البيع بدون إنترنت. قارئ باركود، ومخزون، وما لك وما عليك، وهاتف يعرض ما يجري على الطاولة.', // AR: drafted, native check pending
       link: 'تعرّف على أورا ريتيل', // AR: drafted, native check pending
     },
     clinic: {

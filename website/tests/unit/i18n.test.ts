@@ -31,7 +31,7 @@ describe('dictionaries', () => {
   });
 
   it('never claims banned features or prices', () => {
-    const banned = /(JoFotara|e-invoic|iPhone|\biOS\b|cash drawer|\bJOD\b|دينار|testimonial)/i;
+    const banned = /(JoFotara|e-invoic|iPhone|\biOS\b|cash drawer|\bJOD\b|دينار|د\.أ|testimonial|14[- ]day|grace period|customers? trust|\d+\s*(shops|customers|clients)\b)/i;
     for (const [k, v] of [...en, ...ar]) expect(banned.test(v), `${k}: ${v}`).toBe(false);
   });
 
