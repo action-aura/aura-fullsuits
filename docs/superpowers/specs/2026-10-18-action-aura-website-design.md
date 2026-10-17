@@ -67,7 +67,9 @@ Every page exists at `/ar/…` and `/en/…` with identical Latin slugs.
 | Aura Clinic | `/…/aura-clinic/` | Available product. Every claim must be verified against the DentaCare code (section 4) |
 | About + Partners | `/…/about/` | Story, vision, values, how we work, then future products as "coming" and partnership areas |
 | Book a demo / Contact | `/…/contact/` | Form, WhatsApp, call, email, office map link |
+| FAQ | `/…/faq/` | 10-14 honest answers to what shop owners actually ask (works offline? Arabic? what hardware? is my data safe? price, answered as "depends on your shop, ask us"; Clinic questions). Also marked up as FAQPage JSON-LD, and the strongest source for AI-assistant answers |
 | Privacy | `/…/privacy/` | Draft text that needs a lawyer before launch |
+| Terms of use | `/…/terms/` | Website terms (not the software licence). Draft text that needs a lawyer before launch |
 | 404 | `/404.html` | Bilingual; links home in both languages |
 
 Not in scope: prices, a blog, testimonials, a Gym product page, customer
@@ -158,6 +160,18 @@ website/                       Astro project (static output)
 - Add `llms.txt` and plain, factual product summaries, so AI assistants
   can cite the products (the `ai-seo` skill).
 - Use Cloudflare Web Analytics, which is cookieless. Add no other trackers.
+- **No cookie banner is needed, by design.** No tracking cookies are set.
+  The language choice lives in `localStorage`, and Turnstile is strictly
+  necessary anti-abuse. The privacy page says so. If a tracker is ever
+  added, a consent banner becomes mandatory with it.
+- **Social share.** Every page in both languages has Open Graph and Twitter
+  card tags with its own designed 1200x630 image: the jewel in that page's
+  world, with the page title in that language.
+- **Favicon set** from the kit's app icon: SVG, a 32 px PNG, a 180 px
+  Apple touch icon, and a web manifest with the theme colour. The flat mark
+  is used because the icon is small.
+- **Alt text** on every meaningful image, in the page's language.
+  Decorative images get `alt=""`, and the jewel canvas gets `aria-hidden`.
 
 ## 8. Demo form
 
@@ -191,7 +205,11 @@ website/                       Astro project (static output)
 4. `accessibility` audit: keyboard path, focus, labels, landmarks. Run
    `break-ui` on the form and the status pills with worst-case data.
 5. `seo-audit` plus `schema` validation. Hreflang reciprocity is checked by
-   a script, not by eye.
+   a script, not by eye. A **broken-link crawl** of the built site must come
+   back clean: every internal link, anchor and asset (external links are
+   reported). A script also checks the built HTML: every page has a unique
+   title and meta description in its own language, a self canonical, OG
+   tags and a favicon.
 6. Unit tests for the form validation and the Pages Function. Each guard
    is **mutation-proven**: break it, watch the test go red, restore. Do
    this for Turnstile, the honeypot, required fields and the rate limit,
