@@ -1,0 +1,64 @@
+---
+import '@fontsource/outfit/400.css';
+import '@fontsource/outfit/500.css';
+import '@fontsource/outfit/600.css';
+import '@fontsource/outfit/700.css';
+import '@fontsource/readex-pro/400.css';
+import '@fontsource/readex-pro/500.css';
+import '@fontsource/readex-pro/600.css';
+import '../styles/tokens.css';
+import '../styles/base.css';
+import { dict, dir, type Lang } from '../i18n';
+import { canonical, alternates } from '../lib/seo';
+
+interface Props {
+  lang: Lang; slug: string; title: string; description: string;
+  world?: 'master' | 'retail' | 'clinic' | 'gym'; noindex?: boolean; jsonld?: object[];
+  canonicalOverride?: string; xDefaultOverride?: string;
+}
+const { lang, slug, title, description, world = 'master', noindex = false, jsonld = [], canonicalOverride, xDefaultOverride } = Astro.props;
+const t = dict(lang);
+const alt = alternates(slug);
+const self = canonicalOverride ?? canonical(lang, slug);
+const ogImage = `https://actionaura.me/og/${lang}-${slug || 'home'}.png`;
+---
+<html lang={lang} dir={dir(lang)} data-world={world}>
+  <head>
+    <meta charset="utf-8" />
+    <script is:inline>document.documentElement.classList.add('js')</script>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    {noindex ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={self} />}
+    {!noindex && <link rel="alternate" hreflang="ar" href={alt.ar} />}
+    {!noindex && <link rel="alternate" hreflang="en" href={alt.en} />}
+    {!noindex && <link rel="alternate" hreflang="x-default" href={xDefaultOverride ?? alt.xDefault} />}
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={self} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:locale" content={lang === 'ar' ? 'ar_JO' : 'en_US'} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#0E1729" />
+    {jsonld.map((o) => <script type="application/ld+json" set:html={JSON.stringify(o)} />)}
+  </head>
+  <body>
+    <a class="visually-hidden" href="#main">{t.a11y.skip}</a>
+    <slot />
+    <script>
+      const els = document.querySelectorAll<HTMLElement>('.reveal');
+      if (!('IntersectionObserver' in window)) els.forEach((e) => e.classList.add('in'));
+      else {
+        const io = new IntersectionObserver((entries) => {
+          for (const en of entries) if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target); }
+        }, { rootMargin: '0px 0px -12% 0px' });
+        els.forEach((e) => io.observe(e));
+      }
+    </script>
+  </body>
+</html>
