@@ -1,0 +1,85 @@
+/* Design tokens per colour world. Values come verbatim from website/docs/design-system.md section 2.
+   Worlds are selected with data-world on <html>; the master world is :root. Field = 3 gradient stops (a, b, c),
+   glow = rgba at the jewel, scrim = "r,g,b" ink triple (used as rgba(var(--scrim), .55)). */
+
+:root {
+  --field-a: #0B1322;
+  --field-b: #0E1729;
+  --field-c: #15213A;
+  --field: var(--field-b);
+  --glow: rgba(47, 123, 123, .5);
+  --scrim: 14, 23, 41;
+  --accent: #8FD0D0;
+  --link: #8FD0D0;
+  --ink: #F6F4EF;
+  --ink-muted: rgba(246, 244, 239, .72);
+  --hair: rgba(246, 244, 239, .14);
+  color-scheme: dark;
+}
+
+[data-world="retail"] {
+  --field-a: #15100D;
+  --field-b: #1C1511;
+  --field-c: #2C1C12;
+  --field: var(--field-b);
+  --glow: rgba(201, 123, 61, .52);
+  --scrim: 26, 21, 18;
+  --accent: #F0B87A;
+  --link: #F0B87A;
+  --ink: #F6F4EF;
+  --ink-muted: rgba(246, 244, 239, .72);
+  --hair: rgba(246, 244, 239, .14);
+  color-scheme: dark;
+}
+
+/* Light room */
+[data-world="clinic"] {
+  --field-a: #F8FBFD;
+  --field-b: #EEF4F8;
+  --field-c: #D8E5EF;
+  --field: var(--field-b);
+  --glow: rgba(140, 199, 238, .55);
+  --scrim: 238, 244, 248;
+  --accent: #3D7FB5;
+  --link: #33699C;
+  --ink: #16233D;
+  --ink-muted: #39475F;
+  --hair: rgba(22, 35, 61, .16);
+  color-scheme: light;
+}
+
+[data-world="gym"] {
+  --field-a: #110709;
+  --field-b: #1A0C12;
+  --field-c: #2C1120;
+  --field: var(--field-b);
+  --glow: rgba(200, 50, 75, .5);
+  --scrim: 26, 14, 20;
+  --accent: #F5A3A8;
+  --link: #F5A3A8;
+  --ink: #F6F4EF;
+  --ink-muted: rgba(246, 244, 239, .72);
+  --hair: rgba(246, 244, 239, .14);
+  color-scheme: dark;
+}
+
+/* Text sits over the mark on phones: more opaque body ink */
+@media (max-width: 899px) {
+  :root,
+  [data-world="retail"],
+  [data-world="gym"] {
+    --ink-muted: rgba(246, 244, 239, .84);
+  }
+
+  [data-world="clinic"] {
+    --ink-muted: #2F3C52;
+  }
+}
+
+:root {
+  --gutter: clamp(16px, 4.5vw, 64px);
+  --ease-out: cubic-bezier(.23, 1, .32, 1);
+  --ease-io: cubic-bezier(.77, 0, .175, 1);
+  --ease-drawer: cubic-bezier(.32, .72, 0, 1);
+  --wa: #25D366; /* WhatsApp green is never world-tinted */
+}
