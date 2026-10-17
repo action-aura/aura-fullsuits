@@ -1,0 +1,606 @@
+<title>Aura Logo Worlds</title>
+<style>
+/* Aura Logo Worlds, v2 r4: the mark is a DIRECTED JEWEL. One complete 3D mark in the fixed background layer glides between
+   one station per section (right of the copy, left of it on the flipped Retail and Gym chapters, centred low on phones);
+   content reads beside or above it over a whisper of per-world scrim. Worlds follow research-and-concepts.md section 3.
+   Tokens on :root; the world palettes and stations are in the script. The SVG fallback (#svgfall) stays at the hero station. */
+:root{
+  --ink:#F6F4EF; --ink-muted:rgba(246,244,239,.72); --hair:rgba(246,244,239,.14); --field:#0E1729;
+  --accent:#8FD0D0; --wa:#25D366;
+  --ease-out:cubic-bezier(.23,1,.32,1); --ease-io:cubic-bezier(.77,0,.175,1);
+  --fs-hero:clamp(2.25rem, 1.3rem + 3.4vw, 4.1rem);
+  --fs-hero-ar:clamp(1.35rem, 1rem + 1.4vw, 2.1rem);
+  --fs-h2:clamp(1.9rem, 1.2rem + 2.4vw, 3.4rem);
+  --fs-h2-ar:clamp(1.2rem, .95rem + 1vw, 1.8rem);
+  --fs-lead:clamp(1.0625rem, 1rem + .3vw, 1.2rem);
+  --gutter:clamp(16px, 4.5vw, 64px);
+  --gx:73%; --gxf:27%; --gy:54%;   /* the jewel's two desktop stations: right of the copy (--gx) and, in the flipped chapters, left of it (--gxf) */
+  color-scheme:dark;
+}
+:root.world-light{ --ink:#16233D; --ink-muted:#39475F; --hair:rgba(22,35,61,.16); --field:#EEF4F8; color-scheme:light }
+@media (max-width:899px){
+  :root{ --gx:50%; --gxf:50%; --gy:80%; --ink-muted:rgba(246,244,239,.84) }   /* text sits over the mark on phones: more opaque body ink */
+  :root.world-light{ --ink-muted:#2F3C52 }
+}
+
+*{ box-sizing:border-box; margin:0; padding:0 }
+html{ -webkit-text-size-adjust:100%; scroll-behavior:smooth; overflow-x:clip }
+body{
+  background:#0E1729; color:var(--ink);
+  font-family:Outfit, system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow-x:clip; min-height:100vh;
+  -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+  transition:color .6s var(--ease-out);
+}
+a{ color:inherit }
+
+/* Layers: field (0) < canvas (1) < scrim (2) < content (3) < grain (4) < header (5) */
+.bg, .scrim{ position:fixed; inset:0; pointer-events:none; will-change:opacity }
+.bg{ z-index:0 } .scrim{ z-index:2 }
+.bg-aura  { background:radial-gradient(34% 42% at var(--gx) var(--gy), rgba(47,123,123,.5), rgba(47,123,123,0) 70%), linear-gradient(180deg,#0B1322 0%,#0E1729 50%,#15213A 100%) }
+.bg-retail{ opacity:0; background:radial-gradient(34% 42% at var(--gxf) var(--gy), rgba(201,123,61,.52), rgba(201,123,61,0) 70%), linear-gradient(180deg,#15100D 0%,#1C1511 48%,#2C1C12 100%) }
+.bg-clinic{ opacity:0; background:radial-gradient(34% 42% at var(--gx) var(--gy), rgba(140,199,238,.55), rgba(140,199,238,0) 70%), linear-gradient(180deg,#F8FBFD 0%,#EEF4F8 50%,#D8E5EF 100%) }
+.bg-gym   { opacity:0; background:radial-gradient(34% 42% at var(--gxf) var(--gy), rgba(200,50,75,.5), rgba(200,50,75,0) 68%), linear-gradient(180deg,#110709 0%,#1A0C12 50%,#2C1120 100%) }
+/* Scrims. Desktop: a whisper of depth toward the copy column, centred on whichever side the copy takes (12% for the master
+   and Clinic worlds, 88% for the flipped Retail and Gym chapters); the jewel always stands on the other side. Each scrim's
+   opacity is its world's share (script, applyDom), never the stacked field formula. Phones override below with the vertical
+   profile (text over the mark's apex there). */
+.sc-aura  { background:radial-gradient(ellipse 60% 120% at 12% 50%, rgba(14,23,41,.55) 0%, rgba(14,23,41,.45) 40%, rgba(14,23,41,.18) 70%, rgba(14,23,41,0) 100%) }
+.sc-retail{ opacity:0; background:radial-gradient(ellipse 60% 120% at 88% 50%, rgba(26,21,18,.55) 0%, rgba(26,21,18,.45) 40%, rgba(26,21,18,.18) 70%, rgba(26,21,18,0) 100%) }
+.sc-clinic{ opacity:0; background:radial-gradient(ellipse 60% 120% at 12% 50%, rgba(238,244,248,.6) 0%, rgba(238,244,248,.5) 40%, rgba(238,244,248,.2) 70%, rgba(238,244,248,0) 100%) }
+.sc-gym   { opacity:0; background:radial-gradient(ellipse 60% 120% at 88% 50%, rgba(26,14,20,.55) 0%, rgba(26,14,20,.45) 40%, rgba(26,14,20,.18) 70%, rgba(26,14,20,0) 100%) }
+@media (max-width:899px){
+  /* On phones the mark's apex is at ~46% and its ring crosses the bottom sixth (script, resize()). Text is pinned to the top
+     60%, so the scrim is near-opaque there, halves behind the buttons, and opens to .16 where the metal is. */
+  .sc-aura  { background:linear-gradient(180deg, rgba(14,23,41,.86) 0%, rgba(14,23,41,.82) 62%, rgba(14,23,41,.5) 74%, rgba(14,23,41,.16) 84%, rgba(14,23,41,.16) 100%) }
+  .sc-retail{ background:linear-gradient(180deg, rgba(26,21,18,.86) 0%, rgba(26,21,18,.82) 62%, rgba(26,21,18,.5) 74%, rgba(26,21,18,.16) 84%, rgba(26,21,18,.16) 100%) }
+  .sc-clinic{ background:linear-gradient(180deg, rgba(238,244,248,.9) 0%, rgba(238,244,248,.86) 62%, rgba(238,244,248,.54) 74%, rgba(238,244,248,.18) 84%, rgba(238,244,248,.18) 100%) }
+  .sc-gym   { background:linear-gradient(180deg, rgba(26,14,20,.86) 0%, rgba(26,14,20,.82) 62%, rgba(26,14,20,.5) 74%, rgba(26,14,20,.16) 84%, rgba(26,14,20,.16) 100%) }
+}
+
+#gl{ position:fixed; inset:0; z-index:1; width:100%; height:100%; display:block; pointer-events:none }
+
+/* SVG fallback (no WebGL / script blocked), placed like the 3D backdrop */
+#svgfall{ position:fixed; z-index:1; display:none; left:73%; top:54%; height:76vh; aspect-ratio:1; transform:translate(-50%,-50%); pointer-events:none; opacity:.9 }
+@media (max-width:899px){ #svgfall{ left:50%; top:76%; height:auto; width:125vw } }
+#svgfall.show{ display:block }
+
+.grain{ position:fixed; inset:0; z-index:4; pointer-events:none; opacity:.05; mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .7 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  background-size:160px 160px }
+:root.world-light .grain{ mix-blend-mode:multiply; opacity:.04 }
+
+/* Header */
+.top{ position:fixed; top:0; left:0; right:0; z-index:5; display:flex; justify-content:space-between; align-items:center; padding:18px var(--gutter); font-size:13px; letter-spacing:.01em }
+.top .brand{ display:inline-flex; align-items:center; gap:10px; font-weight:600; color:var(--ink); text-decoration:none; transition:color .6s var(--ease-out) }
+.top .brand svg{ width:22px; height:22px; display:block }
+.top nav{ display:flex; gap:26px }
+.top nav a{ color:var(--ink-muted); text-decoration:none; transition:color .25s var(--ease-out) }
+@media (hover:hover) and (pointer:fine){ .top nav a:hover{ color:var(--ink) } }
+@media (max-width:899px){ .top nav{ display:none } }
+:root[data-chapter="retail"] .top nav a[href="#retail"], :root[data-chapter="clinic"] .top nav a[href="#clinic"],
+:root[data-chapter="gym"] .top nav a[href="#gym"], :root[data-chapter="talk"] .top nav a[href="#talk"]{ color:var(--ink) }
+
+/* Content */
+main{ position:relative; z-index:3 }
+section{ position:relative; padding:0 var(--gutter) }
+.copy{ max-width:36rem }
+@media (min-width:900px){
+  section{ display:grid; grid-template-columns:minmax(0,46%) 1fr } .copy{ grid-column:1 }
+  /* Flipped chapters (Retail, Gym): the copy takes the right column and hugs the right gutter, the jewel stands left (C5). */
+  section.flip{ grid-template-columns:1fr minmax(0,46%) } .flip .copy{ grid-column:2; justify-self:end }
+}
+
+.hero{ min-height:100vh; min-height:100svh; align-items:center; display:grid; padding-top:72px; padding-bottom:88px }
+@media (max-width:899px){ .hero, .chapter, .close{ align-items:start; padding-top:min(16vh, 140px) } }
+.chapter{ min-height:80vh; display:grid; align-items:center; padding-top:clamp(88px, 14vh, 150px); padding-bottom:clamp(88px, 14vh, 150px) }
+.close{ min-height:70vh; display:grid; align-items:center; padding-top:clamp(88px, 14vh, 150px); padding-bottom:clamp(120px, 18vh, 200px) }
+
+/* The fade lives on the children so they can stagger; the script keeps toggling .in on .copy.reveal (contract C2).
+   Specificity is deliberately (0,2,0) so this rule beats .lead / .ar-title / .foot, and it carries the .6s colour ease for every
+   direct child, so the room flip (dark to porcelain) eases on headings, leads and the footer too. */
+.copy.reveal > *{ opacity:0; transform:translate3d(0,18px,0); filter:blur(8px); transition:opacity .9s var(--ease-out), transform .9s var(--ease-out), filter .9s var(--ease-out), color .6s var(--ease-out), border-color .6s var(--ease-out) }
+.copy.reveal.in > *{ opacity:1; transform:none; filter:none }
+/* Delays are per property (opacity, transform, filter, color, border-color): the entrance staggers, the colour ease never does. */
+.copy.reveal > :nth-child(2){ transition-delay:.07s,.07s,.07s,0s,0s } .copy.reveal > :nth-child(3){ transition-delay:.14s,.14s,.14s,0s,0s }
+.copy.reveal > :nth-child(4){ transition-delay:.21s,.21s,.21s,0s,0s } .copy.reveal > :nth-child(5){ transition-delay:.28s,.28s,.28s,0s,0s }
+.copy.reveal > :nth-child(6){ transition-delay:.35s,.35s,.35s,0s,0s } .copy.reveal > :nth-child(7){ transition-delay:.42s,.42s,.42s,0s,0s }
+@media (max-width:899px){ .copy.reveal > *{ filter:none } }   /* lite path: no blur filter work on phones */
+
+.status{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:clamp(14px, 2.4vh, 24px) }
+.tag{ display:inline-flex; align-items:center; gap:8px; padding:6px 11px 6px 9px; border-radius:999px; border:1px solid var(--hair); color:var(--ink); font-size:11px; font-weight:500; letter-spacing:.14em; text-transform:uppercase; transition:color .6s var(--ease-out), border-color .6s var(--ease-out) }
+.tag::before{ content:""; width:6px; height:6px; border-radius:50%; background:var(--accent); flex:none }
+.tag.dev{ color:var(--ink-muted) }
+.tag.dev::before{ background:transparent; box-shadow:inset 0 0 0 1.5px currentColor }   /* hollow dot = coming; filled = available now */
+.tag [lang="ar"]{ font-family:"Readex Pro", sans-serif; font-size:12px; font-weight:500; opacity:.9 }
+
+h1, h2{ font-weight:700; letter-spacing:-.035em; text-wrap:balance; color:var(--ink) }
+h1{ font-size:var(--fs-hero); line-height:1 }
+h2{ font-size:var(--fs-h2); line-height:1 }
+h2 .hl{ color:var(--accent) }
+.ar-title{ font-family:"Readex Pro", Outfit, system-ui, sans-serif; font-weight:600; line-height:1.4; margin-top:.4em; text-align:left; color:var(--ink) }
+.hero .ar-title{ font-size:var(--fs-hero-ar) }
+.chapter .ar-title, .close .ar-title{ font-size:var(--fs-h2-ar) }
+.ar-title .hl{ color:var(--accent) }
+.lead{ font-size:var(--fs-lead); line-height:1.55; color:var(--ink-muted); margin-top:clamp(18px, 3vh, 28px); max-width:31rem; text-wrap:pretty }
+.lead.ar{ font-family:"Readex Pro", Outfit, system-ui, sans-serif; font-size:calc(var(--fs-lead) * 1.04); line-height:1.85; margin-top:.4em; text-align:start }   /* multi-line Arabic aligns to its reading-start edge (right); a left-ragged start edge is a typographic error in Arabic */
+
+.cta{ display:flex; align-items:center; gap:22px 28px; flex-wrap:wrap; margin-top:clamp(26px, 4.5vh, 40px) }
+.wa{ display:inline-flex; align-items:center; gap:12px; padding:8px 22px 8px 8px; border-radius:999px; background:var(--ink); color:var(--field); text-decoration:none; font-weight:500; font-size:15px; letter-spacing:.01em; box-shadow:inset 0 1px 0 rgba(255,255,255,.55), 0 14px 34px -14px rgba(0,0,0,.55); transition:transform .16s var(--ease-out), background-color .4s var(--ease-out), color .4s var(--ease-out), box-shadow .4s var(--ease-out) }
+:root.world-light .wa{ box-shadow:inset 0 1px 0 rgba(255,255,255,.12), 0 14px 34px -14px rgba(22,35,61,.45) }
+.wa .disc{ display:grid; place-items:center; width:36px; height:36px; border-radius:50%; background:var(--wa) }  /* true WhatsApp green, never tinted */
+.wa .disc svg{ width:20px; height:20px; fill:#fff; display:block }
+.wa:active{ transform:scale(.97) }
+@media (hover:hover) and (pointer:fine){ .wa:hover{ transform:translateY(-1px) } }
+.demo{ display:inline-flex; align-items:center; gap:10px; padding:10px 0; color:var(--ink); text-decoration:none; font-weight:500; font-size:15px; border-bottom:1px solid var(--hair); transition:border-color .25s var(--ease-out), color .6s var(--ease-out) }
+.demo svg{ width:16px; height:16px; stroke:currentColor; fill:none; stroke-width:1.6; transition:transform .25s var(--ease-out) }
+@media (hover:hover) and (pointer:fine){ .demo:hover{ border-color:var(--ink) } .demo:hover svg{ transform:translateX(3px) } }
+@media (max-width:899px){
+  /* The buttons sit over the mark's shoulders on phones; the secondary link gets a translucent field fill so it never
+     depends on the scrim for legibility. Desktop keeps the underlined link. */
+  .demo{ padding:10px 16px; border:1px solid var(--hair); border-radius:999px; background:color-mix(in srgb, var(--field) 60%, transparent) }
+}
+:focus-visible{ outline:2px solid var(--accent); outline-offset:4px; border-radius:4px }
+
+.foot{ margin-top:clamp(40px, 7vh, 72px); padding-top:18px; border-top:1px solid var(--hair); display:flex; gap:10px 24px; flex-wrap:wrap; font-size:12px; letter-spacing:.06em; color:var(--ink-muted) }
+.foot .dot{ font-style:normal; color:var(--accent) }
+
+/* Per-chapter accents */
+[data-w="0"]{ --accent:#8FD0D0 }
+[data-w="1"]{ --accent:#F0B87A }
+[data-w="2"]{ --accent:#3D7FB5 }
+[data-w="3"]{ --accent:#F5A3A8 }
+
+/* Arabic is never letter-spaced, never uppercased, whatever the parent does */
+[lang="ar"], [lang="ar"] *{ letter-spacing:0 !important; text-transform:none !important }
+
+@media (prefers-reduced-motion: reduce){
+  html{ scroll-behavior:auto }
+  .copy.reveal > *{ transform:none; filter:none; transition:opacity .3s ease, color .3s ease; transition-delay:0s !important }
+  body, .wa, .demo{ transition:none }
+}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Readex+Pro:wght@400;500;600&display=swap">
+
+<div class="bg bg-aura" aria-hidden="true"></div>
+<div class="bg bg-retail" aria-hidden="true"></div>
+<div class="bg bg-clinic" aria-hidden="true"></div>
+<div class="bg bg-gym" aria-hidden="true"></div>
+
+<canvas id="gl" aria-hidden="true"></canvas>
+
+<svg id="svgfall" viewBox="0 0 120 120" aria-hidden="true" style="--f-fa:#9FDCD8;--f-fb:#4FA09B;--f-ra:#223B5E;--f-rb:#3E8E89;--f-rc:#4FA09B;--f-rd:#B8ECE8;--f-node:#EDFDFC;--f-halo:#B8ECE8">
+  <defs>
+    <linearGradient id="ffl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--f-fa)"/><stop offset="1" style="stop-color:var(--f-fb)"/></linearGradient>
+    <linearGradient id="ffr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3E7E88"/><stop offset="1" stop-color="#1E3A5A"/></linearGradient>
+    <linearGradient id="frb" x1="0" y1="0" x2="1" y2="0"><stop offset="0" style="stop-color:var(--f-ra)"/><stop offset="1" style="stop-color:var(--f-rb)"/></linearGradient>
+    <linearGradient id="frf" x1="0" y1="0" x2="1" y2="0"><stop offset="0" style="stop-color:var(--f-rc)"/><stop offset="1" style="stop-color:var(--f-rd)"/></linearGradient>
+  </defs>
+  <path d="M 24 69 A 36 8 0 0 1 96 69" transform="rotate(-12 60 69)" fill="none" stroke="url(#frb)" stroke-width="5" opacity=".6"/>
+  <path d="M60 12.6 L60 56 L40 104 L22 104 Z" fill="url(#ffl)"/>
+  <path d="M60 12.6 L98 104 L80 104 L60 56 Z" fill="url(#ffr)"/>
+  <line x1="60" y1="12.6" x2="60" y2="56" stroke="#E8FBF9" stroke-width="1.3" opacity=".95"/>
+  <path d="M 24 69 A 36 8 0 0 0 96 69" transform="rotate(-12 60 69)" fill="none" stroke="url(#frf)" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="95.2" cy="61.5" r="7.5" style="fill:var(--f-halo)" opacity=".3"/>
+  <circle cx="95.2" cy="61.5" r="4" style="fill:var(--f-node)"/>
+</svg>
+
+<div class="scrim sc-aura" aria-hidden="true"></div>
+<div class="scrim sc-retail" aria-hidden="true"></div>
+<div class="scrim sc-clinic" aria-hidden="true"></div>
+<div class="scrim sc-gym" aria-hidden="true"></div>
+
+<div class="grain" aria-hidden="true"></div>
+
+<header class="top">
+  <a class="brand" href="#top" aria-label="Action Aura, back to top">
+    <svg viewBox="0 0 120 120" aria-hidden="true"><path d="M60 12.6 L60 56 L40 104 L22 104 Z M60 12.6 L98 104 L80 104 L60 56 Z" fill="currentColor"/><path d="M 24 69 A 36 8 0 0 0 96 69" transform="rotate(-12 60 69)" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" opacity=".85"/><circle cx="95.2" cy="61.5" r="5" fill="currentColor"/></svg>
+    Action Aura
+  </a>
+  <nav aria-label="Products">
+    <a href="#retail">Aura Retail</a>
+    <a href="#clinic">Aura Clinic</a>
+    <a href="#gym">Aura Gym</a>
+    <a href="#talk">Talk to us</a>
+  </nav>
+</header>
+
+<main id="top">
+  <section class="hero" data-w="0" aria-labelledby="h-hero">
+    <div class="copy reveal">
+      <h1 id="h-hero">Your shop keeps selling, even when the internet doesn't.</h1>
+      <p class="ar-title" lang="ar" dir="rtl">محلّك يبيع… حتى لو انقطع الإنترنت</p>
+      <p class="lead">Till, stock and books for shops and showrooms. It runs on the counter and on your phone, works offline, and syncs when you are back.</p>
+      <p class="lead ar" lang="ar" dir="rtl">كاشير ومخزون ودفاتر للمحلات والمعارض. يعمل على الكاونتر وعلى هاتفك، بلا إنترنت، ويتزامن عند عودته.</p>
+      <div class="cta">
+        <a class="wa" href="https://wa.me/962780069485"><span class="disc"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg></span>Chat on WhatsApp</a>
+        <a class="demo" href="#talk">Book a free demo <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h11M9 3.5 13.5 8 9 12.5"/></svg></a>
+      </div>
+    </div>
+  </section>
+
+  <section class="chapter" id="aura" data-w="0" aria-labelledby="h-aura">
+    <div class="copy reveal">
+      <h2 id="h-aura">Action <span class="hl">Aura</span></h2>
+      <p class="ar-title" lang="ar" dir="rtl">أكشن <span class="hl">أورا</span></p>
+      <p class="lead">One mark, one way of working, three products. Each runs on its own; all of them share identity, licensing and sync.</p>
+      <p class="lead ar" lang="ar" dir="rtl">علامة واحدة وطريقة عمل واحدة وثلاثة منتجات. كلٌّ منها يعمل وحده، وتتشارك جميعها الهوية والترخيص والمزامنة.</p>
+    </div>
+  </section>
+
+  <section class="chapter flip" id="retail" data-w="1" aria-labelledby="h-retail">
+    <div class="copy reveal">
+      <p class="status"><span class="tag"><span>Available now</span><span lang="ar" dir="rtl">متوفّر الآن</span></span></p>
+      <h2 id="h-retail">Aura <span class="hl">Retail</span></h2>
+      <p class="ar-title" lang="ar" dir="rtl">أورا <span class="hl">ريتيل</span></p>
+      <p class="lead">The till that keeps selling offline. Barcode scanning, stock, receivables and payables, receipts in Arabic and English, and a phone that mirrors the counter.</p>
+      <p class="lead ar" lang="ar" dir="rtl">الكاشير الذي يواصل البيع بلا إنترنت: قراءة الباركود، والمخزون، والذمم المدينة والدائنة، وفواتير بالعربية والإنجليزية، وهاتف يعكس شاشة الكاونتر.</p>
+    </div>
+  </section>
+
+  <section class="chapter" id="clinic" data-w="2" aria-labelledby="h-clinic">
+    <div class="copy reveal">
+      <p class="status"><span class="tag"><span>Available now</span><span lang="ar" dir="rtl">متوفّر الآن</span></span></p>
+      <h2 id="h-clinic">Aura <span class="hl">Clinic</span></h2>
+      <p class="ar-title" lang="ar" dir="rtl">أورا <span class="hl">كلينك</span></p>
+      <p class="lead">Appointments, patient records, treatment plans and billing, in the same calm system.</p>
+      <p class="lead ar" lang="ar" dir="rtl">المواعيد وسجلات المرضى وخطط العلاج والفواتير، في النظام الهادئ نفسه.</p>
+    </div>
+  </section>
+
+  <section class="chapter flip" id="gym" data-w="3" aria-labelledby="h-gym">
+    <div class="copy reveal">
+      <p class="status"><span class="tag dev"><span>Coming</span><span lang="ar" dir="rtl">قريبًا</span></span></p>
+      <h2 id="h-gym">Aura <span class="hl">Gym</span></h2>
+      <p class="ar-title" lang="ar" dir="rtl">أورا <span class="hl">جيم</span></p>
+      <p class="lead">Members, plans and check-ins. A membership lives over time, so renewals, freezes and attendance come first.</p>
+      <p class="lead ar" lang="ar" dir="rtl">الأعضاء والاشتراكات والحضور. الاشتراك يمتدّ عبر الزمن، لذلك يأتي التجديد والتجميد والحضور أولًا.</p>
+    </div>
+  </section>
+
+  <section class="close" id="talk" data-w="0" aria-labelledby="h-talk">
+    <div class="copy reveal">
+      <h2 id="h-talk">Twenty minutes, at your counter.</h2>
+      <p class="ar-title" lang="ar" dir="rtl">عشرون دقيقة، عند كاونترك.</p>
+      <p class="lead">In Arabic or English, in the shop or on a call. We bring the till, you bring the questions.</p>
+      <p class="lead ar" lang="ar" dir="rtl">بالعربية أو الإنجليزية، في المحل أو عبر مكالمة. نحضر الكاشير، وتحضر أنت الأسئلة.</p>
+      <div class="cta">
+        <a class="wa" href="https://wa.me/962780069485"><span class="disc"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg></span>Chat on WhatsApp</a>
+        <a class="demo" href="https://wa.me/962780069485?text=Demo">Book a free demo <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h11M9 3.5 13.5 8 9 12.5"/></svg></a>
+      </div>
+      <p class="foot"><span>Action Aura · Amman, Jordan</span><span>Go Bigger <i class="dot">·</i> Go Smarter</span></p>
+    </div>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+  'use strict';
+  // ---- World palettes (enhance-spec.md section 2). facetL is each product's MID tone; the vertex ramp builds the kit's light-top/saturated-bottom gradient from it. facetR stays lifted navy in the dark worlds (family rule) and true navy #16233D in the Clinic room. exp = tone-mapping exposure.
+  var W=[
+    {facetL:'#4FA09B', facetR:'#22304A', ring:'#6FC0BC', ringEm:'#2F7B7B', node:'#EDFDFC', halo:'#8FD0D0', glow:'#5FB3AE', key:'#E6F4F2', rim:'#5FB3AE', sky:'#3B5577', ground:'#0E1729', shadow:'#02060C', exp:1.0, light:0},
+    {facetL:'#C97B3D', facetR:'#22304A', ring:'#CF8244', ringEm:'#6B3410', node:'#FBE3C4', halo:'#F0B87A', glow:'#C97B3D', key:'#FFEFDC', rim:'#E0945A', sky:'#5A3A24', ground:'#1A1512', shadow:'#060302', exp:1.0, light:0},
+    {facetL:'#3D7FB5', facetR:'#16233D', ring:'#2F6AA0', ringEm:'#1A446C', node:'#F4FAFF', halo:'#8CC7EE', glow:'#3D7FB5', key:'#FFFFFF', rim:'#8CC7EE', sky:'#FFFFFF', ground:'#B9CFE0', shadow:'#5F7D9C', exp:.92, light:1},
+    {facetL:'#8B1E3F', facetR:'#22304A', ring:'#9E2342', ringEm:'#4A0C1E', node:'#FFF1F2', halo:'#F5A3A8', glow:'#B8283F', key:'#FFEDEA', rim:'#D8465C', sky:'#4A1A28', ground:'#1A0E14', shadow:'#08030A', exp:1.0, light:0}
+  ];
+  var root=document.documentElement;
+  var reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var bgs=[].slice.call(document.querySelectorAll('.bg'));
+  var scrims=[].slice.call(document.querySelectorAll('.scrim'));
+  var fall=document.getElementById('svgfall');
+  var clamp=function(v,a,b){ return v<a?a:v>b?b:v; };
+  var smooth=function(t){ return t*t*(3-2*t); };
+
+  // ---- Scroll -> world progress. Anchors are the sections; each names its world. Worlds blend between anchor centres.
+  var anchors=[].slice.call(document.querySelectorAll('section[data-w]'));
+  var centres=[], total=1;
+  function measure(){
+    centres=anchors.map(function(s){ return s.offsetTop+s.offsetHeight/2; });
+    total=Math.max(1, root.scrollHeight-innerHeight);
+  }
+  var target={p:0,f:0}, sp=0, sf=0, lastKey=-1;
+  function readScroll(){
+    var yc=scrollY+innerHeight/2, k=0;
+    while(k<centres.length-2 && yc>centres[k+1]) k++;
+    var t=clamp((yc-centres[k])/Math.max(1,centres[k+1]-centres[k]),0,1);
+    target.p=k+t; target.f=clamp(scrollY/total,0,1);
+  }
+  addEventListener('scroll', readScroll, {passive:true});
+
+  // Reveal once on entry
+  var reveals=[].slice.call(document.querySelectorAll('.reveal'));
+  function revealAll(){ reveals.forEach(function(el){ el.classList.add('in'); }); }
+  if('IntersectionObserver' in window){
+    var io=new IntersectionObserver(function(es){ es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } }); },{threshold:.12});
+    reveals.forEach(function(el){ io.observe(el); });
+    setTimeout(revealAll, 2500); // content must never stay hidden, whatever the observer does
+  }else revealAll();
+
+  function worldsAt(p){
+    var k=Math.min(anchors.length-2, Math.floor(p)), te=smooth(p-k);
+    return {a:+anchors[k].dataset.w, b:+anchors[k+1].dataset.w, te:te};
+  }
+  function applyDom(p){
+    var m=worldsAt(p);
+    var mix=[0,0,0,0]; mix[m.a]+=1-m.te; mix[m.b]+=m.te;
+    // Fields are opaque, so they stack: layer k's opacity is its share over everything beneath it (exact composite).
+    var below=mix[0];
+    for(var k=1;k<4;k++){ var o=below+mix[k]>0 ? mix[k]/(below+mix[k]) : 0; bgs[k].style.opacity=o.toFixed(3); below+=mix[k]; }
+    // Scrims are semi-transparent vignettes with clear regions, so the stacked formula must NOT be used for them: it holds the
+    // lowest active vignette at opacity 1 until the exact snap and lets it show through the upper one's clear areas (the r4
+    // grey band over the Clinic jewel and the porcelain ghost over the Gym jewel). Each scrim simply takes its own share,
+    // including the master one, which was never switched off before.
+    for(var j=0;j<4;j++) scrims[j].style.opacity=mix[j].toFixed(3);
+    root.classList.toggle('world-light', mix[2]>.5);
+    root.setAttribute('data-chapter', anchors[Math.min(anchors.length-1, Math.max(0, Math.round(p)))].id || 'hero');   // contract C1: the page styles the active nav link
+    root.classList.toggle('scrolled', target.f>.03);
+  }
+
+  // ---- Plain hex lerp for the SVG fallback (works without three.js)
+  function hexRgb(h){ h=h.replace('#',''); return [parseInt(h.substr(0,2),16),parseInt(h.substr(2,2),16),parseInt(h.substr(4,2),16)]; }
+  function lerpHex(a,b,t){ var A=hexRgb(a),B=hexRgb(b); return 'rgb('+Math.round(A[0]+(B[0]-A[0])*t)+','+Math.round(A[1]+(B[1]-A[1])*t)+','+Math.round(A[2]+(B[2]-A[2])*t)+')'; }
+  function applyFallback(p){
+    var m=worldsAt(p), A=W[m.a], B=W[m.b], te=m.te;
+    fall.style.setProperty('--f-fa', lerpHex(A.halo,B.halo,te));
+    fall.style.setProperty('--f-fb', lerpHex(A.facetL,B.facetL,te));
+    fall.style.setProperty('--f-ra', lerpHex(A.ground,B.ground,te));
+    fall.style.setProperty('--f-rb', lerpHex(A.ringEm,B.ringEm,te));
+    fall.style.setProperty('--f-rc', lerpHex(A.ringEm,B.ringEm,te));
+    fall.style.setProperty('--f-rd', lerpHex(A.ring,B.ring,te));
+    fall.style.setProperty('--f-node', lerpHex(A.node,B.node,te));
+    fall.style.setProperty('--f-halo', lerpHex(A.halo,B.halo,te));
+  }
+
+  // ---- three.js backdrop
+  var renderer=null, render3d=null;
+  try{
+    var canvas=document.getElementById('gl');
+    var gl=canvas.getContext('webgl2')||canvas.getContext('webgl');
+    if(window.THREE && gl) renderer=new THREE.WebGLRenderer({canvas:canvas, context:gl, antialias:true, alpha:true, powerPreference:'high-performance'});
+  }catch(e){ renderer=null; }
+
+  if(!renderer){
+    fall.classList.add('show');
+    var glc=document.getElementById('gl'); glc.parentNode.removeChild(glc);
+  }else{
+    render3d=init3d(renderer);
+  }
+
+  function init3d(renderer){
+    var phone=innerWidth<900;
+    var C=function(h){ return new THREE.Color(h); };
+    W.forEach(function(w){ w.c={}; for(var k in w) if(typeof w[k]==='string') w.c[k]=C(w[k]); });
+
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, phone?1.5:2));
+    renderer.outputEncoding=THREE.sRGBEncoding;
+    renderer.toneMapping=THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure=1.0;
+    renderer.setClearColor(0x000000, 0);
+    renderer.shadowMap.enabled=true;
+    renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+
+    var scene=new THREE.Scene();
+    var camera=new THREE.PerspectiveCamera(22, 1, .1, 120);   // longer lens: product-render perspective, the ring reads as a true ellipse
+
+    // Procedural studio environment: gradient dome + light cards, baked through PMREM. No textures.
+    (function(){
+      var es=new THREE.Scene();
+      var dg=new THREE.SphereGeometry(30,32,16), dp=dg.attributes.position, dc=new Float32Array(dp.count*3);
+      var top=C('#9A9EA6'), mid=C('#2E3238'), bot=C('#07080A'), tmp=new THREE.Color();   // neutral dome: a cool dome greys out copper and garnet
+      for(var i=0;i<dp.count;i++){ var y=dp.getY(i)/30; if(y>=0) tmp.copy(mid).lerp(top,y); else tmp.copy(mid).lerp(bot,-y); dc[i*3]=tmp.r; dc[i*3+1]=tmp.g; dc[i*3+2]=tmp.b; }
+      dg.setAttribute('color', new THREE.BufferAttribute(dc,3));
+      es.add(new THREE.Mesh(dg, new THREE.MeshBasicMaterial({side:THREE.BackSide, vertexColors:true})));
+      function card(w,h,x,y,z,col){ var m=new THREE.Mesh(new THREE.PlaneGeometry(w,h), new THREE.MeshBasicMaterial({color:col, side:THREE.DoubleSide})); m.position.set(x,y,z); m.lookAt(0,0,0); es.add(m); }
+      card(22,5, 0,10,6, 0xffffff);      // wide softbox above: the long specular streak across the facets
+      card(6,13, -12,3,-2, 0xbfe6ee);
+      card(5,10, 11,-2,6, 0xd6d9e0);
+      card(3,16, 9,4,-10, 0xffffff);     // tall rim card behind right: edge light on the navy facet
+      card(2.5,2.5, 5,7,8, 0xffffff);    // small hot card front-right: a tight glint on the bevels and the ring crown
+      card(12,2, 0,-9,5, 0x707a88);
+      var pm=new THREE.PMREMGenerator(renderer);
+      scene.environment=pm.fromScene(es, .035).texture;
+      pm.dispose();
+    })();
+
+    var rig=new THREE.Group(), tilt=new THREE.Group(), mark=new THREE.Group();
+    scene.add(rig); rig.add(tilt); tilt.add(mark);
+
+    // Facets from the SVG geometry (120u canvas -> units: x'=(x-60)/10, y'=(60-y)/10)
+    function facet(pts){
+      var s=new THREE.Shape();
+      pts.forEach(function(p,i){ i? s.lineTo(p[0],p[1]) : s.moveTo(p[0],p[1]); });
+      s.closePath();
+      var g=new THREE.ExtrudeGeometry(s,{depth:.7, bevelEnabled:true, bevelThickness:.12, bevelSize:.09, bevelSegments:phone?3:6, curveSegments:4});
+      g.translate(0,0,-.35);
+      // Brand facets are light-at-top, saturated-at-bottom gradients: a brightness ramp in vertex colours (>1 brightens).
+      var p=g.attributes.position, c=new Float32Array(p.count*3);
+      // u is clamped: the bevel pushes vertices 0.09 outside the shape, and pow(negative) is NaN, which paints whole triangles black.
+      for(var i=0;i<p.count;i++){ var u=Math.min(1,Math.max(0,(p.getY(i)+4.4)/9.14)), b=.55+.5*Math.pow(u,1.2); c[i*3]=c[i*3+1]=c[i*3+2]=b; }
+      g.setAttribute('color', new THREE.BufferAttribute(c,3));
+      return g;
+    }
+    var matL=new THREE.MeshPhysicalMaterial({color:W[0].c.facetL, vertexColors:true, metalness:1, roughness:.2, clearcoat:.35, clearcoatRoughness:.08, envMapIntensity:1.0, emissive:C('#000000')});
+    var matR=new THREE.MeshStandardMaterial({color:W[0].c.facetR, vertexColors:true, metalness:1, roughness:.24, envMapIntensity:1.0});
+    var mL=new THREE.Mesh(facet([[0,4.74],[0,.4],[-2,-4.4],[-3.8,-4.4]]), matL);
+    var mR=new THREE.Mesh(facet([[0,4.74],[3.8,-4.4],[2,-4.4],[0,.4]]), matR);
+    var FOLD=.3; mL.rotation.y=-FOLD; mR.rotation.y=FOLD; // legs recede, ridge nearest the viewer
+    mL.castShadow=mR.castShadow=mL.receiveShadow=mR.receiveShadow=true;
+    mark.add(mL, mR);
+
+    var ridge=new THREE.Mesh(new THREE.BoxGeometry(.06,4.3,.06), new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:.9}));
+    ridge.position.set(0,2.57,.43); mark.add(ridge);
+
+    // Orbit ring. Torus in its own plane, tilted so the top arc passes behind the shoulders and the bottom arc in front
+    // of the legs, then rotated 12 degrees like the SVG. Back/front dimming is done in view depth (see onBeforeCompile),
+    // so it stays right while the node travels and the camera drifts.
+    var ringZ=new THREE.Group(); ringZ.position.set(0,-.9,0); ringZ.rotation.z=12*Math.PI/180;
+    var ringX=new THREE.Group(); ringX.rotation.x=-75*Math.PI/180;
+    var spin=new THREE.Group();
+    mark.add(ringZ); ringZ.add(ringX); ringX.add(spin);
+    var matRing=new THREE.MeshStandardMaterial({color:W[0].c.ring, metalness:1, roughness:.2, emissive:W[0].c.ringEm, emissiveIntensity:.45, envMapIntensity:1.0});
+    var ringShader=null;
+    matRing.onBeforeCompile=function(sh){
+      sh.uniforms.uRingZ={value:30};
+      sh.fragmentShader=sh.fragmentShader
+        .replace('uniform vec3 diffuse;','uniform vec3 diffuse; uniform float uRingZ;')
+        .replace('vec4 diffuseColor = vec4( diffuse, opacity );','float auraBack = smoothstep(-0.6, 2.8, vViewPosition.z - uRingZ); vec4 diffuseColor = vec4( diffuse * mix(1.0, 0.3, auraBack), opacity );')
+        .replace('vec3 totalEmissiveRadiance = emissive;','vec3 totalEmissiveRadiance = emissive * mix(1.0, 0.15, auraBack);');
+      ringShader=sh;
+    };
+    var ringMesh=new THREE.Mesh(new THREE.TorusGeometry(3.6,.26,phone?16:32,phone?120:220), matRing);   // tube .26: a hair over the kit's 6/120 stroke so it reads at 500 px
+    ringMesh.castShadow=ringMesh.receiveShadow=true;
+    spin.add(ringMesh);
+
+    // Energy node: emissive core + additive halos (dark worlds) + normal-blend halo (light world) + a real point light.
+    var node=new THREE.Group(); node.position.set(3.6,0,0); spin.add(node);
+    var core=new THREE.Mesh(new THREE.SphereGeometry(.38,28,20), new THREE.MeshBasicMaterial({color:W[0].c.node}));   // clears the .26 tube by .12 all round: a bead on the ring, not a lip around it
+    node.add(core);
+    var haloTex=(function(){
+      var cv=document.createElement('canvas'); cv.width=cv.height=128; var x=cv.getContext('2d');
+      var g=x.createRadialGradient(64,64,0,64,64,64);
+      g.addColorStop(0,'rgba(255,255,255,1)'); g.addColorStop(.18,'rgba(255,255,255,.75)'); g.addColorStop(.45,'rgba(255,255,255,.22)'); g.addColorStop(1,'rgba(255,255,255,0)');
+      x.fillStyle=g; x.fillRect(0,0,128,128);
+      return new THREE.CanvasTexture(cv);
+    })();
+    function sprite(scale,opacity,additive,depthTest,parent){
+      var s=new THREE.Sprite(new THREE.SpriteMaterial({map:haloTex, color:W[0].c.halo, transparent:true, opacity:opacity, depthWrite:false, depthTest:depthTest, blending:additive?THREE.AdditiveBlending:THREE.NormalBlending}));
+      s.scale.set(scale,scale,1); parent.add(s); return s;
+    }
+    var haloA=sprite(1.9,.6,true,false,node), haloB=sprite(5.2,.22,true,false,node), haloN=sprite(4.4,0,false,false,node), haloT=sprite(1.5,0,false,false,node);   // haloA no longer depth-tests: the tube was cutting the glow in half, which read as a white band
+    var nodeLight=new THREE.PointLight(0xffffff, 1.2, 8, 2); node.add(nodeLight);
+
+    // Soft ground shadow so the letter has weight
+    var shadow=new THREE.Sprite(new THREE.SpriteMaterial({map:haloTex, color:W[0].c.shadow, transparent:true, opacity:.55, depthWrite:false, blending:THREE.NormalBlending}));
+    shadow.scale.set(7.6,1.25,1); shadow.position.set(.1,-4.7,.6); mark.add(shadow);   // fully on screen now: tighter, so the jewel stands on something
+
+    var hemi=new THREE.HemisphereLight(0xffffff, 0x000000, .45); scene.add(hemi);
+    // Key light lives on the rig so its shadow frustum follows the mark. Its shadow is what sells "pierced":
+    // the front arc shades the legs, the legs shade the back arc.
+    var key=new THREE.DirectionalLight(0xffffff, 1.0); key.position.set(-5,8,9);
+    key.castShadow=true; key.shadow.mapSize.set(phone?512:1024, phone?512:1024);
+    key.shadow.camera.left=key.shadow.camera.bottom=-6.6; key.shadow.camera.right=key.shadow.camera.top=6.6;   // covers the 1.14 station without clipping the ring's shadow
+    key.shadow.camera.near=1; key.shadow.camera.far=40; key.shadow.bias=-.0004; key.shadow.normalBias=.03;
+    rig.add(key); rig.add(key.target);
+    var rim=new THREE.DirectionalLight(0xffffff, .75); rim.position.set(7,2,-6); scene.add(rim);
+
+    // Layout: the mark is a DIRECTED JEWEL, fully visible, gliding between one station per section as you scroll.
+    // Desktop scale 1 = 58% of the viewport height. Stations alternate sides with the copy column (contract C5: the page
+    // flips the copy to the right for Retail and Gym), so the object is always opposite the text and crosses the stage on
+    // each product. Phones keep it centred low (apex at mid-height) at every station; only the close shrinks a little.
+    // fx = centre offset as a fraction of the view width, fy = centre offset as a fraction of the view height, s = scale.
+    var ST_D=[{fx:.23,fy:-.04,s:1},{fx:.16,fy:-.02,s:1.14},{fx:-.23,fy:-.04,s:.9},{fx:.23,fy:-.04,s:.9},{fx:-.23,fy:-.04,s:.9},{fx:.23,fy:-.08,s:.76}];
+    var ST_P=[{fx:0,fy:0,s:1},{fx:0,fy:0,s:1},{fx:0,fy:0,s:1},{fx:0,fy:0,s:1},{fx:0,fy:0,s:1},{fx:0,fy:0,s:.9}];
+    var view={w:1,h:1,desktop:true};
+    function stationAt(p){
+      var ST=view.desktop?ST_D:ST_P, k=Math.min(ST.length-2, Math.max(0, Math.floor(p))), te=smooth(p-k), a=ST[k], b=ST[k+1];
+      return {fx:a.fx+(b.fx-a.fx)*te, fy:a.fy+(b.fy-a.fy)*te, s:a.s+(b.s-a.s)*te};
+    }
+    function resize(){
+      var w=innerWidth, h=innerHeight, aspect=w/h, desktop=w>=900;
+      renderer.setSize(w,h,false); camera.aspect=aspect; camera.updateProjectionMatrix();
+      var visH = desktop ? 9.14/.58 : (7.66/.95)/aspect;   // scale 1: mark height = 58% of the view (desktop); mark width = 95% of the view (phone)
+      var d = visH/2/Math.tan(camera.fov*Math.PI/360), elev=6*Math.PI/180;
+      camera.position.set(0, d*Math.sin(elev), d*Math.cos(elev)); camera.lookAt(0,0,0);
+      view.w=visH*aspect; view.h=visH; view.desktop=desktop;   // the rig is placed every frame from the station
+    }
+    addEventListener('resize', function(){ resize(); measure(); readScroll(); }); resize();
+
+    var mouse={x:0,y:0}, tx=0, ty=0, _v=new THREE.Vector3();
+    addEventListener('pointermove', function(e){
+      if(reduce) return; var f=e.pointerType==='touch'?.4:1;
+      mouse.x=(e.clientX/innerWidth*2-1)*f; mouse.y=(e.clientY/innerHeight*2-1)*f;
+    }, {passive:true});
+
+    function applyWorld(p){
+      var m=worldsAt(p), A=W[m.a].c, B=W[m.b].c, te=m.te;
+      matL.color.copy(A.facetL).lerp(B.facetL,te);
+      matL.emissive.copy(matL.color).multiplyScalar(.08);
+      matR.color.copy(A.facetR).lerp(B.facetR,te);
+      matRing.color.copy(A.ring).lerp(B.ring,te);
+      matRing.emissive.copy(A.ringEm).lerp(B.ringEm,te);
+      core.material.color.copy(A.node).lerp(B.node,te);
+      ridge.material.color.copy(core.material.color);
+      haloA.material.color.copy(A.halo).lerp(B.halo,te);
+      haloB.material.color.copy(haloA.material.color);
+      haloN.material.color.copy(A.halo).lerp(B.halo,te); haloT.material.color.copy(A.node).lerp(B.node,te);
+      // The point light takes the deeper "glow" tone where a world defines one, so lit metal keeps its hue instead of washing to pink.
+      nodeLight.color.copy(A.glow||A.halo).lerp(B.glow||B.halo,te);
+      key.color.copy(A.key).lerp(B.key,te);
+      rim.color.copy(A.rim).lerp(B.rim,te);
+      hemi.color.copy(A.sky).lerp(B.sky,te);
+      hemi.groundColor.copy(A.ground).lerp(B.ground,te);
+      var light=W[m.a].light+(W[m.b].light-W[m.a].light)*te;
+      hemi.intensity=.45+.05*light; key.intensity=1.0-.3*light;
+      core.material.color.multiplyScalar(1.25+.6*light);   // pearl: a value above 1.0 survives ACES as true white; on porcelain a 1.0 white maps to grey
+      // Cobalt on porcelain: in the light room the facets become glazed ceramic (dielectric, clearcoated) and the ring deep glass,
+      // so the mark keeps saturation against the pale field instead of washing out as a pale relief did.
+      matR.metalness=1-.85*light; matR.roughness=.24+.2*light;
+      matL.metalness=1-.9*light; matL.roughness=.2+.04*light; matL.clearcoat=.35+.65*light; matL.envMapIntensity=1.0-.4*light;
+      matRing.metalness=1-.75*light; matRing.roughness=.2+.1*light; matRing.envMapIntensity=1.0-.6*light;
+      haloB.material.opacity=.2*(1-light);
+      haloN.material.opacity=.4*light; haloT.material.opacity=.55*light;   // light room: a tight white corona plus the wide sky halo, so the bead glows on porcelain too
+      shadow.material.color.copy(A.shadow).lerp(B.shadow,te);
+      shadow.material.opacity=.55-.23*light;
+      renderer.toneMappingExposure=W[m.a].exp+(W[m.b].exp-W[m.a].exp)*te;
+    }
+
+    // Arrival: the canvas fades in and the mark rises into place on first paint. Under reduced motion both are instant.
+    var born=null, cv=renderer.domElement;
+    cv.style.opacity='0'; cv.style.transition=reduce?'opacity .4s ease':'opacity 1.1s cubic-bezier(.23,1,.32,1)';
+    return function(p, f, now){
+      if(born===null){ born=now; requestAnimationFrame(function(){ cv.style.opacity='1'; }); }
+      var age=reduce?1:Math.min(1,(now-born)/1800), ea=1-Math.pow(1-age,3);
+      applyWorld(p);
+      // Choreography: glide and rescale between the two nearest stations (smoothstep across the section gap, then the
+      // loop's inertia). Desktop x is clamped so the ring's outer edge stays >= .37 units inside tall viewports; the phone
+      // keeps the apex at mid-height whatever the scale (origin = apex - 4.74*s). Desktop y: the mark's own centre is +.17*s.
+      var st=stationAt(p), sgn=st.fx<0?-1:1;
+      var bx=view.desktop ? sgn*Math.min(Math.abs(st.fx)*view.w, view.w/2-4.2*st.s) : 0;
+      var by=view.desktop ? st.fy*view.h-.17*st.s : -4.74*st.s;
+      mark.scale.setScalar(st.s);
+      // Scroll: the node sweeps the front arc from the right seam toward the centre; the camera view drifts a little.
+      spin.rotation.z=-f*Math.PI*.6;
+      rig.position.set(bx, by+f*.5-(1-ea)*.8, 0);   // small rise and arrival drop on top of the station
+      var s=now/1000, idleY=0, idleR=0, idleX=0;
+      if(!reduce){
+        idleY=Math.sin(s*.9)*.04; idleR=Math.sin(s*.45)*.06; idleX=Math.cos(s*.7)*.01;   // slow turntable sway, +-3.4 degrees over ~14 s, plus a small bob
+        // Facet Catch: every 9 s the key light swings from x=-5 to 0 and back over 1.4 s, a highlight travelling across the metal.
+        var cyc=s%9, sw=Math.min(1,cyc/1.4), e=sw*sw*(3-2*sw); key.position.x=-5+5*Math.sin(e*Math.PI);
+      }
+      tilt.position.y=idleY;
+      tx+=((mouse.x*.12 + idleR - .04 - st.fx*.4 + f*.26 - (1-ea)*.3) - tx)*.05;   // a slight yaw toward the copy column at every station
+      ty+=((-mouse.y*.07 + idleX) - ty)*.05;
+      tilt.rotation.y=tx; tilt.rotation.x=ty;
+      if(!reduce) haloA.material.opacity=.54+.08*Math.sin(s*2.2);
+      camera.updateMatrixWorld(); camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+      ringZ.getWorldPosition(_v).applyMatrix4(camera.matrixWorldInverse);
+      if(ringShader) ringShader.uniforms.uRingZ.value=-_v.z;
+      renderer.render(scene,camera);
+    };
+  }
+
+  // ---- One loop. Pauses when the tab is hidden; under reduced motion it renders only when the scroll changed.
+  var running=true, last=0;
+  function frame(now){
+    if(!running) return;
+    requestAnimationFrame(frame);
+    var dt=Math.min(.1,(now-last)/1000)||.016; last=now;   // clamp at 100 ms: a slow software GL still converges within ~3 s instead of ~10 s; identical at 60 fps
+    var k=1-Math.pow(1-(reduce?.2:.085), dt*60);
+    sp+=(target.p-sp)*k; if(Math.abs(target.p-sp)<.0004) sp=target.p;
+    sf+=(target.f-sf)*k; if(Math.abs(target.f-sf)<.0002) sf=target.f;
+    var keyv=sp*1000+sf;
+    if(reduce && keyv===lastKey) return;
+    lastKey=keyv;
+    applyDom(sp);
+    if(render3d) render3d(sp, sf, now); else applyFallback(sp);
+  }
+  document.addEventListener('visibilitychange', function(){
+    running=!document.hidden;
+    if(running){ last=performance.now(); requestAnimationFrame(frame); }
+  });
+  measure(); readScroll(); sp=target.p; sf=target.f;
+  if(document.fonts && document.fonts.ready) document.fonts.ready.then(function(){ measure(); readScroll(); });
+  requestAnimationFrame(frame);
+})();
+</script>

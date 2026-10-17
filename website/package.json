@@ -1,0 +1,26 @@
+{
+  "name": "action-aura-website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview --port 4321",
+    "check": "astro check",
+    "test": "vitest run",
+    "test:site": "playwright test"
+  },
+  "dependencies": {
+    "astro": "5.18.2",
+    "@astrojs/sitemap": "3.7.4",
+    "three": "0.128.0",
+    "@fontsource/outfit": "5.3.0",
+    "@fontsource/readex-pro": "5.3.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.10",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7",
+    "@playwright/test": "1.56.1"
+  }
+}
