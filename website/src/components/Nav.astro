@@ -1,0 +1,49 @@
+---
+import { dict, type Lang } from '../i18n/index';
+import { pagePath } from '../lib/seo';
+import StatusPill from './StatusPill.astro';
+
+interface Props {
+  lang: Lang;
+  slug: string;
+}
+
+const { lang, slug } = Astro.props;
+const t = dict(lang);
+const other: Lang = lang === 'en' ? 'ar' : 'en';
+const cur = (s: string) => (s === slug ? 'page' : undefined);
+---
+<header class="nav">
+  <a class="nav-brand" href={pagePath(lang, '')}>
+    <svg class="nav-mark" width="22" height="22" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+      <path d="M60 12.6 L98 104 L80 104 L60 56 L40 104 L22 104 Z" fill="currentColor"/>
+      <path d="M 24 69 A 36 8 0 0 0 96 69" transform="rotate(-12 60 69)" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round"/>
+    </svg>
+    {t.nav.brand}
+  </a>
+
+  <nav class="nav-links" aria-label="Main">
+    <a class="nav-link" data-chapter-link="retail" href={pagePath(lang, 'aura-retail')} aria-current={cur('aura-retail')}>{t.nav.retail}</a>
+    <a class="nav-link" data-chapter-link="clinic" href={pagePath(lang, 'aura-clinic')} aria-current={cur('aura-clinic')}>{t.nav.clinic}</a>
+    <a class="nav-link" data-chapter-link="gym" href={pagePath(lang, '') + '#gym'}>{t.nav.gym}</a>
+    <StatusPill kind="coming" />
+    <a class="nav-link" href={pagePath(lang, 'about')} aria-current={cur('about')}>{t.nav.about}</a>
+    <a class="nav-lang" hreflang={other} lang={other} href={pagePath(other, slug)}>{t.nav.switchTo}</a>
+    <a class="nav-demo" href={pagePath(lang, 'contact')} aria-current={cur('contact')}>{t.nav.demo}</a>
+  </nav>
+
+  <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-sheet" data-menu={t.nav.menu} data-close={t.nav.close}>
+    <span class="nav-toggle-bars" aria-hidden="true"></span>
+    <span class="nav-toggle-label visually-hidden">{t.nav.menu}</span>
+  </button>
+
+  <div id="nav-sheet" class="nav-sheet" hidden>
+    <a class="nav-sheet-link" data-chapter-link="retail" href={pagePath(lang, 'aura-retail')} aria-current={cur('aura-retail')}>{t.nav.retail}</a>
+    <a class="nav-sheet-link" data-chapter-link="clinic" href={pagePath(lang, 'aura-clinic')} aria-current={cur('aura-clinic')}>{t.nav.clinic}</a>
+    <a class="nav-sheet-link" data-chapter-link="gym" href={pagePath(lang, '') + '#gym'}>{t.nav.gym} <StatusPill kind="coming" /></a>
+    <a class="nav-sheet-link" href={pagePath(lang, 'about')} aria-current={cur('about')}>{t.nav.about}</a>
+    <a class="nav-sheet-link nav-lang" hreflang={other} lang={other} href={pagePath(other, slug)}>{t.nav.switchTo}</a>
+    <a class="nav-sheet-link nav-demo" href={pagePath(lang, 'contact')} aria-current={cur('contact')}>{t.nav.demo}</a>
+  </div>
+</header>
+<script>import '../scripts/nav';</script>

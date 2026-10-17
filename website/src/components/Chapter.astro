@@ -1,0 +1,31 @@
+---
+import StatusPill from './StatusPill.astro';
+import type { Lang } from '../i18n/index';
+
+interface Props {
+  id: string;
+  lang: Lang;
+  world: 'master' | 'retail' | 'clinic' | 'gym';
+  status?: 'available' | 'coming';
+  flip?: boolean;
+  title: string;
+  accentWord: string;
+  lead: string;
+  link?: { href: string; label: string };
+}
+
+const { id, world, status, flip, title, accentWord, lead, link } = Astro.props;
+
+const at = accentWord ? title.indexOf(accentWord) : -1;
+const before = at >= 0 ? title.slice(0, at) : title;
+const hit = at >= 0 ? accentWord : '';
+const after = at >= 0 ? title.slice(at + accentWord.length) : '';
+---
+<section id={id} data-w={world} class:list={['chapter', { flip }]}>
+  <div class="copy reveal">
+    {status && <StatusPill kind={status} />}
+    <h2>{before}{at >= 0 && <span class="hl">{hit}</span>}{after}</h2>
+    <p class="lead">{lead}</p>
+    {link && <a class="chapter-link" href={link.href}>{link.label}</a>}
+  </div>
+</section>

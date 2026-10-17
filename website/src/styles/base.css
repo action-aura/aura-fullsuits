@@ -224,3 +224,69 @@ body:lang(ar) {
     transition-delay: 0s !important;
   }
 }
+
+/* Hero and close layout (prototype logo-worlds.html lines 86-97): same box as .chapter, copy in column 1 */
+.hero,
+.close {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  inline-size: 100%;
+  max-inline-size: 1400px;
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+@media (min-width: 900px) {
+  .hero,
+  .close {
+    grid-template-columns: minmax(0, 46%) 1fr;
+    align-items: center;
+  }
+
+  .hero > .copy,
+  .close > .copy {
+    grid-column: 1;
+  }
+}
+
+.hero {
+  min-block-size: 100vh;
+  min-block-size: 100svh;
+  padding-block: 72px 88px;
+}
+
+.close {
+  min-block-size: 70vh;
+  padding-block: clamp(88px, 14vh, 150px) clamp(120px, 18vh, 200px);
+}
+
+@media (max-width: 899px) {
+  .hero,
+  .close {
+    align-items: start;
+    padding-block-start: min(16vh, 140px);
+  }
+}
+
+.copy {
+  max-inline-size: 36rem;
+}
+
+.ctas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 22px;
+  align-items: center;
+  margin-block-start: 28px;
+}
+
+.price-line {
+  margin-block-start: 18px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+body {
+  background: #0E1729;
+}

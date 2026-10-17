@@ -1,0 +1,18 @@
+---
+import { dict, type Lang } from '../i18n';
+import { pagePath } from '../lib/seo';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const t = dict(lang);
+---
+
+<a class="demo-link" href={pagePath(lang, 'contact')}>
+  <span>{t.cta.demo}</span>
+  <svg class="demo-arrow" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M2 8h12M9 3l5 5-5 5"></path>
+  </svg>
+</a>

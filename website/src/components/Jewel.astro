@@ -1,0 +1,76 @@
+---
+import { dict, type Lang } from '../i18n';
+interface Props { lang: Lang; fixed?: { x: number; y: number; scale: number } }
+const { lang, fixed } = Astro.props;
+const t = dict(lang);
+---
+<div class="world-bg bg-master" aria-hidden="true"></div>
+<div class="world-bg bg-retail" aria-hidden="true"></div>
+<div class="world-bg bg-clinic" aria-hidden="true"></div>
+<div class="world-bg bg-gym" aria-hidden="true"></div>
+<div class="jewel" aria-hidden="true" data-fixed={fixed ? JSON.stringify(fixed) : undefined}>
+  {['master', 'retail', 'clinic', 'gym'].map((w) => (
+    <img class={`jewel-still still-${w}`} src={`/jewel/still-${w}.webp`} alt="" width="900" height="1200" decoding="async" />
+  ))}
+  <canvas class="jewel-canvas"></canvas>
+</div>
+<div class="world-scrim sc-master" aria-hidden="true"></div>
+<div class="world-scrim sc-retail" aria-hidden="true"></div>
+<div class="world-scrim sc-clinic" aria-hidden="true"></div>
+<div class="world-scrim sc-gym" aria-hidden="true"></div>
+<span class="visually-hidden">{t.a11y.jewel}</span>
+<script>
+  import { pickTier } from '../scripts/jewel/tier';
+  import { HOME_DESKTOP, HOME_PHONE, stationAt } from '../scripts/jewel/stations';
+
+  const root = document.documentElement;
+  const layer = document.querySelector<HTMLElement>('.jewel')!;
+  const canvas = layer.querySelector<HTMLCanvasElement>('.jewel-canvas')!;
+  const rtl = root.dir === 'rtl';
+  const phone = matchMedia('(max-width: 899px)').matches;
+  const stations = phone ? HOME_PHONE : HOME_DESKTOP;
+  const fixed = layer.dataset.fixed ? (JSON.parse(layer.dataset.fixed) as { x: number; y: number; scale: number }) : null;
+  const gl2 = !!document.createElement('canvas').getContext('webgl2');
+  const nav = navigator as Navigator & { deviceMemory?: number; connection?: { saveData?: boolean } };
+  const tier = pickTier({
+    reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, webgl2: gl2,
+    deviceMemory: nav.deviceMemory, saveData: nav.connection?.saveData, width: innerWidth, dpr: devicePixelRatio,
+  });
+  layer.dataset.tier = tier;
+
+  const apply = (s: { x: number; y: number; scale: number }) => {
+    root.style.setProperty('--jx', String(s.x));
+    root.style.setProperty('--jy', String(s.y));
+    root.style.setProperty('--js', String(s.scale));
+    return s;
+  };
+  const centres = () => Array.from(document.querySelectorAll<HTMLElement>('[data-w]')).map((el) => el.offsetTop + el.offsetHeight / 2);
+  let cs = fixed ? [] : centres();
+  const place = () => apply(fixed ?? stationAt(stations, cs, scrollY + innerHeight / 2, rtl));
+  if (!fixed) addEventListener('resize', () => { cs = centres(); place(); });
+  place();
+
+  if (tier === 'rich') {
+    addEventListener('load', async () => {
+      const { mountJewel } = await import('../scripts/jewel/scene.js');
+      const j = mountJewel(canvas, { phone });
+      root.addEventListener('worldmix', (e) => j.setMix((e as CustomEvent).detail));
+      const progress = () => {
+        const p = scrollY / Math.max(1, document.documentElement.scrollHeight - innerHeight);
+        j.setProgress(Math.min(1, Math.max(0, p)));
+      };
+      if (fixed) {
+        j.setStation(fixed);
+      } else {
+        const tick = () => j.setStation(place());
+        addEventListener('scroll', tick, { passive: true });
+        tick();
+      }
+      addEventListener('scroll', progress, { passive: true });
+      progress();
+      layer.classList.add('is-live');
+    }, { once: true });
+  } else if (!fixed) {
+    addEventListener('scroll', place, { passive: true });
+  }
+</script>

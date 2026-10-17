@@ -1,0 +1,31 @@
+---
+import Base from '../layouts/Base.astro';
+import { dict } from '../i18n';
+
+const en = dict('en');
+const ar = dict('ar');
+---
+<Base lang="en" slug="" title={en.meta.chooser.title} description={en.meta.chooser.description} canonicalOverride="https://actionaura.me/" xDefaultOverride="https://actionaura.me/">
+  <script is:inline>
+    (()=>{let s=null;try{s=localStorage.getItem('aa-lang')}catch(e){}
+    /* pickLang logic duplicated inline: chooser must work before any bundle loads */
+    const L=(x)=>x==='ar'||x==='en';let l=L(s)?s:null;
+    if(!l){for(const r of (navigator.languages||[navigator.language||''])){const b=String(r).toLowerCase().split('-')[0];if(L(b)){l=b;break}}}
+    location.replace('/'+(l||'en')+'/')})();
+  </script>
+  <main id="main" class="wrap section">
+    <div class="copy">
+      <img src="/favicon.svg" alt="Aura" width="64" height="64" />
+      <h1>
+        <span lang="en">{en.chooser.heading}</span>
+        <span lang="ar" class="ar-title">{ar.chooser.heading}</span>
+      </h1>
+      <p class="lead">
+        <a href="/ar/" lang="ar" hreflang="ar" onclick="try{localStorage.setItem('aa-lang','ar')}catch(e){}">{en.chooser.ar}</a>
+        {' '}
+        <a href="/en/" lang="en" hreflang="en" onclick="try{localStorage.setItem('aa-lang','en')}catch(e){}">{en.chooser.en}</a>
+      </p>
+      <noscript><p>Both links work as plain links. / الروابط تعمل كروابط عادية.</p></noscript>
+    </div>
+  </main>
+</Base>
