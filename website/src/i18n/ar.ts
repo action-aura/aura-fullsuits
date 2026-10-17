@@ -45,7 +45,7 @@ export const ar: Dict = {
     },
     retail: {
       title: 'أورا ريتيل', accent: 'ريتيل',
-      lead: 'الكاشير الذي يكمل البيع بدون إنترنت. قارئ باركود، ومخزون، وما لك وما عليك، وهاتف يعرض ما يجري على الطاولة.', // AR: drafted, native check pending
+      lead: 'الكاشير الذي يكمل البيع بدون إنترنت. قارئ باركود، ومخزون، وما لك وما عليك، وهاتف يعرض ما يجري على الكاشير.', // AR: drafted, native check pending
       link: 'تعرّف على أورا ريتيل', // AR: drafted, native check pending
     },
     clinic: {

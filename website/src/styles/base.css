@@ -1,4 +1,4 @@
-/* Base type, rhythm and reveal. Logical properties only; only transform and opacity are animated. */
+/* Base type, rhythm and reveal. Logical properties for direction (inline start/end); block/inline sizes may be physical where direction-neutral. Only transform and opacity are animated. */
 
 *,
 *::before,
@@ -123,6 +123,8 @@ h3 {
   margin-block-start: .4em;
   text-align: start;
   color: var(--ink);
+  letter-spacing: 0 !important;
+  text-transform: none !important;
 }
 
 .hero .ar-title {
