@@ -1,0 +1,44 @@
+---
+import Base from '../../../layouts/Base.astro';
+import Nav from '../../../components/Nav.astro';
+import Footer from '../../../components/Footer.astro';
+import Jewel from '../../../components/Jewel.astro';
+import DemoForm from '../../../components/DemoForm.astro';
+import WhatsAppPill from '../../../components/WhatsAppPill.astro';
+import { dict, LANGS, type Lang } from '../../../i18n';
+import { PHONE_TEL } from '../../../lib/lang';
+import { organizationLd, breadcrumbLd } from '../../../lib/jsonld';
+
+export function getStaticPaths() { return LANGS.map((lang) => ({ params: { lang } })); }
+const lang = Astro.params.lang as Lang;
+const t = dict(lang);
+const c = t.pages.contact;
+const direct = c.direct;
+const crumbs = breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: c.title, slug: 'contact' }]);
+---
+<Base lang={lang} slug="contact" title={t.meta.contact.title} description={t.meta.contact.description} jsonld={[organizationLd(lang), crumbs]}>
+  <Nav lang={lang} slug="contact" />
+  <Jewel lang={lang} stations="contact" />
+  <main id="main">
+    <section id="contact" data-w="master" class="contact-grid">
+      <div>
+        <h1>{c.title}</h1>
+        <p class="lead">{c.lead}</p>
+        <DemoForm lang={lang} />
+      </div>
+      <aside class="contact-direct">
+        <h2>{direct.title}</h2>
+        <WhatsAppPill lang={lang} />
+        <p><a href={PHONE_TEL}><bdi dir="ltr">{direct.call}</bdi></a></p>
+        <p><a href="mailto:info@actionaura.me">{direct.email}</a></p>
+        <p>{direct.office}</p>
+        <p>{direct.hours}</p>
+      </aside>
+    </section>
+  </main>
+  <Footer lang={lang} slug="contact" />
+  <script>
+    import { startWorlds } from '../../../scripts/worlds/apply';
+    startWorlds(document.documentElement);
+  </script>
+</Base>

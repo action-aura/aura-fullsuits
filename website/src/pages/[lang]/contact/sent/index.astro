@@ -1,0 +1,28 @@
+---
+import Base from '../../../../layouts/Base.astro';
+import Nav from '../../../../components/Nav.astro';
+import Footer from '../../../../components/Footer.astro';
+import Jewel from '../../../../components/Jewel.astro';
+import WhatsAppPill from '../../../../components/WhatsAppPill.astro';
+import { dict, LANGS, type Lang } from '../../../../i18n';
+
+export function getStaticPaths() { return LANGS.map((lang) => ({ params: { lang } })); }
+const lang = Astro.params.lang as Lang;
+const t = dict(lang);
+const c = t.pages.contact;
+---
+<Base lang={lang} slug="contact" noindex title={t.meta.contact.title} description={t.meta.contact.description}>
+  <Nav lang={lang} slug="contact" />
+  <Jewel lang={lang} stations="contact" />
+  <main id="main">
+    <section data-w="master" class="contact-grid">
+      <div>
+        <h1 id="sent-title">{c.form.success}</h1>
+        <p class="lead">{c.direct.title}</p>
+        <WhatsAppPill lang={lang} />
+        <a class="chapter-link" href={'/' + lang + '/'}>{t.notFound.back}</a>
+      </div>
+    </section>
+  </main>
+  <Footer lang={lang} slug="contact" />
+</Base>

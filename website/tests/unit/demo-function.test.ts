@@ -150,10 +150,10 @@ describe('demo function', () => {
     expect(inserts()).toHaveLength(0);
   });
 
-  it('(g) form-encoded valid, lang=ar: 303 to /ar/contact/?sent=1', async () => {
+  it('(g) form-encoded valid, lang=ar: 303 to /ar/contact/sent/', async () => {
     const res = await onRequestPost({ request: formReq(), env: makeEnv() } as any);
     expect(res.status).toBe(303);
-    expect(res.headers.get('Location')).toBe('/ar/contact/?sent=1');
+    expect(res.headers.get('Location')).toBe('/ar/contact/sent/');
     expect(inserts()).toHaveLength(1);
   });
 

@@ -1,0 +1,19 @@
+---
+import ReadPage from '../../../layouts/ReadPage.astro';
+import WhatsAppPill from '../../../components/WhatsAppPill.astro';
+import { dict, LANGS, type Lang } from '../../../i18n';
+import { faqLd, breadcrumbLd } from '../../../lib/jsonld';
+
+export function getStaticPaths() { return LANGS.map((lang) => ({ params: { lang } })); }
+const lang = Astro.params.lang as Lang;
+const t = dict(lang);
+const f = t.pages.faq;
+const crumbs = breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: t.footer.faq, slug: 'faq' }]);
+---
+<ReadPage lang={lang} slug="faq" title={t.meta.faq.title} description={t.meta.faq.description} heading={f.title} jsonld={[faqLd(f.items), crumbs]}>
+  <p class="lead">{f.lead}</p>
+  <div class="faq-list">
+    {f.items.map((i) => <details><summary>{i.q}</summary><p>{i.a}</p></details>)}
+  </div>
+  <div class="ctas"><WhatsAppPill lang={lang} /></div>
+</ReadPage>

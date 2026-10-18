@@ -1,0 +1,115 @@
+---
+import { dict, type Lang } from '../i18n';
+import { waLink } from '../lib/lang';
+
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const form = dict(lang).pages.contact.form;
+
+const sitekey = import.meta.env.PUBLIC_TURNSTILE_SITEKEY ?? '';
+const choose = lang === 'ar' ? 'اختر' : 'Choose…';
+
+const kebab = (s: string) => s.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase());
+const errAttrs: Record<string, string> = {};
+for (const [k, v] of Object.entries(form.errors)) errAttrs['data-err-' + kebab(k)] = v;
+errAttrs['data-err-error-network'] = form.errorNetwork;
+errAttrs['data-err-error-server'] = form.errorServer;
+errAttrs['data-err-error-rate'] = form.errorRate;
+---
+
+<div id="form-error" class="form-error-target" role="alert">
+  <p>{form.errorServer}</p>
+  <a href={waLink('')} class="demo-error-wa">{form.sendWa}</a>
+</div>
+
+<form
+  id="demo-form"
+  class="demo-form"
+  method="post"
+  action="/api/demo"
+  novalidate
+  data-lang={lang}
+  data-sending={form.sending}
+  data-send={form.send}
+  {...errAttrs}
+>
+  <div class="field">
+    <label for="demo-name">{form.name} <span class="req" aria-hidden="true">*</span></label>
+    <input
+      id="demo-name" name="name" type="text" autocomplete="name" aria-required="true"
+      aria-describedby="name-error"
+    />
+    <p id="name-error" class="field-error" aria-live="polite"></p>
+  </div>
+
+  <div class="field">
+    <label for="demo-phone">{form.phone} <span class="req" aria-hidden="true">*</span></label>
+    <input
+      id="demo-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" dir="ltr"
+      placeholder="07X XXX XXXX" aria-required="true"
+      aria-describedby="phone-help phone-error"
+    />
+    <p id="phone-help" class="field-help">{form.phoneHelp}</p>
+    <p id="phone-error" class="field-error" aria-live="polite"></p>
+  </div>
+
+  <div class="field">
+    <label for="demo-type">{form.type} <span class="opt">{form.optional}</span></label>
+    <select id="demo-type" name="businessType" aria-describedby="businessType-error">
+      <option value="">{choose}</option>
+      <option value="shop">{form.typeOptions.shop}</option>
+      <option value="clinic">{form.typeOptions.clinic}</option>
+      <option value="other">{form.typeOptions.other}</option>
+    </select>
+    <p id="businessType-error" class="field-error" aria-live="polite"></p>
+  </div>
+
+  <div class="field">
+    <label for="demo-business">{form.businessName} <span class="opt">{form.optional}</span></label>
+    <input
+      id="demo-business" name="businessName" type="text" autocomplete="organization"
+      aria-describedby="businessName-error"
+    />
+    <p id="businessName-error" class="field-error" aria-live="polite"></p>
+  </div>
+
+  <div class="field">
+    <label for="demo-branches">{form.branches} <span class="opt">{form.optional}</span></label>
+    <select id="demo-branches" name="branches" aria-describedby="branches-error">
+      <option value="">{choose}</option>
+      <option value="1">{form.branchesOptions.one}</option>
+      <option value="2-3">{form.branchesOptions.few}</option>
+      <option value="more">{form.branchesOptions.many}</option>
+    </select>
+    <p id="branches-error" class="field-error" aria-live="polite"></p>
+  </div>
+
+  <div class="field">
+    <label for="demo-message">{form.message} <span class="opt">{form.optional}</span></label>
+    <textarea id="demo-message" name="message" rows="3" aria-describedby="message-error"></textarea>
+    <p id="message-error" class="field-error" aria-live="polite"></p>
+  </div>
+
+  <input type="hidden" name="lang" value={lang} />
+
+  <div class="hp" aria-hidden="true">
+    <label>Website<input name="website" tabindex="-1" autocomplete="off" /></label>
+  </div>
+
+  {sitekey && <div class="cf-turnstile" data-sitekey={sitekey}></div>}
+  {sitekey && <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>}
+
+  <div id="demo-error" class="demo-error" hidden role="alert">
+    <span id="demo-error-text"></span>
+    <a class="demo-error-wa" href={waLink('')} target="_blank" rel="noopener">{form.sendWa}</a>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" id="demo-send" class="btn-send">{form.send}</button>
+    <button type="submit" id="demo-send-wa" class="btn-send-wa">{form.sendWa}</button>
+  </div>
+</form>
+
+<div id="demo-success" class="demo-success" tabindex="-1" hidden>{form.success}</div>
+
+<script>import '../scripts/demo-form';</script>

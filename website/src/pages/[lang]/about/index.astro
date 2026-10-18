@@ -1,0 +1,109 @@
+---
+import Base from '../../../layouts/Base.astro';
+import Nav from '../../../components/Nav.astro';
+import Footer from '../../../components/Footer.astro';
+import Jewel from '../../../components/Jewel.astro';
+import StatusPill from '../../../components/StatusPill.astro';
+import WhatsAppPill from '../../../components/WhatsAppPill.astro';
+import { dict, LANGS, type Lang } from '../../../i18n';
+import { pagePath } from '../../../lib/seo';
+import { breadcrumbLd } from '../../../lib/jsonld';
+
+export function getStaticPaths() { return LANGS.map((lang) => ({ params: { lang } })); }
+const lang = Astro.params.lang as Lang;
+const t = dict(lang);
+const a = t.pages.about;
+const crumbs = breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: t.nav.about, slug: 'about' }]);
+---
+<Base lang={lang} slug="about" title={t.meta.about.title} description={t.meta.about.description} jsonld={[crumbs]}>
+  <Nav lang={lang} slug="about" />
+  <Jewel lang={lang} stations="about" />
+  <main id="main">
+    <section id="hero" data-w="master" class="page-hero about-hero">
+      <div class="copy reveal">
+        <h1>{a.hero.title}</h1>
+        <p class="lead">{a.hero.lead}</p>
+      </div>
+    </section>
+
+    <section id="story" data-w="master" class="about-story">
+      <div class="copy reveal">
+        <h2>{a.story.title}</h2>
+        {a.story.paragraphs.map((p) => <p>{p}</p>)}
+        <h3>{a.values.title}</h3>
+        <ul class="about-values">
+          {a.values.items.map((v) => <li>{v}</li>)}
+        </ul>
+        <h3>{a.how.title}</h3>
+        <ol class="about-steps">
+          {a.how.steps.map((s) => <li><strong>{s.title}</strong> <span>{s.line}</span></li>)}
+        </ol>
+      </div>
+    </section>
+
+    <section id="products" data-w="master" class="about-products">
+      <div class="copy reveal">
+        <h2>{a.products.title}</h2>
+        <div class="about-grid">
+          <article class="about-card">
+            <h3><a href={pagePath(lang, 'aura-retail')}>{a.products.retail.name}</a></h3>
+            <StatusPill kind="available" />
+            <p>{a.products.retail.line}</p>
+          </article>
+          <article class="about-card">
+            <h3><a href={pagePath(lang, 'aura-clinic')}>{a.products.clinic.name}</a></h3>
+            <StatusPill kind="available" />
+            <p>{a.products.clinic.line}</p>
+          </article>
+          <article class="about-card">
+            <h3>{a.products.gym.name}</h3>
+            <StatusPill kind="coming" />
+            <p>{a.products.gym.line}</p>
+          </article>
+          <article class="about-card">
+            <h3>{a.products.more.name}</h3>
+            <StatusPill kind="coming" />
+            <p>{a.products.more.line}</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="partners" data-w="master" class="about-partners">
+      <div class="copy reveal">
+        <h2>{a.vision.title}</h2>
+        <p>{a.vision.body}</p>
+
+        <h3>{a.platforms.title}</h3>
+        <p class="about-status">{a.platforms.status}</p>
+        <p>{a.platforms.line}</p>
+        <p class="about-note">{a.platforms.note}</p>
+
+        <h3>{a.ai.title}</h3>
+        <p>{a.ai.lead}</p>
+        <ul class="about-points">
+          {a.ai.points.map((p) => <li><strong>{p.title}</strong> <span>{p.line}</span></li>)}
+        </ul>
+
+        <h3>{a.meta.title}</h3>
+        <p>{a.meta.body}</p>
+
+        <h3>{a.ordering.title}</h3>
+        <p class="about-status">{a.ordering.status}</p>
+        <p>{a.ordering.line}</p>
+
+        <h3>{a.partners.title}</h3>
+        <p>{a.partners.lead}</p>
+        <ul class="about-areas">
+          {a.partners.areas.map((x) => <li>{x}</li>)}
+        </ul>
+        <div class="ctas"><WhatsAppPill lang={lang} label={a.partners.cta} /></div>
+      </div>
+    </section>
+  </main>
+  <Footer lang={lang} slug="about" />
+  <script>
+    import { startWorlds } from '../../../scripts/worlds/apply';
+    startWorlds(document.documentElement);
+  </script>
+</Base>

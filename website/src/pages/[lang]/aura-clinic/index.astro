@@ -1,0 +1,12 @@
+---
+import ProductPage from '../../../layouts/ProductPage.astro';
+import { dict, LANGS, type Lang } from '../../../i18n';
+import { softwareLd, breadcrumbLd } from '../../../lib/jsonld';
+export function getStaticPaths() { return LANGS.map((lang) => ({ params: { lang } })); }
+const lang = Astro.params.lang as Lang;
+const t = dict(lang);
+const copy = t.pages.clinic;
+---
+<ProductPage lang={lang} slug="aura-clinic" world="clinic" metaKey="clinic" copy={copy}
+  jsonld={[softwareLd(lang, 'aura-clinic', 'Aura Clinic', t.meta.clinic.description),
+           breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: t.nav.clinic, slug: 'aura-clinic' }])]} />

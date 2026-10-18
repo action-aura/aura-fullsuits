@@ -1,0 +1,15 @@
+---
+import ReadPage from '../../../layouts/ReadPage.astro';
+import { dict, LANGS, type Lang } from '../../../i18n';
+import { breadcrumbLd } from '../../../lib/jsonld';
+export function getStaticPaths() { return LANGS.map((lang) => ({ params: { lang } })); }
+const lang = Astro.params.lang as Lang;
+const t = dict(lang);
+const doc = t.pages.legal.terms;
+---
+<ReadPage lang={lang} slug="terms" title={t.meta.terms.title} description={t.meta.terms.description}
+  heading={doc.title} draftNote={doc.draftNote}
+  jsonld={[breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: doc.title, slug: 'terms' }])]}>
+  <p class="updated">{doc.updated}</p>
+  {doc.sections.map((s) => (<section><h2>{s.h}</h2>{s.p.map((para) => <p>{para}</p>)}</section>))}
+</ReadPage>

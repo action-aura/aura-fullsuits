@@ -1,0 +1,68 @@
+---
+import Base from './Base.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import Jewel from '../components/Jewel.astro';
+import StatusPill from '../components/StatusPill.astro';
+import WhatsAppPill from '../components/WhatsAppPill.astro';
+import DemoLink from '../components/DemoLink.astro';
+import DayRail from '../components/DayRail.astro';
+import FeatureGrid from '../components/FeatureGrid.astro';
+import CtaBlock from '../components/CtaBlock.astro';
+import { dict, type Lang } from '../i18n';
+
+interface Props {
+  lang: Lang;
+  slug: 'aura-retail' | 'aura-clinic';
+  world: 'retail' | 'clinic';
+  metaKey: 'retail' | 'clinic';
+  copy: any;
+  featureShots?: string[];
+  jsonld?: object[];
+}
+const { lang, slug, world, metaKey, copy, featureShots = [], jsonld = [] } = Astro.props;
+const t = dict(lang);
+const meta = t.meta[metaKey];
+const title: string = copy.hero.title;
+const accent: string = copy.hero.accent;
+const at = accent ? title.indexOf(accent) : -1;
+const before = at >= 0 ? title.slice(0, at) : title;
+const after = at >= 0 ? title.slice(at + accent.length) : '';
+const list = copy.jordan ?? copy.privacy;
+---
+<Base lang={lang} slug={slug} title={meta.title} description={meta.description} world={world} jsonld={jsonld}>
+  <Nav lang={lang} slug={slug} />
+  <Jewel lang={lang} stations="product" />
+  <main id="main">
+    <section id="hero" data-w={world} class="page-hero">
+      <div class="copy reveal">
+        <StatusPill kind="available" />
+        <h1>{at >= 0 ? <>{before}<span class="hl">{accent}</span>{after}</> : title}</h1>
+        <p class="lead">{copy.hero.lead}</p>
+        <div class="ctas"><WhatsAppPill lang={lang} /><DemoLink lang={lang} /></div>
+      </div>
+    </section>
+    <div id="day"><DayRail lang={lang} world={world} title={copy.rail.title} moments={copy.rail.moments} /></div>
+    <div id="features"><FeatureGrid lang={lang} world={world} title={copy.features.title} items={copy.features.items} shots={featureShots} /></div>
+    <section id="details" data-w={world} class="chapter">
+      <div class="copy reveal">
+        <h2>{copy.works.title}</h2>
+        <p>{copy.works.line}</p>
+        {list && (
+          <>
+            <h2>{list.title}</h2>
+            <ul>{list.items.map((i: string) => <li>{i}</li>)}</ul>
+          </>
+        )}
+        <h2>{copy.run.title}</h2>
+        <p>{copy.run.line}</p>
+      </div>
+    </section>
+    <div id="talk"><CtaBlock lang={lang} world={world} title={copy.cta.title} lead={copy.cta.lead} /></div>
+  </main>
+  <Footer lang={lang} slug={slug} />
+  <script>
+    import { startWorlds } from '../scripts/worlds/apply';
+    startWorlds(document.documentElement);
+  </script>
+</Base>

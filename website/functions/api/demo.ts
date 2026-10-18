@@ -34,7 +34,7 @@ export const onRequestPost = async (ctx: { request: Request; env: Env }): Promis
   const fail = (status: number, body: Record<string, unknown>): Response =>
     wantsJson
       ? Response.json({ ok: false, ...body }, { status })
-      : new Response(null, { status: 303, headers: { Location: `/${lang}/contact/?error=1` } });
+      : new Response(null, { status: 303, headers: { Location: `/${lang}/contact/#form-error` } });
 
   // 2. Honeypot: bots fill the hidden field. Answer 200 so they learn nothing; store and notify nothing.
   if (typeof fields.website === 'string' && fields.website !== '') {
@@ -100,5 +100,5 @@ export const onRequestPost = async (ctx: { request: Request; env: Env }): Promis
   // 8. Accept header (not content-type) picks the format: the JS form also sends FormData.
   return wantsJson
     ? Response.json({ ok: true })
-    : new Response(null, { status: 303, headers: { Location: `/${lead.lang}/contact/?sent=1` } });
+    : new Response(null, { status: 303, headers: { Location: `/${lead.lang}/contact/sent/` } });
 };
