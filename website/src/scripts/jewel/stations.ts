@@ -67,3 +67,11 @@ export function stationAt(stations: Station[], centres: number[], c: number, rtl
   }
   return pick(stations[last]);
 }
+
+// The mark is sized from viewport height; on narrow-but-tall desktops that makes it
+// too wide for its column and the ring runs into the copy. Shrink it in proportion
+// once the aspect ratio falls below 1.6 (1440x900). Never grows the mark.
+export function fitScale(scale: number, width: number, height: number): number {
+  const k = Math.min(1, (width / Math.max(1, height)) / 1.6);
+  return scale * k;
+}

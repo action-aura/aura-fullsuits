@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { HOME_DESKTOP, HOME_PHONE, mirror, stationAt, stationsFor } from '../../src/scripts/jewel/stations';
+import { HOME_DESKTOP, HOME_PHONE, fitScale, mirror, stationAt, stationsFor } from '../../src/scripts/jewel/stations';
 
 const C = [450, 1350, 2250, 3150, 4050, 4950];
 
@@ -72,5 +72,20 @@ describe('stationsFor', () => {
   it('home returns the existing HOME tables by reference', () => {
     expect(stationsFor('home', false)).toBe(HOME_DESKTOP);
     expect(stationsFor('home', true)).toBe(HOME_PHONE);
+  });
+});
+
+describe('fitScale', () => {
+  it('leaves the scale alone at 1440x900 (aspect 1.6)', () => {
+    expect(fitScale(1, 1440, 900)).toBe(1);
+  });
+  it('never grows the mark on wide screens', () => {
+    expect(fitScale(1, 1920, 900)).toBe(1);
+  });
+  it('shrinks in proportion on 1024x900', () => {
+    expect(fitScale(1.14, 1024, 900)).toBeCloseTo(1.14 * (1024 / 900 / 1.6));
+  });
+  it('keeps zero scale at zero', () => {
+    expect(fitScale(0, 1024, 900)).toBe(0);
   });
 });

@@ -21,7 +21,7 @@ const t = dict(lang);
 <span class="visually-hidden">{t.a11y.jewel}</span>
 <script>
   import { pickTier } from '../scripts/jewel/tier';
-  import { stationsFor, stationAt, type PageKind, type Station } from '../scripts/jewel/stations';
+  import { stationsFor, stationAt, fitScale, type PageKind, type Station } from '../scripts/jewel/stations';
 
   const root = document.documentElement;
   const layer = document.querySelector<HTMLElement>('.jewel')!;
@@ -62,11 +62,13 @@ const t = dict(lang);
   const apply = (s: { x: number; y: number; scale: number }) => {
     // Phones: the big mark would swamp the copy on the 404 page, so cap its scale.
     const sc = fixed && innerWidth < 900 ? Math.min(s.scale, 1) : s.scale;
+    // Desktop: fit the mark to the viewport. Hide check below still reads the station's own scale.
+    const fitted = phone ? sc : fitScale(s.scale, innerWidth, innerHeight);
     root.style.setProperty('--jx', String(s.x));
     root.style.setProperty('--jy', String(s.y));
-    root.style.setProperty('--js', String(sc));
+    root.style.setProperty('--js', String(fitted));
     root.style.setProperty('--jhide', sc <= 0.01 ? '1' : '0');
-    return { x: s.x, y: s.y, scale: sc };
+    return { x: s.x, y: s.y, scale: fitted };
   };
   const centres = () => Array.from(document.querySelectorAll<HTMLElement>('[data-w]')).map(
     (el) => el.getBoundingClientRect().top + scrollY + el.offsetHeight / 2);
