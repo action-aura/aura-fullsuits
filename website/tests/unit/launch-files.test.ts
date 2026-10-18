@@ -84,3 +84,12 @@ describe('favicon set', () => {
     expect(s).not.toMatch(/linearGradient|radialGradient|filter/);
   });
 });
+
+describe('OG images', () => {
+  const slugs = ['home', 'aura-retail', 'aura-clinic', 'about', 'faq', 'contact', 'privacy', 'terms'];
+  it.each(['ar', 'en'].flatMap((l) => slugs.map((s) => `og/${l}-${s}.png`)))('%s is 1200x630 and under 280 KB', (f) => {
+    expect(pngSize(f)).toEqual([1200, 630]);
+    // WhatsApp drops the large preview around 300 KB; make-og.mjs refuses above 280, this keeps it refused.
+    expect(fs.statSync(path.resolve('public', f)).size).toBeLessThanOrEqual(280 * 1024);
+  });
+});

@@ -1,0 +1,291 @@
+<!doctype html>
+<!--
+  Share (OG) card, 1200x630. Rendered by tools/make-og.mjs, which passes ?title=&lang=&world= taken from the
+  built dist (og:title, <html lang>, data-world) and screenshots the #card box. Nothing here is a page the
+  site serves; it only has to look right in a 1200x630 screenshot, in both languages.
+
+  Layout (design-system.md sections 2, 3, 5): the world's field gradient with the glow at the jewel's station
+  and the copy-side scrim; the jewel still on the inline-end side, never cropped, never mirrored; the wordmark
+  top-start; the title mid-start in Outfit 700 (Latin) or Readex Pro 600 (Arabic), two lines at most, with a
+  one-line descriptor under it. Nothing textual sits within 60px of an edge.
+
+  The still (public/jewel/still-<world>.webp) is a 13:12 frame with shadow and halo margins that the site sizes
+  at 72vh; its framing is not this card's to change. So the card measures the still itself: one alpha scan
+  gives the box of everything visible (the crop, so no soft halo is ever cut) and the box of the solid geometry
+  (alpha > 200: the A and the ring), then the solid mark is scaled to MARK_H and its centre put on the station.
+  Any future framing of the stills renders the same card.
+
+  The field, glow and scrim are painted into a canvas from the tokens rather than written as CSS gradients:
+  Chromium dithers CSS gradients, and that noise made each PNG 270-305 KB, on the 300 KB line past which
+  WhatsApp stops showing a large preview. Painted, the same picture is 115-155 KB (measured 2026-10-18).
+-->
+<html lang="en" dir="ltr" data-world="master">
+<head>
+<meta charset="utf-8" />
+<title>OG card</title>
+<link rel="stylesheet" href="../../node_modules/@fontsource/outfit/400.css" />
+<link rel="stylesheet" href="../../node_modules/@fontsource/outfit/600.css" />
+<link rel="stylesheet" href="../../node_modules/@fontsource/outfit/700.css" />
+<link rel="stylesheet" href="../../node_modules/@fontsource/readex-pro/400.css" />
+<link rel="stylesheet" href="../../node_modules/@fontsource/readex-pro/600.css" />
+<!-- World tokens come from the site's own file so the card can never drift from the pages. -->
+<link rel="stylesheet" href="../../src/styles/tokens.css" />
+<style>
+  html, body { margin: 0; background: #000; }
+  body { width: 1200px; height: 630px; overflow: hidden; }
+
+  /* --jx/--jy: the solid mark's centre as fractions of the card. --jx is already the RTL mirror of itself, so the
+     jewel is placed with `left` (the documented exception: inset-inline-start would mirror it a second time). */
+  #card {
+    --jx: .77;
+    --jy: .5;
+    position: relative;
+    width: 1200px;
+    height: 630px;
+    overflow: hidden;
+    color: var(--ink);
+    background: var(--field-b); /* under the painted field, so a failed paint is a flat field, never black */
+  }
+  #card[dir="rtl"] { --jx: .23; }
+
+  .field { position: absolute; inset: 0; z-index: 0; display: block; }
+
+  /* The jewel: a canvas holding the still cropped to its visible box; left/top/width/height are set by
+     placeStill(). Never transformed, so the geometry is never mirrored. The source <img> only loads the file. */
+  .still-src { display: none; }
+  .jewel { position: absolute; z-index: 1; display: block; }
+
+  .wordmark {
+    position: absolute;
+    z-index: 2;
+    inset-block-start: 64px;
+    inset-inline-start: 72px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--ink);
+  }
+  .wordmark svg { width: 30px; height: 30px; display: block; }
+  .brand { font: 600 22px/1 Outfit, sans-serif; letter-spacing: -.01em; }
+  .brand.ar { font: 600 22px/1 'Readex Pro', sans-serif; letter-spacing: 0; }
+  .brand:empty { display: none; }
+
+  .copy {
+    position: absolute;
+    z-index: 2;
+    inset-inline-start: 72px;
+    inset-block-start: 50%;
+    transform: translateY(-50%);
+    padding-block-start: 36px; /* visual centre sits a little below true centre, under the wordmark */
+    max-width: 560px;
+    text-align: start;
+  }
+  .title {
+    margin: 0;
+    text-wrap: balance;
+    overflow-wrap: break-word;
+  }
+  .title.la { font: 700 84px/1 Outfit, sans-serif; letter-spacing: -.035em; }
+  .title.ar { font: 600 64px/1.3 'Readex Pro', sans-serif; letter-spacing: 0; }
+  .title .hl { color: var(--accent); }
+
+  .sub {
+    margin: 22px 0 0;
+    color: var(--ink-muted);
+    text-wrap: pretty;
+  }
+  .sub.la { font: 400 30px/1.35 Outfit, sans-serif; letter-spacing: 0; }
+  .sub.ar { font: 400 28px/1.7 'Readex Pro', sans-serif; letter-spacing: 0; }
+  .sub:empty { display: none; }
+</style>
+</head>
+<body>
+<div id="card" dir="ltr">
+  <canvas class="field" width="1200" height="630"></canvas>
+  <img class="still-src" alt="" />
+  <canvas class="jewel"></canvas>
+  <div class="wordmark">
+    <svg viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+      <path d="M60 12.6 L98 104 L80 104 L60 56 L40 104 L22 104 Z" fill="currentColor"/>
+      <path d="M 24 69 A 36 8 0 0 0 96 69" transform="rotate(-12 60 69)" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round"/>
+    </svg>
+    <span class="brand"></span>
+  </div>
+  <div class="copy">
+    <h1 class="title"><bdi></bdi></h1>
+    <p class="sub"><bdi></bdi></p>
+  </div>
+</div>
+<script>
+  // Inputs. make-og.mjs passes them; the defaults let the card be opened by hand.
+  const q = new URLSearchParams(location.search);
+  const lang = q.get('lang') === 'ar' ? 'ar' : 'en';
+  const world = ['master', 'retail', 'clinic', 'gym'].includes(q.get('world')) ? q.get('world') : 'master';
+  const ogTitle = q.get('title') || 'Action Aura | Retail Software from Amman, Jordan';
+
+  const W = 1200, H = 630;
+  const MARK_H = 500;        // height of the solid mark (apex to feet) on the card, 79% of the card
+  const SOLID_ALPHA = 200;   // above this a pixel is the A or the ring; halo, glow and shadow stay below it
+  const SAFE = 60;           // no text inside this margin
+  const CLEAR = 24;          // copy stays this far from the solid mark
+
+  const BRAND = { en: 'Action Aura', ar: 'أكشن أورا' };
+  const isArabic = (s) => /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/.test(s);
+  const script = (s) => (isArabic(s) ? 'ar' : 'la');
+
+  // og:title is "Page | Brand" on content pages, "Brand | Descriptor" on the home page and "Product | Descriptor"
+  // on product pages. The part before the bar is the headline. The part after is the one-line descriptor, except
+  // when it is the brand name, which the wordmark already carries. On the home card the headline IS the brand,
+  // so the wordmark keeps only its glyph rather than printing the name twice.
+  const bar = ogTitle.indexOf(' | ');
+  const head = (bar < 0 ? ogTitle : ogTitle.slice(0, bar)).trim();
+  const tail = bar < 0 ? '' : ogTitle.slice(bar + 3).trim();
+  const brandNames = Object.values(BRAND);
+  const sub = brandNames.includes(tail) ? '' : tail;
+  const headIsBrand = brandNames.includes(head);
+
+  const root = document.documentElement;
+  const card = document.getElementById('card');
+  root.lang = lang;
+  root.dir = lang === 'ar' ? 'rtl' : 'ltr';
+  card.dir = root.dir;
+  root.dataset.world = world;
+  const jx = card.dir === 'rtl' ? .23 : .77, jy = .5;   // mirrors #card[dir="rtl"] { --jx } above
+
+  const stillSrc = document.querySelector('.still-src');
+  stillSrc.src = `../../public/jewel/still-${world}.webp`;
+  const jewel = document.querySelector('.jewel');
+
+  const brandEl = document.querySelector('.brand');
+  brandEl.textContent = headIsBrand ? '' : BRAND[lang];
+  brandEl.classList.add(lang === 'ar' ? 'ar' : 'la');
+
+  const title = document.querySelector('.title');
+  const titleText = title.querySelector('bdi');
+  title.classList.add(script(head));
+  // Product worlds: the product word (the last word) takes the world accent, as the chapter h2s do.
+  const words = head.split(' ');
+  if (world !== 'master' && words.length > 1) {
+    titleText.append(document.createTextNode(words.slice(0, -1).join(' ') + ' '));
+    const hl = document.createElement('span');
+    hl.className = 'hl';
+    hl.textContent = words[words.length - 1];
+    titleText.append(hl);
+  } else {
+    titleText.textContent = head;
+  }
+
+  const subEl = document.querySelector('.sub');
+  const subText = subEl.querySelector('bdi');
+  subText.textContent = sub;
+  if (!sub) subEl.remove(); else subEl.classList.add(script(sub));
+
+  // The field. Same picture as the site's world layers (components.css .bg-* and .sc-*): a vertical 3-stop
+  // field, the glow as a 34% x 42% ellipse at the station fading out at 70% of its radius, and the copy-side
+  // scrim as a 60% x 120% ellipse at (1 - jx) with stops .55 / .45 at 40% / .18 at 70% / 0 (clinic .6 / .5 / .2).
+  // Colours are read from tokens.css at run time; only the geometry lives here.
+  function paintField() {
+    const cs = getComputedStyle(card);
+    const hex = (k) => { const v = cs.getPropertyValue(k).trim(); return [1, 3, 5].map((i) => parseInt(v.slice(i, i + 2), 16)); };
+    const [A, B, C] = ['--field-a', '--field-b', '--field-c'].map(hex);
+    const glow = cs.getPropertyValue('--glow').match(/[\d.]+/g).map(Number); // r, g, b, a
+    const scrim = cs.getPropertyValue('--scrim').split(',').map(Number);     // r, g, b
+    const S = world === 'clinic' ? [.6, .5, .2] : [.55, .45, .18];
+    const gcx = jx * W, gcy = jy * H, grx = .34 * W, gry = .42 * H;
+    const scx = (1 - jx) * W, scy = .5 * H, srx = .6 * W, sry = 1.2 * H;
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const g = document.querySelector('.field').getContext('2d');
+    const im = g.createImageData(W, H), px = im.data;
+    for (let y = 0; y < H; y++) {
+      const t = y / (H - 1);
+      const f = t < .5 ? [0, 1, 2].map((i) => lerp(A[i], B[i], t / .5)) : [0, 1, 2].map((i) => lerp(B[i], C[i], (t - .5) / .5));
+      for (let x = 0; x < W; x++) {
+        const gr = Math.hypot((x - gcx) / grx, (y - gcy) / gry);
+        const ga = glow[3] * Math.max(0, 1 - gr / .7);
+        let r = lerp(f[0], glow[0], ga), gg = lerp(f[1], glow[1], ga), b = lerp(f[2], glow[2], ga);
+        const sr = Math.hypot((x - scx) / srx, (y - scy) / sry);
+        let sa = 0;
+        if (sr < .4) sa = lerp(S[0], S[1], sr / .4);
+        else if (sr < .7) sa = lerp(S[1], S[2], (sr - .4) / .3);
+        else if (sr < 1) sa = lerp(S[2], 0, (sr - .7) / .3);
+        r = lerp(r, scrim[0], sa); gg = lerp(gg, scrim[1], sa); b = lerp(b, scrim[2], sa);
+        const o = (y * W + x) * 4;
+        px[o] = Math.round(r); px[o + 1] = Math.round(gg); px[o + 2] = Math.round(b); px[o + 3] = 255;
+      }
+    }
+    g.putImageData(im, 0, 0);
+  }
+
+  // The jewel. Decode the still, find its visible box (alpha > 2) and its solid box (alpha > SOLID_ALPHA), crop
+  // the canvas to the visible box so no halo or shadow is cut, scale so the solid mark is MARK_H tall and place
+  // the solid centre on the station. Returns the solid box in card pixels, or null when the file is missing.
+  async function placeStill() {
+    try { await stillSrc.decode(); } catch { return null; }
+    const w = stillSrc.naturalWidth, h = stillSrc.naturalHeight;
+    const src = document.createElement('canvas');
+    src.width = w; src.height = h;
+    const sg = src.getContext('2d', { willReadFrequently: true });
+    sg.drawImage(stillSrc, 0, 0);
+    const d = sg.getImageData(0, 0, w, h).data;
+    const all = { x0: w, y0: h, x1: -1, y1: -1 }, solid = { x0: w, y0: h, x1: -1, y1: -1 };
+    const grow = (b, x, y) => { if (x < b.x0) b.x0 = x; if (x > b.x1) b.x1 = x; if (y < b.y0) b.y0 = y; if (y > b.y1) b.y1 = y; };
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const a = d[(y * w + x) * 4 + 3];
+      if (a > 2) grow(all, x, y);
+      if (a > SOLID_ALPHA) grow(solid, x, y);
+    }
+    if (solid.x1 < 0) return null;
+    const cw = all.x1 - all.x0 + 1, ch = all.y1 - all.y0 + 1;
+    jewel.width = cw; jewel.height = ch;
+    jewel.getContext('2d').drawImage(src, all.x0, all.y0, cw, ch, 0, 0, cw, ch);
+    const scale = MARK_H / (solid.y1 - solid.y0 + 1);
+    const scx = (solid.x0 + solid.x1 + 1) / 2 - all.x0, scy = (solid.y0 + solid.y1 + 1) / 2 - all.y0; // solid centre in crop px
+    const left = jx * W - scx * scale, top = jy * H - scy * scale;
+    jewel.style.width = cw * scale + 'px'; jewel.style.height = ch * scale + 'px';
+    jewel.style.left = left + 'px'; jewel.style.top = top + 'px';
+    return {
+      left: Math.round(left + (solid.x0 - all.x0) * scale), top: Math.round(top + (solid.y0 - all.y0) * scale),
+      right: Math.round(left + (solid.x1 + 1 - all.x0) * scale), bottom: Math.round(top + (solid.y1 + 1 - all.y0) * scale),
+      scale: Math.round(scale * 1000) / 1000,
+    };
+  }
+
+  // Fit: at most two lines for the title and for the descriptor; step the title down (84 -> 56 Latin,
+  // 64 -> 44 Arabic) until it fits; then prove that no text box crosses the safe area, that the solid mark is
+  // whole inside the card and that the copy stays CLEAR of it. The result is published on window.__og for
+  // make-og.mjs, which refuses to write a card that does not fit.
+  const lines = (el) => Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight));
+  const MIN = { la: 56, ar: 44 };
+  async function fit() {
+    paintField();
+    const sample = head + ' ' + sub + ' ' + BRAND[lang];
+    await Promise.all([
+      document.fonts.load('700 84px Outfit', sample), document.fonts.load('600 22px Outfit', sample),
+      document.fonts.load('400 30px Outfit', sample), document.fonts.load("600 64px 'Readex Pro'", sample),
+      document.fonts.load("400 28px 'Readex Pro'", sample),
+    ]);
+    await document.fonts.ready;
+    const mark = await placeStill();
+    const stillOk = mark !== null;
+    const kind = title.classList.contains('ar') ? 'ar' : 'la';
+    let size = parseFloat(getComputedStyle(title).fontSize);
+    while (lines(title) > 2 && size > MIN[kind]) { size -= 4; title.style.fontSize = size + 'px'; }
+    const subLines = subEl.isConnected ? lines(subEl) : 0;
+    const overflow = [];
+    for (const el of document.querySelectorAll('.wordmark, .title, .sub')) {
+      const r = el.getBoundingClientRect();
+      if (r.left < SAFE || r.top < SAFE || r.right > W - SAFE || r.bottom > H - SAFE) overflow.push(el.className);
+    }
+    const c = document.querySelector('.copy').getBoundingClientRect();
+    const clearance = !mark ? 0 : card.dir === 'rtl' ? Math.round(c.left - mark.right) : Math.round(mark.left - c.right);
+    const markInside = !!mark && mark.left >= 0 && mark.top >= 0 && mark.right <= W && mark.bottom <= H;
+    window.__og = {
+      done: true, stillOk, mark, markInside, titleLines: lines(title), subLines, titleSize: size, overflow, clearance,
+      fits: stillOk && markInside && lines(title) <= 2 && subLines <= 2 && overflow.length === 0 && clearance >= CLEAR,
+    };
+  }
+  // Any failure is published too, so make-og.mjs reports it instead of waiting for a card that never finishes.
+  fit().catch((e) => { window.__og = { done: true, fits: false, error: String(e) }; });
+</script>
+</body>
+</html>
