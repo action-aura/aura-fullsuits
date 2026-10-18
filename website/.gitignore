@@ -3,4 +3,4 @@ dist/
 .astro/
 test-results/
 playwright-report/
-shots/
+/shots/
