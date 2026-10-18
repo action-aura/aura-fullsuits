@@ -1,0 +1,21 @@
+name: website
+on:
+  push:
+    paths: ['website/**', '.github/workflows/website.yml']
+  pull_request:
+    paths: ['website/**', '.github/workflows/website.yml']
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: website } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22.12.0', cache: npm, cache-dependency-path: website/package-lock.json }
+      - run: npm ci
+      - run: npx vitest run
+      - run: npx astro check
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test tests/site/head.spec.ts tests/site/links.spec.ts tests/site/form.spec.ts
+      - run: python3 tools/check_retention_sql.py
