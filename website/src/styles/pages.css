@@ -343,7 +343,9 @@
   margin-block-start: .5em;
 }
 
-.read a {
+/* Plain text links only: an unscoped `.read a` (0,1,1) outranked `.wa-pill` (0,1,0) and painted the FAQ's
+   WhatsApp pill label in --link on the ivory pill (1.57:1, axe 2026-10-18). Classed links style themselves. */
+.read a:not([class]) {
   color: var(--link);
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
