@@ -82,6 +82,7 @@ function init(form: HTMLFormElement): void {
     busy(btn, true);
     // iOS blocks pop-ups opened after an await, so open the tab on the click itself.
     const waWin = wantsWa ? window.open('about:blank', '_blank') : null;
+    if (waWin) waWin.opener = null;
     try {
       const res = await fetch('/api/demo', {
         method: 'POST',

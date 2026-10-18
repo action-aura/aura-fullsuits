@@ -15,6 +15,7 @@ export function normalizeDigits(s: string): string {
 }
 
 // Jordan mobiles: 07[789]XXXXXXX, 7[789]XXXXXXX, (00|+)9627[789]XXXXXXX -> +9627XXXXXXXX.
+// Jordan landlines: 0[2-6]XXXXXXX -> +962[2-6]XXXXXXX.
 // Anything else must be a plausible E.164 number: + then 8 to 15 digits, first digit 1-9.
 export function normalizePhone(raw: string): string | null {
   const s = normalizeDigits(raw).replace(/[\s\-().]/g, '');
