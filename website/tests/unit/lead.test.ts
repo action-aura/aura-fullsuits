@@ -43,6 +43,19 @@ describe('validateLead', () => {
     const r = validateLead({ ...good, name: 42 as unknown as string });
     expect(!r.ok && r.errors.name).toBe('nameRequired');
   });
+  it('collapses CR/LF in name so it cannot inject mail headers', () => {
+    const r = validateLead({ ...good, name: 'Sami\r\nReply-To: x@evil.io' });
+    expect(r.ok && /[\r\n]/.test(r.lead.name)).toBe(false);
+    expect(r.ok && r.lead.name).toBe('Sami Reply-To: x@evil.io');
+  });
+  it('collapses newlines in businessName', () => {
+    const r = validateLead({ ...good, businessName: 'Shop\nX' });
+    expect(r.ok && r.lead.businessName).toBe('Shop X');
+  });
+  it('keeps newlines in message', () => {
+    const r = validateLead({ ...good, message: 'a\nb' });
+    expect(r.ok && r.lead.message).toBe('a\nb');
+  });
   it('keeps HTML as plain text (escaping is the renderer job)', () => {
     const r = validateLead({ ...good, businessName: '<b>Shop</b>' });
     expect(r.ok && r.lead.businessName).toBe('<b>Shop</b>');

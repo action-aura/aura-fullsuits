@@ -28,7 +28,9 @@ Verify: `npx wrangler whoami` shows the owner's account.
 npx wrangler d1 create aura-leads
 ```
 
-Paste the printed `database_id` into `wrangler.toml` and `retention/wrangler.toml`. Then:
+Paste the printed `database_id` into `wrangler.toml` and `retention/wrangler.toml`. Then commit both files by explicit path and push `feat/website`. Do this BEFORE step 3.
+
+Why: Pages builds from git. The wrangler file is the source of truth for bindings. A placeholder id gives a deploy with no working DB. The D1 id is not a secret.
 
 ```
 npx wrangler d1 migrations apply aura-leads --remote
@@ -44,7 +46,9 @@ In the Cloudflare dashboard, create a Pages project from the GitHub repo. Use th
 - Root directory: `website` (if not, `functions/` is not found)
 - Build command: `npm run build`
 - Output directory: `dist`
-- Env var: `NODE_VERSION=22.12.0`
+- Node: `website/.node-version` pins Node 22.12.0. Setting `NODE_VERSION=22.12.0` in the dashboard is a backup only.
+
+Check first: with `wrangler.toml` as the source of truth, the dashboard may accept only secrets, not plain runtime vars. If so, put the non-secret runtime values in a `[vars]` block in `wrangler.toml` and commit them: `NOTIFY_PROVIDER`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `NOTIFY_TO`. Build-time `PUBLIC_*` values go in the Pages build environment variables.
 
 Verify: the first build is green. The `*.pages.dev` URL opens the home page. The form endpoint under `functions/` is listed in the deployment's Functions tab.
 
@@ -76,9 +80,11 @@ Option A, mail on:
 - `NOTIFY_PROVIDER=smtp`
 - `SMTP_HOST=mail.privateemail.com`
 - `SMTP_PORT=465`
-- `SMTP_USER` (the mailbox name)
+- `SMTP_USER=info@actionaura.me` (the full address; it is also used as the From address)
 - `SMTP_PASS` as a secret
 - `NOTIFY_TO=info@actionaura.me`
+
+Port 465 uses TLS. Port 587 is supported, but use 465.
 
 Option B, mail off: set `NOTIFY_PROVIDER=none`.
 
@@ -96,16 +102,21 @@ Verify: the page source holds the beacon script. The dashboard shows a visit aft
 npx wrangler deploy -c retention/wrangler.toml
 ```
 
+`retention/wrangler.toml` has `workers_dev = false`, so no public URL is created.
+
 Verify: `npx wrangler tail` on the next cron run shows it ran. To test sooner, run it locally with `--test-scheduled`.
+
+Monitoring: turn on a Cloudflare notification for Worker errors, or put a dated monthly check in the owner calendar. The check is to run `wrangler tail` or look at the D1 row count of leads older than 24 months. It should be 0. The privacy promise depends on this job.
 
 ## 9. [team] Smoke test on the `*.pages.dev` URL
 
-- Run the `stack.spec.ts` checks against the URL.
-- `curl -I <pages.dev URL>` shows `X-Robots-Tag: noindex`.
-- Post one real form lead.
+- Do NOT run the full `stack.spec.ts` against pages.dev. Run only the CSP console check. This is the first run with real Turnstile and the beacon live under the CSP:
+  `STACK_URL=https://<project>.pages.dev npx playwright test tests/site/stack.spec.ts -g "(b)"`
+- Check noindex by hand: `curl -I <pages.dev URL>` must show `X-Robots-Tag: noindex`.
+- Make one real form post by hand, with Turnstile solved.
 - If smtp is on, a test mail arrives.
 
-Verify: all four pass. The lead is in D1:
+Verify: the CSP check (b) passes, `curl -I` shows noindex, and the hand-made post landed. The lead is in D1:
 `npx wrangler d1 execute aura-leads --remote --command "SELECT id, created_at FROM leads ORDER BY id DESC LIMIT 1"`.
 Then delete the test lead.
 
@@ -113,10 +124,15 @@ Then delete the test lead.
 
 Why: this makes the site live on `actionaura.me`. A wrong DNS record can break the company email (`info@actionaura.me`) or take the old site down.
 
-Choose one route:
+Cloudflare Pages needs the apex domain as a zone on the Cloudflare account, using Cloudflare nameservers. Do the steps in order:
 
-- Move DNS to Cloudflare. Copy every record first. Run `scripts/ops/check_mail_dns.py` before and after the move.
-- Or use the Namecheap ALIAS route.
+1. Add the `actionaura.me` zone to Cloudflare. Copy every record: MX, SPF, DKIM (`privateemail`), DMARC, and `owner.actionaura.me`.
+2. Run `scripts/ops/check_mail_dns.py` against Cloudflare's view.
+3. Switch the nameservers at Namecheap.
+4. Re-run the mail check.
+5. In the Pages project, go to Custom domains, then "Set up a domain", and add `actionaura.me`. Do not create the DNS record by hand first, because that can cause a 522.
+6. Add `www.actionaura.me` with a redirect to the apex.
+7. Before go-live, audit subdomains for HTTPS. `_headers` sends HSTS with includeSubDomains for a year. If any subdomain is HTTP-only, remove includeSubDomains first.
 
 Verify: `scripts/ops/check_mail_dns.py` gives the same result as before. `curl -I https://actionaura.me/` shows no `X-Robots-Tag`. Mail to and from `info@actionaura.me` still works.
 

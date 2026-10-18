@@ -33,9 +33,11 @@ export function validateLead(input: LeadInput):
   | { ok: true; lead: Lead }
   | { ok: false; errors: Partial<Record<keyof Lead, LeadError>> } {
   const errors: Partial<Record<keyof Lead, LeadError>> = {};
-  const name = str(input.name).trim();
+  // Single-line fields: CR/LF in name reaches the notification Subject header verbatim (header injection).
+  const oneLine = (v: unknown): string => str(v).replace(/[\u0000-\u001F\u007F]+/g, ' ').trim();
+  const name = oneLine(input.name);
   const phoneRaw = str(input.phone).trim();
-  const businessName = str(input.businessName).trim();
+  const businessName = oneLine(input.businessName);
   const message = str(input.message).trim();
   if (!name) errors.name = 'nameRequired';
   else if (name.length > LIMITS.name) errors.name = 'nameLong';

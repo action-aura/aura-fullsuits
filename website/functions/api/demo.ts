@@ -10,7 +10,7 @@ async function sha256Hex(s: string): Promise<string> {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-export const onRequestPost = async (ctx: { request: Request; env: Env }): Promise<Response> => {
+export const onRequestPost = async (ctx: { request: Request; env: Env; waitUntil?: (p: Promise<unknown>) => void }): Promise<Response> => {
   const { request, env } = ctx;
   const wantsJson = (request.headers.get('accept') ?? '').includes('application/json');
   const ctype = request.headers.get('content-type') ?? '';
@@ -94,14 +94,16 @@ export const onRequestPost = async (ctx: { request: Request; env: Env }): Promis
   const id = Number((ins as { meta?: { last_row_id?: number } }).meta?.last_row_id ?? 0);
 
   // 7. Notify after storing; a failure is recorded on the row but the lead is safe, so still succeed.
-  const n = await notify(env, lead, id);
-  if (!n.ok) {
-    try {
-      await env.DB.prepare('UPDATE leads SET notify_error=? WHERE id=?').bind(n.error ?? 'unknown', id).run();
-    } catch {
-      // lead is already stored; nothing more to do
+  // Notification runs after the response when the platform allows it (waitUntil), so a slow
+  // mail server never delays the visitor (and prompts resubmits/duplicates). Without waitUntil
+  // (tests) it is awaited.
+  const report = async () => {
+    const n = await notify(env, lead, id);
+    if (!n.ok) {
+      try { await env.DB.prepare('UPDATE leads SET notify_error=? WHERE id=?').bind(n.error ?? 'unknown', id).run(); } catch { /* lead already stored */ }
     }
-  }
+  };
+  if (ctx.waitUntil) ctx.waitUntil(report()); else await report();
 
   // 8. Accept header (not content-type) picks the format: the JS form also sends FormData.
   return wantsJson

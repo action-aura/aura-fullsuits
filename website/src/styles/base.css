@@ -333,7 +333,13 @@ body:lang(ar) {
 
 /* The page base follows the world (data-world on <html>). It was hard-coded master navy from when only the dark
    Home existed: on Clinic the light field sat over a navy body, which showed through any fading layer and made
-   axe measure Clinic copy against navy (1.14:1) while the visible pixels are 14:1. */
+   axe measure Clinic copy against navy (1.14:1) while the visible pixels are 14:1.
+   Mid-blend between worlds, up to 25% of the body shows through the per-share world layers, and --field flips
+   instantly when data-world changes. Without the transition the screen steps at each flip. */
 body {
   background: var(--field);
+  transition: background-color .6s var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  body { transition: none; }
 }

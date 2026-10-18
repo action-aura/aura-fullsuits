@@ -2,14 +2,22 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 
-// Needs the REAL stack, not the astro dev server: `npm run build`, `npm run d1:local`,
-// then `npm run pages:dev` (wrangler on :8788) must already be running.
-// `.dev.vars` must set ALLOW_NO_TURNSTILE=1, IP_SALT=<random> and NOTIFY_PROVIDER=none.
+// Needs the REAL stack, not the astro dev server. Two modes, picked by STACK_URL:
+// - LOCAL (default, STACK_URL unset or localhost/127.0.0.1): `npm run build`, `npm run d1:local`,
+//   then `npm run pages:dev` (wrangler on :8788) must already be running.
+//   `.dev.vars` must set ALLOW_NO_TURNSTILE=1, IP_SALT=<random> and NOTIFY_PROVIDER=none.
+//   All of (a)-(d) run.
+// - REMOTE (STACK_URL=https://<project>.pages.dev): only (b) runs. A pages.dev host must send
+//   noindex, so (a) is local-only; with a real TURNSTILE_SECRET (c) and (d) cannot pass
+//   unattended, so check them by hand on pages.dev.
 // /api/demo is rate limited to 5 per 10 minutes per IP, so this spec makes at most 2 posts
 // in total ((c) and (d)). Do not add more without raising that budget.
 // The D1 row for (c) is confirmed by the main session, not here.
 
-test.use({ baseURL: 'http://localhost:8788' });
+const STACK_URL = process.env.STACK_URL ?? 'http://localhost:8788';
+const LOCAL = /localhost|127\.0\.0\.1/.test(STACK_URL);
+
+test.use({ baseURL: STACK_URL });
 
 const DIST = path.resolve('dist');
 const CSP_NOISE = /Content Security Policy|Refused to/;
@@ -29,6 +37,7 @@ function distPages(dir: string, out: string[] = []): string[] {
 }
 
 test('(a) /en/ sends a CSP and does not noindex the real host', async ({ request }) => {
+  test.skip(!LOCAL, 'a pages.dev host must send noindex, so (a) is local-only');
   const res = await request.get('/en/');
   expect(res.status()).toBe(200);
   expect(res.headers()['content-security-policy'], 'CSP header present').toBeTruthy();
@@ -57,6 +66,7 @@ test('(b) every built page loads with zero CSP violations', async ({ page }) => 
 });
 
 test('(c) valid lead through the real Function shows the success panel', async ({ page }) => {
+  test.skip(!LOCAL, 'with a real TURNSTILE_SECRET the post needs a solved challenge; check by hand on pages.dev');
   await page.goto('/en/contact/');
   await expect(page.locator('form#demo-form')).toBeVisible();
   await page.fill('#demo-form [name="name"]', VALID_NAME);
@@ -66,6 +76,7 @@ test('(c) valid lead through the real Function shows the success panel', async (
 });
 
 test('(d) no-JS form POST gets a 303 to the sent page', async ({ request }) => {
+  test.skip(!LOCAL, 'with a real TURNSTILE_SECRET a no-JS post gets #form-error; check by hand on pages.dev');
   const res = await request.post('/api/demo', {
     form: { name: VALID_NAME, phone: VALID_PHONE, lang: 'en' },
     headers: { accept: 'text/html' },

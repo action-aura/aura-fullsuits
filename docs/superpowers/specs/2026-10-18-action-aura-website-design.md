@@ -230,7 +230,9 @@ website/                       Astro project (static output)
   DNS, copying every record first and verifying with
   `scripts/ops/check_mail_dns.py`. **Owner action, gated:** nothing changes
   DNS without the owner's explicit go-ahead at that step. The Namecheap
-  ALIAS record is the no-move alternative.
+  Moving DNS to Cloudflare is required: Cloudflare Pages serves an apex
+  domain only from a zone on the Cloudflare account (corrected 2026-10-18
+  after the Plan 3 review; the ALIAS route does not verify).
 - Launch checklist: use the `launch` skill. Then set up Google Search
   Console and Bing Webmaster Tools, submit the sitemap, and create a Google
   Business Profile (an owner action).

@@ -81,20 +81,28 @@ test.describe('keyboard', () => {
       await page.goto(p);
       await page.waitForLoadState('load');
 
-      type Stop = { id: string; tag: string; href: string; visible: boolean; desc: string };
+      type Stop = { id: string; tag: string; href: string; visible: boolean; detail: string; desc: string };
       const stops: Stop[] = [];
       for (let i = 0; i < 60; i++) {
         await page.keyboard.press('Tab');
         const stop = await page.evaluate((): Stop => {
           const el = document.activeElement as HTMLElement;
-          const cs = getComputedStyle(el);
-          const outlineOk = cs.outlineStyle !== 'none' && cs.outlineWidth !== '0px';
-          const shadowOk = cs.boxShadow !== 'none';
+          const read = () => {
+            const cs = getComputedStyle(el);
+            return { style: cs.outlineStyle, width: cs.outlineWidth, shadow: cs.boxShadow };
+          };
+          const focused = read();
+          el.blur();
+          const resting = read();
+          el.focus();
+          const outlineOk = focused.style !== 'none' && focused.width !== '0px';
+          const shadowOk = focused.shadow !== resting.shadow;
           return {
             id: el.id,
             tag: el.tagName.toLowerCase(),
             href: el.getAttribute('href') ?? '',
             visible: outlineOk || shadowOk,
+            detail: `focused[outline ${focused.style} ${focused.width}; shadow ${focused.shadow}] resting[outline ${resting.style} ${resting.width}; shadow ${resting.shadow}]`,
             desc: `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.className ? '.' + String(el.className).split(/\s+/).join('.') : ''}`,
           };
         });
@@ -110,7 +118,7 @@ test.describe('keyboard', () => {
         expect(order[i], `${FIELD_IDS[i]} comes after ${FIELD_IDS[i - 1]}`).toBeGreaterThan(order[i - 1]);
       }
 
-      const invisible = stops.filter((s) => !s.visible).map((s) => s.desc);
+      const invisible = stops.filter((s) => !s.visible).map((s) => `${s.desc} ${s.detail}`);
       expect(invisible, `stops without a visible focus indicator:\n${invisible.join('\n')}`).toEqual([]);
     });
   }

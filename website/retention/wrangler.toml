@@ -4,6 +4,8 @@
 name = "action-aura-lead-retention"
 main = "index.ts"
 compatibility_date = "2026-09-01"
+# cron-only Worker: no public *.workers.dev URL
+workers_dev = false
 
 [triggers]
 crons = ["17 3 * * *"]

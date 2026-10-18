@@ -179,6 +179,22 @@ describe('demo function', () => {
     expect(upd).toBeGreaterThan(hook);
   });
 
+  it('(h2) waitUntil: responds first, notify failure recorded only after the captured promise settles', async () => {
+    hookThrows = true;
+    const captured: Promise<unknown>[] = [];
+    const waitUntil = vi.fn((p: Promise<unknown>) => {
+      captured.push(p);
+    });
+    const res = await onRequestPost({ request: jsonReq(), env: makeEnv(), waitUntil } as any);
+    expect(res.status).toBe(200);
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    await Promise.all(captured);
+    const upd = idxOf((e) => e.startsWith('db:') && e.includes('UPDATE leads') && e.includes('notify_error'));
+    expect(upd).toBeGreaterThanOrEqual(0);
+    const updCall = calls.find((c) => c.sql.includes('UPDATE leads'));
+    expect(updCall?.binds).toEqual([expect.any(String), 7]);
+  });
+
   it('(i) text/plain: 415', async () => {
     const req = new Request('https://actionaura.me/api/demo', {
       method: 'POST',
