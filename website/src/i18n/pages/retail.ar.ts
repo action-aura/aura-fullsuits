@@ -13,39 +13,33 @@ export const retailAr: DeepStrings<typeof retailEn> = {
     moments: [
       {
         title: 'افتح الكاشير', // AR: drafted, native check pending
-        line: 'ابدأ اليوم برصيد نقدي افتتاحي، وكل بيع بعده يُحسب على هذا الرصيد.', // AR: drafted, native check pending
+        line: 'ابدأ اليوم برصيد افتتاحي في الدرج.', // AR: drafted, native check pending
         shot: 'pos',
-        alt: 'شاشة كاشير أورا ريتيل جاهزة لأول بيع في اليوم', // AR: drafted, native check pending
       },
       {
         title: 'امسح وبِع', // AR: drafted, native check pending
         line: 'بيع كامل من لوحة المفاتيح مع قارئ باركود، وتعليق الفواتير، وفحص السعر، والدفع نقدًا أو بطاقة أو كليك أو تحويل أو على الحساب.', // AR: drafted, native check pending
         shot: 'products',
-        alt: 'قائمة أصناف أورا ريتيل مع الباركود والأسعار', // AR: drafted, native check pending
       },
       {
         title: 'ينقطع الإنترنت', // AR: drafted, native check pending
         line: 'الكاشير يكمل البيع والطباعة على كمبيوتر المحل، والمزامنة تكتمل وحدها عند عودة الاتصال.',
         shot: 'posNight',
-        alt: 'كاشير أورا ريتيل بالمظهر الداكن أثناء عملية بيع', // AR: drafted, native check pending
       },
       {
         title: 'هاتفك يعكس ما على الطاولة', // AR: drafted, native check pending
         line: 'الكمبيوتر والهاتف يتعرّفان على بعضهما عبر شبكة المحل ويتزامنان تلقائيًا.',
         shot: 'dashboard',
-        alt: 'لوحة أورا ريتيل تعرض مبيعات اليوم', // AR: drafted, native check pending
       },
       {
         title: 'آخر اليوم', // AR: drafted, native check pending
         line: 'شغّل تقارير X وZ وطابق النقد، وأي فرق يحتاج موافقتك.',
         shot: 'reports',
-        alt: 'شاشة تقارير أورا ريتيل بأرقام نهاية اليوم', // AR: drafted, native check pending
       },
       {
         title: 'الدفاتر', // AR: drafted, native check pending
         line: 'كل بيع يُقيَّد آليًا في ميزان المراجعة والدخل والميزانية والتدفقات النقدية.',
         shot: 'trialBalance',
-        alt: 'تقرير ميزان المراجعة في أورا ريتيل', // AR: drafted, native check pending
       },
     ],
   },
@@ -79,7 +73,7 @@ export const retailAr: DeepStrings<typeof retailEn> = {
     ],
   },
   works: {
-    title: 'يعمل مع الأجهزة التي لديك', // AR: drafted, native check pending
+    title: 'قارئات الباركود وطابعات الإيصالات', // AR: drafted, native check pending
     line: 'قارئات الباركود وطابعات الإيصالات تتصل بكمبيوتر المحل.', // AR: drafted, native check pending
   },
   jordan: {

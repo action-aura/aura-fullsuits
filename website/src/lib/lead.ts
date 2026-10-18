@@ -21,6 +21,8 @@ export function normalizePhone(raw: string): string | null {
   if (!s) return null;
   const jo = s.match(/^(?:\+962|00962|0)?(7[789]\d{7})$/);
   if (jo) return `+962${jo[1]}`;
+  const land = s.match(/^(?:\+962|00962|0)?([2-6]\d{7})$/);
+  if (land) return '+962' + land[1];
   const intl = s.replace(/^00/, '+');
   if (/^\+[1-9]\d{7,14}$/.test(intl) && !intl.startsWith('+962')) return intl;
   return null;

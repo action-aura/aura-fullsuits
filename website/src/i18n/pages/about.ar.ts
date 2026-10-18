@@ -85,7 +85,7 @@ export const aboutAr: DeepStrings<typeof aboutEn> = {
   ordering: {
     title: 'مساعد الطلبات عبر واتساب', // AR: drafted, native check pending
     status: 'قيد التطوير',
-    line: 'نظام طلبات ذكي عبر واتساب يفهم اللهجة المحلية ويؤكّد كل طلب قبل تنفيذه.',
+    line: 'نظام طلبات ذكي عبر واتساب يفهم اللهجة المحلية ويؤكّد كل طلب.',
   },
   partners: {
     title: 'مجالات الشراكة',

@@ -80,6 +80,8 @@ function init(form: HTMLFormElement): void {
     const btn = (e as SubmitEvent).submitter as HTMLButtonElement | null;
     const wantsWa = btn === waBtn;
     busy(btn, true);
+    // iOS blocks pop-ups opened after an await, so open the tab on the click itself.
+    const waWin = wantsWa ? window.open('about:blank', '_blank') : null;
     try {
       const res = await fetch('/api/demo', {
         method: 'POST',
@@ -90,9 +92,12 @@ function init(form: HTMLFormElement): void {
         form.hidden = true;
         success.hidden = false;
         success.focus();
-        if (wantsWa) window.open(waLink(summary()), '_blank', 'noopener');
+        if (waWin) waWin.location.href = waLink(summary());
         return;
       }
+      waWin?.close();
+      // Turnstile tokens are single-use: any failed attempt needs a fresh one.
+      (window as any).turnstile?.reset?.();
       if (res.status === 422) {
         const body = await res.json().catch(() => ({}));
         const first422 = showErrors((body && body.errors) || {});
@@ -100,10 +105,14 @@ function init(form: HTMLFormElement): void {
         else showBoxError('errorServer');
       } else if (res.status === 429) {
         showBoxError('errorRate');
+      } else if (res.status === 403) {
+        showBoxError('errorChallenge');
       } else {
         showBoxError('errorNetwork');
       }
     } catch {
+      waWin?.close();
+      (window as any).turnstile?.reset?.();
       showBoxError('errorNetwork');
     }
     busy(null, false);

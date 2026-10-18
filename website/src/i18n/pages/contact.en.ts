@@ -27,6 +27,9 @@ export const contactEn = {
     errorNetwork: 'We could not send your request. Check your connection and try again.',
     errorServer: 'Something went wrong on our side. Please try again in a moment.',
     errorRate: 'Too many attempts. Please wait a little and try again.',
+    errorChallenge: 'Please complete the check above, then send again.',
+    noscript: 'This form needs JavaScript. Message us on WhatsApp or call +962 78 006 9485.',
+    noJsError: 'We could not send the form from this page. Message us on WhatsApp, or call us, and we will book your demo.',
     errors: {
       nameRequired: 'Please enter your name.',
       nameLong: 'The name is too long.',

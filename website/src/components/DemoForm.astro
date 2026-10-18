@@ -4,7 +4,8 @@ import { waLink } from '../lib/lang';
 
 interface Props { lang: Lang }
 const { lang } = Astro.props;
-const form = dict(lang).pages.contact.form;
+const t = dict(lang);
+const form = t.pages.contact.form;
 
 const sitekey = import.meta.env.PUBLIC_TURNSTILE_SITEKEY ?? '';
 const choose = lang === 'ar' ? 'اختر' : 'Choose…';
@@ -15,12 +16,15 @@ for (const [k, v] of Object.entries(form.errors)) errAttrs['data-err-' + kebab(k
 errAttrs['data-err-error-network'] = form.errorNetwork;
 errAttrs['data-err-error-server'] = form.errorServer;
 errAttrs['data-err-error-rate'] = form.errorRate;
+errAttrs['data-err-error-challenge'] = form.errorChallenge;
 ---
 
-<div id="form-error" class="form-error-target" role="alert">
-  <p>{form.errorServer}</p>
+<div id="form-error" class="form-error-target" role="alert" tabindex="-1">
+  <p>{form.noJsError}</p>
   <a href={waLink('')} class="demo-error-wa">{form.sendWa}</a>
 </div>
+
+<noscript><p class="form-noscript">{form.noscript}</p></noscript>
 
 <form
   id="demo-form"
@@ -110,6 +114,9 @@ errAttrs['data-err-error-rate'] = form.errorRate;
   </div>
 </form>
 
-<div id="demo-success" class="demo-success" tabindex="-1" hidden>{form.success}</div>
+<div id="demo-success" class="demo-success" tabindex="-1" hidden>
+  {form.success}
+  <a class="demo-success-wa" href={waLink(t.cta.waText)} target="_blank" rel="noopener">{form.sendWa}</a>
+</div>
 
 <script>import '../scripts/demo-form';</script>

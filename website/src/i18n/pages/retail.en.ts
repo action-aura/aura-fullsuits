@@ -10,39 +10,33 @@ export const retailEn = {
     moments: [
       {
         title: 'Open the till',
-        line: 'Start the day with an opening cash balance. Every sale after it is counted against that balance.',
+        line: 'Start the day with a drawer float.',
         shot: 'pos',
-        alt: 'Aura Retail till screen ready for the first sale of the day',
       },
       {
         title: 'Scan and sell',
         line: 'Sell from the keyboard with a barcode scanner. Hold and resume bills, check a price, take cash, card, CliQ, transfer or on-account.',
         shot: 'products',
-        alt: 'Aura Retail items list with barcodes and prices',
       },
       {
         title: 'The internet drops',
         line: 'The till keeps selling and printing on the shop computer. Sync finishes by itself when the connection returns.',
         shot: 'posNight',
-        alt: 'Aura Retail till in the dark theme, mid-sale',
       },
       {
         title: 'Your phone mirrors the counter',
         line: 'Your computer and phone find each other on the shop network and stay in sync automatically.',
         shot: 'dashboard',
-        alt: 'Aura Retail dashboard showing the day\'s sales',
       },
       {
         title: 'End of day',
         line: 'Run X and Z reports and reconcile the cash. Any difference needs your approval.',
         shot: 'reports',
-        alt: 'Aura Retail reports screen with end of day figures',
       },
       {
         title: 'The books',
         line: 'Every sale is posted automatically to the trial balance, income, balance sheet and cash flow.',
         shot: 'trialBalance',
-        alt: 'Aura Retail trial balance report',
       },
     ],
   },
@@ -76,7 +70,7 @@ export const retailEn = {
     ],
   },
   works: {
-    title: 'Works with the hardware you have',
+    title: 'Scanners and receipt printers',
     line: 'Barcode scanners and receipt printers connect to the shop computer.',
   },
   jordan: {

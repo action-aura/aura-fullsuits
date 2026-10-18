@@ -65,12 +65,18 @@ export const onRequestPost = async (ctx: { request: Request; env: Env }): Promis
     return fail(500, { error: 'config' });
   }
 
+  // Fail closed on a missing salt: an unsalted hash of the IPv4 space is reversible,
+  // and the Privacy page promises the stored hash cannot be turned back into the address.
+  if (!env.IP_SALT) return fail(500, { error: 'config' });
+
   // 4. Validate (also normalises the phone).
   const v = validateLead(fields);
   if (!v.ok) return fail(422, { errors: v.errors });
   const lead = v.lead;
 
   // 5. Rate limit per salted IP hash; raw IPs are never stored.
+  // Check-then-insert is not atomic, so a burst of parallel posts could exceed the limit;
+  // single-use Turnstile tokens bound that abuse in practice.
   const ipHash = await sha256Hex(env.IP_SALT + ip);
   const rate = (await env.DB
     .prepare("SELECT COUNT(*) AS n FROM leads WHERE ip_hash=? AND created_at > datetime('now','-10 minutes')")

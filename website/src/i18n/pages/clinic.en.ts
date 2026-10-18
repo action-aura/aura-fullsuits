@@ -25,7 +25,7 @@ export const clinicEn = {
         line: 'Per visit: procedure, tooth number, price, discount, lab cost, payment and clinic profit.', // claims: clinic-claims.md Follow-up sheet
       },
       {
-        title: 'End of day reports', // claims: clinic-claims.md Reports
+        title: 'Reports', // claims: clinic-claims.md Reports
         line: 'Weekly, monthly and custom-range reports, a dashboard, and reporting for each dentist.', // claims: clinic-claims.md Reports
       },
     ],

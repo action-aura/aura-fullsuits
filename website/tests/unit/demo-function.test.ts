@@ -132,6 +132,15 @@ describe('demo function', () => {
     expect(inserts()).toHaveLength(0);
   });
 
+  it('(d2) no IP_SALT: 500, no INSERT', async () => {
+    const res = await onRequestPost({
+      request: jsonReq(),
+      env: makeEnv({ IP_SALT: undefined }),
+    } as any);
+    expect(res.status).toBe(500);
+    expect(inserts()).toHaveLength(0);
+  });
+
   it('(e) rate count 5: 429, no INSERT', async () => {
     const res = await onRequestPost({ request: jsonReq(), env: makeEnv({}, 5) } as any);
     expect(res.status).toBe(429);

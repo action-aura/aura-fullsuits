@@ -30,6 +30,9 @@ export const contactAr: DeepStrings<typeof contactEn> = {
     errorNetwork: 'تعذّر إرسال طلبك. تحقق من الاتصال بالإنترنت وحاول مرة أخرى.', // AR: drafted, native check pending
     errorServer: 'حدث خطأ من جهتنا. حاول مرة أخرى بعد قليل.', // AR: drafted, native check pending
     errorRate: 'محاولات كثيرة. انتظر قليلًا ثم حاول مرة أخرى.', // AR: drafted, native check pending
+    errorChallenge: 'أكمل خطوة التحقق أعلاه، ثم أرسل مرة أخرى.', // AR: drafted, native check pending
+    noscript: 'هذا النموذج يحتاج إلى جافاسكربت. راسلنا على واتساب أو اتصل على +962 78 006 9485.', // AR: drafted, native check pending
+    noJsError: 'لم نتمكن من إرسال النموذج من هذه الصفحة. راسلنا على واتساب أو اتصل بنا وسنحجز لك العرض.', // AR: drafted, native check pending
     errors: {
       nameRequired: 'يرجى إدخال اسمك.', // AR: drafted, native check pending
       nameLong: 'الاسم طويل جدًا.', // AR: drafted, native check pending

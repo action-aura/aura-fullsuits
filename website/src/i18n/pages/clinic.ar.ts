@@ -25,10 +25,10 @@ export const clinicAr: DeepStrings<typeof clinicEn> = {
       },
       {
         title: 'ورقة المتابعة والدفعة', // claims: clinic-claims.md Follow-up sheet // AR: drafted, native check pending
-        line: 'لكل زيارة: الإجراء ورقم السن والسعر والخصم وتكلفة المختبر والدفعة وصافي الربح.', // claims: clinic-claims.md Follow-up sheet
+        line: 'لكل زيارة: الإجراء ورقم السن والسعر والخصم وتكلفة المختبر والدفعة وربح العيادة.', // claims: clinic-claims.md Follow-up sheet
       },
       {
-        title: 'تقارير نهاية اليوم', // claims: clinic-claims.md Reports // AR: drafted, native check pending
+        title: 'التقارير', // claims: clinic-claims.md Reports // AR: drafted, native check pending
         line: 'تقارير أسبوعية وشهرية ولفترة مخصصة، ولوحة مؤشرات، وتقارير لكل طبيب.', // claims: clinic-claims.md Reports
       },
     ],
