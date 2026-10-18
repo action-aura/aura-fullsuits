@@ -1,4 +1,4 @@
-export interface D1Result { meta: { last_row_id: number } }
+export interface D1Result { meta: { last_row_id: number; changes?: number } }
 export interface D1PreparedStatement {
   bind(...values: unknown[]): D1PreparedStatement;
   run(): Promise<D1Result>;
@@ -10,6 +10,11 @@ export interface Env {
   TURNSTILE_SECRET?: string;
   IP_SALT: string;
   ALLOW_NO_TURNSTILE?: string;
-  NOTIFY_PROVIDER?: 'none' | 'webhook';
+  NOTIFY_PROVIDER?: 'none' | 'webhook' | 'smtp';
   NOTIFY_WEBHOOK_URL?: string;
+  SMTP_HOST?: string;
+  SMTP_PORT?: string;
+  SMTP_USER?: string;
+  SMTP_PASS?: string;
+  NOTIFY_TO?: string;
 }

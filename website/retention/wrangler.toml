@@ -1,0 +1,14 @@
+# Daily deletion of leads older than 24 months (Privacy page promise).
+# Deployed separately from the Pages project: `npx wrangler deploy -c retention/wrangler.toml`.
+# database_id must equal the Pages project's D1 id (set at the gated deploy step).
+name = "action-aura-lead-retention"
+main = "index.ts"
+compatibility_date = "2026-09-01"
+
+[triggers]
+crons = ["17 3 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "aura-leads"
+database_id = "SET-AT-DEPLOY"
