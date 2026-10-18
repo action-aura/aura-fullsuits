@@ -42,6 +42,16 @@ test.describe('axe', () => {
         await page.setViewportSize({ width: w, height: 900 });
         await page.goto(p);
         await page.waitForLoadState('load');
+        // Measure the settled page: at 'load' the copy reveal (opacity) and the world layers are mid-transition,
+        // and axe misreads half-faded text against a half-faded field. Same wait as shots.spec.
+        await page.evaluate(() => Promise.race([
+          Promise.all(document.getAnimations()
+            .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+            .map((a) => a.finished.catch(() => undefined))),
+          new Promise((r) => setTimeout(r, 10_000)),
+        ]));
+        // Layers that fade out keep visibility for .6s (transition delay), which getAnimations does not report.
+        await page.waitForTimeout(1000);
         const results = await new AxeBuilder({ page })
           .withTags(TAGS)
           .exclude('.jewel')
@@ -50,7 +60,10 @@ test.describe('axe', () => {
         const readable = results.violations.map(
           (v) =>
             `${v.id} [${v.impact}] ${v.help}\n` +
-            v.nodes.map((n) => `    ${n.target.join(' ')}`).join('\n'),
+            v.nodes.map((n) => {
+              const d = (n.any[0]?.data ?? {}) as { fgColor?: string; bgColor?: string; contrastRatio?: number };
+              return `    ${n.target.join(' ')}${d.fgColor ? `  fg ${d.fgColor} bg ${d.bgColor} ${d.contrastRatio}:1` : ''}`;
+            }).join('\n'),
         );
         expect(readable, `${p} @${w}:\n${readable.join('\n')}`).toEqual([]);
       });

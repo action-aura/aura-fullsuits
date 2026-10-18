@@ -331,6 +331,9 @@ body:lang(ar) {
   color: var(--ink-muted);
 }
 
+/* The page base follows the world (data-world on <html>). It was hard-coded master navy from when only the dark
+   Home existed: on Clinic the light field sat over a navy body, which showed through any fading layer and made
+   axe measure Clinic copy against navy (1.14:1) while the visible pixels are 14:1. */
 body {
-  background: #0E1729;
+  background: var(--field);
 }

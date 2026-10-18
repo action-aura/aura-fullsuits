@@ -11,6 +11,7 @@ export function startWorlds(root: HTMLElement): () => void {
   const sections = () => Array.from(document.querySelectorAll<HTMLElement>('[data-w]')).map((el) => ({
     top: el.getBoundingClientRect().top + window.scrollY, height: el.offsetHeight, world: (el.dataset.w as World) ?? 'master',
   }));
+  const layers = Object.fromEntries(WORLDS.map((w) => [w, Array.from(document.querySelectorAll<HTMLElement>(`.bg-${w}, .sc-${w}`))])) as Record<World, HTMLElement[]>;
   let cache = sections();
   let frame = 0;
   const update = () => {
@@ -22,6 +23,12 @@ export function startWorlds(root: HTMLElement): () => void {
       mix = Object.fromEntries(WORLDS.map((w) => [w, w === dom ? 1 : 0])) as typeof mix;
     }
     for (const w of WORLDS) root.style.setProperty(`--w-${w}`, mix[w].toFixed(3));
+    // A world at share 0 is hidden, not just transparent: axe read the hidden master field behind Clinic copy
+    // (dark-on-dark, while the pixels measure 14:1), and phones painted four invisible full-screen layers.
+    for (const w of WORLDS) {
+      const off = mix[w] < 0.0005;
+      for (const el of layers[w]) el.toggleAttribute('data-off', off);
+    }
     root.dataset.world = dom;
     // Latest mix kept on the root so a late-mounting jewel can read it (deep-load colour).
     (root as any).__auraMix = mix;

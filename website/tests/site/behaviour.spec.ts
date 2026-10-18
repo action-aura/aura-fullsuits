@@ -115,6 +115,8 @@ const intersects = (a: Box, b: Box): boolean => !(a.right <= b.left || a.left >=
 
 for (const url of ['/en/aura-retail/', '/ar/aura-clinic/']) {
   test(`product jewel dissolves at the rail and the grid, returns clear of the copy: ${url}`, async ({ page }) => {
+    // Four sections with WebGL under swiftshader and up to 8s polls each: past 30s when workers share the CPU.
+    test.setTimeout(150_000);
     await page.goto(url);
     await page.waitForLoadState('load');
     await page.waitForTimeout(800);

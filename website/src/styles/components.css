@@ -645,7 +645,14 @@ html:lang(ar) .footer-title {
   inset: 0;
   pointer-events: none;
   will-change: opacity;
-  transition: opacity .6s var(--ease-out);
+  transition: opacity .6s var(--ease-out), visibility 0s;
+}
+
+/* Share 0: hidden after the fade-out finishes (visibility waits .6s); shown at once when the share rises. */
+.world-bg[data-off],
+.world-scrim[data-off] {
+  visibility: hidden;
+  transition: opacity .6s var(--ease-out), visibility 0s linear .6s;
 }
 
 .world-bg { z-index: 0; }
@@ -680,7 +687,11 @@ html:lang(ar) .footer-title {
 @media (prefers-reduced-motion: reduce) {
   .world-bg,
   .world-scrim {
-    transition: opacity .3s linear;
+    transition: opacity .3s linear, visibility 0s;
+  }
+  .world-bg[data-off],
+  .world-scrim[data-off] {
+    transition: opacity .3s linear, visibility 0s linear .3s;
   }
 }
 
