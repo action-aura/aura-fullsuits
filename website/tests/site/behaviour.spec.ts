@@ -225,3 +225,13 @@ test('the still mark sits where the canvas mark renders (hero, 1440x900)', async
       .toBeLessThanOrEqual(STILL_TOLERANCE_PX);
   }
 });
+
+// Read pages pin the still top-right; on Arabic pages it must move to the left (the copy is right-aligned).
+// The pinned path bypasses stationAt, so it once skipped the RTL mirror and sat behind the Arabic headings.
+for (const [url, expected] of [['/en/privacy/', 0.86], ['/ar/privacy/', 0.14]] as const) {
+  test(`read-page still is mirrored for RTL: ${url}`, async ({ page }) => {
+    await page.goto(url);
+    await page.waitForLoadState('load');
+    expect(await jx(page)).toBeCloseTo(expected, 2);
+  });
+}

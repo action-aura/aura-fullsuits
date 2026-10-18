@@ -23,7 +23,7 @@ const t = dict(lang);
 <span class="visually-hidden">{t.a11y.jewel}</span>
 <script>
   import { pickTier } from '../scripts/jewel/tier';
-  import { stationsFor, stationAt, fitScale, footerFade, type PageKind, type Station } from '../scripts/jewel/stations';
+  import { stationsFor, stationAt, fitScale, footerFade, mirror, type PageKind, type Station } from '../scripts/jewel/stations';
 
   const root = document.documentElement;
   const layer = document.querySelector<HTMLElement>('.jewel')!;
@@ -87,7 +87,9 @@ const t = dict(lang);
   };
   const place = () => {
     let s;
-    if (pinned) s = pinned;
+    // Pinned stations (read pages, 404) go through no stationAt, so mirror them here: on Arabic read pages the
+    // still sat top-right behind the right-aligned headings (invisible until Plan 3 shipped the still files).
+    if (pinned) s = rtl ? mirror(pinned) : pinned;
     else {
       const c = scrollY + innerHeight / 2;
       let at = c;

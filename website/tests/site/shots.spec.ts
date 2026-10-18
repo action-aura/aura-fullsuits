@@ -4,7 +4,7 @@ import path from 'node:path';
 
 const SHOTS = path.resolve('shots');
 const LANGS = ['ar', 'en'] as const;
-const CORE_WIDTHS = [390, 1440];
+const CORE_WIDTHS = [320, 390, 1440];
 const WIDE_WIDTHS = [768, 1024];
 const PAGES: { slug: string; widths: number[] }[] = [
   { slug: '', widths: [...CORE_WIDTHS, ...WIDE_WIDTHS] },
@@ -62,7 +62,9 @@ for (const lang of LANGS) {
             await page.evaluate((idx) => {
               const el = document.querySelectorAll('[data-w]')[idx] as HTMLElement;
               const r = el.getBoundingClientRect();
-              const y = r.top + window.scrollY + r.height / 2 - window.innerHeight / 2;
+              // The first section is photographed as a visitor lands (scroll 0): centring a tall first section
+              // pushed its heading under the fixed nav, which no visitor sees (contrast read the nav over the h1).
+              const y = idx === 0 ? 0 : r.top + window.scrollY + r.height / 2 - window.innerHeight / 2;
               window.scrollTo({ top: Math.max(0, y), behavior: 'instant' as ScrollBehavior });
             }, i);
             await page.waitForTimeout(3000);
@@ -81,7 +83,10 @@ for (const lang of LANGS) {
               const sec = document.querySelectorAll('[data-w]')[idx];
               const out: { kind: 'heading' | 'lead'; color: string; box: { x: number; y: number; width: number; height: number; top: number; left: number; right: number; bottom: number } }[] = [];
               sec.querySelectorAll('h1, h2, .lead').forEach((el) => {
-                const r = el.getBoundingClientRect();
+                // The text's own extent, not the element box: a block heading spans the full column, so on read pages
+                // its empty right side sat over the pinned still and contrast measured mark pixels, not glyphs.
+                const range = document.createRange(); range.selectNodeContents(el);
+                const r = range.getBoundingClientRect();
                 const hit = r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight;
                 if (!hit) return;
                 out.push({
