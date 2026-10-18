@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { HOME_DESKTOP, HOME_PHONE, fitScale, mirror, stationAt, stationsFor } from '../../src/scripts/jewel/stations';
+import { HOME_DESKTOP, HOME_PHONE, fitScale, mirror, stationAt, stationsFor, type Station } from '../../src/scripts/jewel/stations';
 
 const C = [450, 1350, 2250, 3150, 4050, 4950];
 
@@ -33,10 +33,25 @@ describe('stationsFor', () => {
     return r;
   };
 
-  it('product desktop has six entries, hero first at {x:0.73,y:0.54,scale:1}', () => {
+  it('product desktop has one station per product section: hero, day rail, features, details, demo CTA', () => {
     const s = desktop('product');
-    expect(s).toHaveLength(6);
+    expect(s).toHaveLength(5);
     expect(s[0]).toEqual({ x: 0.73, y: 0.54, scale: 1 });
+  });
+
+  it('product desktop dissolves the mark at the day rail and the features grid only', () => {
+    expect(desktop('product').map((st) => st.alpha ?? 1)).toEqual([1, 0, 0, 1, 1]);
+  });
+
+  it('product desktop reaches the .9 demo CTA station with five section centres', () => {
+    const five = [450, 1270, 2300, 3300, 4100];
+    expect(stationAt(desktop('product'), five, 99999, false)).toEqual({ x: 0.73, y: 0.56, scale: 0.9 });
+  });
+
+  it('phone product has one station per product section too', () => {
+    const s = stationsFor('product', true);
+    if (s === 'none') throw new Error('expected phone stations for product');
+    expect(s).toHaveLength(5);
   });
 
   it('read has no stations on desktop or phone', () => {
@@ -87,5 +102,28 @@ describe('fitScale', () => {
   });
   it('keeps zero scale at zero', () => {
     expect(fitScale(0, 1024, 900)).toBe(0);
+  });
+});
+
+describe('dissolve', () => {
+  const A: Station = { x: 0.75, y: 0.5, scale: 0.7 };
+  const B: Station = { x: 0.75, y: 0.5, scale: 0.7, alpha: 0 };
+  const G = [0, 1000];
+  it('holds full alpha to 40% of the gap, is half at 55%, gone from 70%', () => {
+    expect(stationAt([A, B], G, 350, false).alpha).toBe(1);
+    expect(stationAt([A, B], G, 550, false).alpha).toBeCloseTo(0.5, 6);
+    expect(stationAt([A, B], G, 750, false).alpha).toBe(0);
+    expect(stationAt([A, B], G, 1000, false).alpha).toBe(0);
+  });
+  it('condenses back the same way', () => {
+    expect(stationAt([B, A], G, 350, false).alpha).toBe(0);
+    expect(stationAt([B, A], G, 550, false).alpha).toBeCloseTo(0.5, 6);
+    expect(stationAt([B, A], G, 750, false).alpha).toBe(1);
+  });
+  it('never emits alpha for stations that do not define it', () => {
+    expect('alpha' in stationAt(HOME_DESKTOP, C, 1800, false)).toBe(false);
+  });
+  it('mirror keeps alpha and flips only x', () => {
+    expect(mirror(B)).toEqual({ x: 0.25, y: 0.5, scale: 0.7, alpha: 0 });
   });
 });

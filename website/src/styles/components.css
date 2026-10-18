@@ -740,9 +740,10 @@ html:lang(ar) .footer-title {
   }
 }
 
-/* A station with scale <= 0.01 hides the mark (product pages after the hero on phones).
-   --jhide is set on <html> by Jewel.astro; opacity sits on .jewel so it does not fight
-   the per-world opacity of the stills. */
+/* --jhide (0..1) is how far the mark is hidden: 1 for a station with scale <= 0.01 (product pages after the hero on
+   phones), 1 - alpha for a dissolved station (desktop day rail and features grid), 0 otherwise. Set on <html> by
+   Jewel.astro; opacity sits on .jewel so it does not fight the per-world opacity of the stills. The .4s ease gives
+   the scroll-linked dissolve a little inertia; reduced motion removes it below, so the dissolve becomes a step. */
 .jewel { opacity: calc(1 - var(--jhide, 0)); transition: opacity .4s var(--ease-out); }
 @media (prefers-reduced-motion: reduce) { .jewel { transition: none; } }
 

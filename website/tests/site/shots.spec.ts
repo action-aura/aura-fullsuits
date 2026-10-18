@@ -76,6 +76,14 @@ for (const lang of LANGS) {
               window.scrollTo({ top: Math.max(0, y), behavior: 'instant' as ScrollBehavior });
             }, i);
             await page.waitForTimeout(3000);
+            // Under swiftshader a frame can take long enough that the copy's reveal (opacity + blur) is still
+            // mid-fade at 3s, which photographs as faint text. Wait for every finite CSS transition/animation.
+            await page.evaluate(() => Promise.race([
+              Promise.all(document.getAnimations()
+                .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+                .map((a) => a.finished.catch(() => undefined))),
+              new Promise((r) => setTimeout(r, 10_000)),
+            ]));
 
             await page.screenshot({ path: path.join(SHOTS, `${base}.png`) });
 

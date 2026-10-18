@@ -246,6 +246,49 @@
   }
 }
 
+/* ---------- Details chapter (product pages): three short blocks, not three section titles ----------
+   The h2s keep their element (honest outline) but take the Read-page block-heading scale; body under a heading is
+   muted prose 12px below it; blocks sit a clear beat apart so each reads as heading + body. */
+.product-details h2 {
+  font-size: clamp(1.4rem, 1.1rem + 1vw, 2rem);
+  line-height: 1.15;
+}
+
+:lang(ar) .product-details h2 {
+  font-size: 1.3rem;
+  line-height: 1.5;
+}
+
+.product-details h2 + p,
+.product-details h2 + ul {
+  margin-block-start: 12px;
+}
+
+.product-details p + h2,
+.product-details ul + h2 {
+  margin-block-start: clamp(40px, 6vh, 64px);
+}
+
+.product-details p,
+.product-details li {
+  color: var(--ink-muted);
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+:lang(ar) .product-details p,
+:lang(ar) .product-details li {
+  line-height: 1.9;
+}
+
+.product-details ul {
+  padding-inline-start: 1.4em;
+}
+
+.product-details li + li {
+  margin-block-start: .5em;
+}
+
 /* ---------- Read mode (privacy, terms, faq) ---------- */
 .read {
   padding-block: clamp(120px, 18vh, 180px) clamp(88px, 14vh, 150px);

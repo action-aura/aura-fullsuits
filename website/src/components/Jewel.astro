@@ -59,15 +59,18 @@ const t = dict(lang);
   markMix(currentMix());
   root.addEventListener('worldmix', (e) => markMix((e as CustomEvent).detail));
 
-  const apply = (s: { x: number; y: number; scale: number }) => {
+  const apply = (s: Station) => {
     // Phones: the big mark would swamp the copy on the 404 page, so cap its scale.
     const sc = fixed && innerWidth < 900 ? Math.min(s.scale, 1) : s.scale;
     // Desktop: fit the mark to the viewport. Hide check below still reads the station's own scale.
     const fitted = phone ? sc : fitScale(s.scale, innerWidth, innerHeight);
+    // --jhide is how far the mark is hidden, 0..1: fully for a scale-0 station (product pages after the hero on
+    // phones), 1 - alpha for a dissolved station (desktop day rail and features grid), 0 otherwise.
+    const hide = sc <= 0.01 ? 1 : 1 - (s.alpha ?? 1);
     root.style.setProperty('--jx', String(s.x));
     root.style.setProperty('--jy', String(s.y));
     root.style.setProperty('--js', String(fitted));
-    root.style.setProperty('--jhide', sc <= 0.01 ? '1' : '0');
+    root.style.setProperty('--jhide', String(Math.round(hide * 1000) / 1000));
     return { x: s.x, y: s.y, scale: fitted };
   };
   const centres = () => Array.from(document.querySelectorAll<HTMLElement>('[data-w]')).map(

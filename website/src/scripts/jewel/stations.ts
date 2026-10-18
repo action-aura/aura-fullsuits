@@ -1,4 +1,7 @@
-export type Station = { x: number; y: number; scale: number };
+// alpha: how visible the mark is at the station, 0..1; absent means 1. Used where a section's content spans the
+// full width (the product day rail and features grid): no station inside the clear-space band clears them, so the
+// mark dissolves there and condenses back for the next copy section. The world glow stays at the station.
+export type Station = { x: number; y: number; scale: number; alpha?: number };
 
 // Values from docs/design-system.md section 5 (Home row). x/y are viewport
 // fractions of the mark's centre; scale 1 = 58% of viewport height.
@@ -15,17 +18,19 @@ export const HOME_PHONE: Station[] = [
   { x: 0.5, y: 0.5, scale: 1 }, { x: 0.5, y: 0.5, scale: 1 }, { x: 0.5, y: 0.5, scale: 0.9 },
 ];
 
+// One station per [data-w] section of ProductPage.astro, in DOM order: hero, day rail, features, details, demo CTA.
+// stationAt caps at the number of section centres, so an extra entry is unreachable: a sixth entry once made the .9
+// CTA station dead and the mark stayed at .7 through the CTA (measured 2026-10-18).
 export const PRODUCT_DESKTOP: Station[] = [
-  { x: 0.73, y: 0.54, scale: 1 },
-  { x: 0.75, y: 0.5, scale: 0.7 },
-  { x: 0.75, y: 0.5, scale: 0.7 },
-  { x: 0.75, y: 0.5, scale: 0.7 },
-  { x: 0.75, y: 0.5, scale: 0.7 },
-  { x: 0.73, y: 0.56, scale: 0.9 },
+  { x: 0.73, y: 0.54, scale: 1 },            // hero
+  { x: 0.75, y: 0.5, scale: 0.7, alpha: 0 }, // day rail: full-width cards, the mark dissolves
+  { x: 0.75, y: 0.5, scale: 0.7, alpha: 0 }, // features grid: full-width cards, stays dissolved
+  { x: 0.75, y: 0.5, scale: 0.7 },           // details: condenses back beside the copy
+  { x: 0.73, y: 0.56, scale: 0.9 },          // demo CTA
 ];
 export const PRODUCT_PHONE: Station[] = [
   { x: 0.5, y: 0.5, scale: 1 }, { x: 0.5, y: 0.5, scale: 0 }, { x: 0.5, y: 0.5, scale: 0 },
-  { x: 0.5, y: 0.5, scale: 0 }, { x: 0.5, y: 0.5, scale: 0 }, { x: 0.5, y: 0.5, scale: 0 },
+  { x: 0.5, y: 0.5, scale: 0 }, { x: 0.5, y: 0.5, scale: 0 },
 ];
 export const ABOUT_DESKTOP: Station[] = [
   { x: 0.5, y: 0.36, scale: 1.2 },
@@ -50,8 +55,12 @@ export function stationsFor(kind: PageKind, phone: boolean): Station[] | 'none' 
   return phone ? CONTACT_PHONE : CONTACT_DESKTOP;
 }
 
-export const mirror = (s: Station): Station => ({ x: 1 - s.x, y: s.y, scale: s.scale });
+export const mirror = (s: Station): Station => ({ ...s, x: 1 - s.x });
 const smooth = (t: number) => t * t * (3 - 2 * t);
+// A dissolve runs inside the middle 30% of the gap between two section centres (scroll fraction .4 to .7): the mark
+// holds, then fades, then is gone, instead of sitting half-faded behind cards for the whole glide. Symmetric on the
+// way back. Takes the raw scroll fraction, not the smoothed one.
+const alphaStep = (u: number) => smooth(Math.min(1, Math.max(0, (u - 0.4) / 0.3)));
 
 export function stationAt(stations: Station[], centres: number[], c: number, rtl: boolean): Station {
   const pick = (s: Station) => (rtl ? mirror(s) : s);
@@ -60,9 +69,16 @@ export function stationAt(stations: Station[], centres: number[], c: number, rtl
   if (c >= centres[last]) return pick(stations[last]);
   for (let i = 0; i < last; i++) {
     if (c >= centres[i] && c <= centres[i + 1]) {
-      const t = smooth((c - centres[i]) / (centres[i + 1] - centres[i]));
+      const u = (c - centres[i]) / (centres[i + 1] - centres[i]);
+      const t = smooth(u);
       const a = stations[i], b = stations[i + 1];
-      return pick({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, scale: a.scale + (b.scale - a.scale) * t });
+      const out: Station = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, scale: a.scale + (b.scale - a.scale) * t };
+      // alpha is emitted only when a neighbour defines it, so tables without alpha still compare equal to their stations.
+      if (a.alpha !== undefined || b.alpha !== undefined) {
+        const aa = a.alpha ?? 1, ba = b.alpha ?? 1;
+        out.alpha = aa + (ba - aa) * alphaStep(u);
+      }
+      return pick(out);
     }
   }
   return pick(stations[last]);

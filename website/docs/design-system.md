@@ -39,6 +39,7 @@ Fonts: Outfit 400/500/600/700 (Latin), Readex Pro 400/500/600 (Arabic). Self-hos
 |---|---|---|---|---|
 | Hero h1 | Outfit 700 `clamp(2.25rem, 1.3rem + 3.4vw, 4.1rem)` | Readex Pro 600 `clamp(1.35rem, 1rem + 1.4vw, 2.1rem)` | 1.0 / 1.4 | -.035em / 0 |
 | Section h2 | Outfit 700 `clamp(1.9rem, 1.2rem + 2.4vw, 3.4rem)` | Readex Pro 600 `clamp(1.2rem, .95rem + 1vw, 1.8rem)` | 1.0 / 1.4 | -.035em / 0 |
+| Block heading (details chapter on product pages; h2 on Read pages) | Outfit 700 `clamp(1.4rem, 1.1rem + 1vw, 2rem)` | Readex Pro 600 `1.3rem` | 1.15 / 1.5 | -.035em / 0 |
 | h3 (card, feature) | Outfit 600 `1.25rem` | Readex Pro 600 `1.2rem` | 1.2 / 1.5 | -.01em / 0 |
 | Lead | Outfit 400 `clamp(1.0625rem, 1rem + .3vw, 1.2rem)` | Readex Pro 400 `lead x 1.04` | 1.55 / 1.85 | 0 |
 | Body | Outfit 400 `1rem` | Readex Pro 400 `1.0625rem` (16px minimum on phones) | 1.6 / 1.9 | 0 |
@@ -46,7 +47,7 @@ Fonts: Outfit 400/500/600/700 (Latin), Readex Pro 400/500/600 (Arabic). Self-hos
 | Nav | Outfit 500 `13px` | Readex Pro 500 `14px` | 1 | .01em / 0 |
 | Numbers | `font-variant-numeric: tabular-nums`; Western digits 0-9 in both languages for prices and phone numbers | | | |
 
-Rules: `text-wrap: balance` on h1/h2/h3, `text-wrap: pretty` on leads and captions. Headlines max 2 lines on desktop (h1 3 lines allowed in the hero). Emphasis within a headline = the world accent colour on one word (`.hl`), never a second family. On bilingual pages the Arabic title sits directly under the Latin title at the Latin size ratio above, same ink; the Arabic lead sits under the Latin lead, `text-align: start`. On Arabic-only pages everything is Readex Pro and `dir="rtl"`.
+Rules: `text-wrap: balance` on h1/h2/h3, `text-wrap: pretty` on leads and captions. Headlines max 2 lines on desktop (h1 3 lines allowed in the hero). Emphasis within a headline = the world accent colour on one word (`.hl`), never a second family. On bilingual pages the Arabic title sits directly under the Latin title at the Latin size ratio above, same ink; the Arabic lead sits under the Latin lead, `text-align: start`. On Arabic-only pages everything is Readex Pro and `dir="rtl"`. A chapter made of several short blocks (the product details chapter: hardware, Jordan or privacy, what you need to run it) keeps its `h2` elements but sets them at the block-heading scale; the body under a block heading is `--ink-muted` at line-height 1.7 (Arabic 1.9), 12px below the heading, and blocks sit `clamp(40px, 6vh, 64px)` apart, so each reads as heading + body rather than a run of section titles.
 
 ## 4. Spacing, rhythm, surfaces
 
@@ -63,18 +64,20 @@ Rules: `text-wrap: balance` on h1/h2/h3, `text-wrap: pretty` on leads and captio
 
 Geometry from the kit's 120-unit construction (apex 60,12.6; ring 36x8 at 60,69 rotated -12 degrees; node 95.2,61.5), extruded .7 with bevel .12/.09; ring torus r 3.6, tube .26; node sphere .38 with a tight additive halo (1.9, .6, not depth-tested), a wide halo (5.2, .22), and in the light room a white corona (1.5, .55) plus a sky halo (4.4, .4). Camera FOV 22, elevation 6 degrees, ACES tone mapping, exposure 1.0 (.92 in the light room). Materials: facets metalness 1, roughness .2/.24, clearcoat .35 (ceramic in the light room: metalness .1, clearcoat 1); ring metalness 1, roughness .2, emissive .45. Vertex brightness ramp .55 at the feet to 1.05 at the apex. Neutral studio dome (`#9A9EA6 / #2E3238 / #07080A`) with a wide softbox above, a rim card behind right, a small hot glint card.
 
-**Placement rules.** Scale 1 = 58% of the viewport height on desktop; the mark keeps the kit's 25% clear space from the header, the viewport edge and the bottom, and never stands behind text at a station.
+**Placement rules.** Scale 1 = 58% of the viewport height on desktop; the mark keeps the kit's 25% clear space from the header, the viewport edge and the bottom, and never stands behind text at a station; where a section's content spans the full width (a rail, a grid) it dissolves instead (below).
 
 | Page type | Desktop stations (centre across / down, scale) | Phone |
 |---|---|---|
 | Home | hero R 73%/54% 1.0; company R 66%/52% 1.14; Retail L 27% .9 (copy flipped right); Clinic R .9; Gym L .9 (flipped); close R 73%/58% .76 | centred, apex at mid-height, scale 1; close .9 |
-| Product page (Retail, Clinic) | hero R 73%/54% 1.0 in the product's world; it stays R and shrinks to .7 while the day-rail and features scroll; returns to .9 at the demo CTA | apex at mid-height on the hero only; hidden (opacity 0) past the hero, lite still in the CTA block |
+| Product page (Retail, Clinic) | one station per section, five in all: hero R 73%/54% 1.0 in the product's world; day rail R 75%/50% .7 dissolved (alpha 0); features grid R 75%/50% .7 dissolved (alpha 0); details R 75%/50% .7; demo CTA R 73%/56% .9 | apex at mid-height on the hero only; hidden (opacity 0) past the hero, lite still in the CTA block |
 | About + Partners | hero: centred, 72%/50%, scale 1.2, copy BELOW it (the only centred-copy hero); then R .8 | centred, apex 40% |
 | Book a demo / Contact | R 73%/54% .9 beside the form | lite still above the form, 40% width |
 | Privacy (Read) | lite still, top right, 28% height | none |
 | 404 | centred, scale 1.3, copy below | centred, scale 1 |
 
 RTL pages mirror every station horizontally (R becomes 27%, L becomes 73%); the mark's geometry is never mirrored.
+
+**Dissolve.** A station may carry `alpha` (0 to 1; absent means 1). Where a section's content spans the full width (the product day rail, the features grid) no station inside the clear-space band clears it, and cards must not go opaque to hide it (the ring would show in the 20px gutters), so the mark dissolves: alpha 0 with the scale held, while the world glow stays lit at the station. The dissolve runs inside the middle 30% of the scroll gap between two section centres (hold to 40%, fade to 70%, gone after), so the mark is never half-faded behind a card at rest; it condenses back the same way for the next copy section. At rest at a dissolved station the mark has no rendered pixels (`.jewel` opacity 0); that is the check, since a bounding box cannot be measured for an absent mark. Phones already hide the mark after the product hero; nothing changes there.
 
 **Lite path** (any of: `prefers-reduced-motion: reduce`, no WebGL2, `navigator.deviceMemory <= 4`, `Save-Data`, viewport < 900px with `devicePixelRatio > 2.5`): a pre-rendered still per world (AVIF with WebP fallback, 1200px tall, transparent background, 4 files, about 40 KB each), placed exactly at the station, cross-faded between worlds over 600ms; desktop adds a CSS `perspective(1200px) rotateY(+-4deg) rotateX(+-2deg)` following the pointer with a 300ms ease-out, phones add nothing. Loading order everywhere: still first, three.js after `load`, canvas fades in over 1.1s behind a 2px blur of the still, then the still is removed.
 
@@ -85,6 +88,7 @@ RTL pages mirror every station horizontally (R becomes 27%, L becomes 73%); the 
 | Arrival | canvas fades in, mark rises .8 units into its station | 1.1s fade, 1.8s rise, cubic-out |
 | Reveal | copy children fade up 18px from a 8px blur, 70ms stagger (no blur on phones) | .9s `cubic-bezier(.23,1,.32,1)` |
 | Glide | jewel moves and rescales between stations | scroll-linked smoothstep across the section gap, then loop inertia (k .085/frame) |
+| Dissolve | mark opacity to 0 at a full-width section, back for the next copy section; the glow stays | scroll-linked inside the middle 30% of the gap between section centres (hold to 40%, fade to 70%), smoothstep, plus the .4s `--ease-out` opacity ease |
 | World Blend | field, glow, scrim crossfade; text colour eases | scroll-linked; colour .6s cubic-out |
 | Facet Catch | key light swings -5 to 0 and back | every 9s, 1.4s smoothstep |
 | Idle | bob .04, sway +-3.4 degrees | 7s / 14s sine |
@@ -94,7 +98,7 @@ RTL pages mirror every station horizontally (R becomes 27%, L becomes 73%); the 
 | Menu Sheet (phone) | full-screen material, links mask-reveal 12px with 50ms stagger | 320ms `cubic-bezier(.32,.72,0,1)` |
 | Rail Snap | day-rail scroll-snap, mandatory, proximity on desktop | native |
 
-Tokens: `--ease-out: cubic-bezier(.23,1,.32,1)`, `--ease-io: cubic-bezier(.77,0,.175,1)`, `--ease-drawer: cubic-bezier(.32,.72,0,1)`. Reduced motion: Reveal becomes a .3s opacity fade, Glide and Idle stop (stills at stations), Facet Catch and Node Pulse off, World Blend becomes a 300ms step-fade. Never animate layout properties.
+Tokens: `--ease-out: cubic-bezier(.23,1,.32,1)`, `--ease-io: cubic-bezier(.77,0,.175,1)`, `--ease-drawer: cubic-bezier(.32,.72,0,1)`. Reduced motion: Reveal becomes a .3s opacity fade, Glide and Idle stop (stills at stations), Facet Catch and Node Pulse off, World Blend becomes a 300ms step-fade, Dissolve becomes a step at the midpoint between centres (the station snaps and the .4s ease is removed). Never animate layout properties.
 
 ## 7. Components
 
@@ -122,9 +126,9 @@ Tokens: `--ease-out: cubic-bezier(.23,1,.32,1)`, `--ease-io: cubic-bezier(.77,0,
 
 **Home.** Master world. Nav. Hero: copy left (h1 "Your shop keeps selling, even when the internet doesn't." + Arabic title + lead + Arabic lead + WhatsApp pill + demo link), jewel R 58%. Company chapter ("Action Aura", jewel R 66%). Retail chapter, flipped, Available now, jewel L, world copper. Clinic chapter, Available now, jewel R, light room. Gym chapter, flipped, Coming, jewel L, garnet. Close "Twenty minutes, at your counter." with both CTAs and the footer line. Six sections, no cards.
 
-**Aura Retail.** Retail world from the first pixel. Hero: pill Available now, h1 "The till that keeps selling offline.", lead, CTAs, jewel R. Day-in-the-shop rail (6 moments). Features: a bento of exactly six cells with two cells carrying screenshots (offline till; barcode scanning; stock and purchasing; receivables and payables; receipts in Arabic and English; phone mirrors the counter). Two photo frames side by side with captions. "What works with it" as plain text, only hardware actually supported (barcode scanners, receipt printers; no cash-drawer claim). Demo CTA block (copy + both CTAs, jewel .9). Footer.
+**Aura Retail.** Retail world from the first pixel. Hero: pill Available now, h1 "The till that keeps selling offline.", lead, CTAs, jewel R. Day-in-the-shop rail (6 moments). Features: a bento of exactly six cells with two cells carrying screenshots (offline till; barcode scanning; stock and purchasing; receivables and payables; receipts in Arabic and English; phone mirrors the counter). Two photo frames side by side with captions. "What works with it", "Ready for Jordan" and "What you need to run it" as one details chapter of three block headings (section 3), plain text, only hardware actually supported (barcode scanners, receipt printers; no cash-drawer claim). Demo CTA block (copy + both CTAs, jewel .9). Footer.
 
-**Aura Clinic.** Clinic world (light room) from the first pixel; `--ink` navy. Hero: Available now, h1 "Appointments, records and billing, in one calm system.", CTAs, cobalt jewel R. Rail: a day in the clinic (5 moments). Features bento of five (appointments; patient records; treatment plans; billing; Arabic and English). Screenshots from the clinic product. Demo CTA. Footer.
+**Aura Clinic.** Clinic world (light room) from the first pixel; `--ink` navy. Hero: Available now, h1 "Appointments, records and billing, in one calm system.", CTAs, cobalt jewel R. Rail: a day in the clinic (5 moments). Features bento of five (appointments; patient records; treatment plans; billing; Arabic and English). Screenshots from the clinic product. Details chapter of three blocks (hardware, privacy, what you need to run it). Demo CTA. Footer.
 
 **About + Partners.** Master world. Hero: jewel centred at 72%/50% scale 1.2, copy below: "One mark, one way of working." + the mark explained in two sentences (the pierced A, the orbit, the node). Story section (plain prose, 65ch). Products: three chapter blocks in a row on desktop, each with its status pill (Retail and Clinic Available now, Gym Coming), plus one line "More Aura products are coming" with a Coming pill, no names that are not decided. Partners: logo-only wall of real partner marks; if there are none yet, the section is omitted, never faked. Footer.
 
@@ -136,6 +140,6 @@ Tokens: `--ease-out: cubic-bezier(.23,1,.32,1)`, `--ease-io: cubic-bezier(.77,0,
 
 ## 9. Do / Don't
 
-Do: keep one jewel per page at a station; keep the copy opposite it; measure body contrast on the rendered backdrop; use the two status labels only; ship real screenshots in the page's language; caption composited photos as illustrations; honour reduced motion with stills; use logical CSS properties everywhere; keep WhatsApp green true; use Western digits for numbers in Arabic; one label per CTA intent.
+Do: keep one jewel per page at a station; keep the copy opposite it; let the mark dissolve for a full-width section (rail, grid) and bring it back for the next copy section; measure body contrast on the rendered backdrop; use the two status labels only; ship real screenshots in the page's language; caption composited photos as illustrations; honour reduced motion with stills; use logical CSS properties everywhere; keep WhatsApp green true; use Western digits for numbers in Arabic; one label per CTA intent.
 
-Don't: crop the mark, mirror the mark, tint the mark's ring to anything but its world; put text over the jewel at a station; add eyebrows, section numbers, scroll cues, decorative dots, em-dashes, version strings, locale/time strips; use Inter, Fraunces, Instrument Serif or any serif; letter-space or uppercase Arabic; build fake UI from divs; show a cash-drawer, e-invoicing, or notification feature as available; add a third CTA intent; use pure black or pure white; animate width, height, top or left; load any third-party script other than three.js r128 from cdnjs and the self-hosted fonts.
+Don't: crop the mark, mirror the mark, tint the mark's ring to anything but its world; put text over the jewel at a station; make cards opaque to hide the mark (the ring shows in the gutters); add eyebrows, section numbers, scroll cues, decorative dots, em-dashes, version strings, locale/time strips; use Inter, Fraunces, Instrument Serif or any serif; letter-space or uppercase Arabic; build fake UI from divs; show a cash-drawer, e-invoicing, or notification feature as available; add a third CTA intent; use pure black or pure white; animate width, height, top or left; load any third-party script other than three.js r128 from cdnjs and the self-hosted fonts.
