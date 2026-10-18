@@ -23,6 +23,7 @@ const t = dict(lang);
 const alt = alternates(slug);
 const self = canonicalOverride ?? canonical(lang, slug);
 const ogImage = `https://actionaura.me/og/${lang}-${slug || 'home'}.png`;
+const beacon = import.meta.env.PUBLIC_CF_BEACON_TOKEN;
 ---
 <html lang={lang} dir={dir(lang)} data-world={world}>
   <head>
@@ -62,5 +63,6 @@ const ogImage = `https://actionaura.me/og/${lang}-${slug || 'home'}.png`;
         els.forEach((e) => io.observe(e));
       }
     </script>
+    {beacon && <script is:inline defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon={JSON.stringify({ token: beacon })}></script>}
   </body>
 </html>

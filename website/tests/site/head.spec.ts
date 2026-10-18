@@ -1,4 +1,6 @@
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const SLUGS = ['aura-retail', 'aura-clinic', 'about', 'faq', 'contact', 'privacy', 'terms'];
 const PAGES = ['ar', 'en'].flatMap((l) => [`/${l}/`, ...SLUGS.map((s) => `/${l}/${s}/`)]);
@@ -59,6 +61,24 @@ test.describe('every page head', () => {
       await page.goto(p, { waitUntil: 'domcontentloaded' });
       const href = await page.locator('a[href^="https://wa.me/962780069485"]').first().getAttribute('href');
       expect(href, p).toContain('wa.me/962780069485');
+    }
+  });
+
+  test('analytics beacon appears only when a token was baked in', () => {
+    const expected = process.env.BEACON_EXPECT;
+    const SRC = 'https://static.cloudflareinsights.com/beacon.min.js';
+    for (const l of ['en', 'ar']) {
+      const html = readFileSync(resolve(process.cwd(), 'dist', l, 'index.html'), 'utf8');
+      if (!expected) {
+        expect(html, l).not.toContain('cloudflareinsights');
+        continue;
+      }
+      const tags = (html.match(/<script\b[^>]*>/g) ?? []).filter((t) => t.includes(`src="${SRC}"`));
+      expect(tags.length, l).toBe(1);
+      const m = tags[0].match(/data-cf-beacon=(?:"([^"]*)"|'([^']*)')/);
+      expect(m, l).not.toBeNull();
+      const raw = (m![1] ?? m![2]).replace(/&quot;/g, '"').replace(/&#34;/g, '"').replace(/&amp;/g, '&');
+      expect(JSON.parse(raw), l).toEqual({ token: expected });
     }
   });
 });
