@@ -23,7 +23,7 @@ const otherTitle = dict(other).home.hero.title;
     <section id="hero" data-w="master" class="hero">
       <div class="copy reveal">
         <h1>{t.home.hero.title}</h1>
-        <p class="ar-title" lang={other}>{otherTitle}</p>
+        <p class="ar-title" lang={other} dir={lang === 'ar' ? 'ltr' : 'rtl'}>{otherTitle}</p>
         <p class="lead">{t.home.hero.lead}</p>
         <div class="ctas"><WhatsAppPill lang={lang} /><DemoLink lang={lang} /></div>
       </div>
