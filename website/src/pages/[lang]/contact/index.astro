@@ -7,7 +7,7 @@ import DemoForm from '../../../components/DemoForm.astro';
 import WhatsAppPill from '../../../components/WhatsAppPill.astro';
 import { dict, LANGS, type Lang } from '../../../i18n';
 import { PHONE_TEL } from '../../../lib/lang';
-import { organizationLd, breadcrumbLd } from '../../../lib/jsonld';
+import { organizationLd, breadcrumbLd, professionalServiceLd } from '../../../lib/jsonld';
 
 export function getStaticPaths() { return LANGS.map((lang) => ({ params: { lang } })); }
 const lang = Astro.params.lang as Lang;
@@ -16,7 +16,7 @@ const c = t.pages.contact;
 const direct = c.direct;
 const crumbs = breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: c.title, slug: 'contact' }]);
 ---
-<Base lang={lang} slug="contact" title={t.meta.contact.title} description={t.meta.contact.description} jsonld={[organizationLd(lang), crumbs]}>
+<Base lang={lang} slug="contact" title={t.meta.contact.title} description={t.meta.contact.description} jsonld={[organizationLd(lang), professionalServiceLd(lang), crumbs]}>
   <Nav lang={lang} slug="contact" />
   <Jewel lang={lang} stations="contact" />
   <main id="main">

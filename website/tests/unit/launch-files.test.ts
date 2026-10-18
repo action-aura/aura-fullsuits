@@ -25,6 +25,7 @@ describe('_headers', () => {
   }
   it('noindexes the pages.dev preview host only', () => {
     expect(blocks['https://:project.pages.dev/*']).toContain('X-Robots-Tag: noindex');
+    expect(blocks['https://:version.:project.pages.dev/*']).toContain('X-Robots-Tag: noindex');
     expect((blocks['/*'] ?? []).some((l) => l.startsWith('X-Robots-Tag'))).toBe(false);
   });
   it('sends the security headers on every path', () => {

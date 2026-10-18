@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { organizationLd, breadcrumbLd, softwareLd, faqLd } from '../../src/lib/jsonld';
+import { organizationLd, professionalServiceLd, breadcrumbLd, softwareLd, faqLd } from '../../src/lib/jsonld';
 
 describe('json-ld', () => {
   it('organization has the real contact data and no ratings or offers', () => {
@@ -9,6 +9,25 @@ describe('json-ld', () => {
     expect(o.alternateName).toBe('أكشن أورا');
     expect(o.telephone).toBe('+962780069485');
     expect(JSON.stringify(o)).not.toMatch(/aggregateRating|offers|review/);
+  });
+  // Old logo path /icons/mark-512.png 404'd, and a per-language url gave two homepages for one entity.
+  it('organization has one stable @id and url for both languages, a real logo and a contactPoint', () => {
+    const ar = organizationLd('ar') as any;
+    const en = organizationLd('en') as any;
+    expect(ar.url).toBe('https://actionaura.me/');
+    expect(en.url).toBe(ar.url);
+    expect(ar['@id']).toBe('https://actionaura.me/#org');
+    expect(en['@id']).toBe(ar['@id']);
+    expect(ar.logo.endsWith('/icon-512.png')).toBe(true);
+    expect(ar.contactPoint.telephone).toBe('+962780069485');
+  });
+  it('professional service links to the organization by @id and shares contact data', () => {
+    const org = organizationLd('ar') as any;
+    const p = professionalServiceLd('ar') as any;
+    expect(p['@type']).toBe('ProfessionalService');
+    expect(p.parentOrganization['@id']).toBe(org['@id']);
+    expect(p.telephone).toBe(org.telephone);
+    expect(p.address.streetAddress).toBe(org.address.streetAddress);
   });
   it('breadcrumb positions are 1-based and urls absolute', () => {
     const b = breadcrumbLd('en', [{ name: 'Home', slug: '' }, { name: 'Aura Retail', slug: 'aura-retail' }]) as any;

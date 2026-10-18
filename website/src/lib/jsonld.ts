@@ -4,11 +4,28 @@ import { ORIGIN, canonical } from './seo';
 export function organizationLd(lang: Lang): object {
   return {
     '@context': 'https://schema.org', '@type': 'Organization',
+    '@id': `${ORIGIN}/#org`,
     name: 'Action Aura', alternateName: 'أكشن أورا',
-    url: `${ORIGIN}/${lang}/`, logo: `${ORIGIN}/icons/mark-512.png`,
+    url: `${ORIGIN}/`, logo: `${ORIGIN}/icon-512.png`,
     telephone: '+962780069485', email: 'info@actionaura.me',
     address: { '@type': 'PostalAddress', addressLocality: 'Amman', addressCountry: 'JO',
       streetAddress: 'Al-Rayyan Complex, Radio & Television St, Al-Muqabalain' },
+    contactPoint: { '@type': 'ContactPoint', telephone: '+962780069485', email: 'info@actionaura.me',
+      contactType: 'sales', areaServed: 'JO', availableLanguage: ['ar', 'en'] },
+  };
+}
+
+// About and Contact (SEO plan section 4): the local business entity, linked to the Organization by @id.
+export function professionalServiceLd(lang: Lang): object {
+  return {
+    '@context': 'https://schema.org', '@type': 'ProfessionalService',
+    '@id': `${ORIGIN}/#business`,
+    name: lang === 'ar' ? 'أكشن أورا' : 'Action Aura',
+    url: `${ORIGIN}/${lang}/`, image: `${ORIGIN}/icon-512.png`,
+    telephone: '+962780069485', email: 'info@actionaura.me',
+    address: { '@type': 'PostalAddress', addressLocality: 'Amman', addressCountry: 'JO',
+      streetAddress: 'Al-Rayyan Complex, Radio & Television St, Al-Muqabalain' },
+    parentOrganization: { '@id': `${ORIGIN}/#org` },
   };
 }
 

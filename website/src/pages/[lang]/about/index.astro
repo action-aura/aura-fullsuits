@@ -7,7 +7,7 @@ import StatusPill from '../../../components/StatusPill.astro';
 import WhatsAppPill from '../../../components/WhatsAppPill.astro';
 import { dict, LANGS, type Lang } from '../../../i18n';
 import { pagePath } from '../../../lib/seo';
-import { breadcrumbLd } from '../../../lib/jsonld';
+import { breadcrumbLd, professionalServiceLd } from '../../../lib/jsonld';
 
 export function getStaticPaths() { return LANGS.map((lang) => ({ params: { lang } })); }
 const lang = Astro.params.lang as Lang;
@@ -15,7 +15,7 @@ const t = dict(lang);
 const a = t.pages.about;
 const crumbs = breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: t.nav.about, slug: 'about' }]);
 ---
-<Base lang={lang} slug="about" title={t.meta.about.title} description={t.meta.about.description} jsonld={[crumbs]}>
+<Base lang={lang} slug="about" title={t.meta.about.title} description={t.meta.about.description} jsonld={[professionalServiceLd(lang), crumbs]}>
   <Nav lang={lang} slug="about" />
   <Jewel lang={lang} stations="about" />
   <main id="main">

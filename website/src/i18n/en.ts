@@ -44,7 +44,7 @@ export const en = {
       description: 'Terms for using the Action Aura website. They cover website use only, not the Aura software licence.',
     },
     notFound: { title: 'Page not found | Action Aura', description: 'This page is not here. Go back to Action Aura.' },
-    chooser: { title: 'Action Aura | العربية or English', description: 'Choose your language: Arabic or English.' },
+    chooser: { title: 'Action Aura | العربية or English', description: 'Action Aura, retail and clinic software from Amman, Jordan. Choose Arabic or English.' },
   },
   nav: {
     brand: 'Action Aura', retail: 'Aura Retail', clinic: 'Aura Clinic', gym: 'Aura Gym', about: 'About',

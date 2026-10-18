@@ -46,7 +46,7 @@ export const ar: Dict = {
     },
     chooser: {
       title: 'أكشن أورا | العربية أو English', // AR: drafted, native check pending
-      description: 'اختر لغتك: العربية أو الإنجليزية.', // AR: drafted, native check pending
+      description: 'أكشن أورا، برامج للمحلات والعيادات من عمّان، الأردن. اختر العربية أو الإنجليزية.', // AR: drafted, native check pending
     },
   },
   nav: {

@@ -2,6 +2,10 @@
 https://:project.pages.dev/*
   X-Robots-Tag: noindex
 
+# Per-deployment and branch preview hosts (<hash>.<project>.pages.dev) too.
+https://:version.:project.pages.dev/*
+  X-Robots-Tag: noindex
+
 /*
   Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com https://static.cloudflareinsights.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://cloudflareinsights.com https://challenges.cloudflare.com; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
   X-Content-Type-Options: nosniff

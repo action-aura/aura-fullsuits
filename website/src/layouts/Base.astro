@@ -22,7 +22,8 @@ const { lang, slug, title, description, world = 'master', noindex = false, jsonl
 const t = dict(lang);
 const alt = alternates(slug);
 const self = canonicalOverride ?? canonical(lang, slug);
-const ogImage = `https://actionaura.me/og/${lang}-${slug || 'home'}.png`;
+// The 404 page has no card of its own, so it shares home's.
+const ogImage = `https://actionaura.me/og/${lang}-${!slug || slug === '404' ? 'home' : slug}.png`;
 const beacon = import.meta.env.PUBLIC_CF_BEACON_TOKEN;
 ---
 <html lang={lang} dir={dir(lang)} data-world={world}>
