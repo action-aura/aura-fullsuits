@@ -1,13 +1,47 @@
 // Every visible English string. ar.ts must have exactly these keys (the type
 // below enforces it at `astro check`; tests/unit/i18n.test.ts enforces it at
 // test time). Claims come only from docs/messaging.md (traced to content.py).
-type DeepStrings<T> = { [K in keyof T]: T[K] extends string ? string : DeepStrings<T[K]> };
+import type { DeepStrings } from './types';
+import { retailEn } from './pages/retail.en';
+import { clinicEn } from './pages/clinic.en';
+import { aboutEn } from './pages/about.en';
+import { faqEn } from './pages/faq.en';
+import { contactEn } from './pages/contact.en';
+import { legalEn } from './pages/legal.en';
 
 export const en = {
   meta: {
     home: {
       title: 'Action Aura | Retail Software from Amman, Jordan',
       description: 'Action Aura builds Aura Retail, POS and shop-management software that works offline and syncs your devices. Book a demo.',
+    },
+    retail: {
+      title: 'Aura Retail | POS and Shop Management Software',
+      description: 'Desktop till plus manager phone app. Works offline, syncs devices, tracks stock, customer and supplier debts, reports, multiple branches, barcode scanning.',
+    },
+    clinic: {
+      title: 'Aura Clinic | Clinic Management Software',
+      description: 'Aura Clinic covers appointments, patient files, treatment plans and billing for clinics. Encrypted on the clinic PC and works offline.',
+    },
+    about: {
+      title: 'About and Partners | Action Aura',
+      description: 'Meet Action Aura in Amman and learn how we work with shop owners, partners and investors.',
+    },
+    faq: {
+      title: 'FAQ | Action Aura',
+      description: 'Answers about Aura Retail: working offline, Arabic, hardware, branches, data safety, installation and training. Ask us about pricing.',
+    },
+    contact: {
+      title: 'Book a Demo | Action Aura',
+      description: 'Book a demo of Aura Retail or contact our Amman team on +962 78 006 9485.',
+    },
+    privacy: {
+      title: 'Privacy Policy | Action Aura',
+      description: 'How Action Aura handles the details you send through this website, how long we keep them, and how to ask for deletion.',
+    },
+    terms: {
+      title: 'Terms of Use | Action Aura',
+      description: 'Terms for using the Action Aura website. They cover website use only, not the Aura software licence.',
     },
     notFound: { title: 'Page not found | Action Aura', description: 'This page is not here. Go back to Action Aura.' },
     chooser: { title: 'Action Aura | العربية or English', description: 'Choose your language: Arabic or English.' },
@@ -55,8 +89,12 @@ export const en = {
     privacy: 'Privacy', terms: 'Terms', faq: 'FAQ', city: 'Amman, Jordan', phone: '+962 78 006 9485',
   },
   notFound: { title: "This page isn't on the shelf.", back: 'Back to the start' },
-  chooser: { heading: 'Choose your language', ar: 'العربية', en: 'English' },
-  a11y: { skip: 'Skip to content', jewel: 'Action Aura mark' },
+  chooser: {
+    heading: 'Choose your language', ar: 'العربية', en: 'English',
+    noscript: 'Choose a language above. Both links work without JavaScript.',
+  },
+  a11y: { skip: 'Skip to content', jewel: 'Action Aura mark', nav: 'Main' },
+  pages: { retail: retailEn, clinic: clinicEn, about: aboutEn, faq: faqEn, contact: contactEn, legal: legalEn },
 } as const;
 
 export type Dict = DeepStrings<typeof en>;

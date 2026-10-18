@@ -1,0 +1,46 @@
+export const contactEn = {
+  title: 'Book a free demo',
+  lead: "Takes a minute. We'll contact you to set a time that suits you.",
+  form: {
+    name: 'Name',
+    phone: 'Phone or WhatsApp',
+    phoneHelp: 'We will call you on this number.',
+    type: 'Type of business',
+    typeOptions: {
+      shop: 'Shop',
+      clinic: 'Clinic',
+      other: 'Other',
+    },
+    businessName: 'Business name',
+    branches: 'Branches',
+    branchesOptions: {
+      one: '1',
+      few: '2 to 3',
+      many: 'More',
+    },
+    message: 'Message',
+    optional: 'Optional',
+    send: 'Book a free demo',
+    sendWa: 'Message us on WhatsApp',
+    sending: 'Sending',
+    success: "Thank you, we've got your request. We'll call you on the number you gave.",
+    errorNetwork: 'We could not send your request. Check your connection and try again.',
+    errorServer: 'Something went wrong on our side. Please try again in a moment.',
+    errorRate: 'Too many attempts. Please wait a little and try again.',
+    errors: {
+      nameRequired: 'Please enter your name.',
+      nameLong: 'The name is too long.',
+      phoneRequired: 'Please enter a phone number.',
+      phoneInvalid: 'This phone number does not look right.',
+      tooLong: 'This text is too long.',
+    },
+  },
+  direct: {
+    title: 'Or reach us directly',
+    whatsapp: '+962 78 006 9485',
+    call: '+962 78 006 9485',
+    email: 'info@actionaura.me',
+    office: 'Al-Rayyan Complex, Radio & Television St, Al-Muqabalain, Amman',
+    hours: 'Sunday to Thursday, 9:00 to 17:00', // OWNER: confirm hours
+  },
+} as const;

@@ -22,7 +22,7 @@ const cur = (s: string) => (s === slug ? 'page' : undefined);
     {t.nav.brand}
   </a>
 
-  <nav class="nav-links" aria-label="Main">
+  <nav class="nav-links" aria-label={t.a11y.nav}>
     <a class="nav-link" data-chapter-link="retail" href={pagePath(lang, 'aura-retail')} aria-current={cur('aura-retail')}>{t.nav.retail}</a>
     <a class="nav-link" data-chapter-link="clinic" href={pagePath(lang, 'aura-clinic')} aria-current={cur('aura-clinic')}>{t.nav.clinic}</a>
     <a class="nav-link" data-chapter-link="gym" href={pagePath(lang, '') + '#gym'}>{t.nav.gym}</a>
