@@ -44,10 +44,9 @@ const t = dict(lang);
   // Read pages: master still only, pinned top-right at 28% of viewport height (0.48 / 58%).
   const READ_STILL = { x: 0.86, y: 0.2, scale: 0.48 };
   const pinned = isRead ? READ_STILL : fixed;
-  const gl2 = !!document.createElement('canvas').getContext('webgl2');
   const nav = navigator as Navigator & { deviceMemory?: number; connection?: { saveData?: boolean } };
   const tier = pickTier({
-    reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, webgl2: gl2,
+    reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, webgl2: () => !!document.createElement('canvas').getContext('webgl2'),
     deviceMemory: nav.deviceMemory, saveData: nav.connection?.saveData, width: innerWidth, dpr: devicePixelRatio,
   });
   layer.dataset.tier = tier;

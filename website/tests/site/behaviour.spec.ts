@@ -163,8 +163,8 @@ const markPixelBox = async (p: Page, tier: 'still' | 'live'): Promise<Box> => {
   const off = await p.addStyleTag({ content: '.jewel{visibility:hidden !important}' });
   await p.waitForTimeout(400);
   const hidden = (await p.screenshot()).toString('base64');
-  await off.evaluate((el) => el.remove());
-  await hide.evaluate((el) => el.remove());
+  await off.evaluate((el) => (el as HTMLElement).remove());
+  await hide.evaluate((el) => (el as HTMLElement).remove());
   const box = await p.evaluate(async ([a, b, tEdge, tRight]) => {
     const load = (s: string) => new Promise<HTMLImageElement>((res) => { const i = new Image(); i.onload = () => res(i); i.src = 'data:image/png;base64,' + s; });
     const [ia, ib] = await Promise.all([load(a), load(b)]);
