@@ -1,0 +1,24 @@
+---
+import { Image } from 'astro:assets';
+import { SHOTS } from '../lib/shots';
+import type { ShotKey } from '../lib/shots';
+import type { Lang } from '../i18n/index';
+
+interface Props {
+  shot: ShotKey;
+  lang: Lang;
+  caption?: string;
+  ratio?: string;
+}
+
+const { shot, lang, caption, ratio = '16/10' } = Astro.props;
+const entry = SHOTS[shot];
+const arShot = lang === 'ar' ? entry.ar : null;
+const src = arShot ?? entry.en;
+const showEnNote = lang === 'ar' && !entry.ar;
+---
+<figure class="shot" style={`--ratio:${ratio}`}>
+  {showEnNote && <p class="shot-note">الشاشة معروضة بالإنجليزية</p>}
+  <div class="shot-bezel"><div class="shot-inner"><Image src={src} alt={entry.alt[lang]} widths={[480, 960, 1440]} sizes="(min-width: 900px) 42vw, 92vw" loading="lazy" decoding="async" class="shot-img" /></div></div>
+  {caption && <figcaption class="shot-caption">{caption}</figcaption>}
+</figure>

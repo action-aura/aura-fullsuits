@@ -1,0 +1,31 @@
+---
+import ShotFrame from './ShotFrame.astro';
+import { isShotKey } from '../lib/shots';
+import type { Lang } from '../i18n/index';
+
+interface Props {
+  lang: Lang;
+  world: 'master' | 'retail' | 'clinic' | 'gym';
+  title: string;
+  moments: ReadonlyArray<{ title: string; line: string; shot?: string }>;
+}
+
+const { lang, world, title, moments } = Astro.props;
+---
+<section class="rail-wrap" data-w={world}>
+  <h2>{title}</h2>
+  <ol class="rail" tabindex="0" aria-label={title}>
+    {moments.map((m) => (
+      <li class="rail-card">
+        {m.shot && isShotKey(m.shot)
+          ? <ShotFrame shot={m.shot} lang={lang} />
+          : <div class="rail-mark" aria-hidden="true"></div>}
+        <h3>{m.title}</h3>
+        <p>{m.line}</p>
+      </li>
+    ))}
+  </ol>
+</section>
+<script>
+  import '../scripts/rail';
+</script>

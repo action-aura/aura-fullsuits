@@ -1,0 +1,27 @@
+---
+import { dict, type Lang } from '../i18n';
+import type { World } from '../scripts/worlds/mix';
+import WhatsAppPill from './WhatsAppPill.astro';
+import DemoLink from './DemoLink.astro';
+
+interface Props {
+  lang: Lang;
+  world: World;
+  title: string;
+  lead: string;
+}
+
+const { lang, world, title, lead } = Astro.props;
+---
+
+<section class="cta-block" data-w={world}>
+  <div class="copy reveal">
+    <h2>{title}</h2>
+    <p class="lead">{lead}</p>
+    <div class="ctas">
+      <WhatsAppPill lang={lang} />
+      <DemoLink lang={lang} />
+    </div>
+    <p class="price-line">{dict(lang).cta.price}</p>
+  </div>
+</section>

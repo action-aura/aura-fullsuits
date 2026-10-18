@@ -739,3 +739,15 @@ html:lang(ar) .footer-title {
     transition: none;
   }
 }
+
+/* A station with scale <= 0.01 hides the mark (product pages after the hero on phones).
+   --jhide is set on <html> by Jewel.astro; opacity sits on .jewel so it does not fight
+   the per-world opacity of the stills. */
+.jewel { opacity: calc(1 - var(--jhide, 0)); transition: opacity .4s var(--ease-out); }
+@media (prefers-reduced-motion: reduce) { .jewel { transition: none; } }
+
+/* Reading pages (FAQ, Privacy, Terms): master still only, no canvas, none on phones. */
+.jewel[data-read] .jewel-canvas,
+.jewel[data-read] .jewel-still:not(.still-master) { display: none; }
+.jewel[data-read] .still-master { opacity: 1; }
+@media (max-width: 899px) { .jewel[data-read] { display: none; } }

@@ -1,0 +1,33 @@
+---
+import type { Lang } from '../i18n';
+import type { World } from '../scripts/worlds/mix';
+import { isShotKey } from '../lib/shots';
+import ShotFrame from './ShotFrame.astro';
+
+interface Props {
+  lang: Lang;
+  world: World;
+  title: string;
+  items: ReadonlyArray<{ title: string; line: string }>;
+  shots?: ReadonlyArray<string>;
+}
+
+const { lang, world, title, items, shots = [] } = Astro.props;
+const cellShots = shots.slice(0, 2).map((k) => (isShotKey(k) ? k : undefined));
+---
+
+<section class="features" data-w={world}>
+  <h2>{title}</h2>
+  <div class={`bento bento-${items.length}`}>
+    {items.map((item, i) => {
+      const shot = cellShots[i];
+      return (
+        <article class="cell">
+          {shot && <ShotFrame shot={shot} lang={lang} />}
+          <h3>{item.title}</h3>
+          <p>{item.line}</p>
+        </article>
+      );
+    })}
+  </div>
+</section>

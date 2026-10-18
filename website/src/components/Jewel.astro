@@ -1,14 +1,14 @@
 ---
 import { dict, type Lang } from '../i18n';
-interface Props { lang: Lang; fixed?: { x: number; y: number; scale: number } }
-const { lang, fixed } = Astro.props;
+interface Props { lang: Lang; fixed?: { x: number; y: number; scale: number }; stations?: 'home' | 'product' | 'about' | 'contact' | 'read' }
+const { lang, fixed, stations = 'home' } = Astro.props;
 const t = dict(lang);
 ---
 <div class="world-bg bg-master" aria-hidden="true"></div>
 <div class="world-bg bg-retail" aria-hidden="true"></div>
 <div class="world-bg bg-clinic" aria-hidden="true"></div>
 <div class="world-bg bg-gym" aria-hidden="true"></div>
-<div class="jewel" aria-hidden="true" data-fixed={fixed ? JSON.stringify(fixed) : undefined}>
+<div class="jewel" aria-hidden="true" data-kind={stations} data-read={stations === 'read' ? '1' : undefined} data-fixed={fixed ? JSON.stringify(fixed) : undefined}>
   {['master', 'retail', 'clinic', 'gym'].map((w) => (
     <img class={`jewel-still still-${w}`} src={`/jewel/still-${w}.webp`} alt="" width="900" height="1200" decoding="async" />
   ))}
@@ -21,7 +21,7 @@ const t = dict(lang);
 <span class="visually-hidden">{t.a11y.jewel}</span>
 <script>
   import { pickTier } from '../scripts/jewel/tier';
-  import { HOME_DESKTOP, HOME_PHONE, stationAt } from '../scripts/jewel/stations';
+  import { stationsFor, stationAt, type PageKind, type Station } from '../scripts/jewel/stations';
 
   const root = document.documentElement;
   const layer = document.querySelector<HTMLElement>('.jewel')!;
@@ -33,8 +33,15 @@ const t = dict(lang);
   const canvas = layer.querySelector<HTMLCanvasElement>('.jewel-canvas')!;
   const rtl = root.dir === 'rtl';
   const phone = matchMedia('(max-width: 899px)').matches;
-  const stations = phone ? HOME_PHONE : HOME_DESKTOP;
+  const kind = (layer.dataset.kind ?? 'home') as PageKind;
+  const found = stationsFor(kind, phone);
+  const isRead = found === 'none';
+  const stations: Station[] = isRead ? [] : found;
+  if (isRead) layer.dataset.read = '1';
   const fixed = layer.dataset.fixed ? (JSON.parse(layer.dataset.fixed) as { x: number; y: number; scale: number }) : null;
+  // Read pages: master still only, pinned top-right at 28% of viewport height (0.48 / 58%).
+  const READ_STILL = { x: 0.86, y: 0.2, scale: 0.48 };
+  const pinned = isRead ? READ_STILL : fixed;
   const gl2 = !!document.createElement('canvas').getContext('webgl2');
   const nav = navigator as Navigator & { deviceMemory?: number; connection?: { saveData?: boolean } };
   const tier = pickTier({
@@ -58,11 +65,12 @@ const t = dict(lang);
     root.style.setProperty('--jx', String(s.x));
     root.style.setProperty('--jy', String(s.y));
     root.style.setProperty('--js', String(sc));
+    root.style.setProperty('--jhide', sc <= 0.01 ? '1' : '0');
     return { x: s.x, y: s.y, scale: sc };
   };
   const centres = () => Array.from(document.querySelectorAll<HTMLElement>('[data-w]')).map(
     (el) => el.getBoundingClientRect().top + scrollY + el.offsetHeight / 2);
-  let cs = fixed ? [] : centres();
+  let cs = pinned ? [] : centres();
   let scene: Scene | null = null;
   const progress = () => {
     const p = scrollY / Math.max(1, document.documentElement.scrollHeight - innerHeight);
@@ -70,7 +78,7 @@ const t = dict(lang);
   };
   const place = () => {
     let s;
-    if (fixed) s = fixed;
+    if (pinned) s = pinned;
     else {
       const c = scrollY + innerHeight / 2;
       let at = c;
@@ -85,8 +93,8 @@ const t = dict(lang);
     progress();
     return out;
   };
-  const remeasure = () => { if (!fixed) cs = centres(); place(); };
-  if (!fixed) {
+  const remeasure = () => { if (!pinned) cs = centres(); place(); };
+  if (!pinned) {
     addEventListener('scroll', place, { passive: true });
     addEventListener('load', remeasure);
     document.fonts?.ready.then(remeasure);
@@ -96,7 +104,7 @@ const t = dict(lang);
   addEventListener('resize', remeasure);
   place();
 
-  if (tier === 'rich') {
+  if (tier === 'rich' && !isRead) {
     addEventListener('load', async () => {
       try {
         const { mountJewel } = await import('../scripts/jewel/scene.js');

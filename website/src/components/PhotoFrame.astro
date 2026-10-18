@@ -1,0 +1,16 @@
+---
+import { Image } from 'astro:assets';
+
+interface Props {
+  src: ImageMetadata;
+  alt: string;
+  caption: string;
+  ratio?: string;
+}
+
+const { src, alt, caption, ratio = '3/2' } = Astro.props;
+---
+<figure class="photo" style={`--ratio:${ratio}`}>
+  <div class="photo-bezel"><div class="photo-inner"><Image src={src} alt={alt} widths={[480, 960, 1440]} sizes="(min-width: 900px) 42vw, 92vw" loading="lazy" decoding="async" class="photo-img" /></div></div>
+  <figcaption class="photo-caption">{caption}</figcaption>
+</figure>

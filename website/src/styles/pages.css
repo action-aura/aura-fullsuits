@@ -1,0 +1,430 @@
+/* Page-level styles: screenshot and photo frames, day-in-the-shop rail, bento, CTA block, page hero, read mode,
+   draft note, FAQ list, contact grid. Values from website/docs/design-system.md sections 4 and 7. Logical
+   properties only; hover only for real pointers; nothing here moves, so reduced motion has nothing to undo
+   beyond smooth scrolling and colour transitions. */
+
+/* ---------- Section box: same as .chapter ---------- */
+.rail-wrap,
+.features,
+.cta-block,
+.page-hero,
+.read,
+.contact-grid {
+  position: relative;
+  inline-size: 100%;
+  max-inline-size: 1400px;
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.rail-wrap,
+.features {
+  padding-block: clamp(88px, 14vh, 150px);
+}
+
+.rail-wrap > h2,
+.features > h2 {
+  max-inline-size: 22ch;
+  margin-block-end: clamp(28px, 5vh, 48px);
+}
+
+/* ---------- Frames (screenshot + photo): double bezel ---------- */
+:root {
+  --frame-bg: rgba(255, 255, 255, .05);
+  --frame-img-line: rgba(255, 255, 255, .1);
+  --frame-shadow: var(--pill-shadow), 0 30px 60px -30px rgba(var(--scrim), .6);
+}
+
+[data-world="clinic"] {
+  --frame-bg: rgba(22, 35, 61, .05);
+  --frame-img-line: rgba(0, 0, 0, .1);
+}
+
+.shot,
+.photo {
+  margin: 0;
+  min-inline-size: 0;
+}
+
+.shot-bezel,
+.photo-bezel {
+  padding: 6px;
+  border: 1px solid var(--hair);
+  border-radius: 20px;
+  background: var(--frame-bg);
+  box-shadow: var(--frame-shadow);
+}
+
+.shot-inner,
+.photo-inner {
+  overflow: hidden;
+  border-radius: 14px;
+  aspect-ratio: var(--ratio, 16 / 10);
+}
+
+.shot-img,
+.photo-img {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+  outline: 1px solid var(--frame-img-line);
+  outline-offset: -1px;
+}
+
+.shot-caption,
+.photo-caption {
+  margin-block-start: 12px;
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.shot-note {
+  margin-block-end: 8px;
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ---------- Day rail ---------- */
+.rail {
+  display: flex;
+  column-gap: 20px;
+  list-style: none;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  scroll-padding-inline: 4px;
+  padding-block: 8px 12px;
+  padding-inline: 4px;
+  margin-inline: -4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hair) transparent;
+}
+
+.rail-card {
+  flex: 0 0 min(320px, 82vw);
+  min-inline-size: 0;
+  scroll-snap-align: start;
+}
+
+.rail-card > h3 {
+  margin-block-start: 18px;
+}
+
+.rail-card > p {
+  margin-block-start: 8px;
+  max-inline-size: 36ch;
+  color: var(--ink-muted);
+  font-size: 15px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+:lang(ar) .rail-card > p {
+  line-height: 1.85;
+}
+
+.rail-mark {
+  inline-size: 100%;
+  aspect-ratio: 16 / 10;
+  border: 1px solid var(--hair);
+  border-radius: 20px;
+  background: var(--frame-bg);
+}
+
+@media (min-width: 900px) {
+  .rail {
+    scroll-snap-type: x proximity;
+  }
+
+  .rail-card {
+    flex-basis: 420px;
+  }
+}
+
+/* ---------- Bento ---------- */
+.bento {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+
+.cell {
+  min-inline-size: 0;
+  padding: clamp(20px, 2.4vw, 28px);
+  border: 1px solid var(--hair);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  transition: border-color 250ms var(--ease-out);
+}
+
+.cell > .shot {
+  margin-block-end: 20px;
+}
+
+.cell > p {
+  margin-block-start: 8px;
+  color: var(--ink-muted);
+  font-size: 15px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+:lang(ar) .cell > p {
+  line-height: 1.85;
+}
+
+@media (min-width: 900px) {
+  .bento {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-auto-flow: dense;
+    gap: 20px;
+  }
+
+  .bento > .cell {
+    grid-column: span 2;
+  }
+
+  .bento > .cell:has(.shot) {
+    grid-column: span 3;
+  }
+
+  .bento-5 > .cell:nth-child(n + 4) {
+    grid-column: span 3;
+  }
+}
+
+/* ---------- CTA block (same grid as .close; copy opposite the jewel) ---------- */
+.cta-block {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  min-block-size: 70vh;
+  padding-block: clamp(88px, 14vh, 150px) clamp(120px, 18vh, 200px);
+}
+
+@media (min-width: 900px) {
+  .cta-block {
+    grid-template-columns: minmax(0, 46%) 1fr;
+    align-items: center;
+  }
+
+  .cta-block > .copy {
+    grid-column: 1;
+  }
+}
+
+/* ---------- Page hero (product + about): laid out like .hero ---------- */
+.page-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  min-block-size: 100vh;
+  min-block-size: 100svh;
+  padding-block: min(16vh, 140px) 88px;
+}
+
+.page-hero > .copy > .status-pill {
+  display: flex;
+  inline-size: max-content;
+  margin-block-end: 18px;
+}
+
+@media (min-width: 900px) {
+  .page-hero {
+    grid-template-columns: minmax(0, 46%) 1fr;
+    align-items: center;
+    padding-block: 72px 88px;
+  }
+
+  .page-hero > .copy {
+    grid-column: 1;
+  }
+}
+
+/* ---------- Read mode (privacy, terms, faq) ---------- */
+.read {
+  padding-block: clamp(120px, 18vh, 180px) clamp(88px, 14vh, 150px);
+}
+
+.read > * {
+  max-inline-size: 65ch;
+}
+
+.read h1 {
+  margin-block-end: clamp(24px, 4vh, 40px);
+}
+
+.read h2 {
+  margin-block: 2.4em .6em;
+  font-size: clamp(1.4rem, 1.1rem + 1vw, 2rem);
+  line-height: 1.15;
+}
+
+:lang(ar) .read h2 {
+  font-size: 1.3rem;
+  line-height: 1.5;
+}
+
+.read h3 {
+  margin-block: 1.8em .5em;
+}
+
+.read p,
+.read li {
+  color: var(--ink-muted);
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+:lang(ar) .read p,
+:lang(ar) .read li {
+  line-height: 1.9;
+}
+
+.read p + p {
+  margin-block-start: 1em;
+}
+
+.read ul,
+.read ol {
+  margin-block: 1em;
+  padding-inline-start: 1.4em;
+}
+
+.read li + li {
+  margin-block-start: .5em;
+}
+
+.read a {
+  color: var(--link);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+/* ---------- Draft note ---------- */
+.draft-note {
+  margin-block: 24px;
+  padding: 16px 20px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+/* ---------- FAQ list (details or dl) ---------- */
+.faq-list {
+  border-block-start: 1px solid var(--hair);
+}
+
+.faq-list details,
+.faq-list dt {
+  border-block-end: 1px solid var(--hair);
+}
+
+.faq-list summary,
+.faq-list dt {
+  padding-block: 18px;
+  color: var(--ink);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.faq-list summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.faq-list summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq-list summary::after {
+  content: "+";
+  flex: none;
+  color: var(--accent);
+  font-size: 1.4rem;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.faq-list details[open] > summary::after {
+  content: "\2212";
+}
+
+.faq-list details > :not(summary),
+.faq-list dd {
+  padding-block-end: 20px;
+  color: var(--ink-muted);
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+:lang(ar) .faq-list details > :not(summary),
+:lang(ar) .faq-list dd {
+  line-height: 1.9;
+}
+
+.faq-list dt {
+  border-block-end: 0;
+  padding-block-end: 6px;
+}
+
+.faq-list dd {
+  border-block-end: 1px solid var(--hair);
+}
+
+/* ---------- Contact grid: form first; start column = form ---------- */
+.contact-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 48px;
+  align-items: start;
+  padding-block: min(16vh, 140px) clamp(88px, 14vh, 150px);
+}
+
+.contact-grid > * {
+  min-inline-size: 0;
+}
+
+@media (min-width: 900px) {
+  .contact-grid {
+    grid-template-columns: minmax(0, 46%) 1fr;
+    gap: clamp(48px, 6vw, 96px);
+    padding-block: 120px clamp(88px, 14vh, 150px);
+  }
+}
+
+/* ---------- Hover: real pointers only ---------- */
+@media (hover: hover) and (pointer: fine) {
+  .cell:hover {
+    border-color: color-mix(in srgb, var(--ink) 32%, transparent);
+  }
+
+  .faq-list summary:hover {
+    color: var(--accent);
+  }
+}
+
+/* ---------- Reduced motion: no smooth scroll, no transitions, nothing moves ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .rail {
+    scroll-behavior: auto;
+  }
+
+  .cell {
+    transition: none;
+  }
+}
