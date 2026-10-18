@@ -1,6 +1,10 @@
 import { test, expect } from '@playwright/test';
 
-const PAGES = ['/ar/', '/en/'];
+const SLUGS = ['aura-retail', 'aura-clinic', 'about', 'faq', 'contact', 'privacy', 'terms'];
+const PAGES = ['ar', 'en'].flatMap((l) => [`/${l}/`, ...SLUGS.map((s) => `/${l}/${s}/`)]);
+
+const swapLang = (p: string) => (p.startsWith('/ar/') ? '/en/' + p.slice(4) : '/ar/' + p.slice(4));
+const enVersion = (p: string) => (p.startsWith('/ar/') ? '/en/' + p.slice(4) : p);
 
 test.describe('every page head', () => {
   for (const p of PAGES) {
@@ -14,16 +18,17 @@ test.describe('every page head', () => {
       expect(desc && desc.length).toBeGreaterThan(50);
       await expect(page.locator('link[rel=canonical]')).toHaveAttribute('href', `https://actionaura.me${p}`);
       const other = lang === 'ar' ? 'en' : 'ar';
-      await expect(page.locator(`link[hreflang=${other}]`)).toHaveAttribute('href', `https://actionaura.me/${other}/`);
-      await expect(page.locator('link[hreflang=x-default]')).toHaveAttribute('href', 'https://actionaura.me/en/');
+      await expect(page.locator(`link[hreflang=${other}]`)).toHaveAttribute('href', `https://actionaura.me${swapLang(p)}`);
+      await expect(page.locator('link[hreflang=x-default]')).toHaveAttribute('href', `https://actionaura.me${enVersion(p)}`);
       await expect(page.locator('meta[property="og:image"]')).toHaveCount(1);
     });
   }
 
   test('titles and descriptions are unique across pages', async ({ page }) => {
+    test.setTimeout(180_000);
     const seen = new Set<string>();
     for (const p of PAGES) {
-      await page.goto(p);
+      await page.goto(p, { waitUntil: 'domcontentloaded' });
       const key = (await page.title()) + '|' + (await page.locator('meta[name=description]').getAttribute('content'));
       expect(seen.has(key), `${p} duplicates another page`).toBe(false);
       seen.add(key);
@@ -31,8 +36,9 @@ test.describe('every page head', () => {
   });
 
   test('every <img> has an alt attribute', async ({ page }) => {
+    test.setTimeout(180_000);
     for (const p of PAGES) {
-      await page.goto(p);
+      await page.goto(p, { waitUntil: 'domcontentloaded' });
       const missing = await page.locator('img:not([alt])').count();
       expect(missing, p).toBe(0);
     }
@@ -47,11 +53,12 @@ test.describe('every page head', () => {
     await ctx.close();
   });
 
-  test('page has the WhatsApp link with the right number in both languages', async ({ page }) => {
+  test('every page has the WhatsApp link with the right number', async ({ page }) => {
+    test.setTimeout(180_000);
     for (const p of PAGES) {
-      await page.goto(p);
+      await page.goto(p, { waitUntil: 'domcontentloaded' });
       const href = await page.locator('a[href^="https://wa.me/962780069485"]').first().getAttribute('href');
-      expect(href).toContain('wa.me/962780069485');
+      expect(href, p).toContain('wa.me/962780069485');
     }
   });
 });

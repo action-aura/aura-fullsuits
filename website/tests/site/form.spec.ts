@@ -83,6 +83,9 @@ test('no-JS: /contact/sent/ shows its heading and /contact/#form-error shows the
     const page = await ctx.newPage();
     await page.goto('http://localhost:4321/en/contact/sent/');
     await expect(page.locator('#sent-title')).toBeVisible();
+    // No hash: the :target rule must keep the block hidden, else the hash check below proves nothing.
+    await page.goto('http://localhost:4321/en/contact/');
+    await expect(page.locator('#form-error')).not.toBeVisible();
     await page.goto('http://localhost:4321/en/contact/#form-error');
     await expect(page.locator('#form-error')).toBeVisible();
   } finally {

@@ -428,3 +428,388 @@
     transition: none;
   }
 }
+
+/* ---------- About: centred hero, copy sits BELOW the jewel ---------- */
+.about-hero {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  align-items: start;
+  text-align: center;
+  padding-block-start: 46vh;
+}
+
+.about-hero > .copy {
+  grid-column: 1;
+  max-inline-size: 60ch;
+}
+
+.about-story,
+.about-products,
+.about-partners {
+  position: relative;
+  inline-size: 100%;
+  max-inline-size: 1400px;
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+  padding-block: clamp(72px, 12vh, 130px);
+}
+
+.about-story > .copy,
+.about-partners > .copy {
+  max-inline-size: 65ch;
+}
+
+.about-story h3,
+.about-partners h3 {
+  margin-block: 2em .5em;
+}
+
+.about-story p,
+.about-partners p,
+.about-values li,
+.about-steps li,
+.about-points li,
+.about-areas li {
+  color: var(--ink-muted);
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+:lang(ar) .about-story p,
+:lang(ar) .about-partners p,
+:lang(ar) .about-values li,
+:lang(ar) .about-steps li,
+:lang(ar) .about-points li,
+:lang(ar) .about-areas li {
+  line-height: 1.9;
+}
+
+.about-story p + p {
+  margin-block-start: 1em;
+}
+
+.about-values,
+.about-steps,
+.about-points,
+.about-areas {
+  margin-block: 1em;
+  padding-inline-start: 1.4em;
+}
+
+.about-values li + li,
+.about-steps li + li,
+.about-points li + li,
+.about-areas li + li {
+  margin-block-start: .6em;
+}
+
+.about-steps strong,
+.about-points strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.about-products h2 {
+  margin-block-end: clamp(28px, 5vh, 48px);
+}
+
+.about-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+
+@media (min-width: 900px) {
+  .about-hero {
+    padding-block-start: 58vh;
+  }
+
+  .about-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px;
+  }
+}
+
+.about-card {
+  min-inline-size: 0;
+  padding: clamp(20px, 2.4vw, 28px);
+  border: 1px solid var(--hair);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.about-card > .status-pill {
+  display: flex;
+  inline-size: max-content;
+  margin-block: 10px 12px;
+}
+
+.about-card > p {
+  color: var(--ink-muted);
+  font-size: 15px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+:lang(ar) .about-card > p {
+  line-height: 1.85;
+}
+
+.about-card h3 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.about-status {
+  margin-block: .4em;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.about-note {
+  margin-block-start: .8em;
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ---------- Demo form ---------- */
+.demo-form {
+  display: grid;
+  gap: 20px;
+  max-inline-size: 560px;
+  margin-block-start: 28px;
+}
+
+.field {
+  min-inline-size: 0;
+}
+
+.field label,
+.label {
+  display: block;
+  margin-block-end: 8px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.req {
+  color: var(--accent);
+}
+
+.opt {
+  color: var(--ink-muted);
+  font-weight: 400;
+}
+
+.input,
+.field input,
+.field select,
+.field textarea {
+  display: block;
+  inline-size: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.field textarea {
+  resize: vertical;
+  min-block-size: 96px;
+}
+
+.input:focus-visible,
+.field input:focus-visible,
+.field select:focus-visible,
+.field textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.field [aria-invalid="true"] {
+  border-color: var(--accent);
+}
+
+.field-help {
+  margin-block-start: 6px;
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.field-error {
+  margin-block-start: 6px;
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.field-error:empty {
+  margin-block-start: 0;
+}
+
+/* Honeypot: visually hidden, still in the tree for bots (not display:none) */
+.hp {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.cf-turnstile {
+  min-block-size: 65px;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.btn-send,
+.btn-send-wa {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.btn-send {
+  padding: 12px 22px;
+  border: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--field) 60%, transparent);
+  color: var(--ink);
+}
+
+.btn-send-wa {
+  padding: 12px 22px;
+  border: 0;
+  background: var(--ink);
+  color: var(--field);
+  box-shadow: var(--pill-shadow);
+}
+
+.btn-send:focus-visible,
+.btn-send-wa:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.btn-send:disabled,
+.btn-send-wa:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+.demo-error,
+.form-error-target {
+  margin-block: 4px;
+  padding: 16px 20px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.demo-error-wa {
+  display: inline-block;
+  margin-block-start: 8px;
+  color: var(--link);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.demo-success {
+  padding: 24px;
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--ink);
+  font-size: 1.125rem;
+  line-height: 1.6;
+}
+
+.demo-success:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+/* No-JS error block: shown only when the URL hash targets it */
+.form-error-target {
+  display: none;
+}
+
+.form-error-target:target {
+  display: block;
+}
+
+/* Author display rules above must never beat [hidden] */
+#demo-form[hidden],
+#demo-success[hidden],
+#demo-error[hidden] {
+  display: none;
+}
+
+/* ---------- Contact: direct column ---------- */
+.contact-direct {
+  min-inline-size: 0;
+  padding-block-start: 32px;
+  border-block-start: 1px solid var(--hair);
+}
+
+.contact-direct h2 {
+  margin-block-end: 20px;
+}
+
+.contact-direct p {
+  margin-block-start: 14px;
+  color: var(--ink-muted);
+  line-height: 1.6;
+}
+
+.contact-direct a:not([class]) {
+  color: var(--ink);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+@media (min-width: 900px) {
+  .contact-direct {
+    padding-block-start: 0;
+    border-block-start: 0;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn-send:hover {
+    border-color: var(--ink);
+  }
+
+  .btn-send-wa:hover {
+    background: color-mix(in srgb, var(--ink) 88%, var(--accent));
+  }
+
+  .demo-error-wa:hover {
+    color: var(--ink);
+  }
+}
