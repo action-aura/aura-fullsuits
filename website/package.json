@@ -8,7 +8,9 @@
     "preview": "astro preview --port 4321",
     "check": "astro check",
     "test": "vitest run",
-    "test:site": "playwright test"
+    "test:site": "playwright test",
+    "pages:dev": "wrangler pages dev dist --port 8788",
+    "d1:local": "wrangler d1 migrations apply aura-leads --local"
   },
   "dependencies": {
     "@astrojs/sitemap": "3.7.4",
@@ -22,6 +24,7 @@
     "@astrojs/check": "0.9.10",
     "@playwright/test": "1.56.1",
     "typescript": "5.9.3",
-    "vitest": "3.2.7"
+    "vitest": "3.2.7",
+    "wrangler": "4.145.0"
   }
 }
