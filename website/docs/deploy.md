@@ -151,7 +151,7 @@ Verify: the rule exists, or a dated reminder is set for the first cleanup.
 Do not announce until every box is ticked.
 
 - [ ] The full screenshot run is done, and contrast is measured at 0 failing.
-- [ ] The real-phone check is done on a mid-range Android.
+- [ ] The real-phone check is done on a mid-range Android. Measure the home page's LCP with Chrome remote devtools (Performance panel). Lighthouse on the laptop gave 3.3-3.7 s (target 2.5 s), but the laptop has no GPU for testing, so the phone decides. If the phone is also over 2.5 s, open a speed task before launch. Also decide whether phones may get the live 3D logo (today they get the still picture).
 - [ ] The native Arabic read is done.
 - [ ] The lawyer has signed off on Privacy and Terms.
 - [ ] Office hours are confirmed.
