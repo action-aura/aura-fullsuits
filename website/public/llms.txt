@@ -1,0 +1,23 @@
+# Action Aura
+
+> Action Aura is a software company in Amman, Jordan. It builds Arabic-first systems for shops and clinics that keep working when the internet drops.
+
+## Products
+
+- [Aura Retail](https://actionaura.me/en/aura-retail/): a till, stock and accounts system for shops and showrooms. It runs on the shop's Windows computer and on an Android phone, keeps both in sync over the shop's own network, and keeps selling without internet. Barcode scanners and receipt printers connect to the shop computer. Amounts are kept to the fils, with three decimal places.
+- [Aura Clinic](https://actionaura.me/en/aura-clinic/): patient files, appointments, tooth charts and patient accounts for dental clinics. It runs on the clinic's Windows computer, with an Android phone app that syncs with it, and works offline.
+
+## Coming
+
+- Aura Gym, and further Aura platforms, are in development and not available yet.
+
+## Contact
+
+- WhatsApp or phone: +962 78 006 9485
+- Email: info@actionaura.me
+- Office: Al-Rayyan Complex, Amman, Jordan
+- Book a free demo: https://actionaura.me/en/contact/
+
+## Arabic
+
+- https://actionaura.me/ar/
