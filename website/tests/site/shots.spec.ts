@@ -21,19 +21,9 @@ const MOTIONS = [
   { tag: 'reduce', reducedMotion: 'reduce' as const },
 ];
 
-// Assets produced in Plan 3: a 404 on these is expected until then.
-const EXPECTED_MISSING = ['/jewel/', '/favicon', '/apple-touch-icon', '/site.webmanifest', '/og/'];
-
 function ignorable(msg: ConsoleMessage): boolean {
   const text = msg.text();
   if (/GL Driver Message|GPU stall|swiftshader/i.test(text)) return true;
-  if (/Failed to load resource/i.test(text)) {
-    const url = msg.location().url;
-    if (!url) return false;
-    let p: string;
-    try { p = new URL(url).pathname; } catch { return false; }
-    return EXPECTED_MISSING.some((prefix) => p.startsWith(prefix));
-  }
   return false;
 }
 

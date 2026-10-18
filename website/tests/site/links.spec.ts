@@ -1,13 +1,17 @@
 import { test, expect } from '@playwright/test';
 
-// EXPECTED-MISSING until Plan 3 ships these assets; skipped, not failed.
-const EXPECTED_MISSING_UNTIL_PLAN_3 = ['/jewel/', '/og/', '/favicon', '/apple-touch-icon', '/site.webmanifest'];
-
+// The production origin: canonical, hreflang and og:image URLs are absolute on it, so they are checked
+// against the local build as if same-origin (a missing share image or alternate page is a broken link).
+const PROD = 'https://actionaura.me';
 const ORIGIN = 'http://local.invalid';
 const SKIP_SCHEMES = /^(mailto:|tel:|https:\/\/wa\.me|javascript:|data:)/i;
 
 function extract(html: string): string[] {
   const out: string[] = [];
+  for (const m of html.matchAll(/<meta\s[^>]*(?:property|name)="(?:og:image|twitter:image)"[^>]*>/gi)) {
+    const c = m[0].match(/\scontent\s*=\s*"([^"]*)"/i);
+    if (c) out.push(c[1]);
+  }
   for (const m of html.matchAll(/<(?:a|link|img|script|source)\b[^>]*>/gi)) {
     const tag = m[0];
     for (const a of tag.matchAll(/\s(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)) {
@@ -45,7 +49,7 @@ test('every same-origin link and asset resolves; every #fragment has a target', 
       const ref = raw.trim();
       if (!ref || SKIP_SCHEMES.test(ref)) continue;
       let u: URL;
-      try { u = new URL(ref, new URL(pagePath, base)); } catch { continue; }
+      try { u = new URL(ref.startsWith(PROD + '/') ? ref.slice(PROD.length) : ref, new URL(pagePath, base)); } catch { continue; }
       if (u.origin !== base.origin) continue;
       if (u.pathname.startsWith('/api/')) continue;
       const key = u.pathname + u.search;
@@ -63,7 +67,6 @@ test('every same-origin link and asset resolves; every #fragment has a target', 
 
   const broken: string[] = [];
   for (const [url, from] of linkedFrom) {
-    if (EXPECTED_MISSING_UNTIL_PLAN_3.some((p) => url.startsWith(p))) continue;
     const res = await request.get(url, { maxRedirects: 0 });
     const s = res.status();
     if (s < 200 || s >= 400) broken.push(`${s} ${url}  <- ${[...from].join(', ')}`);
