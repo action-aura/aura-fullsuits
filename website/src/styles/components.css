@@ -148,7 +148,7 @@ main,
   transition: translate 250ms var(--ease-out);
 }
 
-:dir(rtl) .demo-arrow {
+[dir="rtl"] .demo-arrow {
   transform: scaleX(-1);
 }
 
@@ -567,7 +567,7 @@ html:lang(ar) .footer-title {
     --arrow-shift: 3px;
   }
 
-  :dir(rtl) .demo-link:hover {
+  [dir="rtl"] .demo-link:hover {
     --arrow-shift: -3px;
   }
 
@@ -693,6 +693,16 @@ html:lang(ar) .footer-title {
   top: calc(var(--jy, .54) * 100%);
   transform: translate(-50%, -50%);
   transition: opacity 1.1s;
+}
+
+@media (max-width: 899px) {
+  .jewel-still {
+    left: 50%;
+    top: 50%;
+    height: auto;
+    width: calc(95vw * var(--js, 1));
+    transform: translate(-50%, 0);
+  }
 }
 
 .still-master { opacity: var(--w-master, 1); }

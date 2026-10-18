@@ -60,6 +60,50 @@ a {
   border: 0;
 }
 
+a.visually-hidden:focus,
+a.visually-hidden:focus-visible {
+  position: fixed;
+  inset-block-start: 8px;
+  inset-inline-start: 8px;
+  inline-size: auto;
+  block-size: auto;
+  clip: auto;
+  clip-path: none;
+  overflow: visible;
+  white-space: normal;
+  z-index: 20;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--field);
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+body,
+h1,
+h2,
+h3,
+.lead,
+.ar-title,
+.nav,
+.footer {
+  transition: color .6s var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body,
+  h1,
+  h2,
+  h3,
+  .lead,
+  .ar-title,
+  .nav,
+  .footer {
+    transition-duration: .3s;
+  }
+}
+
 /* Type scale (design-system section 3) */
 h1,
 h2,
@@ -121,7 +165,7 @@ h3 {
   font-size: clamp(1.2rem, .95rem + 1vw, 1.8rem);
   line-height: 1.4;
   margin-block-start: .4em;
-  text-align: start;
+  text-align: match-parent;
   color: var(--ink);
   letter-spacing: 0 !important;
   text-transform: none !important;
