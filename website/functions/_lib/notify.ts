@@ -5,6 +5,28 @@ import type { Lead } from '../../src/lib/lead';
 // notification must be reported to the caller, not escalate into a failed request.
 export async function notify(env: Env, lead: Lead, id: number): Promise<{ ok: boolean; error?: string }> {
   if (!env.NOTIFY_PROVIDER || env.NOTIFY_PROVIDER === 'none') return { ok: true };
+  if (env.NOTIFY_PROVIDER === 'smtp') {
+    if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASS || !env.NOTIFY_TO) return { ok: false, error: 'smtp config missing' };
+    try {
+      const { WorkerMailer } = await import('worker-mailer');
+      const mailer = await WorkerMailer.connect({
+        host: env.SMTP_HOST,
+        port: Number(env.SMTP_PORT || 465),
+        secure: true,
+        credentials: { username: env.SMTP_USER, password: env.SMTP_PASS },
+        authType: 'plain',
+      });
+      await mailer.send({
+        from: { name: 'Action Aura website', email: env.SMTP_USER },
+        to: env.NOTIFY_TO,
+        subject: `Demo request #${id}: ${lead.name}`,
+        text: [`Name: ${lead.name}`, `Phone: ${lead.phone}`, `Business: ${lead.businessType || '-'} ${lead.businessName || ''}`.trim(), `Branches: ${lead.branches || '-'}`, `Language: ${lead.lang}`, '', lead.message || ''].join('\n'),
+      });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
   if (env.NOTIFY_PROVIDER !== 'webhook') return { ok: false, error: 'unknown provider' };
   if (!env.NOTIFY_WEBHOOK_URL) return { ok: false, error: 'webhook url missing' };
   try {
