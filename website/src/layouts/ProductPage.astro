@@ -9,6 +9,8 @@ import DemoLink from '../components/DemoLink.astro';
 import DayRail from '../components/DayRail.astro';
 import FeatureGrid from '../components/FeatureGrid.astro';
 import CtaBlock from '../components/CtaBlock.astro';
+import PhotoFrame from '../components/PhotoFrame.astro';
+import { PHOTOS, isPhotoKey } from '../lib/photos';
 import { dict, type Lang } from '../i18n';
 
 interface Props {
@@ -18,9 +20,10 @@ interface Props {
   metaKey: 'retail' | 'clinic';
   copy: any;
   featureShots?: string[];
+  photos?: string[];
   jsonld?: object[];
 }
-const { lang, slug, world, metaKey, copy, featureShots = [], jsonld = [] } = Astro.props;
+const { lang, slug, world, metaKey, copy, featureShots = [], photos = [], jsonld = [] } = Astro.props;
 const t = dict(lang);
 const meta = t.meta[metaKey];
 const title: string = copy.hero.title;
@@ -29,6 +32,12 @@ const at = accent ? title.indexOf(accent) : -1;
 const before = at >= 0 ? title.slice(0, at) : title;
 const after = at >= 0 ? title.slice(at + accent.length) : '';
 const list = copy.jordan ?? copy.privacy;
+// Composited illustrations under the features bento (Retail only today). A key renders only when the page copy has
+// matching alt and caption text at the same index, so a photo can never ship without its "Illustration:" caption.
+const photoFrames = photos.flatMap((k, i) => {
+  const text = copy.photos?.items?.[i];
+  return isPhotoKey(k) && text ? [{ src: PHOTOS[k][lang], alt: text.alt as string, caption: text.caption as string }] : [];
+});
 ---
 <Base lang={lang} slug={slug} title={meta.title} description={meta.description} world={world} jsonld={jsonld}>
   <Nav lang={lang} slug={slug} />
@@ -43,7 +52,17 @@ const list = copy.jordan ?? copy.privacy;
       </div>
     </section>
     <div id="day"><DayRail lang={lang} world={world} title={copy.rail.title} moments={copy.rail.moments} /></div>
-    <div id="features"><FeatureGrid lang={lang} world={world} title={copy.features.title} items={copy.features.items} shots={featureShots} /></div>
+    <div id="features">
+      <FeatureGrid lang={lang} world={world} title={copy.features.title} items={copy.features.items} shots={featureShots}>
+        <Fragment slot="after">
+          {photoFrames.length > 0 && (
+            <div id="photos" class="photo-pair">
+              {photoFrames.map((p) => <PhotoFrame src={p.src} alt={p.alt} caption={p.caption} />)}
+            </div>
+          )}
+        </Fragment>
+      </FeatureGrid>
+    </div>
     <section id="details" data-w={world} class="chapter product-details">
       <div class="copy reveal">
         <h2>{copy.works.title}</h2>

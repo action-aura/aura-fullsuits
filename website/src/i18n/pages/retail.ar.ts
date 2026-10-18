@@ -72,6 +72,18 @@ export const retailAr: DeepStrings<typeof retailEn> = {
       },
     ],
   },
+  photos: {
+    items: [
+      {
+        alt: 'شاشة كاشير على كاونتر خشبي في بقالة تعرض لوحة أورا ريتيل، وبجانبها طابعة إيصالات وقارئ باركود وسلة تمر.', // AR: drafted, native check pending
+        caption: 'صورة توضيحية: أورا ريتيل على كاونتر بقالة.', // AR: drafted, native check pending
+      },
+      {
+        alt: 'شاشة كاشير على كاونتر زجاجي في محل هواتف تعرض شاشة البيع في أورا ريتيل، وبجانبها قارئ باركود، وفي الواجهة أغطية هواتف وإكسسوارات.', // AR: drafted, native check pending
+        caption: 'صورة توضيحية: كاشير أورا ريتيل في محل هواتف.', // AR: drafted, native check pending
+      },
+    ],
+  },
   works: {
     title: 'قارئات الباركود وطابعات الإيصالات', // AR: drafted, native check pending
     line: 'قارئات الباركود وطابعات الإيصالات تتصل بكمبيوتر المحل.', // AR: drafted, native check pending

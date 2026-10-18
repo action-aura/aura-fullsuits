@@ -69,6 +69,18 @@ export const retailEn = {
       },
     ],
   },
+  photos: {
+    items: [
+      {
+        alt: 'A touchscreen till on a wooden grocery counter showing the Aura Retail overview, with a receipt printer, a barcode scanner and a basket of dates beside it.',
+        caption: 'Illustration: Aura Retail on a grocery counter.',
+      },
+      {
+        alt: 'A touchscreen till on a glass counter in a mobile phone shop showing the Aura Retail sale screen, with a barcode scanner beside it and phone cases and accessories in the display case.',
+        caption: 'Illustration: the Aura Retail till in a phone shop.',
+      },
+    ],
+  },
   works: {
     title: 'Scanners and receipt printers',
     line: 'Barcode scanners and receipt printers connect to the shop computer.',

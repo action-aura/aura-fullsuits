@@ -198,6 +198,25 @@
   }
 }
 
+/* ---------- Photo pair (the close of the Retail features chapter) ----------
+   Two composited illustrations under the bento, inside the same [data-w] section, so there is no new jewel station:
+   the mark is already dissolved for the full-width grid and condenses back at the details chapter. One clear beat
+   below the cards, shorter than a section break, so the pair reads as the chapter's close rather than a new chapter.
+   Phones stack them (design-system.md section 7: at most two photos per screen). */
+.photo-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+  margin-block-start: clamp(64px, 10vh, 112px);
+}
+
+@media (min-width: 900px) {
+  .photo-pair {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+  }
+}
+
 /* ---------- CTA block (same grid as .close; copy opposite the jewel) ---------- */
 .cta-block {
   display: grid;

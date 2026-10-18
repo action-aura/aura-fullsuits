@@ -30,4 +30,5 @@ const cellShots = shots.slice(0, 2).map((k) => (isShotKey(k) ? k : undefined));
       );
     })}
   </div>
+  <slot name="after" />
 </section>
