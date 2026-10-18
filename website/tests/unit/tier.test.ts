@@ -13,5 +13,11 @@ describe('pickTier', () => {
     ['dense small screen', { width: 390, dpr: 3 }],
   ])('lite when %s', (_n, patch) => expect(pickTier({ ...base, ...patch })).toBe('lite'));
   it('unknown deviceMemory does not force lite', () => expect(pickTier({ ...base, deviceMemory: undefined })).toBe('rich'));
-  it('a 390px phone at dpr 2 can be rich', () => expect(pickTier({ ...base, width: 390, dpr: 2 })).toBe('rich'));
+  // Was 'a 390px phone at dpr 2 can be rich'. Spec section 14 makes lite the phone default until a
+  // real-device check; this test now pins that. It can no longer catch phones wrongly losing rich.
+  it('every phone-width viewport is lite until the real-phone check', () => {
+    expect(pickTier({ ...base, width: 390, dpr: 2 })).toBe('lite');
+    expect(pickTier({ ...base, width: 899, dpr: 1 })).toBe('lite');
+    expect(pickTier({ ...base, width: 900, dpr: 1 })).toBe('rich');
+  });
 });

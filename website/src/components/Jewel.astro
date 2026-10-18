@@ -9,8 +9,10 @@ const t = dict(lang);
 <div class="world-bg bg-clinic" aria-hidden="true"></div>
 <div class="world-bg bg-gym" aria-hidden="true"></div>
 <div class="jewel" aria-hidden="true" data-kind={stations} data-read={stations === 'read' ? '1' : undefined} data-fixed={fixed ? JSON.stringify(fixed) : undefined}>
+  {/* Stills are 1404x1296: the hero rest pose in a 13:12 frame 72/58 of the mark's height (tools/render-stills.mjs). The
+      attributes give the aspect before load; components.css sets height and width: auto, so the attribute width is never used. */}
   {['master', 'retail', 'clinic', 'gym'].map((w) => (
-    <img class={`jewel-still still-${w}`} src={`/jewel/still-${w}.webp`} alt="" width="900" height="1200" decoding="async" />
+    <img class={`jewel-still still-${w}`} src={`/jewel/still-${w}.webp`} alt="" width="1404" height="1296" decoding="async" />
   ))}
   <canvas class="jewel-canvas"></canvas>
 </div>
@@ -21,7 +23,7 @@ const t = dict(lang);
 <span class="visually-hidden">{t.a11y.jewel}</span>
 <script>
   import { pickTier } from '../scripts/jewel/tier';
-  import { stationsFor, stationAt, fitScale, type PageKind, type Station } from '../scripts/jewel/stations';
+  import { stationsFor, stationAt, fitScale, footerFade, type PageKind, type Station } from '../scripts/jewel/stations';
 
   const root = document.documentElement;
   const layer = document.querySelector<HTMLElement>('.jewel')!;
@@ -65,8 +67,11 @@ const t = dict(lang);
     // Desktop: fit the mark to the viewport. Hide check below still reads the station's own scale.
     const fitted = phone ? sc : fitScale(s.scale, innerWidth, innerHeight);
     // --jhide is how far the mark is hidden, 0..1: fully for a scale-0 station (product pages after the hero on
-    // phones), 1 - alpha for a dissolved station (desktop day rail and features grid), 0 otherwise.
-    const hide = sc <= 0.01 ? 1 : 1 - (s.alpha ?? 1);
+    // phones), 1 - alpha for a dissolved station (desktop day rail and features grid), 0 otherwise,
+    // and it fades out as the footer rises (footerFade).
+    const foot = document.querySelector('footer');
+    const fade = foot ? footerFade(foot.getBoundingClientRect().top, innerHeight) : 0;
+    const hide = sc <= 0.01 ? 1 : Math.max(1 - (s.alpha ?? 1), fade);
     root.style.setProperty('--jx', String(s.x));
     root.style.setProperty('--jy', String(s.y));
     root.style.setProperty('--js', String(fitted));

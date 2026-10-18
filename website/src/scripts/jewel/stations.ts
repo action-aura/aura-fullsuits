@@ -91,3 +91,15 @@ export function fitScale(scale: number, width: number, height: number): number {
   const k = Math.min(1, (width / Math.max(1, height)) / 1.6);
   return scale * k;
 }
+
+// The footer spans the full width, so the mark dissolves as it rises (design-system dissolve rule): it
+// ran behind the footer link columns at the CTA/close station (axe colour-contrast, 2026-10-18).
+// 0 while the footer's top is below 82% of the viewport (the bottom of the mark at the CTA station: centre .56,
+// half of 58vh * .9), 1 once it reaches 62%, where the first footer links meet the mark. Starting earlier dimmed
+// the mark beside the centred CTA copy (measured --jhide .126), which the CTA station must show in full.
+export function footerFade(footerTop: number, viewportHeight: number): number {
+  const start = viewportHeight * 0.82, end = viewportHeight * 0.62;
+  if (footerTop >= start) return 0;
+  if (footerTop <= end) return 1;
+  return (start - footerTop) / (start - end);
+}

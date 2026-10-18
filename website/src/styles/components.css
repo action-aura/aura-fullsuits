@@ -685,23 +685,30 @@ html:lang(ar) .footer-title {
 }
 
 /* `left` is the one documented exception to the logical-properties rule: x is already mirrored by
-   stationAt for RTL, so `inset-inline-start` would mirror it a second time. */
+   stationAt for RTL, so `inset-inline-start` would mirror it a second time.
+   The still is a 13:12 frame, 72/58 of the mark's nominal height, centred on the station point: the mark (58vh * --js
+   tall, as scene.js sizes it) sits in the middle with room for the ground shadow below and the bead's halo to the side.
+   width: auto is load-bearing: without it the <img> width attribute is used as the CSS width and the still is stretched
+   (measured 2026-10-18: 900px wide at 648 tall with the old 900x1200 attributes). Frame numbers: tools/render-stills.mjs. */
 .jewel-still {
   position: absolute;
-  height: calc(58vh * var(--js, 1));
+  height: calc(72vh * var(--js, 1));
+  width: auto;
   left: calc(var(--jx, .73) * 100%);
   top: calc(var(--jy, .54) * 100%);
   transform: translate(-50%, -50%);
   transition: opacity 1.1s;
 }
 
+/* Phones follow scene.js: the mark is 95vw * --js wide, centred, with its nominal apex at mid-height. The frame is
+   702 / 437.5 = 1.6046 mark widths (152.4vw), and the apex sits 63 / 648 = 9.72% of the frame height below its top. */
 @media (max-width: 899px) {
   .jewel-still {
     left: 50%;
     top: 50%;
     height: auto;
-    width: calc(95vw * var(--js, 1));
-    transform: translate(-50%, 0);
+    width: calc(152.4vw * var(--js, 1));
+    transform: translate(-50%, -9.72%);
   }
 }
 

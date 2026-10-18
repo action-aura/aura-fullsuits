@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { HOME_DESKTOP, HOME_PHONE, fitScale, mirror, stationAt, stationsFor, type Station } from '../../src/scripts/jewel/stations';
+import { HOME_DESKTOP, HOME_PHONE, fitScale, footerFade, mirror, stationAt, stationsFor, type Station } from '../../src/scripts/jewel/stations';
 
 const C = [450, 1350, 2250, 3150, 4050, 4950];
 
@@ -125,5 +125,19 @@ describe('dissolve', () => {
   });
   it('mirror keeps alpha and flips only x', () => {
     expect(mirror(B)).toEqual({ x: 0.25, y: 0.5, scale: 0.7, alpha: 0 });
+  });
+});
+
+describe('footerFade', () => {
+  it('is 0 while the footer top is at or below 82% of the viewport', () => {
+    expect(footerFade(900, 900)).toBe(0);
+    expect(footerFade(738, 900)).toBe(0);
+  });
+  it('is 1 once the footer top reaches 62% of the viewport', () => {
+    expect(footerFade(558, 900)).toBe(1);
+    expect(footerFade(0, 900)).toBe(1);
+  });
+  it('is linear between 82% and 62%', () => {
+    expect(footerFade(648, 900)).toBeCloseTo(0.5, 6);
   });
 });
