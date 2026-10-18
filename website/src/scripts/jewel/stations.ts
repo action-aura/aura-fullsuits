@@ -15,6 +15,41 @@ export const HOME_PHONE: Station[] = [
   { x: 0.5, y: 0.5, scale: 1 }, { x: 0.5, y: 0.5, scale: 1 }, { x: 0.5, y: 0.5, scale: 0.9 },
 ];
 
+export const PRODUCT_DESKTOP: Station[] = [
+  { x: 0.73, y: 0.54, scale: 1 },
+  { x: 0.75, y: 0.5, scale: 0.7 },
+  { x: 0.75, y: 0.5, scale: 0.7 },
+  { x: 0.75, y: 0.5, scale: 0.7 },
+  { x: 0.75, y: 0.5, scale: 0.7 },
+  { x: 0.73, y: 0.56, scale: 0.9 },
+];
+export const PRODUCT_PHONE: Station[] = [
+  { x: 0.5, y: 0.5, scale: 1 }, { x: 0.5, y: 0.5, scale: 0 }, { x: 0.5, y: 0.5, scale: 0 },
+  { x: 0.5, y: 0.5, scale: 0 }, { x: 0.5, y: 0.5, scale: 0 }, { x: 0.5, y: 0.5, scale: 0 },
+];
+export const ABOUT_DESKTOP: Station[] = [
+  { x: 0.5, y: 0.36, scale: 1.2 },
+  { x: 0.75, y: 0.52, scale: 0.8 },
+  { x: 0.75, y: 0.52, scale: 0.8 },
+  { x: 0.75, y: 0.52, scale: 0.8 },
+];
+export const ABOUT_PHONE: Station[] = [
+  { x: 0.5, y: 0.4, scale: 1 }, { x: 0.5, y: 0.4, scale: 1 },
+  { x: 0.5, y: 0.4, scale: 1 }, { x: 0.5, y: 0.4, scale: 1 },
+];
+export const CONTACT_DESKTOP: Station[] = [{ x: 0.75, y: 0.62, scale: 0.9 }];
+export const CONTACT_PHONE: Station[] = [{ x: 0.5, y: 0.15, scale: 0.4 }];
+
+export type PageKind = 'home' | 'product' | 'about' | 'contact' | 'read';
+
+export function stationsFor(kind: PageKind, phone: boolean): Station[] | 'none' {
+  if (kind === 'read') return 'none';
+  if (kind === 'home') return phone ? HOME_PHONE : HOME_DESKTOP;
+  if (kind === 'product') return phone ? PRODUCT_PHONE : PRODUCT_DESKTOP;
+  if (kind === 'about') return phone ? ABOUT_PHONE : ABOUT_DESKTOP;
+  return phone ? CONTACT_PHONE : CONTACT_DESKTOP;
+}
+
 export const mirror = (s: Station): Station => ({ x: 1 - s.x, y: s.y, scale: s.scale });
 const smooth = (t: number) => t * t * (3 - 2 * t);
 
