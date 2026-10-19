@@ -13,4 +13,4 @@ crons = ["17 3 * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "aura-leads"
-database_id = "SET-AT-DEPLOY"
+database_id = "c2000ae7-21cc-4b66-813f-f9e6aec23efe"

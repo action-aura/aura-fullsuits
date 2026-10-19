@@ -1,6 +1,6 @@
-# Cloudflare Pages project for actionaura.me. The D1 database id is filled in
-# Plan 3 from the real Cloudflare account; until then local dev uses
-# `wrangler pages dev` with a local D1.
+# Cloudflare Pages project for actionaura.me. This file is the source of truth for
+# bindings and non-secret vars (the dashboard cannot override them). Secrets
+# (TURNSTILE_SECRET, IP_SALT, SMTP_PASS) are set with `wrangler pages secret put`.
 name = "action-aura-website"
 pages_build_output_dir = "dist"
 compatibility_date = "2026-09-01"
@@ -8,5 +8,10 @@ compatibility_date = "2026-09-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "aura-leads"
-database_id = "SET-IN-PLAN-3"
+database_id = "c2000ae7-21cc-4b66-813f-f9e6aec23efe"
 migrations_dir = "migrations"
+
+# Non-secret runtime settings. Email alerts are off until the owner chooses SMTP
+# (then: NOTIFY_PROVIDER="smtp" plus SMTP_HOST/PORT/USER/NOTIFY_TO here and SMTP_PASS as a secret).
+[vars]
+NOTIFY_PROVIDER = "none"
