@@ -174,3 +174,17 @@ Do not announce until every box is ticked.
 - [ ] The share-card preview is tested in WhatsApp.
 - [ ] Search Console shows no errors.
 - [ ] The form is checked live: post a test lead, confirm it is in D1, then delete it.
+
+## Go-live record (2026-10-19)
+
+What was actually done, and what differs from the steps above:
+
+- Account: Cloudflare account of abuzyad700222@gmail.com (id 350a4a544e0bc35c5a89cc2ed158eb5c). Wrangler login was approved from the owner's phone; the localhost callback URL was pasted back and replayed on the laptop.
+- D1 `aura-leads` in EEUR, id c2000ae7-21cc-4b66-813f-f9e6aec23efe (committed in both wrangler files).
+- Pages project `action-aura-website` deployed by **direct upload** (`wrangler pages deploy dist --project-name action-aura-website --branch main`), not a GitHub-connected build. Every later change: `npm run build`, then that command, from `website/` with Node 22 (`npx -y node@22.12.0 node_modules/wrangler/bin/wrangler.js ...`).
+- Turnstile widget "Action Aura website form" (actionaura.me + action-aura-website.pages.dev). Public site key `0x4AAAAAAFbb-A9R_Prl7ViW` lives in `website/.env.production` (git-ignored by the repo's .env rule; recreate it from this line on a fresh clone). TURNSTILE_SECRET and IP_SALT were piped into Pages secrets, never printed.
+- Email alerts ON: SMTP vars in wrangler.toml `[vars]`, SMTP_PASS set by the owner in the dashboard. Test lead #4 email arrived. Test leads 1-4 deleted.
+- Retention Worker live, cron 17 3 * * *. Cron needed the account workers subdomain (`actionaura`) to exist even with workers_dev=false.
+- HSTS: includeSubDomains removed (mail.actionaura.me has no valid HTTPS for that host).
+- DNS: zone moved to Cloudflare (patryk / roxy.ns.cloudflare.com), active 2026-10-19 ~23:00. Records: @ and www CNAME to action-aura-website.pages.dev (proxied); owner A 130.61.55.33, mail/autodiscover/autoconfig CNAME privateemail.com, MX x2, SPF, DMARC, DKIM (`privateemail._domainkey`, 408 chars), SRV _autodiscover._tcp: all DNS only. During the edit the owner and DKIM rows were deleted by mistake and restored the same night; lesson: never delete by type, delete by exact content.
+- Not yet done: Web Analytics switch, Search Console + Bing, Google Business Profile, real-phone LCP, Arabic reader, lawyer, office hours.
