@@ -11,7 +11,11 @@ database_name = "aura-leads"
 database_id = "c2000ae7-21cc-4b66-813f-f9e6aec23efe"
 migrations_dir = "migrations"
 
-# Non-secret runtime settings. Email alerts are off until the owner chooses SMTP
-# (then: NOTIFY_PROVIDER="smtp" plus SMTP_HOST/PORT/USER/NOTIFY_TO here and SMTP_PASS as a secret).
+# Non-secret runtime settings. Lead alerts go by SMTP through the Namecheap Private Email
+# mailbox; SMTP_PASS is a Pages secret set by the owner in the dashboard (2026-10-19).
 [vars]
-NOTIFY_PROVIDER = "none"
+NOTIFY_PROVIDER = "smtp"
+SMTP_HOST = "mail.privateemail.com"
+SMTP_PORT = "465"
+SMTP_USER = "info@actionaura.me"
+NOTIFY_TO = "info@actionaura.me"
