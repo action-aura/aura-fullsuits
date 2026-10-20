@@ -70,8 +70,8 @@ export const ar: Dict = {
   status: { available: 'متوفّر الآن', coming: 'قريبًا' },
   home: {
     hero: {
-      title: 'محلّك يبيع… حتى لو انقطع الإنترنت',
-      lead: 'الكاشير والمخزون والحسابات للمحلات والمعارض. يعمل على الكاشير وعلى هاتفك، ويستمر بدون إنترنت، ويتزامن وحده عند عودة الاتصال.', // AR: drafted, native check pending
+      title: 'كبّر شغلك، واشتغل بذكاء', // AR: drafted, native check pending
+      lead: 'أكشن أورا نقطة البداية. أدِر عملك باحتراف، مع كاشير ومخزون وحسابات تبقى منظّمة حتى وأنت مرتاح.', // AR: drafted, native check pending
     },
     company: {
       title: 'أكشن أورا', accent: 'أورا',

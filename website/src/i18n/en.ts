@@ -58,8 +58,8 @@ export const en = {
   status: { available: 'Available now', coming: 'Coming' },
   home: {
     hero: {
-      title: "Your shop keeps selling, even when the internet doesn't.",
-      lead: 'Till, stock and books for shops and showrooms. It runs on the counter and on your phone, works offline, and syncs when you are back.',
+      title: 'Go bigger. Go smarter.',
+      lead: 'Action Aura is where you start. Run your business like a professional, with till, stock and books that stay in order even while you rest.',
     },
     company: {
       title: 'Action Aura', accent: 'Aura',
