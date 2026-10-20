@@ -50,3 +50,10 @@ describe('json-ld', () => {
     expect(f.mainEntity[1].acceptedAnswer.text).toBe('A2');
   });
 });
+
+describe('organization sameAs', () => {
+  it('lists the real Instagram profile and nothing invented', async () => {
+    const { organizationLd } = await import('../../src/lib/jsonld');
+    expect((organizationLd('en') as { sameAs: string[] }).sameAs).toEqual(['https://www.instagram.com/actionaura.me/']);
+  });
+});

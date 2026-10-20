@@ -104,7 +104,7 @@ export const ar: Dict = {
     terms: 'الشروط', // AR: drafted, native check pending
     faq: 'الأسئلة الشائعة', // AR: drafted, native check pending
     city: 'عمّان، الأردن', // AR: drafted, native check pending
-    phone: '+962 78 006 9485',
+    phone: '+962 78 006 9485', instagram: 'إنستغرام',
   },
   notFound: {
     title: 'هذه الصفحة ليست على الرف.',

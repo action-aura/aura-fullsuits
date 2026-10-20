@@ -1,7 +1,7 @@
 ---
 import { dict, type Lang } from '../i18n';
 import { pagePath } from '../lib/seo';
-import { PHONE_TEL, waLink } from '../lib/lang';
+import { PHONE_TEL, waLink, INSTAGRAM } from '../lib/lang';
 import StatusPill from './StatusPill.astro';
 
 interface Props {
@@ -53,6 +53,7 @@ const [tagBefore, tagAfter] = f.tagline.split('·').map((s) => s.trim());
     <span class="footer-city">{t.nav.brand} · {f.city}</span>
     <a class="footer-phone" href={PHONE_TEL}><bdi dir="ltr">{f.phone}</bdi></a>
     <a class="footer-wa" href={waLink(t.cta.waText)} target="_blank" rel="noopener">{t.cta.whatsapp}</a>
+    <a class="footer-ig" href={INSTAGRAM} target="_blank" rel="noopener me">{f.instagram}</a>
     <a class="footer-lang" hreflang={other} lang={other} href={pagePath(other, slug)}>{t.nav.switchTo}</a>
   </div>
 </footer>

@@ -1,5 +1,6 @@
 import type { Lang } from '../i18n';
 import { ORIGIN, canonical } from './seo';
+import { INSTAGRAM } from './lang';
 
 export function organizationLd(lang: Lang): object {
   return {
@@ -10,6 +11,7 @@ export function organizationLd(lang: Lang): object {
     telephone: '+962780069485', email: 'info@actionaura.me',
     address: { '@type': 'PostalAddress', addressLocality: 'Amman', addressCountry: 'JO',
       streetAddress: 'Al-Rayyan Complex, Radio & Television St, Al-Muqabalain' },
+    sameAs: [INSTAGRAM],
     contactPoint: { '@type': 'ContactPoint', telephone: '+962780069485', email: 'info@actionaura.me',
       contactType: 'sales', areaServed: 'JO', availableLanguage: ['ar', 'en'] },
   };

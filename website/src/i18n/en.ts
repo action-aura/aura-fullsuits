@@ -86,7 +86,7 @@ export const en = {
   },
   footer: {
     tagline: 'Go Bigger · Go Smarter', products: 'Products', company: 'Company',
-    privacy: 'Privacy', terms: 'Terms', faq: 'FAQ', city: 'Amman, Jordan', phone: '+962 78 006 9485',
+    privacy: 'Privacy', terms: 'Terms', faq: 'FAQ', city: 'Amman, Jordan', phone: '+962 78 006 9485', instagram: 'Instagram',
   },
   notFound: { title: "This page isn't on the shelf.", back: 'Back to the start' },
   chooser: {
