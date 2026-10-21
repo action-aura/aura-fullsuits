@@ -99,7 +99,11 @@ def _get_valid_session(raw_token: str) -> StaffSession | None:
     return record
 
 
-def load_current_staff() -> StaffUser | None:
+def load_current_staff(*, touch: bool = True) -> StaffUser | None:
+    """touch=False validates the session exactly the same way but does NOT
+    advance last_seen_at -- for background polling (the website-leads badge,
+    attention.website_leads_count) that must never keep an unattended
+    session alive past its idle timeout."""
     if "staff_user" in g:
         return g.staff_user
     raw_token = request.cookies.get(COOKIE_NAME)
@@ -108,8 +112,9 @@ def load_current_staff() -> StaffUser | None:
         g.staff_user = None
         g.staff_session = None
         return None
-    record.last_seen_at = utcnow()
-    db_session.commit()
+    if touch:
+        record.last_seen_at = utcnow()
+        db_session.commit()
     g.staff_session = record
     g.staff_user = db_session.get(StaffUser, record.staff_user_id)
     return g.staff_user

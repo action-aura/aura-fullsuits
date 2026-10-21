@@ -8367,3 +8367,22 @@ msgstr "Search by code"
 #: app/templates/crash_reports/list.html
 msgid "Support code"
 msgstr "Support code"
+
+#: app/attention/service.py
+msgid "New website leads"
+msgstr "New website leads"
+
+#: app/attention/service.py
+#, python-format
+msgid "New website lead: %(name)s"
+msgstr "New website lead: %(name)s"
+
+#: app/attention/service.py
+#, python-format
+msgid "Received %(duration)s ago"
+msgstr "Received %(duration)s ago"
+
+#: app/templates/layout/base.html
+#, python-format
+msgid "New website leads: %(count)s"
+msgstr "New website leads: %(count)s"

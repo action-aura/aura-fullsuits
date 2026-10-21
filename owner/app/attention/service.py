@@ -611,6 +611,68 @@ def _failed_backup_items() -> list[AttentionItem]:
     ]
 
 
+# ------------------------------------------------------ Website leads --
+
+WEBSITE_LEAD_PERMISSIONS = frozenset({"leads.view_own", "leads.view_all"})
+
+
+def _new_website_leads_query(stmt, profile, codes):
+    """NEW leads whose source is WEBSITE, scoped exactly like the real leads
+    list: leads.view_all sees every one; leads.view_own sees only those it
+    created or is assigned. Website leads are created by the "Website intake"
+    system actor, so for view_own that means only the ones a manager has
+    assigned. Returns None when the actor can see none (view_own without an
+    EmployeeProfile -- same as list_leads)."""
+    stmt = stmt.where(Lead.status == "NEW", Lead.source == "WEBSITE")
+    if "leads.view_all" in codes:
+        return stmt
+    if profile is None:
+        return None
+    return apply_ownership_filter(stmt, Lead, profile.id, all_permission_held=False)
+
+
+def _new_website_lead_items(profile, codes) -> list[AttentionItem]:
+    stmt = _new_website_leads_query(select(Lead), profile, codes)
+    if stmt is None:
+        return []
+    now = utcnow()
+    rows = db_session.execute(stmt.order_by(Lead.created_at).limit(100)).scalars().all()
+    items = []
+    for lead in rows:
+        age = now - lead.created_at
+        # A demo request is the warmest lead there is: normal after an hour
+        # untouched, urgent after a day.
+        priority = _age_priority(age, urgent_after=timedelta(days=1), normal_after=timedelta(hours=1))
+        title = _("New website lead: %(name)s", name=lead.organization_or_prospect_name)
+        context = _("Received %(duration)s ago", duration=_humanize_duration(age))
+        items.append(
+            AttentionItem(
+                category="new_website_leads", category_label=_("New website leads"), priority=priority,
+                title=title, context=context, occurred_at=lead.created_at,
+                action_label=_("Open lead"), action_url=url_for("leads.detail", lead_id=lead.id),
+                accessible_label=_accessible_label(_("New website leads"), title, context),
+            )
+        )
+    return items
+
+
+def count_new_website_leads(staff, codes=None) -> int:
+    """The topbar badge's number (attention.website_leads_count): one COUNT
+    query using the same filter as _new_website_lead_items()."""
+    if staff is None:
+        return 0
+    if codes is None:
+        from app.security.rbac import get_staff_permission_codes
+
+        codes = get_staff_permission_codes(staff)
+    if not (codes & WEBSITE_LEAD_PERMISSIONS):
+        return 0
+    stmt = _new_website_leads_query(select(func.count(Lead.id)), find_own_profile(staff.id), codes)
+    if stmt is None:
+        return 0
+    return int(db_session.execute(stmt).scalar_one())
+
+
 # -------------------------------------------------------------- Public --
 
 _PRIORITY_ORDER = {PRIORITY_URGENT: 0, PRIORITY_NORMAL: 1, PRIORITY_LOW: 2}
@@ -635,6 +697,7 @@ def get_attention_items(staff) -> list[AttentionItem]:
 
     if "leads.view_own" in codes or "leads.view_all" in codes:
         items += _overdue_lead_followup_items(profile, codes)
+        items += _new_website_lead_items(profile, codes)
     if "customers.view" in codes:
         items += _overdue_customer_followup_items(staff, codes)
     if "quotes.approve" in codes or "pricing.override" in codes:

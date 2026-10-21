@@ -103,6 +103,8 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_SMTP_FROM",
         "OWNER_SMTP_FROM_NAME",
         "OWNER_SMTP_USE_TLS",
+        # Website intake (2026-10): bearer secret for POST /api/intake/website-lead
+        "OWNER_WEBSITE_INTAKE_SECRET",
         # Read directly by other modules (not by this Config class), but
         # still legitimate OWNER_* variables -- must not trip the unknown-key
         # check in strict mode.
@@ -296,6 +298,12 @@ class BaseConfig:
     SMTP_FROM = os.environ.get("OWNER_SMTP_FROM", "").strip()                 # default: SMTP_USER
     SMTP_FROM_NAME = os.environ.get("OWNER_SMTP_FROM_NAME", "Action Aura").strip() or "Action Aura"
     SMTP_USE_TLS = os.environ.get("OWNER_SMTP_USE_TLS", "1").strip() != "0"   # STARTTLS
+    # -- Website intake (2026-10): the actionaura.me Pages Function forwards
+    # each demo request to POST /api/intake/website-lead with this value as a
+    # bearer token (app/leads/intake_routes.py). Unset == the route answers
+    # 404 exactly like a route that does not exist (default-off). The same
+    # value is the website's Pages secret OWNER_INTAKE_SECRET.
+    WEBSITE_INTAKE_SECRET = os.environ.get("OWNER_WEBSITE_INTAKE_SECRET", "").strip()
     # M2: when true, validate() also rejects any OWNER_* environment variable
     # that isn't in KNOWN_CONFIG_ENV_VARS (catches typos like a misspelled
     # override that would otherwise silently fall back to a default). Off by
@@ -350,6 +358,12 @@ class BaseConfig:
             problems.append(
                 "OWNER_LICENSE_PEPPER is missing, a known default/placeholder value, or shorter than "
                 f"{_MIN_SECRET_LENGTH} characters"
+            )
+        if cls.WEBSITE_INTAKE_SECRET and not cls._looks_like_a_real_secret(cls.WEBSITE_INTAKE_SECRET):
+            problems.append(
+                "OWNER_WEBSITE_INTAKE_SECRET is set but is a known default/placeholder value or shorter than "
+                f"{_MIN_SECRET_LENGTH} characters -- generate a real random secret, or leave it unset to keep "
+                "website intake off"
             )
         if not cls._database_url_looks_valid(cls.SQLALCHEMY_DATABASE_URI):
             problems.append(
@@ -501,6 +515,9 @@ class TestingConfig(BaseConfig):
     # always on in TESTING regardless of the OWNER_EXTERNAL_API_ENABLED env
     # var, so `pytest` alone is sufficient to prove the whole surface works.
     EXTERNAL_API_ENABLED = True
+    # Website intake is off unless a test turns it on via
+    # app.config["WEBSITE_INTAKE_SECRET"] (never inherited from the shell env).
+    WEBSITE_INTAKE_SECRET = ""
 
 
 class ProductionConfig(BaseConfig):

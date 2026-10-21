@@ -123,6 +123,7 @@ services:
              flask --app app:create_app seed-catalog &&
              flask --app app:create_app seed-plans &&
              flask --app app:create_app seed-offline-policy &&
+             flask --app app:create_app seed-website-intake &&
              gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 30 --graceful-timeout 15 --max-requests 2000 --max-requests-jitter 200 --access-logfile - --error-logfile - 'app:create_app()'"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/health/live"]

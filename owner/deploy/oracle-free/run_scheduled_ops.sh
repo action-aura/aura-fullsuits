@@ -23,6 +23,10 @@
 # scan, reconcile, device-limit-scan) -- leaving it out here would make the
 # Oracle path a strict regression from staging's own bundle for no reason.
 #
+# Also run (added later, see the dated comments below): crash-report pruning,
+# `commercial housekeeping`, and `leads purge-website` (24-month deletion of
+# unconverted website demo requests).
+#
 # NOT covered, and still a regression from that staging bundle: its
 # audit-chain verification (app.audit.services.verify_chain). There is no
 # `flask` command for it -- staging calls it from Python in-process -- so it
@@ -94,6 +98,10 @@ run_job "sync prune-events (dry-run; SYNC-JOIN gap)" sync prune-events
 # expired replay nonces / idempotency records / old rate-limit counters.
 run_job "crash-reports prune --apply" crash-reports prune --apply
 run_job "commercial housekeeping --apply" commercial housekeeping --apply
+# Added 2026-10-21: the website privacy page promises demo requests are deleted
+# after 24 months, including the copy the website intake puts in the CRM. Only
+# unconverted WEBSITE leads; a lead that became a customer or a quote is kept.
+run_job "leads purge-website --apply" leads purge-website --apply
 
 report_currency="$(env_value REPORT_CURRENCY)"
 if [ -z "$report_currency" ]; then

@@ -141,6 +141,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.attention.routes import bp as attention_bp
     from app.command_palette.routes import bp as command_palette_bp
     from app.crash_reports.routes import bp as crash_reports_bp
+    from app.leads.intake_routes import bp as website_intake_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(staff_bp)
@@ -173,6 +174,13 @@ def create_app(config_name: str | None = None) -> Flask:
     app.register_blueprint(attention_bp)
     app.register_blueprint(command_palette_bp)
     app.register_blueprint(crash_reports_bp)
+    app.register_blueprint(website_intake_bp)
+    # Website demo-request intake: server-to-server from the actionaura.me
+    # Pages Function, authenticated by a bearer secret (no browser session, so
+    # no CSRF token to carry; the bearer check is its CSRF-equivalent).
+    # Registered unconditionally but default-off: 404 unless
+    # OWNER_WEBSITE_INTAKE_SECRET is set. See app/leads/intake_routes.py.
+    csrf.exempt(website_intake_bp)
 
     if app.config.get("EXTERNAL_API_ENABLED"):
         from app.api.routes import bp as external_api_bp

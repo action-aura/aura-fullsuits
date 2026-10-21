@@ -97,6 +97,21 @@
             <span class="aura-topbar__attention-count" aria-hidden="true">{{ format_owner_number(attention_count) }}</span>
           </a>
           {% endif %}
+          {% if has_any_permission('leads.view_own', 'leads.view_all') %}
+          {# Website demo requests, polled every 30 s by
+             static/js/website-leads-badge.js from attention.website_leads_count.
+             Ships [hidden]: it appears only once a poll returns a count above
+             zero and hides again at zero. Presentation only -- the count
+             endpoint enforces the same permission pair server-side. #}
+          <a class="aura-topbar__website-leads" id="aura-website-leads-badge" hidden
+             href="{{ url_for('attention.index') }}"
+             data-count-url="{{ url_for('attention.website_leads_count') }}"
+             data-poll-ms="30000"
+             data-label-template="{{ _('New website leads: %(count)s', count='__COUNT__') }}">
+            <span aria-hidden="true">&#9993;</span>
+            <span class="aura-topbar__website-leads-count" aria-hidden="true"></span>
+          </a>
+          {% endif %}
           <div class="aura-theme-switch" role="group" aria-label="{{ _('Theme') }}">
             <button type="button" class="aura-theme-switch__btn" data-theme-option="light" aria-pressed="false">{{ _('Light') }}</button>
             <button type="button" class="aura-theme-switch__btn" data-theme-option="dark" aria-pressed="false">{{ _('Dark') }}</button>
@@ -170,6 +185,7 @@
   <script src="{{ url_for('static', filename='js/shortcuts.js') }}"></script>
   <script src="{{ url_for('static', filename='js/chart-palette.js') }}"></script>
   <script src="{{ url_for('static', filename='js/dept-cards.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/website-leads-badge.js') }}"></script>
   {% endif %}
 </body>
 </html>

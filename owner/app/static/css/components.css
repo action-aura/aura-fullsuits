@@ -38,6 +38,10 @@ h3 { font-size: var(--aura-font-size-md); font-weight: var(--aura-font-weight-se
 h4 { font-size: var(--aura-font-size-base); font-weight: var(--aura-font-weight-semibold); margin: 0 0 var(--aura-space-2); }
 p { margin: 0 0 var(--aura-space-3); }
 
+/* Lead notes: intake notes are multi-line (name, phone, business, message).
+   pre-line keeps the line breaks; autoescape still applies to the body. */
+.aura-note-body { white-space: pre-line; }
+
 /* ---------- Links (Stage F) -- near the top so class-based anchor
    styles further down the cascade (.aura-nav-link, .aura-pagination__link,
    .btn, etc.) keep winning by source order + specificity. Focus styles

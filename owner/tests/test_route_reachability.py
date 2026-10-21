@@ -531,6 +531,19 @@ _HEALTH_CHECK_ENDPOINTS = (
     'healthz',
 )
 
+_WEBSITE_INTAKE_REASON = (
+    "Server-to-server intake for the actionaura.me website (website/functions/"
+    "_lib/notify.ts on branch feat/website, the 'owner' NOTIFY_PROVIDER): the "
+    "Cloudflare Pages Function POSTs each stored demo request here with a "
+    "bearer secret (OWNER_WEBSITE_INTAKE_SECRET). No browser and no Owner "
+    "template ever calls it, so no url_for() can reach it; it answers 404 "
+    "unless the secret is configured."
+)
+
+_WEBSITE_INTAKE_ENDPOINTS = (
+    'website_intake.website_lead',
+)
+
 _IMPLICIT_FORM_SIBLING_REASON = (
     "POST sibling of a GET form-page route, reached by `<form "
     "method=\"post\">` with NO `action` attribute in the corresponding "
@@ -566,12 +579,13 @@ INTENTIONALLY_UNREACHABLE.update({e: _EXTERNAL_LICENSING_API_REASON for e in _EX
 INTENTIONALLY_UNREACHABLE.update({e: _EXTERNAL_SYNC_API_REASON for e in _EXTERNAL_SYNC_API_ENDPOINTS})
 INTENTIONALLY_UNREACHABLE.update({e: _HEALTH_CHECK_REASON for e in _HEALTH_CHECK_ENDPOINTS})
 INTENTIONALLY_UNREACHABLE.update({e: _IMPLICIT_FORM_SIBLING_REASON for e in _IMPLICIT_FORM_SIBLING_ENDPOINTS})
+INTENTIONALLY_UNREACHABLE.update({e: _WEBSITE_INTAKE_REASON for e in _WEBSITE_INTAKE_ENDPOINTS})
 
 assert len(INTENTIONALLY_UNREACHABLE) == (
     len(_MOBILE_API_ENDPOINTS) + len(_COMMERCIAL_OPS_MACHINE_ENDPOINTS)
     + len(_EXTERNAL_PRODUCT_API_ENDPOINTS) + len(_EXTERNAL_LICENSING_API_ENDPOINTS)
     + len(_EXTERNAL_SYNC_API_ENDPOINTS) + len(_HEALTH_CHECK_ENDPOINTS)
-    + len(_IMPLICIT_FORM_SIBLING_ENDPOINTS)
+    + len(_IMPLICIT_FORM_SIBLING_ENDPOINTS) + len(_WEBSITE_INTAKE_ENDPOINTS)
 ), "duplicate endpoint name across the INTENTIONALLY_UNREACHABLE source tuples -- fix the typo, don't just let one silently overwrite another"
 
 

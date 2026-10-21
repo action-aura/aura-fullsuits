@@ -205,3 +205,20 @@ class TestDebugInProduction:
         cfg = _valid_staging_config(DEBUG=True, EXTERNAL_API_ENABLED=True)
         with pytest.raises(ConfigError, match="DEBUG must be false"):
             cfg.validate()
+
+
+class TestWebsiteIntakeSecret:
+    def test_unset_intake_secret_is_fine(self):
+        _valid_staging_config(WEBSITE_INTAKE_SECRET="").validate()
+
+    def test_real_intake_secret_is_fine(self):
+        _valid_staging_config(WEBSITE_INTAKE_SECRET="k" * 48).validate()
+
+    @pytest.mark.parametrize("value", ["short", "changeme" + "x" * 40, "placeholder-" + "x" * 40, "dev-only-" + "x" * 40])
+    def test_weak_or_placeholder_intake_secret_blocks_start(self, value):
+        with pytest.raises(ConfigError, match="OWNER_WEBSITE_INTAKE_SECRET"):
+            _valid_staging_config(WEBSITE_INTAKE_SECRET=value).validate()
+
+    def test_intake_secret_env_var_is_known_to_strict_config(self, monkeypatch):
+        monkeypatch.setenv("OWNER_WEBSITE_INTAKE_SECRET", "k" * 48)
+        _valid_staging_config(STRICT_CONFIG=True, WEBSITE_INTAKE_SECRET="k" * 48).validate()

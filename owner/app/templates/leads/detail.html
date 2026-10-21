@@ -183,7 +183,7 @@
 <div class="card">
   <h3>{{ _("Notes") }}</h3>
   {% for n in notes %}
-  <p>{{ n.body }}<br><small>{{ note_visibility_label(n.visibility) }} &middot; {{ format_owner_datetime(n.created_at) }}</small></p>
+  <p><span class="aura-note-body">{{ n.body }}</span><br><small>{{ note_visibility_label(n.visibility) }} &middot; {{ format_owner_datetime(n.created_at) }}</small></p>
   {% else %}<p class="empty">{{ _("No notes yet.") }}</p>
   {% endfor %}
   <form method="post" action="{{ url_for('leads.add_note_route', lead_id=lead.id) }}">

@@ -55,6 +55,11 @@ POLICIES: dict[str, RateLimitPolicy] = {
     # (50/day, 10 identity/day, same recipient 1 per 2 min) are enforced in
     # app/mail/relay.py after the device is authenticated.
     "mail_relay": RateLimitPolicy("mail_relay", max_requests=30, window_seconds=60),
+    # Website-intake wave: the actionaura.me Pages Function forwards each demo
+    # request once. Cloudflare egress IPs are shared, so this is a flood guard,
+    # not a per-visitor limit -- the website already limits each visitor to 5
+    # requests per 10 minutes before forwarding anything.
+    "website_intake": RateLimitPolicy("website_intake", max_requests=30, window_seconds=60),
 }
 
 

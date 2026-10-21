@@ -489,6 +489,32 @@ summary:focus-visible {
   color: var(--aura-color-warning);
 }
 
+/* Website demo-request badge (static/js/website-leads-badge.js). Ships with
+   the [hidden] attribute and appears only once a poll returns a count above
+   zero. The display rule would otherwise override the UA's
+   [hidden] { display: none } -- same trap as .aura-nav-group__list[hidden]. */
+.aura-topbar__website-leads {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aura-space-1);
+  background: var(--aura-color-warning-soft);
+  border: 1px solid var(--aura-color-warning);
+  border-radius: var(--aura-radius-sm);
+  color: var(--aura-color-warning);
+  font-size: var(--aura-font-size-sm);
+  padding: 0.4rem 0.6rem;
+  text-decoration: none;
+}
+.aura-topbar__website-leads[hidden] { display: none; }
+.aura-topbar__website-leads:hover, .aura-topbar__website-leads:focus-visible {
+  border-color: var(--aura-color-brand-primary);
+  color: var(--aura-color-text-primary);
+}
+.aura-topbar__website-leads-count {
+  font-weight: var(--aura-font-weight-semibold);
+  font-size: var(--aura-font-size-xs);
+}
+
 .aura-theme-switch {
   display: inline-flex;
   border: 1px solid var(--aura-color-border-default);

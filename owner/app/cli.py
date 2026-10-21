@@ -163,6 +163,15 @@ def register_cli(app: Flask) -> None:
         policy = seed_default_offline_policy()
         click.echo(f"Default offline policy ready: {policy.policy_code} (v{policy.policy_version})")
 
+    @app.cli.command("seed-website-intake")
+    def seed_website_intake_cmd():
+        """Create the "Website intake" system account that website demo
+        requests (POST /api/intake/website-lead) are recorded as (idempotent;
+        re-asserts that it cannot log in). Safe to re-run on every deploy."""
+        from app.leads.website_intake import seed_website_intake_actor
+
+        click.echo(json.dumps(seed_website_intake_actor()))
+
     @app.cli.command("bootstrap-dev")
     def bootstrap_dev_cmd():
         """Runs every idempotent seed step a fresh Owner deployment needs
@@ -474,6 +483,33 @@ def register_cli(app: Flask) -> None:
                 "login_attempts_purged": privacy_retention.count_login_attempts_to_purge(),
                 "sync_bootstrap": bootstrap_routes.sweep(apply=False),
             }
+        click.echo(json.dumps(result, indent=2))
+
+    @app.cli.group("leads")
+    def leads_group():
+        """Lead data upkeep."""
+
+    @leads_group.command("purge-website")
+    @click.option(
+        "--older-than-days", "older_than_days", type=int, default=None,
+        help="Retention in days (default 730 = 24 months, the privacy-page promise).",
+    )
+    @click.option("--apply", "apply_", is_flag=True, default=False, help="Actually delete. Default is dry-run (counts only).")
+    def purge_website_leads_cmd(older_than_days: int | None, apply_: bool):
+        """The website privacy page promises demo requests are deleted after 24
+        months, including the copy the website intake puts in the CRM. This
+        deletes unconverted WEBSITE leads (and their notes/contacts/history)
+        older than the cutoff; a lead that became a customer or a quote is kept.
+        The nightly scheduled-ops job runs it with --apply. Dry-run by default."""
+        from app.leads.website_retention import WEBSITE_LEAD_RETENTION_DAYS, purge_old_website_leads
+
+        try:
+            result = purge_old_website_leads(
+                older_than_days=WEBSITE_LEAD_RETENTION_DAYS if older_than_days is None else older_than_days,
+                apply=apply_,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
         click.echo(json.dumps(result, indent=2))
 
     @app.cli.group("sync")

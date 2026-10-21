@@ -8326,3 +8326,22 @@ msgstr "البحث بالرمز"
 #: app/templates/crash_reports/list.html
 msgid "Support code"
 msgstr "رمز الدعم"
+
+#: app/attention/service.py
+msgid "New website leads"
+msgstr "عملاء محتملون جدد من الموقع"
+
+#: app/attention/service.py
+#, python-format
+msgid "New website lead: %(name)s"
+msgstr "عميل محتمل جديد من الموقع: %(name)s"
+
+#: app/attention/service.py
+#, python-format
+msgid "Received %(duration)s ago"
+msgstr "وصل منذ %(duration)s"
+
+#: app/templates/layout/base.html
+#, python-format
+msgid "New website leads: %(count)s"
+msgstr "عملاء محتملون جدد من الموقع: %(count)s"
