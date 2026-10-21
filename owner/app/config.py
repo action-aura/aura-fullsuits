@@ -359,12 +359,10 @@ class BaseConfig:
                 "OWNER_LICENSE_PEPPER is missing, a known default/placeholder value, or shorter than "
                 f"{_MIN_SECRET_LENGTH} characters"
             )
-        if cls.WEBSITE_INTAKE_SECRET and not cls._looks_like_a_real_secret(cls.WEBSITE_INTAKE_SECRET):
-            problems.append(
-                "OWNER_WEBSITE_INTAKE_SECRET is set but is a known default/placeholder value or shorter than "
-                f"{_MIN_SECRET_LENGTH} characters -- generate a real random secret, or leave it unset to keep "
-                "website intake off"
-            )
+        # OWNER_WEBSITE_INTAKE_SECRET is deliberately NOT checked here: it is an
+        # optional feature's secret, so a bad value turns website intake off
+        # (app/leads/intake_routes.py: 404 + one startup WARNING) instead of
+        # refusing to boot the whole Owner.
         if not cls._database_url_looks_valid(cls.SQLALCHEMY_DATABASE_URI):
             problems.append(
                 "OWNER_DATABASE_URL is not a recognized PostgreSQL URL (expected a postgresql:// or "

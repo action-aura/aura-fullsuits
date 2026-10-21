@@ -2,7 +2,8 @@
 
 Every guard is proven by the row it did or did not write, not only by the
 status code: default-off 404, both directions of the secret check, the rate
-limit (and that it counts BEFORE auth), idempotency, validation, and the
+limit (which counts only AUTHENTICATED requests, so an unauthenticated flood
+cannot burn the real caller's budget), idempotency, validation, and the
 system actor that can never log in."""
 from __future__ import annotations
 
@@ -199,6 +200,7 @@ def test_concurrent_duplicate_is_answered_as_a_replay(app, client, monkeypatch):
         ({"message": "x" * 2001}, "message"),
         ({"lang": "fr"}, "lang"),
         ({"name": 5}, "name"),
+        ({"phone": "07900abc"}, "phone"),  # F7: letters are not a phone number
     ],
 )
 def test_invalid_payloads_are_rejected_and_write_nothing(app, client, over, field):
@@ -235,7 +237,7 @@ def test_unseeded_actor_is_503_and_writes_nothing(app, client):
     assert _count(app, Lead) == 0
 
 
-def test_rate_limit_counts_every_request_before_auth_and_the_31st_is_429(app, client, monkeypatch):
+def test_rate_limit_counts_authenticated_requests_and_the_31st_is_429(app, client, monkeypatch):
     from app.licensing_service import ratelimit
     from app.models.leads import Lead
 
@@ -246,12 +248,190 @@ def test_rate_limit_counts_every_request_before_auth_and_the_31st_is_429(app, cl
 
     monkeypatch.setattr(ratelimit, "datetime", _Frozen)
     _ready(app)
-    statuses = [_post(client, _body(), auth="Bearer wrong").status_code for _ in range(30)]
-    assert statuses == [401] * 30
-    res = _post(client, _body())  # RIGHT secret, but the budget is already spent
+    # Changed 2026-10-21 by design (the limit now runs AFTER the bearer check):
+    # the budget is spent by 30 AUTHENTICATED posts (one create, 29 replays),
+    # not by wrong-secret ones. This still goes red if the limit call is removed
+    # (the 31st would be 200, not 429). What it no longer proves -- that wrong
+    # secrets burn budget -- is now the opposite guarantee, pinned by
+    # test_unauthenticated_flood_cannot_burn_the_real_callers_budget.
+    statuses = [_post(client, _body()).status_code for _ in range(30)]
+    assert statuses == [201] + [200] * 29
+    res = _post(client, _body())  # budget spent
     assert res.status_code == 429
     assert res.headers["Retry-After"] == "55"
+    assert _count(app, Lead) == 1
+
+
+def test_unauthenticated_flood_cannot_burn_the_real_callers_budget(app, client, monkeypatch):
+    # F3: the caller is a Cloudflare egress IP shared with other traffic, so
+    # wrong-bearer requests from that address must never consume its budget.
+    from app.licensing_service import ratelimit
+    from app.models.leads import Lead
+    from app.models.licensing_service import RateLimitCounter
+
+    class _Frozen(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return dt.datetime(2026, 10, 21, 12, 0, 5, tzinfo=dt.timezone.utc)
+
+    monkeypatch.setattr(ratelimit, "datetime", _Frozen)
+    _ready(app)
+    statuses = [_post(client, _body(), auth="Bearer wrong").status_code for _ in range(40)]
+    assert statuses == [401] * 40
+    assert _count(app, RateLimitCounter) == 0
+    res = _post(client, _body())
+    assert res.status_code == 201
+    assert _count(app, Lead) == 1
+
+
+@pytest.mark.parametrize("secret_set", [True, False])
+def test_get_is_404_whether_or_not_the_secret_is_set(app, client, secret_set):
+    # F9: the route must not reveal itself with a 405 to a probing GET.
+    _enable(app, SECRET if secret_set else "")
+    res = client.get(URL, headers={"Authorization": f"Bearer {SECRET}"})
+    assert res.status_code == 404
+
+
+@pytest.mark.parametrize("weak", ["tiny-9Zq7", "changeme" + "x" * 40, "placeholder-" + "x" * 40])
+def test_a_weak_secret_turns_intake_off_instead_of_refusing_to_boot(app, client, weak):
+    # Changed 2026-10-21 by design: an optional feature's bad secret disables the
+    # feature (404 + one startup WARNING) instead of refusing boot. The route must
+    # not accept the weak value as a bearer.
+    from app.leads.intake_routes import warn_if_intake_secret_unusable
+    from app.models.leads import Lead
+
+    _enable(app, weak)
+    _seed_actor(app)
+    res = _post(client, _body(), auth=f"Bearer {weak}")
+    assert res.status_code == 404
     assert _count(app, Lead) == 0
+    import logging
+
+    records: list[logging.LogRecord] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    # Attached to the module's own logger: the app's JSON log setup does not
+    # propagate to the root logger, so caplog cannot see these records.
+    logger = logging.getLogger("app.leads.intake_routes")
+    handler = _Collect(level=logging.WARNING)
+    logger.addHandler(handler)
+    try:
+        warn_if_intake_secret_unusable(app)
+    finally:
+        logger.removeHandler(handler)
+    logged = " ".join(r.getMessage() for r in records)
+    assert "OWNER_WEBSITE_INTAKE_SECRET" in logged
+    assert weak not in logged
+
+
+def test_seed_command_is_skipped_while_intake_is_off(app):
+    from app.extensions import db_session
+    from app.leads.website_intake import WEBSITE_INTAKE_EMAIL
+    from app.models.staff import StaffUser
+
+    _enable(app, "")
+    result = app.test_cli_runner().invoke(args=["seed-website-intake"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output.strip().splitlines()[-1]) == {"skipped": "website intake off"}
+    with app.app_context():
+        assert db_session.execute(select(StaffUser).where(StaffUser.email == WEBSITE_INTAKE_EMAIL)).first() is None
+
+
+def test_unicode_invisibles_are_removed_and_a_lone_surrogate_does_not_500(app, client):
+    # F7. Each of these used to survive into the database / the lead page.
+    from app.extensions import db_session
+    from app.models.leads import Lead, LeadNote
+
+    _ready(app)
+    res = client.post(
+        URL,
+        data=json.dumps(_body(name="Sa\u2028mi", message="line one\nli\u202ene two\ud800 end")),
+        content_type="application/json",
+        headers={"Authorization": f"Bearer {SECRET}"},
+    )
+    assert res.status_code == 201
+    with app.app_context():
+        lead = db_session.execute(select(Lead)).scalars().one()
+        assert lead.primary_contact_name == "Sami"
+        body = db_session.execute(select(LeadNote)).scalars().one().body
+        assert "\u202e" not in body and "\u2028" not in body and "\ud800" not in body
+        assert "line one\nline two end" in body  # the newline is kept in the message
+
+
+def test_the_intake_note_is_added_once_even_if_another_delivery_already_wrote_it(app, monkeypatch):
+    # F5: simulate the race by writing the actor's note between create_lead and
+    # the note step, exactly as a concurrent delivery would.
+    from app.leads import services
+    from app.leads.website_intake import ingest_website_lead, parse_website_lead_payload
+    from app.models.leads import LeadNote
+
+    actor = _ready(app)
+
+    def _other_delivery_wins_the_note(fields, profile_id, staff_user_id, **kwargs):
+        lead = services.create_lead(fields, profile_id, staff_user_id, **kwargs)
+        services.add_lead_note(lead, "already written by the other delivery", profile_id, staff_user_id)
+        return lead
+
+    monkeypatch.setattr("app.leads.website_intake.create_lead", _other_delivery_wins_the_note)
+    with app.app_context():
+        ingest_website_lead(parse_website_lead_payload(_body()))
+    assert _count(app, LeadNote) == 1
+    assert actor["employee_profile_id"]
+
+
+def _staff_with_profile(app, email):
+    from app.employees.services import create_employee_profile
+
+    staff_id = make_staff(app, email, role_codes=["SALES"])
+    with app.app_context():
+        create_employee_profile(
+            {"staff_user_id": staff_id, "employee_number": "E-" + email[:4], "full_name": "Sales",
+             "employment_start_date": date(2026, 1, 1), "employment_status": "ACTIVE"},
+            actor_staff_user_id=staff_id,
+        )
+    return staff_id
+
+
+def test_staff_cannot_supply_a_website_idempotency_key_on_the_form(app, client, seeded):
+    # F6: "website:7" belongs to the website intake; a typed one would alias lead #7.
+    import re
+
+    from app.models.leads import Lead
+
+    staff_id = _staff_with_profile(app, "form-sales@example.com")
+    force_login(client, app, staff_id)
+    page = client.get("/leads/new")
+    csrf = re.search(r'name="csrf_token" value="([^"]*)"', page.get_data(as_text=True)).group(1)
+    data = {"csrf_token": csrf, "organization_or_prospect_name": "Typed", "phone": "1"}
+    bad = client.post("/leads", data={**data, "idempotency_key": "WebSite:7"})
+    assert bad.status_code == 400
+    assert _count(app, Lead) == 0
+    ok = client.post("/leads", data={**data, "idempotency_key": "my-own-key"})  # allow-half
+    assert ok.status_code == 302
+    assert _count(app, Lead) == 1
+
+
+def test_staff_cannot_supply_a_website_idempotency_key_on_the_api(app, client, seeded):
+    import re
+
+    from app.models.leads import Lead
+
+    staff_id = _staff_with_profile(app, "api-sales@example.com")
+    force_login(client, app, staff_id)
+    page = client.get("/leads/new")
+    csrf = re.search(r'name="csrf_token" value="([^"]*)"', page.get_data(as_text=True)).group(1)
+    headers = {"X-CSRFToken": csrf}
+    api = "/api/operations/v1/leads"
+    body = {"organization_or_prospect_name": "Typed", "phone": "1"}
+    bad = client.post(api, json={**body, "idempotency_key": "website:7"}, headers=headers)
+    assert bad.status_code == 400
+    assert _count(app, Lead) == 0
+    ok = client.post(api, json={**body, "idempotency_key": "my-own-key"}, headers=headers)  # allow-half
+    assert ok.status_code == 201
+    assert _count(app, Lead) == 1
 
 
 def test_html_in_the_message_is_escaped_on_the_lead_page(app, client, seeded):
@@ -291,6 +471,9 @@ def test_seed_is_idempotent_and_the_account_can_never_log_in(app, client, seeded
     from app.models.staff import StaffUser
     from app.security.rbac import get_staff_permission_codes
 
+    # Changed 2026-10-21 by design: the seed command is a no-op unless intake is
+    # opted in (secret set), so this test opts in first.
+    _enable(app)
     runner = app.test_cli_runner()
     first = json.loads(runner.invoke(args=["seed-website-intake"]).output.strip().splitlines()[-1])
     second = json.loads(runner.invoke(args=["seed-website-intake"]).output.strip().splitlines()[-1])

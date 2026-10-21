@@ -40,6 +40,7 @@ from app.employees.queries import find_own_profile
 from app.extensions import db_session
 from app.leads.ownership import apply_ownership_filter
 from app.leads.engagement import list_own_lead_followups_overdue
+from app.leads.website_intake import get_website_intake_actor
 from app.models.audit import DatabaseBackupRecord
 from app.operational_reports.dashboards import OVERDUE_INVOICE_EXCLUDED_STATUSES
 from app.models.commercial_ops import InternalNotification
@@ -617,13 +618,22 @@ WEBSITE_LEAD_PERMISSIONS = frozenset({"leads.view_own", "leads.view_all"})
 
 
 def _new_website_leads_query(stmt, profile, codes):
-    """NEW leads whose source is WEBSITE, scoped exactly like the real leads
-    list: leads.view_all sees every one; leads.view_own sees only those it
+    """NEW leads that came in through the website intake, scoped exactly like
+    the real leads list: leads.view_all sees every one; leads.view_own sees only those it
     created or is assigned. Website leads are created by the "Website intake"
     system actor, so for view_own that means only the ones a manager has
     assigned. Returns None when the actor can see none (view_own without an
     EmployeeProfile -- same as list_leads)."""
-    stmt = stmt.where(Lead.status == "NEW", Lead.source == "WEBSITE")
+    # Selected by ORIGIN (created by the "Website intake" actor), never by
+    # Lead.source: source is a staff-editable label and "WEBSITE" is in the
+    # lead form's picker, so a hand-typed lead labelled WEBSITE would otherwise
+    # ring the badge, and an intake lead re-tagged to REFERRAL would vanish from
+    # it. Same rule as the 24-month purge (app/leads/website_retention.py).
+    # Not seeded -> no intake leads exist -> nothing to show.
+    actor = get_website_intake_actor()
+    if actor is None:
+        return None
+    stmt = stmt.where(Lead.status == "NEW", Lead.created_by_employee_profile_id == actor[1])
     if "leads.view_all" in codes:
         return stmt
     if profile is None:

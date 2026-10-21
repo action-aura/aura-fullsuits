@@ -1,4 +1,4 @@
-"""24-month purge of unconverted WEBSITE leads (app/leads/website_retention.py).
+"""24-month purge of dormant, unconverted website-intake leads (app/leads/website_retention.py).
 
 Every guard is proven in both directions in the same database: the purge-able
 lead is gone AND the keep-lead is still there, so "deletes everything" and
@@ -27,8 +27,13 @@ def _seed_actor(app):
         return seed_website_intake_actor()
 
 
-def _make_lead(app, lead_id, *, age_days, source="WEBSITE", converted=False):
-    """Create via the real intake, then backdate and optionally re-source/convert."""
+def _make_lead(app, lead_id, *, age_days, source="WEBSITE", converted=False, updated_days=None, interaction_days=None):
+    """Create via the real intake, then backdate and optionally re-source/convert.
+
+    created_at AND updated_at are backdated (updated_at defaults to age_days):
+    the purge only deletes a lead that has been dormant for the whole window, and
+    a fresh updated_at (which the ORM sets on every touch) would make every lead
+    look active. interaction_days backdates last_interaction_at (None = never)."""
     from app.extensions import db_session
     from app.leads.website_intake import ingest_website_lead, parse_website_lead_payload
     from app.models.leads import Lead
@@ -40,7 +45,13 @@ def _make_lead(app, lead_id, *, age_days, source="WEBSITE", converted=False):
                  "business_name": BUSINESS, "branches": "1", "message": "private message text", "lang": "en"}
             )
         )
-        values = {"created_at": datetime.now(timezone.utc) - timedelta(days=age_days), "source": source}
+        now = datetime.now(timezone.utc)
+        values = {
+            "created_at": now - timedelta(days=age_days),
+            "updated_at": now - timedelta(days=age_days if updated_days is None else updated_days),
+            "last_interaction_at": None if interaction_days is None else now - timedelta(days=interaction_days),
+            "source": source,
+        }
         if converted:
             values["converted_at"] = datetime.now(timezone.utc)
         db_session.execute(update(Lead).where(Lead.id == lead.id).values(**values))
@@ -94,12 +105,62 @@ def test_dry_run_deletes_nothing_and_reports_the_candidate(app):
     assert _count(app, LeadNote) == 1
 
 
+def _staff_made_lead(app, *, age_days, source="WEBSITE"):
+    """A lead a salesperson typed in by hand (NOT created by the intake actor),
+    old and untouched. Its source label is whatever staff chose."""
+    from app.employees.services import create_employee_profile
+    from app.extensions import db_session
+    from app.leads.services import create_lead
+    from app.models.leads import Lead
+    from tests.conftest import make_staff
+
+    staff_id = make_staff(app, "retention-sales@example.com")
+    with app.app_context():
+        profile = create_employee_profile(
+            {"staff_user_id": staff_id, "employee_number": "E-RET", "full_name": "Retention Sales",
+             "employment_start_date": datetime(2026, 1, 1).date(), "employment_status": "ACTIVE"},
+            actor_staff_user_id=staff_id,
+        )
+        lead = create_lead(
+            {"organization_or_prospect_name": "Hand typed", "phone": "1", "source": source}, profile.id, staff_id
+        )
+        old = datetime.now(timezone.utc) - timedelta(days=age_days)
+        db_session.execute(update(Lead).where(Lead.id == lead.id).values(created_at=old, updated_at=old))
+        db_session.commit()
+        return lead.id
+
+
 def _keep_young(app):
     return _make_lead(app, "keep", age_days=729)
 
 
-def _keep_referral(app):
-    return _make_lead(app, "keep", age_days=900, source="REFERRAL")
+def _keep_recently_updated(app):
+    return _make_lead(app, "keep", age_days=900, updated_days=10)
+
+
+def _keep_recent_interaction(app):
+    return _make_lead(app, "keep", age_days=900, interaction_days=10)
+
+
+def _keep_pending_followup(app):
+    from app.extensions import db_session
+    from app.leads.website_intake import get_website_intake_actor
+    from app.models.leads import LeadFollowup
+
+    lead_id = _make_lead(app, "keep", age_days=900)
+    with app.app_context():
+        _staff_id, profile_id = get_website_intake_actor()
+        db_session.add(
+            LeadFollowup(lead_id=lead_id, employee_profile_id=profile_id,
+                         due_at=datetime.now(timezone.utc) + timedelta(days=3))
+        )
+        db_session.commit()
+    return lead_id
+
+
+def _keep_staff_made_website_label(app):
+    # F1: source "WEBSITE" is a staff-editable label, not proof of origin.
+    return _staff_made_lead(app, age_days=900, source="WEBSITE")
 
 
 def _keep_converted(app):
@@ -117,7 +178,11 @@ def _keep_customer_linked(app):
     return lead_id
 
 
-@pytest.mark.parametrize("make_keep", [_keep_young, _keep_referral, _keep_converted, _keep_customer_linked])
+@pytest.mark.parametrize(
+    "make_keep",
+    [_keep_young, _keep_recently_updated, _keep_recent_interaction, _keep_pending_followup,
+     _keep_staff_made_website_label, _keep_converted, _keep_customer_linked],
+)
 def test_keep_cases_survive_while_the_purgeable_lead_goes(app, make_keep):
     # Both directions in one DB: allow (old1 gone) and deny (keep stays).
     _seed_actor(app)
@@ -126,6 +191,23 @@ def test_keep_cases_survive_while_the_purgeable_lead_goes(app, make_keep):
     result = _purge(app, apply=True)
     assert result["deleted"] == 1
     assert not _exists(app, purge_me)
+    assert _exists(app, keep)
+
+
+def test_intake_lead_retagged_to_another_source_is_still_purged(app):
+    # F1, allow-half: a staff re-tag must not exempt an intake lead from the promise.
+    _seed_actor(app)
+    retagged = _make_lead(app, "old1", age_days=900, source="REFERRAL")
+    assert _purge(app, apply=True)["deleted"] == 1
+    assert not _exists(app, retagged)
+
+
+def test_nothing_is_purged_when_the_intake_actor_was_never_seeded(app):
+    # No actor -> no intake leads can exist -> the purge must select nothing,
+    # including an old hand-made lead that merely carries the WEBSITE label.
+    keep = _staff_made_lead(app, age_days=900, source="WEBSITE")
+    result = _purge(app, apply=True)
+    assert result["deleted"] == 0 and result["candidates"] == 0
     assert _exists(app, keep)
 
 
@@ -159,15 +241,36 @@ def test_audit_row_holds_counts_only(app):
     _purge(app, apply=True)
     with app.app_context():
         rows = db_session.execute(select(AuditLog).where(AuditLog.action_code == "WEBSITE_LEADS_PURGED")).scalars().all()
-        assert len(rows) == 1
+        assert len(rows) == 1  # under one batch (500): exactly one row
         row = rows[0]
         assert row.after_state_redacted["deleted"] == 1
         assert row.after_state_redacted["older_than_days"] == 730
+        assert row.after_state_redacted["batch"] == 1
         dumped = json.dumps(
             [row.after_state_redacted, row.before_state_redacted, row.reason, row.entity_public_id], default=str
         )
         for secret in (PHONE, NAME, BUSINESS, "private message text"):
             assert secret not in dumped
+
+
+def test_one_audit_row_per_committed_batch(app, monkeypatch):
+    # F4: the audit row is written inside each batch's transaction, so a purge
+    # that dies half-way still has a row for every batch that deleted something.
+    from app.extensions import db_session
+    from app.leads import website_retention
+    from app.models.audit import AuditLog
+
+    monkeypatch.setattr(website_retention, "_BATCH_SIZE", 1)
+    _seed_actor(app)
+    _make_lead(app, "old1", age_days=731)
+    _make_lead(app, "old2", age_days=731)
+    assert _purge(app, apply=True)["deleted"] == 2
+    with app.app_context():
+        rows = db_session.execute(
+            select(AuditLog).where(AuditLog.action_code == "WEBSITE_LEADS_PURGED").order_by(AuditLog.created_at)
+        ).scalars().all()
+        assert sorted(r.after_state_redacted["batch"] for r in rows) == [1, 2]
+        assert [r.after_state_redacted["deleted"] for r in rows] == [1, 1]
 
 
 def test_no_audit_row_when_nothing_was_deleted(app):

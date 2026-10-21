@@ -7,12 +7,19 @@ bearer secret is its CSRF-equivalent, because a browser cannot attach it
 cross-site.
 
 Order matters and is pinned by tests/test_website_intake.py:
-  1. OWNER_WEBSITE_INTAKE_SECRET unset -> 404, identical to a missing route,
+  0. Any method but POST -> 404, with or without a secret (the route answers
+     exactly like a missing one; never a 405 that reveals it exists).
+  1. OWNER_WEBSITE_INTAKE_SECRET unset, or set to a value that is not a real
+     secret (placeholder / too short) -> 404, identical to a missing route,
      before anything is read or written. Default-off, and never a compare
      against "".
-  2. Rate limit (policy "website_intake", per client address), BEFORE the
-     auth check, so guessing the secret costs budget too.
-  3. Bearer check with hmac.compare_digest (constant time).
+  2. Bearer check with hmac.compare_digest (constant time) -> 401.
+  3. Rate limit (policy "website_intake", per client address) -> 429, AFTER
+     the bearer check. The caller is a Cloudflare egress address shared with
+     other traffic, so if unauthenticated requests counted, anyone could burn
+     the real caller's budget and lock the website's genuine demo requests out.
+     Rate limiting here bounds what an AUTHENTICATED caller can do; guessing the
+     secret is bounded by its length, not by this budget.
   4. Size, JSON and strict payload validation.
   5. Idempotent create (app/leads/website_intake.py): 201 new, 200 replay.
 
@@ -27,6 +34,7 @@ from flask import Blueprint, abort, current_app, jsonify, request
 
 from app.leads.errors import LeadError
 from app.leads.website_intake import WebsiteIntakeError, ingest_website_lead, parse_website_lead_payload
+from app.config import BaseConfig
 from app.licensing_service import ratelimit
 
 logger = logging.getLogger(__name__)
@@ -51,22 +59,45 @@ def _json(payload: dict, status: int):
     return response
 
 
-@bp.route("/website-lead", methods=["POST"])
+def effective_intake_secret(config) -> str:
+    """The secret intake actually uses: "" (intake off) unless the configured
+    value looks like a real secret. An optional feature's bad secret must switch
+    the FEATURE off, never stop the Owner booting -- Config.validate() used to
+    refuse to start, which took licensing and sync down for every shop over a
+    website convenience."""
+    secret = config.get("WEBSITE_INTAKE_SECRET") or ""
+    return secret if BaseConfig._looks_like_a_real_secret(secret) else ""
+
+
+def warn_if_intake_secret_unusable(app) -> None:
+    """One WARNING at app start (not per request) when the variable is set but
+    unusable. Names the variable, never its value."""
+    configured = app.config.get("WEBSITE_INTAKE_SECRET") or ""
+    if configured and not effective_intake_secret(app.config):
+        logger.warning(
+            "OWNER_WEBSITE_INTAKE_SECRET is set but is a placeholder or shorter than the minimum length; "
+            "website intake is OFF (POST /api/intake/website-lead answers 404). Set a real random secret to enable it."
+        )
+
+
+@bp.route("/website-lead", methods=["GET", "POST"])
 def website_lead():
-    secret = current_app.config.get("WEBSITE_INTAKE_SECRET") or ""
+    if request.method != "POST":
+        abort(404)
+    secret = effective_intake_secret(current_app.config)
     if not secret:
         abort(404)
+
+    if not _bearer_matches(request.headers.get("Authorization", ""), secret):
+        response = _json({"ok": False, "error": "unauthorized"}, 401)
+        response.headers["WWW-Authenticate"] = 'Bearer realm="website-intake"'
+        return response
 
     try:
         ratelimit.check_and_increment(RATE_LIMIT_POLICY, request.remote_addr or "unknown")
     except ratelimit.RateLimitExceeded as exc:
         response = _json({"ok": False, "error": "rate_limited"}, 429)
         response.headers["Retry-After"] = str(exc.retry_after_seconds)
-        return response
-
-    if not _bearer_matches(request.headers.get("Authorization", ""), secret):
-        response = _json({"ok": False, "error": "unauthorized"}, 401)
-        response.headers["WWW-Authenticate"] = 'Bearer realm="website-intake"'
         return response
 
     limit = current_app.config["MAX_REQUEST_BYTES"]

@@ -49,6 +49,7 @@ from app.leads.errors import CustomerCrmError, LeadError, LocationValidationErro
 from app.leads.location import validate_location_fields, verify_location
 from app.leads.notes import list_customer_notes_visible_to, list_lead_notes_visible_to
 from app.leads.ownership import apply_ownership_filter
+from app.leads.website_intake import is_reserved_idempotency_key
 from app.leads.services import (
     assign_lead,
     capture_location,
@@ -154,6 +155,9 @@ def create_lead_route():
     if profile is None:
         return jsonify({"error": "EMPLOYEE_PROFILE_REQUIRED", "message": "This action requires a real employee profile."}), 400
     body = request.get_json(silent=True) or {}
+    if is_reserved_idempotency_key(body.get("idempotency_key")):
+        # "website:<id>" keys belong to the website intake (app/leads/website_intake.py).
+        return jsonify({"error": "VALIDATION_ERROR", "message": "idempotency_key uses a reserved prefix"}), 400
     try:
         lead = create_lead(
             {k: v for k, v in body.items() if k in (

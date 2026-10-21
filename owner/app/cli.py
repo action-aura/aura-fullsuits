@@ -168,8 +168,16 @@ def register_cli(app: Flask) -> None:
         """Create the "Website intake" system account that website demo
         requests (POST /api/intake/website-lead) are recorded as (idempotent;
         re-asserts that it cannot log in). Safe to re-run on every deploy."""
+        from flask import current_app
+
+        from app.leads.intake_routes import effective_intake_secret
         from app.leads.website_intake import seed_website_intake_actor
 
+        # Invisible unless opted in: with no (or an unusable) intake secret the
+        # feature is off, so create nothing -- not even the system account.
+        if not effective_intake_secret(current_app.config):
+            click.echo(json.dumps({"skipped": "website intake off"}))
+            return
         click.echo(json.dumps(seed_website_intake_actor()))
 
     @app.cli.command("bootstrap-dev")

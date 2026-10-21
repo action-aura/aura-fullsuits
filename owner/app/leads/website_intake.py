@@ -27,6 +27,7 @@ it. The website forwards each request once, so this is accepted, not handled.
 from __future__ import annotations
 
 import re
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import date
@@ -41,7 +42,7 @@ from app.leads.validation import validate_lead_fields
 from app.models.base import utcnow
 from app.models.commercial_sales import CommercialOperationsIdempotencyKey
 from app.models.employees import EmployeeProfile
-from app.models.leads import Lead
+from app.models.leads import Lead, LeadNote
 from app.models.staff import StaffUser
 
 WEBSITE_INTAKE_EMAIL = "website-intake@system.invalid"
@@ -52,14 +53,34 @@ WEBSITE_INTAKE_EMPLOYEE_NUMBER = "SYS-WEBSITE-INTAKE"
 # if someone re-enabled it by hand.
 WEBSITE_INTAKE_UNUSABLE_PASSWORD_HASH = "!no-login:website-intake"
 IDEMPOTENCY_PREFIX = "website:"
+# Idempotency keys a staff member may NOT supply themselves. create_lead() looks
+# a key up before inserting, so a staff-typed "website:7" would resolve to (and
+# silently return) the real website lead #7, or squat on the key so that the
+# real request #7 is later answered as a replay of the wrong lead. The two
+# staff-facing create entry points (app/leads/routes.py, app/api_operations/
+# crm.py) refuse these; only this module mints them.
+RESERVED_IDEMPOTENCY_PREFIXES = (IDEMPOTENCY_PREFIX,)
+
+
+def is_reserved_idempotency_key(key) -> bool:
+    return isinstance(key, str) and key.strip().lower().startswith(RESERVED_IDEMPOTENCY_PREFIXES)
+
 
 BUSINESS_TYPES = ("", "shop", "clinic", "other")
 BRANCHES = ("", "1", "2-3", "more")
 LANGS = ("ar", "en")
 
 _LEAD_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-_SINGLE_LINE_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]+")
-_MULTI_LINE_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+")  # keeps \t \n \r
+# Invisible characters nobody types on purpose into a name or message: format
+# characters (Cf: bidi overrides such as U+202E, zero-width joiners), line and
+# paragraph separators (Zl/Zp: U+2028/9) and lone surrogates (Cs: legal in a
+# JSON "\ud800" escape but not encodable as UTF-8, so one reaching the database
+# is a 500, not a 422). Cc (control characters) become one space, except "\n"
+# in the message field.
+_DROPPED_CATEGORIES = frozenset({"Cf", "Zl", "Zp", "Cs"})
+# What a phone number may contain after cleaning. A form that lets letters
+# through is not sending a phone number, so that is a 422, not a guess.
+_PHONE_RE = re.compile(r"^[0-9+() -]+$")
 _MAX_NAME_LEN = 200
 _MAX_PHONE_LEN = 32
 _MAX_BUSINESS_NAME_LEN = 200
@@ -95,8 +116,28 @@ def _text(body: dict, key: str) -> str:
     return value
 
 
+def _clean(value: str, *, keep_newline: bool = False) -> str:
+    out: list[str] = []
+    last_was_control = False
+    for ch in value:
+        category = unicodedata.category(ch)
+        if keep_newline and ch == "\n":
+            out.append(ch)
+            last_was_control = False
+        elif category == "Cc":
+            if not last_was_control:  # a run of controls is one space
+                out.append(" ")
+            last_was_control = True
+        elif category in _DROPPED_CATEGORIES:
+            continue
+        else:
+            out.append(ch)
+            last_was_control = False
+    return "".join(out)
+
+
 def _single_line(body: dict, key: str) -> str:
-    return _SINGLE_LINE_CONTROL_RE.sub(" ", _text(body, key)).strip()
+    return _clean(_text(body, key)).strip()
 
 
 def parse_website_lead_payload(body: dict) -> WebsiteLeadPayload:
@@ -111,7 +152,7 @@ def parse_website_lead_payload(body: dict) -> WebsiteLeadPayload:
     if not name or len(name) > _MAX_NAME_LEN:
         raise WebsiteIntakeError("INVALID_FIELD", 422, "name")
     phone = _single_line(body, "phone")
-    if not phone or len(phone) > _MAX_PHONE_LEN:
+    if not phone or len(phone) > _MAX_PHONE_LEN or not _PHONE_RE.match(phone):
         raise WebsiteIntakeError("INVALID_FIELD", 422, "phone")
     business_type = _single_line(body, "business_type")
     if business_type not in BUSINESS_TYPES:
@@ -122,7 +163,7 @@ def parse_website_lead_payload(body: dict) -> WebsiteLeadPayload:
     branches = _single_line(body, "branches")
     if branches not in BRANCHES:
         raise WebsiteIntakeError("INVALID_FIELD", 422, "branches")
-    message = _MULTI_LINE_CONTROL_RE.sub(" ", _text(body, "message")).strip()
+    message = _clean(_text(body, "message").replace("\r\n", "\n").replace("\r", "\n"), keep_newline=True).strip()
     if len(message) > _MAX_MESSAGE_LEN:
         raise WebsiteIntakeError("INVALID_FIELD", 422, "message")
     lang = _single_line(body, "lang") or "en"
@@ -267,5 +308,16 @@ def ingest_website_lead(payload: WebsiteLeadPayload) -> tuple[Lead, bool]:
         if existing is None:
             raise
         return existing, False
-    add_lead_note(lead, _note_body(payload), profile_id, staff_user_id)
+    # create_lead() and add_lead_note() commit separately. Two deliveries of one
+    # lead_id can both get past the idempotency lookup above and then both reach
+    # this line (the loser's IntegrityError only fires inside create_lead for the
+    # key row, and a timed-out first delivery plus the website's retry can
+    # interleave after it) -- which used to add the note twice. Checked right
+    # before the add so the window is as small as it can be; "authored by the
+    # intake actor" because no staff member can write as that account.
+    already_noted = db_session.execute(
+        select(LeadNote.id).where(LeadNote.lead_id == lead.id, LeadNote.author_employee_profile_id == profile_id).limit(1)
+    ).first()
+    if already_noted is None:
+        add_lead_note(lead, _note_body(payload), profile_id, staff_user_id)
     return lead, True

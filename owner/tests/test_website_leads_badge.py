@@ -247,3 +247,26 @@ def test_badge_js_hides_at_zero_and_stops_on_auth_errors():
     assert "res.status === 401 || res.status === 403" in js
     assert "visibilitychange" in js
     assert "console." not in js
+
+
+def test_badge_selects_by_origin_not_by_the_editable_source_label(app, client, seeded):
+    # F1: a hand-typed lead labelled WEBSITE must not ring the badge, and an
+    # intake lead a staff member re-tagged to REFERRAL must still count.
+    from sqlalchemy import update
+
+    from app.extensions import db_session
+    from app.leads.services import create_lead
+    from app.models.leads import Lead
+
+    viewer = make_staff(app, "badge-origin-viewer@example.com", role_codes=["VIEWER"])
+    profile_id = _make_profile(app, viewer, "EMP-BADGE-O")
+    intake_lead = _ingest(app, "1")
+    with app.app_context():
+        create_lead({"organization_or_prospect_name": "Typed", "phone": "1", "source": "WEBSITE"}, profile_id, viewer)
+    force_login(client, app, viewer)
+    assert _count(client) == 1  # only the intake lead, not the staff-typed WEBSITE one
+
+    with app.app_context():
+        db_session.execute(update(Lead).where(Lead.id == intake_lead).values(source="REFERRAL"))
+        db_session.commit()
+    assert _count(client) == 1  # re-tagged intake lead is still an intake lead

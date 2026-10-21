@@ -142,6 +142,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.command_palette.routes import bp as command_palette_bp
     from app.crash_reports.routes import bp as crash_reports_bp
     from app.leads.intake_routes import bp as website_intake_bp
+    from app.leads.intake_routes import warn_if_intake_secret_unusable
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(staff_bp)
@@ -181,6 +182,7 @@ def create_app(config_name: str | None = None) -> Flask:
     # Registered unconditionally but default-off: 404 unless
     # OWNER_WEBSITE_INTAKE_SECRET is set. See app/leads/intake_routes.py.
     csrf.exempt(website_intake_bp)
+    warn_if_intake_secret_unusable(app)
 
     if app.config.get("EXTERNAL_API_ENABLED"):
         from app.api.routes import bp as external_api_bp

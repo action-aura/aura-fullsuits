@@ -36,6 +36,7 @@ from app.leads.engagement import (
 from app.leads.errors import LeadError, LocationValidationError
 from app.leads.location import validate_location_fields, verify_location
 from app.leads.notes import list_lead_notes_visible_to
+from app.leads.website_intake import is_reserved_idempotency_key
 from app.leads.services import add_lead_note, assign_lead, capture_location, change_lead_status, create_lead, list_all_leads, list_own_leads, update_lead
 from app.models.base import utcnow
 from app.models.leads import Lead, LeadAssignment, LeadStatusHistory
@@ -185,8 +186,13 @@ def create():
         "source": request.form.get("source") or "OTHER",
         "priority": request.form.get("priority") or "MEDIUM",
     }
+    idempotency_key = request.form.get("idempotency_key") or None
+    if is_reserved_idempotency_key(idempotency_key):
+        # "website:<id>" keys belong to the website intake (see
+        # app/leads/website_intake.py); a typed one would alias a real website lead.
+        return render_template("leads/new.html", error=_("That idempotency key is reserved.")), 400
     try:
-        lead = create_lead(fields, profile.id, staff.id, idempotency_key=request.form.get("idempotency_key") or None)
+        lead = create_lead(fields, profile.id, staff.id, idempotency_key=idempotency_key)
     except LeadError as exc:
         return render_template("leads/new.html", error=_localized_lead_error(exc)), 400
     return redirect(url_for("leads.detail", lead_id=lead.id))
