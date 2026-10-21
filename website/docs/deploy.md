@@ -88,7 +88,36 @@ Port 465 uses TLS. Port 587 is supported, but use 465.
 
 Option B, mail off: set `NOTIFY_PROVIDER=none`.
 
+`NOTIFY_PROVIDER` now accepts a comma list (for example `smtp,owner`). Each named provider runs independently; one failing does not stop the others.
+
 Verify: for A, step 9 delivers a test mail. For B, step 9 shows the lead in D1 only.
+
+## 6b. [owner] Owner CRM intake (GATED)
+
+Sends each demo request to the Owner Control Center, so it shows in the CRM. Do NOT switch this on until the owner has approved the privacy wording and the Owner server has the secret (see the Owner deploy runbook).
+
+- C1. [owner] Set the Pages secret. Use the same value as `OWNER_WEBSITE_INTAKE_SECRET` on the Owner server. Type it in; never print it:
+  ```
+  npx wrangler pages secret put OWNER_INTAKE_SECRET --project-name action-aura-website
+  ```
+  Verify: `OWNER_INTAKE_SECRET` is listed in the Pages settings.
+- C2. [team] Set `NOTIFY_PROVIDER = "smtp,owner"` in `wrangler.toml` and commit it by explicit path. Push `feat/website`. The project is deployed by direct upload (see the go-live record), so also run `npm run build` and the `wrangler pages deploy` command from the go-live record. Then the new secret and value are live.
+  Verify: the deployment is green.
+- C3. [team] Make one real form post on `https://actionaura.me/en/contact/` with Turnstile solved. Check:
+  - the email arrives;
+  - the Owner badge shows the lead within 30 s;
+  - `npx wrangler d1 execute aura-leads --remote --command "SELECT id, notify_error FROM leads ORDER BY id DESC LIMIT 1"` shows `notify_error` NULL.
+- C4. [team] Clean up. In the Owner CRM, set the lead to LOST, then ARCHIVED. Delete the D1 test row, as in step 9.
+
+If `notify_error` is set, read it with this table:
+
+| `notify_error` | Meaning |
+|---|---|
+| `owner: owner status 404` | The Owner secret is unset on the Owner server (intake is off). |
+| `owner: owner status 401` | Secret mismatch between the Pages secret and the Owner server. |
+| `owner: owner status 503` | `seed-website-intake` has not run on the Owner server. |
+| `owner: owner status 429` | Rate limit hit. |
+| `owner config missing` | The Pages secret `OWNER_INTAKE_SECRET` is missing. |
 
 ## 7. [owner] Web Analytics
 

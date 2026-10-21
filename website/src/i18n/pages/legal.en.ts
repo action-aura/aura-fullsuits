@@ -16,7 +16,7 @@ export const legalEn = {
         p: [
           'Only what you type into the demo form on the contact page: your name, phone number, business type, business name, number of branches, your message, and the language of the page you were on.',
           'We also keep a salted hash of your IP address. A hash cannot be turned back into the address. We use it only to block abuse of the form.',
-          'We also record the time the request arrived. Once notifications are switched on, a copy of each request is also sent to our own mailbox (info@actionaura.me). Nothing else is collected through this site. There are no accounts and no sign-in on this website.',
+          'We also record the time the request arrived. A copy of each request is also sent to our own mailbox (info@actionaura.me) and to our own internal customer system, which only our staff can open. Nothing else is collected through this site. There are no accounts and no sign-in on this website.',
         ],
       },
       {
@@ -28,7 +28,7 @@ export const legalEn = {
       {
         h: 'How long we keep it',
         p: [
-          'We keep demo requests for 24 months, then delete them. This applies to the copies in our mailbox too.',
+          'We keep demo requests for 24 months, then delete them. This applies to the copies in our mailbox and in our internal customer system too.',
         ],
       },
       {

@@ -19,3 +19,6 @@ SMTP_HOST = "mail.privateemail.com"
 SMTP_PORT = "465"
 SMTP_USER = "info@actionaura.me"
 NOTIFY_TO = "info@actionaura.me"
+# Owner CRM intake (2026-10). Used only when NOTIFY_PROVIDER includes "owner".
+# OWNER_INTAKE_SECRET is a Pages secret (wrangler pages secret put), never here.
+OWNER_INTAKE_URL = "https://owner.actionaura.me/api/intake/website-lead"

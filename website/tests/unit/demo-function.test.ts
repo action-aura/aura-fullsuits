@@ -4,6 +4,7 @@ import { onRequestPost } from '../../functions/api/demo';
 
 const TURNSTILE_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 const HOOK_URL = 'https://hook.test/x';
+const OWNER_URL = 'https://owner.test/api/intake/website-lead';
 
 type Call = { sql: string; binds: unknown[] };
 
@@ -11,6 +12,8 @@ let events: string[];
 let calls: Call[];
 let tsOk: boolean;
 let hookThrows: boolean;
+let ownerStatus: number;
+let ownerInits: any[];
 
 function makeDB(rateCount = 0) {
   return {
@@ -80,12 +83,18 @@ beforeEach(() => {
   calls = [];
   tsOk = true;
   hookThrows = false;
+  ownerStatus = 201;
+  ownerInits = [];
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (url: any) => {
+    vi.fn(async (url: any, init?: any) => {
       const u = typeof url === 'string' ? url : url.url ?? String(url);
       events.push(`fetch:${u}`);
       if (u === TURNSTILE_URL) return Response.json({ success: tsOk });
+      if (u === OWNER_URL) {
+        ownerInits.push(init);
+        return new Response('{}', { status: ownerStatus });
+      }
       if (u === HOOK_URL) {
         if (hookThrows) throw new Error('hook down');
         return new Response('ok', { status: 200 });
@@ -225,5 +234,35 @@ describe('demo function', () => {
     const body: any = await res.json();
     expect(body.ok).toBe(true);
     expect(res.headers.get('Location')).toBeNull();
+  });
+
+  const ownerEnv = () =>
+    makeEnv({ NOTIFY_PROVIDER: 'owner', OWNER_INTAKE_URL: OWNER_URL, OWNER_INTAKE_SECRET: 's'.repeat(48) });
+
+  it('(l) owner provider: forwards the stored lead after the INSERT with the D1 id', async () => {
+    const res = await onRequestPost({ request: jsonReq(), env: ownerEnv() } as any);
+    expect(res.status).toBe(200);
+    const ins = idxOf((e) => e.startsWith('db:') && e.includes('INSERT INTO leads'));
+    const owner = idxOf((e) => e === `fetch:${OWNER_URL}`);
+    expect(ins).toBeGreaterThanOrEqual(0);
+    expect(owner).toBeGreaterThan(ins);
+    expect(ownerInits).toHaveLength(1);
+    const sent = JSON.parse(ownerInits[0].body);
+    expect(sent.lead_id).toBe('7');
+    expect(sent.phone).toBe('+962780069485');
+    expect(idxOf((e) => e.startsWith('db:') && e.includes('UPDATE leads') && e.includes('notify_error'))).toBe(-1);
+  });
+
+  it('(m) owner 401 is recorded in notify_error via waitUntil', async () => {
+    ownerStatus = 401;
+    const captured: Promise<unknown>[] = [];
+    const waitUntil = vi.fn((p: Promise<unknown>) => {
+      captured.push(p);
+    });
+    const res = await onRequestPost({ request: jsonReq(), env: ownerEnv(), waitUntil } as any);
+    expect(res.status).toBe(200);
+    await Promise.all(captured);
+    const updCall = calls.find((c) => c.sql.includes('UPDATE leads'));
+    expect(updCall?.binds).toEqual(['owner: owner status 401', 7]);
   });
 });

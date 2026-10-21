@@ -10,7 +10,10 @@ export interface Env {
   TURNSTILE_SECRET?: string;
   IP_SALT: string;
   ALLOW_NO_TURNSTILE?: string;
-  NOTIFY_PROVIDER?: 'none' | 'webhook' | 'smtp';
+  // Comma list of providers, e.g. "smtp,owner". Unset or "none" sends nothing.
+  NOTIFY_PROVIDER?: string;
+  OWNER_INTAKE_URL?: string;
+  OWNER_INTAKE_SECRET?: string;
   NOTIFY_WEBHOOK_URL?: string;
   SMTP_HOST?: string;
   SMTP_PORT?: string;
