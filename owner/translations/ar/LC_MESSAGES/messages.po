@@ -8345,3 +8345,29 @@ msgstr "وصل منذ %(duration)s"
 #, python-format
 msgid "New website leads: %(count)s"
 msgstr "عملاء محتملون جدد من الموقع: %(count)s"
+
+#: app/templates/system/backups.html
+msgid "Website demo requests"
+msgstr "طلبات العرض التجريبي من الموقع"
+
+#: app/templates/system/backups.html
+#, python-format
+msgid "Currently kept for %(months)s months."
+msgstr "يتم الاحتفاظ بها حاليًا لمدة %(months)s شهرًا."
+
+#: app/templates/system/backups.html
+msgid "Months to keep"
+msgstr "عدد أشهر الاحتفاظ"
+
+#: app/templates/system/backups.html
+msgid "Unconverted website demo requests are deleted after this many months with no activity. The privacy page says 24 months: if you change this, the privacy page must be updated too."
+msgstr "تُحذف طلبات العرض التجريبي من الموقع التي لم تتحول إلى عميل بعد هذا العدد من الأشهر دون أي نشاط. صفحة الخصوصية تذكر 24 شهرًا: إذا غيّرت هذا الرقم فيجب تحديث صفحة الخصوصية أيضًا."
+
+#: app/system/routes.py
+#, python-format
+msgid "Enter a whole number of months from %(min)s to %(max)s."
+msgstr "أدخل عددًا صحيحًا من الأشهر بين %(min)s و%(max)s."
+
+#: app/system/routes.py
+msgid "Website demo request retention saved."
+msgstr "تم حفظ مدة الاحتفاظ بطلبات العرض التجريبي."

@@ -2,6 +2,17 @@
 {% block title %}{{ _("Owner database backups") }}{% endblock %}
 {% block content %}
 <div class="card">
+  <h2>{{ _("Website demo requests") }}</h2>
+  <form method="post" action="{{ url_for('system.set_website_lead_retention') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <p>{{ _("Currently kept for %(months)s months.", months=retention_months) }}</p>
+    <label for="retention-months">{{ _("Months to keep") }}</label>
+    <input id="retention-months" type="number" name="months" min="{{ retention_min }}" max="{{ retention_max }}" step="1" value="{{ retention_months }}" required>
+    <button type="submit">{{ _("Save") }}</button>
+  </form>
+  <p style="color:#6b7785;font-size:0.85rem;">{{ _("Unconverted website demo requests are deleted after this many months with no activity. The privacy page says 24 months: if you change this, the privacy page must be updated too.") }}</p>
+</div>
+<div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;">
     <h2>{{ _("Owner database backups") }}</h2>
     <form method="post" action="{{ url_for('system.create_backup_route') }}">

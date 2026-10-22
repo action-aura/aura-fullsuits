@@ -47,6 +47,7 @@ Dry run (the default) only counts; it deletes nothing.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, exists, or_, select
@@ -55,6 +56,7 @@ from app.audit.services import record as audit_record
 from app.extensions import db_session
 from app.leads.services import LEAD_CREATION_OPERATION_CODE
 from app.leads.website_intake import get_website_intake_actor
+from app.models.audit import SystemSetting
 from app.models.commercial_sales import CommercialOperationsIdempotencyKey, Quote
 from app.models.customers import Customer
 from app.models.leads import (
@@ -69,7 +71,74 @@ from app.models.leads import (
     LeadStatusHistory,
 )
 
-WEBSITE_LEAD_RETENTION_DAYS = 730  # 24 months, as the privacy page says
+logger = logging.getLogger(__name__)
+
+WEBSITE_LEAD_RETENTION_DAYS = 730  # 24 months, as the privacy page says (the default)
+
+# The owner changes this number from the Control Center (System page) instead of
+# asking a developer. It lives in the existing owner_system_settings table, so no
+# schema change. WHY a bounded range: a typo (0, 6000) must never mean "delete
+# everything tonight" or "keep personal data for 500 years"; 1..60 months is the
+# range the business accepts.
+# COUPLING: the public privacy page on actionaura.me states "24 months". If this
+# value is changed, that page must be updated too, or the promise to visitors is
+# no longer true. The UI card says so next to the input.
+RETENTION_SETTING_KEY = "website_lead_retention_months"
+DEFAULT_RETENTION_MONTHS = 24
+MIN_RETENTION_MONTHS = 1
+MAX_RETENTION_MONTHS = 60
+
+
+def months_to_days(months: int) -> int:
+    """24 -> 730, exactly today's constant. The window counts from the lead's
+    LAST activity (see _candidate_conditions), not from its creation."""
+    return months * 365 // 12
+
+
+def _valid_months(value) -> bool:
+    # bool is an int subclass; True must not be read as "1 month".
+    return isinstance(value, int) and not isinstance(value, bool) and MIN_RETENTION_MONTHS <= value <= MAX_RETENTION_MONTHS
+
+
+def _setting_row(session):
+    return session.execute(select(SystemSetting).where(SystemSetting.key == RETENTION_SETTING_KEY)).scalars().first()
+
+
+def get_retention_months(session) -> int:
+    """Stored months, or the 24-month default when there is no row. A stored
+    value that is malformed or out of range also falls back to 24 (and logs a
+    warning): the purge runs unattended every night and must keep the published
+    promise rather than crash or guess."""
+    row = _setting_row(session)
+    if row is None:
+        return DEFAULT_RETENTION_MONTHS
+    months = row.value.get("months") if isinstance(row.value, dict) else None
+    if not _valid_months(months):
+        logger.warning(
+            "owner_system_settings[%s] holds an invalid value (%r); using the default of %d months",
+            RETENTION_SETTING_KEY, row.value, DEFAULT_RETENTION_MONTHS,
+        )
+        return DEFAULT_RETENTION_MONTHS
+    return months
+
+
+def set_retention_months(session, months, staff_user) -> int:
+    """Validate and store the month count. Returns the previous value. Does not
+    commit: the caller writes the audit row (which commits) on the same session,
+    so the change and its audit trail land together or not at all."""
+    if not _valid_months(months):
+        raise ValueError(
+            f"months must be a whole number from {MIN_RETENTION_MONTHS} to {MAX_RETENTION_MONTHS}"
+        )
+    previous = get_retention_months(session)
+    row = _setting_row(session)
+    if row is None:
+        session.add(SystemSetting(key=RETENTION_SETTING_KEY, value={"months": months}, updated_by_staff_user_id=staff_user.id))
+    else:
+        row.value = {"months": months}
+        row.updated_by_staff_user_id = staff_user.id
+    session.flush()
+    return previous
 _BATCH_SIZE = 500
 
 # Children first, then the lead (FKs). All carry lead_id NOT NULL.

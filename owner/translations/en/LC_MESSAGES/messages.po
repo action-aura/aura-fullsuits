@@ -8386,3 +8386,29 @@ msgstr "Received %(duration)s ago"
 #, python-format
 msgid "New website leads: %(count)s"
 msgstr "New website leads: %(count)s"
+
+#: app/templates/system/backups.html
+msgid "Website demo requests"
+msgstr "Website demo requests"
+
+#: app/templates/system/backups.html
+#, python-format
+msgid "Currently kept for %(months)s months."
+msgstr "Currently kept for %(months)s months."
+
+#: app/templates/system/backups.html
+msgid "Months to keep"
+msgstr "Months to keep"
+
+#: app/templates/system/backups.html
+msgid "Unconverted website demo requests are deleted after this many months with no activity. The privacy page says 24 months: if you change this, the privacy page must be updated too."
+msgstr "Unconverted website demo requests are deleted after this many months with no activity. The privacy page says 24 months: if you change this, the privacy page must be updated too."
+
+#: app/system/routes.py
+#, python-format
+msgid "Enter a whole number of months from %(min)s to %(max)s."
+msgstr "Enter a whole number of months from %(min)s to %(max)s."
+
+#: app/system/routes.py
+msgid "Website demo request retention saved."
+msgstr "Website demo request retention saved."

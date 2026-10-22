@@ -509,15 +509,26 @@ def register_cli(app: Flask) -> None:
         deletes unconverted WEBSITE leads (and their notes/contacts/history)
         older than the cutoff; a lead that became a customer or a quote is kept.
         The nightly scheduled-ops job runs it with --apply. Dry-run by default."""
-        from app.leads.website_retention import WEBSITE_LEAD_RETENTION_DAYS, purge_old_website_leads
+        from app.extensions import db_session
+        from app.leads.website_retention import get_retention_months, months_to_days, purge_old_website_leads
 
+        # An explicit --older-than-days always wins (manual runs, tests). Without
+        # it the number of months the owner set in the Control Center is used, so
+        # the nightly job follows that choice with no redeploy.
+        if older_than_days is None:
+            months = get_retention_months(db_session)
+            days = months_to_days(months)
+            source = "setting"
+        else:
+            months = None
+            days = older_than_days
+            source = "flag"
         try:
-            result = purge_old_website_leads(
-                older_than_days=WEBSITE_LEAD_RETENTION_DAYS if older_than_days is None else older_than_days,
-                apply=apply_,
-            )
+            result = purge_old_website_leads(older_than_days=days, apply=apply_)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
+        result["retention_source"] = source
+        result["retention_months"] = months
         click.echo(json.dumps(result, indent=2))
 
     @app.cli.group("sync")
