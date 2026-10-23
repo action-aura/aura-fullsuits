@@ -1,0 +1,10 @@
+---
+// The flat 2-facet Action Aura mark (directions.md 8.3). Teal left facet, navy right facet; on the dark About page
+// the right facet follows --mark-b so it stays visible. Decorative: the brand text beside it names the company.
+interface Props { size?: number; class?: string }
+const { size = 28, class: cls } = Astro.props;
+---
+<svg class={cls} viewBox="0 0 28 28" width={size} height={size} aria-hidden="true" focusable="false">
+  <path d="M14 2 L3 26 H11 Z" fill="#2F7B7B" />
+  <path d="M14 2 L25 26 H17 Z" fill="var(--mark-b, #16233D)" />
+</svg>

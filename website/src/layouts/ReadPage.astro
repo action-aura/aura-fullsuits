@@ -2,7 +2,6 @@
 import Base from './Base.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
-import Jewel from '../components/Jewel.astro';
 import type { Lang } from '../i18n';
 
 interface Props {
@@ -13,7 +12,6 @@ const { lang, slug, title, description, heading, draftNote, jsonld = [] } = Astr
 ---
 <Base lang={lang} slug={slug} title={title} description={description} world="master" jsonld={jsonld}>
   <Nav lang={lang} slug={slug} />
-  <Jewel lang={lang} stations="read" />
   <main id="main">
     <article class="read" data-w="master">
       <h1>{heading}</h1>

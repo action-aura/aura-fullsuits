@@ -30,14 +30,16 @@
 
 /* ---------- Frames (screenshot + photo): double bezel ---------- */
 :root {
+  --frame-bg: var(--paper);
+  --frame-img-line: rgba(22, 35, 61, .1);
+  --frame-shadow: var(--shadow-card);
+}
+
+/* About keeps the dark jewel field, so its frames keep the old translucent look. */
+html[data-jewel] {
   --frame-bg: rgba(255, 255, 255, .05);
   --frame-img-line: rgba(255, 255, 255, .1);
   --frame-shadow: var(--pill-shadow), 0 30px 60px -30px rgba(var(--scrim), .6);
-}
-
-[data-world="clinic"] {
-  --frame-bg: rgba(22, 35, 61, .05);
-  --frame-img-line: rgba(0, 0, 0, .1);
 }
 
 .shot,
@@ -398,7 +400,7 @@
   padding-block: 18px;
   color: var(--ink);
   font-size: 1.0625rem;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.4;
 }
 
@@ -570,7 +572,7 @@
 .about-steps strong,
 .about-points strong {
   color: var(--ink);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .about-products h2 {
@@ -627,7 +629,7 @@
 .about-status {
   margin-block: .4em;
   color: var(--ink);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .about-note {
@@ -766,8 +768,8 @@
 .btn-send-wa {
   padding: 12px 22px;
   border: 0;
-  background: var(--ink);
-  color: var(--field);
+  background: var(--btn);
+  color: var(--on-accent);
   box-shadow: var(--pill-shadow);
 }
 
@@ -870,10 +872,63 @@
   }
 
   .btn-send-wa:hover {
-    background: color-mix(in srgb, var(--ink) 88%, var(--accent));
+    background: var(--btn-hover);
   }
 
   .demo-error-wa:hover {
     color: var(--ink);
   }
+}
+
+/* ---------- Look 1 layout: every page except About is a plain light page without the jewel ----------
+   The old two-column grids left half the screen for the 3D mark. Without it that half would be an empty hole, so
+   the copy takes the full width (still capped at a readable measure), and the fixed-nav top padding is gone: the nav
+   now sits in the flow below the phone strip. About keeps its original geometry (html[data-jewel]). */
+html:not([data-jewel]) .hero,
+html:not([data-jewel]) .close,
+html:not([data-jewel]) .chapter,
+html:not([data-jewel]) .page-hero,
+html:not([data-jewel]) .cta-block {
+  grid-template-columns: minmax(0, 1fr);
+  min-block-size: 0;
+  align-items: start;
+}
+
+html:not([data-jewel]) .hero > .copy,
+html:not([data-jewel]) .close > .copy,
+html:not([data-jewel]) .chapter .copy,
+html:not([data-jewel]) .chapter.flip .copy,
+html:not([data-jewel]) .page-hero > .copy,
+html:not([data-jewel]) .cta-block > .copy {
+  grid-column: 1;
+  max-inline-size: 44rem;
+}
+
+html:not([data-jewel]) .hero,
+html:not([data-jewel]) .page-hero {
+  padding-block: clamp(48px, 9vh, 96px) clamp(48px, 8vh, 80px);
+}
+
+html:not([data-jewel]) .chapter,
+html:not([data-jewel]) .close,
+html:not([data-jewel]) .cta-block {
+  padding-block: clamp(40px, 8vh, 88px);
+}
+
+html:not([data-jewel]) .close,
+html:not([data-jewel]) .cta-block {
+  padding-block-end: clamp(72px, 12vh, 128px);
+}
+
+html:not([data-jewel]) .contact-grid {
+  padding-block: clamp(40px, 8vh, 80px) clamp(72px, 12vh, 128px);
+}
+
+html:not([data-jewel]) .read {
+  padding-block: clamp(40px, 8vh, 80px) clamp(72px, 12vh, 128px);
+}
+
+/* Chapter blocks alternate on a hairline so the home page still reads as separate sections */
+html:not([data-jewel]) .chapter + .chapter {
+  border-block-start: 1px solid var(--hair);
 }

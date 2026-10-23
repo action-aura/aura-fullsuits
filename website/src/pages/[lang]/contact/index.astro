@@ -2,7 +2,6 @@
 import Base from '../../../layouts/Base.astro';
 import Nav from '../../../components/Nav.astro';
 import Footer from '../../../components/Footer.astro';
-import Jewel from '../../../components/Jewel.astro';
 import DemoForm from '../../../components/DemoForm.astro';
 import WhatsAppPill from '../../../components/WhatsAppPill.astro';
 import { dict, LANGS, type Lang } from '../../../i18n';
@@ -18,7 +17,6 @@ const crumbs = breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: c.ti
 ---
 <Base lang={lang} slug="contact" title={t.meta.contact.title} description={t.meta.contact.description} jsonld={[organizationLd(lang), professionalServiceLd(lang), crumbs]}>
   <Nav lang={lang} slug="contact" />
-  <Jewel lang={lang} stations="contact" />
   <main id="main">
     <section id="contact" data-w="master" class="contact-grid">
       <div>
@@ -37,8 +35,4 @@ const crumbs = breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: c.ti
     </section>
   </main>
   <Footer lang={lang} slug="contact" />
-  <script>
-    import { startWorlds } from '../../../scripts/worlds/apply';
-    startWorlds(document.documentElement);
-  </script>
 </Base>

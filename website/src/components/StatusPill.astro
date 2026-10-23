@@ -1,12 +1,14 @@
 ---
-import { dict } from '../i18n/index';
+import { dict, type Lang } from '../i18n/index';
 
 interface Props {
   kind: 'available' | 'coming';
+  // With a lang the pill shows that language only (an Arabic page must not carry English words). Without one
+  // it keeps the old bilingual label, which only the bilingual 404 would want.
+  lang?: Lang;
 }
 
-const { kind } = Astro.props;
-const en = dict('en').status[kind];
-const ar = dict('ar').status[kind];
+const { kind, lang } = Astro.props;
+const label = lang ? [lang] : (['en', 'ar'] as const);
 ---
-<span class={`status-pill status-${kind}`}><i class="status-dot" aria-hidden="true"></i><span lang="en">{en}</span><span lang="ar">{ar}</span></span>
+<span class={`status-pill status-${kind}`}><i class="status-dot" aria-hidden="true"></i>{label.map((l) => <span lang={l}>{dict(l).status[kind]}</span>)}</span>

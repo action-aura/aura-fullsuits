@@ -1,13 +1,11 @@
 ---
 import Base from '../layouts/Base.astro';
-import Jewel from '../components/Jewel.astro';
 import { dict } from '../i18n';
 
 const en = dict('en');
 const ar = dict('ar');
 ---
 <Base lang="en" slug="404" title={en.meta.notFound.title} description={en.meta.notFound.description} world="master" noindex>
-  <Jewel lang="en" fixed={{ x: 0.5, y: 0.45, scale: 1.3 }} />
   <main id="main" class="wrap section">
     <div class="copy">
       <h1>

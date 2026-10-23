@@ -50,6 +50,7 @@ export const en = {
     brand: 'Action Aura', retail: 'Aura Retail', clinic: 'Aura Clinic', gym: 'Aura Gym', about: 'About',
     demo: 'Book a free demo', switchTo: 'العربية', menu: 'Menu', close: 'Close',
   },
+  strip: { city: 'Amman, Jordan', whatsapp: 'WhatsApp', label: 'Contact' },
   cta: {
     whatsapp: 'Chat on WhatsApp', demo: 'Book a free demo', call: 'Call us',
     price: 'Pricing depends on your shop. Ask us.',

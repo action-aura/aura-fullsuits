@@ -60,6 +60,7 @@ export const ar: Dict = {
     menu: 'القائمة', // AR: drafted, native check pending
     close: 'إغلاق', // AR: drafted, native check pending
   },
+  strip: { city: 'عمّان، الأردن', whatsapp: 'واتساب', label: 'التواصل' }, // AR: drafted, native check pending
   cta: {
     whatsapp: 'راسلنا على واتساب',
     demo: 'احجز عرضًا مجانيًا',
@@ -97,7 +98,7 @@ export const ar: Dict = {
     },
   },
   footer: {
-    tagline: 'Go Bigger · Go Smarter',
+    tagline: 'كبّر شغلك، واشتغل بذكاء.', // AR: drafted, native check pending; the English brand line stays off /ar
     products: 'المنتجات', // AR: drafted, native check pending
     company: 'الشركة', // AR: drafted, native check pending
     privacy: 'الخصوصية', // AR: drafted, native check pending

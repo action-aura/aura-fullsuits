@@ -1,36 +1,43 @@
 ---
-import '@fontsource/outfit/400.css';
-import '@fontsource/outfit/500.css';
-import '@fontsource/outfit/600.css';
-import '@fontsource/outfit/700.css';
-import '@fontsource/readex-pro/400.css';
-import '@fontsource/readex-pro/500.css';
-import '@fontsource/readex-pro/600.css';
+// Self-hosted (CSP is font-src 'self'). Only the Arabic and Latin subsets: the other unicode-range subsets of each
+// family are never needed by this site's text. Arabic pages: Plex Sans Arabic; English pages: Plex Sans; every
+// number: Plex Mono through the .num class.
+import '@fontsource/ibm-plex-sans-arabic/arabic-400.css';
+import '@fontsource/ibm-plex-sans-arabic/arabic-500.css';
+import '@fontsource/ibm-plex-sans-arabic/arabic-700.css';
+import '@fontsource/ibm-plex-sans-arabic/latin-400.css';
+import '@fontsource/ibm-plex-sans-arabic/latin-500.css';
+import '@fontsource/ibm-plex-sans-arabic/latin-700.css';
+import '@fontsource/ibm-plex-sans/latin-400.css';
+import '@fontsource/ibm-plex-sans/latin-500.css';
+import '@fontsource/ibm-plex-sans/latin-700.css';
+import '@fontsource/ibm-plex-mono/latin-400.css';
+import '@fontsource/ibm-plex-mono/latin-500.css';
 import '../styles/tokens.css';
 import '../styles/base.css';
 import '../styles/components.css';
 import '../styles/pages.css';
 import { dict, dir, type Lang } from '../i18n';
 import { canonical, alternates } from '../lib/seo';
+import PhoneStrip from '../components/PhoneStrip.astro';
 
 interface Props {
   lang: Lang; slug: string; title: string; description: string;
-  world?: 'master' | 'retail' | 'clinic' | 'gym'; noindex?: boolean; jsonld?: object[];
+  world?: 'master' | 'retail' | 'clinic' | 'gym'; jewel?: boolean; noindex?: boolean; jsonld?: object[];
   canonicalOverride?: string; xDefaultOverride?: string;
 }
-const { lang, slug, title, description, world = 'master', noindex = false, jsonld = [], canonicalOverride, xDefaultOverride } = Astro.props;
+const { lang, slug, title, description, world = 'master', jewel = false, noindex = false, jsonld = [], canonicalOverride, xDefaultOverride } = Astro.props;
 const t = dict(lang);
 const alt = alternates(slug);
 const self = canonicalOverride ?? canonical(lang, slug);
 // The 404 page has no card of its own, so it shares home's.
 const ogImage = `https://actionaura.me/og/${lang}-${!slug || slug === '404' ? 'home' : slug}.png`;
 const beacon = import.meta.env.PUBLIC_CF_BEACON_TOKEN;
-// Seed the page world's shares inline so the right field and still paint before the module script runs. CSS
-// defaults (--w-master: 1, others 0) made product pages start on master navy, flash, then fade to their own world,
-// and held back the LCP image.
-const initialShares = (['master', 'retail', 'clinic', 'gym'] as const).map((w) => `--w-${w}:${w === world ? 1 : 0}`).join(';');
+// Only the About page still runs the 3D jewel (Look 1 removed it elsewhere). There, seed the page world's shares
+// inline so the right field and still paint before the module script runs; every other page is plain light.
+const initialShares = jewel ? (['master', 'retail', 'clinic', 'gym'] as const).map((w) => `--w-${w}:${w === world ? 1 : 0}`).join(';') : undefined;
 ---
-<html lang={lang} dir={dir(lang)} data-world={world} style={initialShares}>
+<html lang={lang} dir={dir(lang)} data-world={world} data-jewel={jewel ? '' : undefined} style={initialShares}>
   <head>
     <meta charset="utf-8" />
     <script is:inline>document.documentElement.classList.add('js')</script>
@@ -52,11 +59,12 @@ const initialShares = (['master', 'retail', 'clinic', 'gym'] as const).map((w) =
     <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
-    <meta name="theme-color" content="#0E1729" />
+    <meta name="theme-color" content={jewel ? '#0E1729' : '#F6F4EF'} />
     {jsonld.map((o) => <script type="application/ld+json" set:html={JSON.stringify(o)} />)}
   </head>
   <body>
     <a class="visually-hidden" href="#main">{t.a11y.skip}</a>
+    <PhoneStrip lang={lang} />
     <slot />
     <script>
       const els = document.querySelectorAll<HTMLElement>('.reveal');

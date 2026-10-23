@@ -22,7 +22,7 @@ html {
 body {
   overflow-x: clip;
   min-height: 100vh;
-  font-family: Outfit, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--sans-en);
   font-weight: 400;
   font-size: 1rem;
   line-height: 1.6;
@@ -127,7 +127,7 @@ h2 {
 }
 
 h3 {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 1.25rem;
   line-height: 1.2;
   letter-spacing: -.01em;
@@ -147,21 +147,29 @@ h3 {
   color: var(--accent);
 }
 
-/* Arabic: Readex Pro, no tracking, no case change, whatever the parent does */
+/* Arabic: IBM Plex Sans Arabic, no tracking, no case change, whatever the parent does. English: IBM Plex Sans. */
 :lang(ar) {
-  font-family: "Readex Pro", Outfit, system-ui, sans-serif;
+  font-family: var(--sans);
 }
 
 :lang(en) {
-  font-family: "Outfit", system-ui, sans-serif;
+  font-family: var(--sans-en);
+}
+
+/* Every number (prices, phone, counters) is Plex Mono and reads left to right even inside Arabic text. */
+.num {
+  font-family: var(--mono);
+  font-weight: 500;
+  direction: ltr;
+  unicode-bidi: isolate;
 }
 
 /* Arabic title sits directly under the Latin title, same ink, aligned to its start edge.
-   After the :lang rules so its Readex Pro wins on a bilingual (lang=en) page. */
+   After the :lang rules so its Plex Sans Arabic wins on a bilingual (lang=en) page. */
 .ar-title {
   display: block;
-  font-family: "Readex Pro", Outfit, system-ui, sans-serif;
-  font-weight: 600;
+  font-family: var(--sans);
+  font-weight: 700;
   font-size: clamp(1.2rem, .95rem + 1vw, 1.8rem);
   line-height: 1.4;
   margin-block-start: .4em;
@@ -181,19 +189,19 @@ body:lang(ar) {
 }
 
 :lang(ar) h1 {
-  font-weight: 600;
-  font-size: clamp(1.35rem, 1rem + 1.4vw, 2.1rem);
-  line-height: 1.4;
+  font-weight: 700;
+  font-size: clamp(2rem, 1.3rem + 2.8vw, 3.4rem);
+  line-height: 1.3;
 }
 
 :lang(ar) h2 {
-  font-weight: 600;
-  font-size: clamp(1.2rem, .95rem + 1vw, 1.8rem);
-  line-height: 1.4;
+  font-weight: 700;
+  font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2.4rem);
+  line-height: 1.35;
 }
 
 :lang(ar) h3 {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 1.2rem;
   line-height: 1.5;
 }
@@ -228,7 +236,7 @@ body:lang(ar) {
 }
 
 /* Reveal: copy children fade up 18px, 70ms stagger. Hidden only while JS runs (.js on <html>), so the page is
-   complete without JS; a script adds .in on .reveal. Blur (>=900px only) starts at 8px and ends at 0. */
+   complete without JS; a script adds .in on .reveal. Look 1 animates transform and opacity only, so there is no blur. Reduced motion shows the final state. */
 .js .reveal > * {
   transition: opacity .9s var(--ease-out), transform .9s var(--ease-out);
 }
@@ -236,16 +244,6 @@ body:lang(ar) {
 .js .reveal:not(.in) > * {
   opacity: 0;
   transform: translate3d(0, 18px, 0);
-}
-
-@media (min-width: 900px) {
-  .js .reveal > * {
-    transition: opacity .9s var(--ease-out), transform .9s var(--ease-out), filter .9s var(--ease-out);
-  }
-
-  .js .reveal:not(.in) > * {
-    filter: blur(8px);
-  }
 }
 
 .js .reveal > :nth-child(2) { transition-delay: .07s; }
@@ -262,9 +260,9 @@ body:lang(ar) {
 
   .js .reveal > *,
   .js .reveal:not(.in) > * {
+    opacity: 1;
     transform: none;
-    filter: none;
-    transition: opacity .3s ease;
+    transition: none;
     transition-delay: 0s !important;
   }
 }

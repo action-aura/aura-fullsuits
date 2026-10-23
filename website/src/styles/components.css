@@ -3,7 +3,8 @@
    animate; hover lift, press and arrow shift use the individual `translate`/`scale` properties driven by custom
    properties, so reduced motion switches them all off in one place. */
 
-/* z-index scheme: world-bg 0, jewel 1, world-scrim 2, main + footer 3, nav 10 (its phone sheet is 1 inside the nav) */
+/* z-index scheme: world-bg 0, jewel 1, world-scrim 2, main + footer 3, nav 10 (its phone sheet is 1 inside the nav),
+   phone strip 11 (only the About page has the fixed jewel layers, but the strip must clear them there) */
 main,
 .footer {
   position: relative;
@@ -11,12 +12,55 @@ main,
 }
 
 :root {
-  --pill-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 14px 34px -14px rgba(0, 0, 0, .55);
+  --pill-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), 0 10px 24px -12px rgba(22, 35, 61, .5);
 }
 
-[data-world="clinic"] {
-  --pill-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), 0 14px 34px -14px rgba(22, 35, 61, .45);
+/* ---------- Phone strip: 40px navy bar above the nav on every page ---------- */
+.strip {
+  position: relative;
+  z-index: 11;
+  background: var(--navy);
+  color: var(--ivory);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
 }
+
+.strip-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  block-size: 40px;
+  padding-inline: max(var(--gutter), calc((100% - 1400px) / 2 + var(--gutter)));
+}
+
+.strip-end {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.strip a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.strip .strip-wa {
+  color: var(--aqua);
+}
+
+.strip a:focus-visible {
+  outline-color: var(--aqua);
+}
+
+@media (max-width: 900px) {
+  .strip {
+    font-size: 13px;
+  }
+
+}
+
 
 /* ---------- Status pill ---------- */
 .status-pill {
@@ -40,12 +84,12 @@ main,
 }
 
 .status-pill [lang="ar"] {
-  font-family: "Readex Pro", Outfit, system-ui, sans-serif;
+  font-family: var(--sans);
   font-size: 12px;
   font-weight: 500;
 }
 
-.status-pill [lang="ar"]::before {
+.status-pill [lang="en"] + [lang="ar"]::before {
   content: "/";
   margin-inline-end: 8px;
   opacity: .5;
@@ -86,8 +130,8 @@ main,
   padding-inline-start: 8px;
   padding-inline-end: 22px;
   border-radius: 999px;
-  background: var(--ink);
-  color: var(--field);
+  background: var(--btn);
+  color: var(--on-accent);
   font-size: 15px;
   font-weight: 500;
   line-height: 1;
@@ -166,26 +210,25 @@ main,
   }
 }
 
-/* ---------- Nav ---------- */
+/* ---------- Nav (72px, ivory, hairline; sticky below the phone strip) ---------- */
 .nav {
-  position: fixed;
+  position: sticky;
   inset-block-start: 0;
-  inset-inline: 0;
   z-index: 10;
   display: flex;
   align-items: center;
   gap: 16px;
-  block-size: 64px;
-  padding-inline: var(--gutter);
-  background: transparent;
-  font-size: 13px;
+  block-size: 72px;
+  padding-inline: max(var(--gutter), calc((100% - 1400px) / 2 + var(--gutter)));
+  background: var(--nav-bg);
+  border-block-end: 1px solid var(--hair);
+  font-size: 15px;
   font-weight: 500;
-  letter-spacing: .01em;
   line-height: 1;
 }
 
-html:lang(ar) .nav {
-  font-size: 14px;
+html[data-jewel] .nav {
+  border-block-end-color: transparent;
 }
 
 .nav-brand,
@@ -201,7 +244,8 @@ html:lang(ar) .nav {
   gap: 10px;
   margin-inline-end: auto;
   color: var(--ink);
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 700;
   text-decoration: none;
 }
 
@@ -216,15 +260,16 @@ html:lang(ar) .nav {
   gap: 28px;
 }
 
-.nav-links .status-pill {
-  margin-inline-start: -16px;
-}
-
 .nav-link,
 .nav-links .nav-lang {
   color: var(--ink-muted);
   text-decoration: none;
   transition: color 160ms var(--ease-out);
+}
+
+/* "English" / "العربية" sits 20px from the pill (28px flex gap minus 8) */
+.nav-links .nav-lang {
+  margin-inline-start: -8px;
 }
 
 .nav-link[aria-current="page"],
@@ -235,19 +280,22 @@ html[data-chapter="gym"] .nav-link[data-chapter-link="gym"] {
   color: var(--ink);
 }
 
-.nav-links .nav-demo {
-  padding-block: 10px;
-  padding-inline: 16px;
-  border: 1px solid var(--hair);
+.nav-links .nav-demo,
+.nav-sheet-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  block-size: 40px;
+  padding-inline: 18px;
   border-radius: 999px;
-  color: var(--ink-muted);
+  background: var(--btn);
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
   text-decoration: none;
   scale: var(--press, 1);
-  transition: color 160ms var(--ease-out), border-color 160ms var(--ease-out), scale 160ms var(--ease-out);
-}
-
-.nav-links .nav-demo[aria-current="page"] {
-  color: var(--ink);
+  transition: background-color 160ms var(--ease-out), scale 160ms var(--ease-out);
 }
 
 /* Phone nav: brand + language + hamburger; everything else lives in the sheet */
@@ -269,7 +317,7 @@ html[data-chapter="gym"] .nav-link[data-chapter-link="gym"] {
 .nav-toggle-bars {
   position: relative;
   display: block;
-  inline-size: 20px;
+  inline-size: 18px;
   block-size: 2px;
   border-radius: 2px;
   background: currentColor;
@@ -313,11 +361,12 @@ html[data-chapter="gym"] .nav-link[data-chapter-link="gym"] {
   z-index: 1;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
-  padding-block: 96px 32px;
+  padding-block: 128px 32px;
   padding-inline: var(--gutter);
   overflow-y: auto;
-  background: linear-gradient(180deg, var(--field-a), var(--field-b) 50%, var(--field-c));
+  background: var(--field);
   animation: sheet-in 320ms var(--ease-drawer) both;
 }
 
@@ -334,15 +383,21 @@ html[data-chapter="gym"] .nav-link[data-chapter-link="gym"] {
   font-size: clamp(1.9rem, 1.2rem + 2.4vw, 3.4rem);
   font-weight: 700;
   line-height: 1.1;
-  letter-spacing: -.035em;
   text-decoration: none;
   animation: sheet-link-in 320ms var(--ease-drawer) both;
 }
 
 html:lang(ar) .nav-sheet-link {
-  font-size: clamp(1.2rem, .95rem + 1vw, 1.8rem);
-  font-weight: 600;
+  font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2.4rem);
   line-height: 1.4;
+}
+
+.nav-sheet-cta {
+  margin-block-start: 20px;
+  block-size: 48px;
+  padding-inline: 24px;
+  font-size: 16px;
+  animation: sheet-link-in 320ms var(--ease-drawer) 250ms both;
 }
 
 .nav-sheet-link[aria-current="page"],
@@ -356,8 +411,6 @@ html[data-chapter="gym"] .nav-sheet-link[data-chapter-link="gym"] {
 .nav-sheet-link:nth-child(2) { animation-delay: 100ms; }
 .nav-sheet-link:nth-child(3) { animation-delay: 150ms; }
 .nav-sheet-link:nth-child(4) { animation-delay: 200ms; }
-.nav-sheet-link:nth-child(5) { animation-delay: 250ms; }
-.nav-sheet-link:nth-child(6) { animation-delay: 300ms; }
 
 @keyframes sheet-in {
   from { opacity: 0; }
@@ -369,18 +422,21 @@ html[data-chapter="gym"] .nav-sheet-link[data-chapter-link="gym"] {
   to { opacity: 1; transform: none; }
 }
 
-@media (max-width: 899px) {
+@media (max-width: 900px) {
+  .nav {
+    padding-inline: var(--gutter);
+  }
+
   .nav-links > :not(.nav-lang) {
     display: none;
   }
+
+  .nav-links .nav-lang {
+    margin-inline-start: 0;
+  }
 }
 
-@media (min-width: 900px) {
-  .nav {
-    block-size: 72px;
-    gap: 32px;
-  }
-
+@media (min-width: 901px) {
   .nav-toggle,
   .nav-sheet,
   .nav-sheet[hidden] {
@@ -443,9 +499,16 @@ html[data-chapter="gym"] .nav-sheet-link[data-chapter-link="gym"] {
 /* ---------- Footer ---------- */
 .footer {
   --footer-pad: max(var(--gutter), calc((100% - 1400px) / 2 + var(--gutter)));
+  /* The footer is a navy band, like the phone strip: local ink, hairline and accent so every child reskins. */
+  --ink: var(--ivory);
+  --ink-muted: rgba(246, 244, 239, .74);
+  --hair: rgba(246, 244, 239, .16);
+  --accent: var(--aqua);
+  --mark-b: var(--ivory);
   padding-block: 56px 32px;
   padding-inline: var(--footer-pad);
-  border-block-start: 1px solid var(--hair);
+  background: var(--navy);
+  color: var(--ivory);
 }
 
 .footer-grid {
@@ -460,7 +523,7 @@ html[data-chapter="gym"] .nav-sheet-link[data-chapter-link="gym"] {
   gap: 10px;
   color: var(--ink);
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
   text-decoration: none;
 }
 
@@ -479,15 +542,8 @@ html[data-chapter="gym"] .nav-sheet-link[data-chapter-link="gym"] {
 .footer-title {
   margin-block-end: 16px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 500;
-  line-height: 1;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-}
-
-html:lang(ar) .footer-title {
-  font-size: 12px;
   line-height: 1.4;
 }
 
@@ -525,8 +581,7 @@ html:lang(ar) .footer-title {
   padding-block-start: 24px;
   border-block-start: 1px solid var(--hair);
   color: var(--ink-muted);
-  font-size: 12px;
-  letter-spacing: .06em;
+  font-size: 13px;
 }
 
 .footer-bottom a {
@@ -549,6 +604,7 @@ html:lang(ar) .footer-title {
 .wa-pill:active,
 .demo-link:active,
 .nav-links .nav-demo:active,
+.nav-sheet-cta:active,
 .nav-toggle:active,
 .chapter-link:active {
   --press: .97;
@@ -573,13 +629,13 @@ html:lang(ar) .footer-title {
 
   .nav-link:hover,
   .nav-links .nav-lang:hover,
-  .nav-links .nav-demo:hover,
   .nav-sheet-link:hover {
     color: var(--ink);
   }
 
-  .nav-links .nav-demo:hover {
-    border-color: var(--ink);
+  .nav-links .nav-demo:hover,
+  .nav-sheet-cta:hover {
+    background: var(--btn-hover);
   }
 
   .chapter-link:hover,
@@ -598,6 +654,7 @@ html:lang(ar) .footer-title {
   .demo-link,
   .demo-arrow,
   .nav-links .nav-demo,
+  .nav-sheet-cta,
   .nav-toggle,
   .chapter-link {
     translate: none;
@@ -606,7 +663,8 @@ html:lang(ar) .footer-title {
   }
 
   .nav-sheet,
-  .nav-sheet-link {
+  .nav-sheet-link,
+  .nav-sheet-cta {
     animation: none;
   }
 
