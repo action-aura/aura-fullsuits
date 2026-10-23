@@ -1,0 +1,69 @@
+---
+// Home section "the offline switch" (directions.md 8.5): the visitor cuts the internet, the till keeps selling, and
+// on reconnect the queued sales travel to the manager phone. Server-rendered in its ONLINE state so the page reads
+// complete without JS; src/scripts/offline.ts makes it work. Every string the script writes comes from data-*
+// attributes here, so the script holds no language of its own.
+import { dict, type Lang } from '../i18n';
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = dict(lang);
+const o = t.home.offline;
+const k = t.home.till;
+const BARS = [30, 44, 26, 52, 38, 58, 8];
+const WIFI = '<path d="M2 9a15 15 0 0 1 20 0M5.5 12.5a10 10 0 0 1 13 0M9 16a5 5 0 0 1 6 0"/><circle cx="12" cy="19.5" r="1.2" fill="currentColor"/>';
+---
+<section class="of" id="offline" aria-labelledby="of-h" data-offline
+  data-on={o.on} data-off={o.off} data-chip-on={o.chipOn} data-chip-off={o.chipOff} data-queued={o.queued} data-sent={o.sent}
+  data-cur={k.currency} data-last={o.lastUpdate} data-count={k.count}
+  data-ann-off={o.announceOff} data-ann-on={o.announceOn}
+  data-t1={o.toastOne} data-t2={o.toastTwo} data-t3={o.toastFew} data-t11={o.toastMany}>
+  <div class="of-wrap">
+    <div class="of-copy">
+      <p class="of-eyebrow">{o.eyebrow}</p>
+      <h2 id="of-h">{o.title}</h2>
+      <p class="of-lead">{o.lead}</p>
+      <div class="of-swrow">
+        <div>
+          <div class="of-sl">{o.switchLabel}</div>
+          <div class="of-ss of-on" data-o-state>{o.on}</div>
+        </div>
+        <button type="button" class="of-sw" role="switch" aria-checked="true" aria-label={o.switchLabel} data-o-switch>
+          <span class="of-th"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><g set:html={WIFI} /><path class="of-slash" d="M3 3l18 18" /></svg></span>
+        </button>
+      </div>
+      <button type="button" class="of-new" data-o-ring>{o.newSale}</button>
+      <p class="of-note">{o.note}</p>
+    </div>
+
+    <div class="of-demo" data-o-demo role="group" aria-label={o.demoLabel}>
+      <svg class="of-cable" aria-hidden="true" focusable="false"><path data-o-path d="M0 0" /></svg>
+      <div class="of-till" data-o-till>
+        <div class="of-badge" data-o-badge aria-hidden="true"><span class="num" data-o-bn>0</span> {o.badge}</div>
+        <div class="of-tin">
+        <div class="lt-th">
+          <div class="lt-th-l">
+            <svg viewBox="0 0 28 28" width="16" height="16" aria-hidden="true" focusable="false"><path d="M14 2 L3 26 H11 Z" fill="#8FD0D0" /><path d="M14 2 L25 26 H17 Z" fill="#F6F4EF" /></svg>
+            {k.brand}<span>{k.cashier}</span>
+          </div>
+          <div class="lt-chip" data-o-chip><i aria-hidden="true"></i><span data-o-chiptext>{o.chipOn}</span></div>
+        </div>
+        <div class="of-tb">
+          <h3 class="of-h4">{o.recent}</h3>
+          <ul class="of-sales" data-o-sales><li class="of-empty" data-o-empty>{o.empty}</li></ul>
+        </div>
+        </div>
+      </div>
+      <div class="of-vline" aria-hidden="true" data-o-vline></div>
+      <div class="lt-phone of-phone" data-o-phone><div class="lt-pscr" data-o-scr>
+        <div class="lt-pt">{k.phoneApp}</div>
+        <div class="lt-pk">{k.today}</div>
+        <div><span class="num lt-big" data-o-ptotal>0.000</span><span class="lt-pu"> {k.currency}</span></div>
+        <div class="lt-pcnt" data-o-line>{k.count}<span class="num" data-o-pcount>0</span></div>
+        <div class="lt-bars" data-o-bars>{BARS.map((px) => <i style={`height:${px}px`}></i>)}</div>
+        <div class="of-toast" data-o-toast aria-hidden="true"></div>
+      </div></div>
+    </div>
+    <p class="visually-hidden" aria-live="polite" data-o-live></p>
+  </div>
+</section>
+<script>import '../scripts/offline';</script>

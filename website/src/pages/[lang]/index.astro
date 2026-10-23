@@ -7,6 +7,7 @@ import WhatsAppPill from '../../components/WhatsAppPill.astro';
 import DemoLink from '../../components/DemoLink.astro';
 import LiveTill from '../../components/LiveTill.astro';
 import Facts from '../../components/Facts.astro';
+import OfflineSwitch from '../../components/OfflineSwitch.astro';
 import '../../styles/live-till.css';
 import { dict, LANGS, type Lang } from '../../i18n';
 import { pagePath } from '../../lib/seo';
@@ -25,6 +26,7 @@ const t = dict(lang);
         <Facts lang={lang} />
       </div>
     </section>
+    <OfflineSwitch lang={lang} />
     <Chapter id="aura" lang={lang} world="master" title={t.home.company.title} accentWord={t.home.company.accent} lead={t.home.company.lead} />
     <Chapter id="retail" lang={lang} world="retail" status="available" flip title={t.home.retail.title} accentWord={t.home.retail.accent} lead={t.home.retail.lead} link={{ href: pagePath(lang, 'aura-retail'), label: t.home.retail.link }} />
     <Chapter id="clinic" lang={lang} world="clinic" status="available" title={t.home.clinic.title} accentWord={t.home.clinic.accent} lead={t.home.clinic.lead} link={{ href: pagePath(lang, 'aura-clinic'), label: t.home.clinic.link }} />

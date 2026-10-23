@@ -59,7 +59,10 @@
 .lt-lines li { display: flex; justify-content: space-between; gap: 8px; padding-block: 4px; font-size: 15px; line-height: 1.6; }
 .lt-lines li.lt-new { animation: lt-in 220ms cubic-bezier(.2, .7, .2, 1); }
 @keyframes lt-in { from { opacity: 0; transform: translateY(-8px); } }
-.lt-q { display: inline-block; margin-inline-start: .4em; }
+/* The name span is a flex row with a real gap. A margin-inline-start on the x2 mark itself failed in Arabic: .num sets
+   direction:ltr, so the mark's own "inline start" resolved to its left and the gap landed on the wrong side. */
+.lt-lines li > span:first-child { display: inline-flex; align-items: baseline; flex-wrap: wrap; column-gap: 6px; }
+.lt-q { display: inline-block; }
 .lt-q.lt-bump { animation: lt-bump 160ms; }
 @keyframes lt-bump { 50% { transform: scale(1.15); } }
 .lt-lines li.lt-empty { display: block; padding-block: 48px; font-size: 14px; color: var(--ink2); text-align: center; }
@@ -141,4 +144,87 @@
   .lt-btn:active, .lt-item:active { transform: none; }
   .lt-done { transition: none; transform: none; }
   .lt-lines li.lt-new, .lt-q.lt-bump, .lt-pscr.lt-ping { animation: none; }
+}
+
+/* ---- The offline switch (directions.md 8.5) ---- */
+.of { padding-block: 120px; background: var(--navy); color: var(--ivory); }
+.of-wrap { inline-size: 100%; max-inline-size: 1200px; margin-inline: auto; padding-inline: 40px; display: grid; grid-template-columns: 5fr 7fr; gap: 64px; align-items: center; }
+.of-wrap > * { min-inline-size: 0; }
+.of .of-eyebrow { font-size: 14px; font-weight: 500; line-height: 1.6; color: var(--aqua); }
+.of h2 { margin-block-start: 12px; font-size: 48px; line-height: 1.2; font-weight: 700; letter-spacing: 0; text-wrap: balance; color: var(--ivory); }
+.of .of-lead { margin-block-start: 16px; font-size: 19px; line-height: 1.75; color: rgba(246, 244, 239, .78); text-align: start; max-inline-size: none; }
+.of-swrow { display: flex; align-items: center; gap: 20px; margin-block-start: 36px; }
+.of-sl { font-size: 16px; font-weight: 500; line-height: 1.6; }
+.of-ss { font-size: 22px; font-weight: 700; line-height: 1.4; }
+.of-on { color: var(--aqua); }
+.of-offc { color: var(--copper-on-navy); }
+.of-sw { position: relative; flex: none; inline-size: 120px; block-size: 64px; padding: 0; border: 0; border-radius: 999px; background: var(--teal); cursor: pointer; transition: background-color 300ms; }
+.of-sw[aria-checked="false"] { background: var(--navy-2); }
+.of-sw:focus-visible, .of-new:focus-visible { outline: 2px solid var(--aqua); outline-offset: 4px; }
+/* The thumb is placed from the physical left, as the spec has it: on = left, off = 56px to the right. The same
+   physical positions are used in English, so the switch looks identical in both languages. */
+.of-th { position: absolute; inset-block-start: 6px; left: 6px; display: flex; align-items: center; justify-content: center; inline-size: 52px; block-size: 52px; border-radius: 50%; background: var(--ivory); color: var(--navy); transition: transform 320ms cubic-bezier(.3, 1.4, .5, 1); }
+.of-sw[aria-checked="false"] .of-th { transform: translateX(56px); }
+.of-slash { display: none; }
+.of-sw[aria-checked="false"] .of-slash { display: inline; }
+.of-new { block-size: 48px; margin-block-start: 20px; padding-inline: 22px; background: transparent; border: 1.5px solid var(--ivory); border-radius: 999px; color: var(--ivory); font: inherit; font-size: 16px; font-weight: 500; cursor: pointer; transition: background-color 120ms; }
+.of-new:active { transform: scale(.98); }
+.of-note { margin-block-start: 16px; font-size: 13px; line-height: 1.6; opacity: .6; text-align: start; }
+
+.of-demo { position: relative; display: flex; align-items: center; gap: 28px; }
+.of-till { position: relative; flex: 1; min-inline-size: 0; min-block-size: 340px; border-radius: 20px; }
+/* The clip sits inside so the queue badge can overhang the till's top edge. */
+.of-tin { overflow: hidden; min-block-size: 340px; background: var(--paper); color: var(--navy); border-radius: 20px; }
+.of-chip-off { padding: 4px 10px; border-radius: 999px; background: var(--copper); color: var(--navy); }
+.of-chip-off i { display: none; }
+.of-tb { padding: 16px; }
+.of-h4 { font-size: 14px; font-weight: 700; line-height: 1.6; letter-spacing: 0; }
+.of-sales { list-style: none; margin-block-start: 8px; }
+.of-sales li { display: flex; align-items: center; gap: 10px; padding-block: 8px; border-block-end: 1px dashed var(--dash); font-size: 15px; line-height: 1.6; }
+.of-sales li.of-in { animation: lt-in 220ms cubic-bezier(.2, .7, .2, 1); }
+.of-sales li.of-empty { display: block; padding-block: 32px; border: 0; font-size: 14px; color: var(--ink2); text-align: center; }
+.of-sales .num { font-size: 14px; }
+.of-sales .of-amt { margin-inline-end: auto; }
+.of-sales .of-amt .num { color: var(--copper-dk); }
+.of-st { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--copper-dk); }
+.of-st.of-ok { color: var(--teal); }
+.of-badge {
+  position: absolute; z-index: 3; inset-block-start: -12px; inset-inline-start: 16px; padding: 4px 12px; border-radius: 999px;
+  background: var(--copper); color: var(--navy); font-size: 13px; font-weight: 700; line-height: 1.6; pointer-events: none;
+  opacity: 0; transform: scale(.6); transition: transform 200ms, opacity 200ms;
+}
+.of-badge.of-show { opacity: 1; transform: scale(1); }
+.of-phone.lt-phone { position: relative; inset: auto; flex: none; inline-size: 180px; transform: none; }
+.of-toast { margin-block-start: 10px; padding: 6px 8px; border-radius: 8px; background: var(--aqua-tint); color: var(--teal-dk); font-size: 12px; font-weight: 500; line-height: 1.5; opacity: 0; transition: opacity 300ms; }
+.of-toast.of-show { opacity: 1; }
+
+.of-cable { position: absolute; inset: 0; z-index: 1; inline-size: 100%; block-size: 100%; overflow: visible; pointer-events: none; }
+.of-cable path { fill: none; stroke: var(--aqua); stroke-width: 2; stroke-dasharray: 4 6; animation: of-flow 1s linear infinite; }
+.of-cable path.of-off { stroke: var(--navy-2); animation-play-state: paused; }
+@keyframes of-flow { to { stroke-dashoffset: -20; } }
+.of-fly { position: absolute; left: 0; top: 0; z-index: 6; inline-size: 12px; block-size: 12px; margin: -6px 0 0 -6px; border-radius: 3px; background: var(--copper); pointer-events: none; }
+.of-vline { display: none; }
+
+@media (hover: hover) and (pointer: fine) { .of-new:hover { background: rgba(246, 244, 239, .08); } }
+
+@media (max-width: 900px) {
+  .of { padding-block: 72px; }
+  .of-wrap { grid-template-columns: 1fr; gap: 40px; padding-inline: 16px; }
+  .of h2 { font-size: 32px; }
+  .of .of-lead { font-size: 17px; }
+  .of-demo { flex-direction: column; gap: 0; }
+  .of-till { inline-size: 100%; flex: none; }
+  .of-cable { display: none; }
+  .of-vline { display: block; position: relative; inline-size: 2px; block-size: 80px; overflow: hidden; }
+  .of-vline::before { content: ""; position: absolute; inset-inline: 0; inset-block-start: -20px; block-size: calc(100% + 20px); background: repeating-linear-gradient(to bottom, var(--aqua) 0 4px, transparent 4px 10px); animation: of-vflow 1s linear infinite; }
+  .of-vline.of-off::before { background: repeating-linear-gradient(to bottom, var(--navy-2) 0 4px, transparent 4px 10px); animation-play-state: paused; }
+  @keyframes of-vflow { to { transform: translateY(10px); } }
+}
+
+/* Reduced motion: final state. No flying chips (the script skips them), static cable, no autoplay, nothing slides. */
+@media (prefers-reduced-motion: reduce) {
+  .of-sw, .of-th, .of-badge, .of-toast, .of-new { transition: none; }
+  .of-new:active { transform: none; }
+  .of-sales li.of-in, .of .lt-pscr.lt-ping { animation: none; }
+  .of-cable path, .of-vline::before { animation: none; }
 }

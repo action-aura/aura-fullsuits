@@ -107,6 +107,31 @@ export const ar: Dict = {
       { title: 'موبايلك بيشوف الكاشير', body: 'تطبيق المدير بيورجيك شو بصير بالمحل وإنت برّا.' }, // AR: drafted, native check pending
       { title: 'فريق في عمّان', body: 'بنركّب، وبندرّب، وبنضل معك.' }, // AR: drafted, native check pending
     ],
+    offline: {
+      eyebrow: 'جرّبها بإيدك',
+      title: 'اقطع النت بإيدك، وشوف شو بصير.',
+      lead: 'اضغط على المفتاح. الكاشير بيضل يبيع، والمبيعات بتنحفظ على الجهاز. أول ما يرجع النت، بتوصل لموبايلك لحالها.', // AR: drafted, native check pending
+      switchLabel: 'الإنترنت',
+      on: 'شغّال',
+      off: 'مقطوع',
+      newSale: 'بيعة جديدة',
+      note: 'هذا عرض توضيحي. البرنامج الحقيقي بيشتغل بنفس الطريقة.', // AR: drafted, native check pending
+      chipOn: 'متصل · كل شي واصل',
+      chipOff: 'بدون إنترنت · البيع شغّال',
+      recent: 'آخر البيعات',
+      empty: 'لسا ما في بيعات. اضغط بيعة جديدة.', // AR: drafted, native check pending
+      queued: 'بانتظار',
+      sent: 'تم الإرسال',
+      badge: 'بانتظار الإرسال',
+      lastUpdate: 'آخر تحديث: ',
+      demoLabel: 'عرض الكاشير والموبايل', // AR: drafted, native check pending
+      announceOff: 'الإنترنت مقطوع. الكاشير بيكمل البيع.', // AR: drafted, native check pending
+      announceOn: 'الإنترنت رجع.', // AR: drafted, native check pending
+      toastOne: 'وصلت بيعة وحدة',
+      toastTwo: 'وصلت بيعتين',
+      toastFew: 'وصلت {n} بيعات',
+      toastMany: 'وصلت {n} بيعة',
+    },
     company: {
       title: 'أكشن أورا', accent: 'أورا',
       lead: 'شركة برمجيات أردنية تبني أنظمة تعمل كما تعمل المنشآت فعلًا.',
