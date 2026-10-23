@@ -82,4 +82,9 @@
   --ease-io: cubic-bezier(.77, 0, .175, 1);
   --ease-drawer: cubic-bezier(.32, .72, 0, 1);
   --wa: #25D366; /* WhatsApp green is never world-tinted */
+  /* The phone strip is always master navy and master ink, whatever world the page is in (it is not world-tinted). */
+  --navy: #0B1322;
+  --navy-ink: #F6F4EF;
+  --navy-accent: #8FD0D0;
+  --press-dur: 120ms;
 }

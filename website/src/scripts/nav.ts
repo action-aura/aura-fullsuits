@@ -1,5 +1,17 @@
 const root = document.documentElement;
 
+// Nav bar: --nav-top keeps the fixed nav under the phone strip (38px) at the top of the page and lets it settle at 0 as the
+// strip scrolls away; data-scrolled switches on the soft field bar behind the nav (components.css .nav::before).
+const nav = document.querySelector<HTMLElement>('.nav');
+const stripH = parseFloat(getComputedStyle(root).getPropertyValue('--strip-h')) || 0;
+const placeNav = () => {
+  root.style.setProperty('--nav-top', Math.max(0, stripH - scrollY) + 'px');
+  nav?.toggleAttribute('data-scrolled', scrollY > 8);
+};
+addEventListener('scroll', placeNav, { passive: true });
+addEventListener('resize', placeNav);
+placeNav();
+
 const sections = document.querySelectorAll<HTMLElement>('[data-w]');
 if (sections.length && 'IntersectionObserver' in window) {
   const io = new IntersectionObserver(

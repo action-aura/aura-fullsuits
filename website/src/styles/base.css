@@ -88,7 +88,7 @@ h3,
 .ar-title,
 .nav,
 .footer {
-  transition: color .6s var(--ease-out);
+  transition: color .2s var(--ease-out);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -227,25 +227,16 @@ body:lang(ar) {
   max-inline-size: 36rem;
 }
 
-/* Reveal: copy children fade up 18px, 70ms stagger. Hidden only while JS runs (.js on <html>), so the page is
-   complete without JS; a script adds .in on .reveal. Blur (>=900px only) starts at 8px and ends at 0. */
+/* Reveal: each copy child (status pill, title, lead, buttons, link) rises 20px and fades in, once, 70ms after the one
+   before. Opacity and transform only: no blur anywhere (the old reveal blurred text 8px on desktop, which read as
+   fog). Hidden only while JS runs (.js on <html>), so the page is complete without JS; a script adds .in on .reveal. */
 .js .reveal > * {
-  transition: opacity .9s var(--ease-out), transform .9s var(--ease-out);
+  transition: opacity .6s var(--ease-out), transform .6s var(--ease-out);
 }
 
 .js .reveal:not(.in) > * {
   opacity: 0;
-  transform: translate3d(0, 18px, 0);
-}
-
-@media (min-width: 900px) {
-  .js .reveal > * {
-    transition: opacity .9s var(--ease-out), transform .9s var(--ease-out), filter .9s var(--ease-out);
-  }
-
-  .js .reveal:not(.in) > * {
-    filter: blur(8px);
-  }
+  transform: translate3d(0, 20px, 0);
 }
 
 .js .reveal > :nth-child(2) { transition-delay: .07s; }
@@ -260,11 +251,12 @@ body:lang(ar) {
     scroll-behavior: auto;
   }
 
+  /* Final states, no movement, no fade. */
   .js .reveal > *,
   .js .reveal:not(.in) > * {
+    opacity: 1;
     transform: none;
-    filter: none;
-    transition: opacity .3s ease;
+    transition: none;
     transition-delay: 0s !important;
   }
 }
@@ -311,6 +303,17 @@ body:lang(ar) {
     align-items: start;
     padding-block-start: min(16vh, 140px);
   }
+
+  /* Phone hero starts right under the strip (38px) and the nav (64px), so the mark below the copy has room. */
+  .hero {
+    padding-block-start: 118px;
+    padding-block-end: 24px;
+  }
+}
+
+/* Anchors (#retail, #gym, #talk ...) land clear of the fixed nav (and, on phones, never under it). */
+main [id] {
+  scroll-margin-block-start: 80px;
 }
 
 .copy {
@@ -338,7 +341,7 @@ body:lang(ar) {
    instantly when data-world changes. Without the transition the screen steps at each flip. */
 body {
   background: var(--field);
-  transition: background-color .6s var(--ease-out);
+  transition: background-color .15s linear;
 }
 @media (prefers-reduced-motion: reduce) {
   body { transition: none; }

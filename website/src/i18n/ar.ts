@@ -59,6 +59,7 @@ export const ar: Dict = {
     switchTo: 'English',
     menu: 'القائمة', // AR: drafted, native check pending
     close: 'إغلاق', // AR: drafted, native check pending
+    stripWa: 'واتساب',
   },
   cta: {
     whatsapp: 'راسلنا على واتساب',
@@ -97,7 +98,7 @@ export const ar: Dict = {
     },
   },
   footer: {
-    tagline: 'Go Bigger · Go Smarter',
+    tagline: 'كبّر شغلك · اشتغل بذكاء', // AR: drafted from the hero line, native check pending (the English slogan leaked onto /ar)
     products: 'المنتجات', // AR: drafted, native check pending
     company: 'الشركة', // AR: drafted, native check pending
     privacy: 'الخصوصية', // AR: drafted, native check pending

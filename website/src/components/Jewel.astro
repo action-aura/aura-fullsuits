@@ -23,7 +23,7 @@ const t = dict(lang);
 <span class="visually-hidden">{t.a11y.jewel}</span>
 <script>
   import { pickTier } from '../scripts/jewel/tier';
-  import { stationsFor, stationAt, fitScale, footerFade, mirror, type PageKind, type Station } from '../scripts/jewel/stations';
+  import { stationsFor, stationAt, fitScale, footerFade, mirror, phoneHeroPose, phoneHeroFade, type PageKind, type Station } from '../scripts/jewel/stations';
 
   const root = document.documentElement;
   const layer = document.querySelector<HTMLElement>('.jewel')!;
@@ -60,7 +60,21 @@ const t = dict(lang);
   markMix(currentMix());
   root.addEventListener('worldmix', (e) => markMix((e as CustomEvent).detail));
 
-  const apply = (s: Station) => {
+  // Phones, home and product pages: the mark lives in the hero only, placed under the hero copy so the whole mark shows,
+  // then faded out as the hero scrolls away. Chapters get nothing behind their text (E1).
+  const heroPhone = phone && !pinned && (kind === 'home' || kind === 'product');
+  const heroEl = heroPhone ? document.querySelector<HTMLElement>('main [data-w]') : null;
+  const heroCopy = heroEl?.querySelector<HTMLElement>('.copy') ?? null;
+  let copyBottom = 0;
+  const measureHero = () => { if (heroCopy) copyBottom = heroCopy.getBoundingClientRect().bottom + scrollY; };
+
+  const apply = (s0: Station) => {
+    let s = s0, heroFade = 0;
+    if (heroEl && heroCopy) {
+      const pose = phoneHeroPose(copyBottom, innerWidth, innerHeight);
+      s = { ...s0, y: pose.y, scale: pose.scale };
+      heroFade = phoneHeroFade(heroEl.getBoundingClientRect().bottom, innerHeight);
+    }
     // Phones: the big mark would swamp the copy on the 404 page, so cap its scale.
     const sc = fixed && innerWidth < 900 ? Math.min(s.scale, 1) : s.scale;
     // Desktop: fit the mark to the viewport. Hide check below still reads the station's own scale.
@@ -70,16 +84,21 @@ const t = dict(lang);
     // and it fades out as the footer rises (footerFade).
     const foot = document.querySelector('footer');
     const fade = foot ? footerFade(foot.getBoundingClientRect().top, innerHeight) : 0;
-    const hide = sc <= 0.01 ? 1 : Math.max(1 - (s.alpha ?? 1), fade);
+    const hide = sc <= 0.01 ? 1 : Math.max(1 - (s.alpha ?? 1), fade, heroFade);
     root.style.setProperty('--jx', String(s.x));
-    root.style.setProperty('--jy', String(s.y));
+    // Hero pose on phones: s.y is the apex, so the glow (--jy) centres half a mark lower, on the mark itself.
+    root.style.setProperty('--jy', String(heroEl ? s.y + (0.567 * innerWidth * sc) / innerHeight : s.y));
     root.style.setProperty('--js', String(fitted));
+    // Phone still apex, as a viewport fraction. Only the hero pose moves it; every other phone page keeps the apex at
+    // mid-height as before (the stations' own phone y was never used).
+    root.style.setProperty('--jay', heroEl ? String(Math.round(s.y * 10000) / 10000) : '0.5');
     root.style.setProperty('--jhide', String(Math.round(hide * 1000) / 1000));
     return { x: s.x, y: s.y, scale: fitted };
   };
   const centres = () => Array.from(document.querySelectorAll<HTMLElement>('[data-w]')).map(
     (el) => el.getBoundingClientRect().top + scrollY + el.offsetHeight / 2);
   let cs = pinned ? [] : centres();
+  measureHero();
   let scene: Scene | null = null;
   const progress = () => {
     const p = scrollY / Math.max(1, document.documentElement.scrollHeight - innerHeight);
@@ -97,14 +116,14 @@ const t = dict(lang);
         // Reduced motion: snap to the nearest station, no interpolation.
         at = cs.reduce((a, b) => (Math.abs(b - c) < Math.abs(a - c) ? b : a));
       }
-      s = stationAt(stations, cs, at, rtl);
+      s = stationAt(stations, cs, at, rtl, innerHeight);
     }
     const out = apply(s);
     scene?.setStation(out);
     progress();
     return out;
   };
-  const remeasure = () => { if (!pinned) cs = centres(); place(); };
+  const remeasure = () => { if (!pinned) cs = centres(); measureHero(); place(); };
   if (!pinned) {
     addEventListener('scroll', place, { passive: true });
     addEventListener('load', remeasure);

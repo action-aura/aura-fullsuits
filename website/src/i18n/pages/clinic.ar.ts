@@ -76,10 +76,10 @@ export const clinicAr: DeepStrings<typeof clinicEn> = {
   },
   run: {
     title: 'ما الذي تحتاجه للتشغيل', // claims: clinic-claims.md (page chrome, no claim) // AR: drafted, native check pending
-    line: 'يعمل Aura Clinic على جهاز ويندوز في العيادة. أضف تطبيق أندرويد للمزامنة معه.', // claims: clinic-claims.md Encrypted database, Android phone app // AR: drafted, native check pending
+    line: 'يعمل أورا كلينك على جهاز ويندوز في العيادة. أضف تطبيق أندرويد للمزامنة معه.', // claims: clinic-claims.md Encrypted database, Android phone app // AR: drafted, native check pending
   },
   cta: {
     title: 'احجز عرضًا مجانيًا', // claims: clinic-claims.md (page chrome, no claim)
-    lead: 'حدثنا عن عيادتك وسنعرض عليك Aura Clinic.', // claims: clinic-claims.md (page chrome, no claim) // AR: drafted, native check pending
+    lead: 'حدثنا عن عيادتك وسنعرض عليك أورا كلينك.', // claims: clinic-claims.md (page chrome, no claim) // AR: drafted, native check pending
   },
 };

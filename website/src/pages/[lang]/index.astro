@@ -13,8 +13,6 @@ import { organizationLd } from '../../lib/jsonld';
 export function getStaticPaths() { return LANGS.map((lang) => ({ params: { lang } })); }
 const lang = Astro.params.lang as Lang;
 const t = dict(lang);
-const other: Lang = lang === 'ar' ? 'en' : 'ar';
-const otherTitle = dict(other).home.hero.title;
 ---
 <Base lang={lang} slug="" title={t.meta.home.title} description={t.meta.home.description} jsonld={[organizationLd(lang)]}>
   <Nav lang={lang} slug="" />
@@ -23,7 +21,6 @@ const otherTitle = dict(other).home.hero.title;
     <section id="hero" data-w="master" class="hero">
       <div class="copy reveal">
         <h1>{t.home.hero.title}</h1>
-        <p class="ar-title" lang={other} dir={lang === 'ar' ? 'ltr' : 'rtl'}>{otherTitle}</p>
         <p class="lead">{t.home.hero.lead}</p>
         <div class="ctas"><WhatsAppPill lang={lang} /><DemoLink lang={lang} /></div>
       </div>

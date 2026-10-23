@@ -33,7 +33,7 @@ const [tagBefore, tagAfter] = f.tagline.split('·').map((s) => s.trim());
       <ul class="footer-list">
         <li><a href={pagePath(lang, 'aura-retail')}>{t.nav.retail}</a></li>
         <li><a href={pagePath(lang, 'aura-clinic')}>{t.nav.clinic}</a></li>
-        <li class="footer-soon"><span>{t.nav.gym}</span> <StatusPill kind="coming" /></li>
+        <li class="footer-soon"><span>{t.nav.gym}</span> <StatusPill kind="coming" lang={lang} /></li>
       </ul>
     </nav>
 

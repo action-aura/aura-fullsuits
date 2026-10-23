@@ -1,12 +1,13 @@
 ---
-import { dict } from '../i18n/index';
+import { dict, type Lang } from '../i18n/index';
 
 interface Props {
   kind: 'available' | 'coming';
+  lang: Lang;
 }
 
-const { kind } = Astro.props;
-const en = dict('en').status[kind];
-const ar = dict('ar').status[kind];
+// One language per page: Arabic on /ar, English on /en. (It used to print both, e.g. "Available now / متوفّر الآن".)
+const { kind, lang } = Astro.props;
+const label = dict(lang).status[kind];
 ---
-<span class={`status-pill status-${kind}`}><i class="status-dot" aria-hidden="true"></i><span lang="en">{en}</span><span lang="ar">{ar}</span></span>
+<span class={`status-pill status-${kind}`}><i class="status-dot" aria-hidden="true"></i><span lang={lang}>{label}</span></span>

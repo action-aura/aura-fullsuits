@@ -137,8 +137,8 @@ for (const url of ['/en/aura-retail/', '/ar/aura-clinic/']) {
       const copy = await elementBox(page, `${sel} .copy`);
       expect(intersects(mark, copy), `${sel}: mark ${JSON.stringify(mark)} meets copy ${JSON.stringify(copy)}`).toBe(false);
     }
-    // The CTA station is the fifth and last: .9 at 73%/56%, x mirrored on the Arabic page.
-    expect(parseFloat(await cssVar(page, '--js'))).toBeCloseTo(0.9, 2);
+    // The CTA station is the fifth and last: .62 (E1: it was .9) at 73%/56%, x mirrored on the Arabic page.
+    expect(parseFloat(await cssVar(page, '--js'))).toBeCloseTo(0.62, 2);
     expect(parseFloat(await cssVar(page, '--jy'))).toBeCloseTo(0.56, 2);
     expect(Math.abs(parseFloat(await cssVar(page, '--jx')) - 0.5)).toBeCloseTo(0.23, 2);
   });

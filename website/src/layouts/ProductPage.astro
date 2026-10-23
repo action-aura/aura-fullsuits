@@ -45,7 +45,7 @@ const photoFrames = photos.flatMap((k, i) => {
   <main id="main">
     <section id="hero" data-w={world} class="page-hero">
       <div class="copy reveal">
-        <StatusPill kind="available" />
+        <StatusPill kind="available" lang={lang} />
         <h1>{at >= 0 ? <>{before}<span class="hl">{accent}</span>{after}</> : title}</h1>
         <p class="lead">{copy.hero.lead}</p>
         <div class="ctas"><WhatsAppPill lang={lang} /><DemoLink lang={lang} /></div>

@@ -68,6 +68,7 @@ const initialShares = (['master', 'retail', 'clinic', 'gym'] as const).map((w) =
         els.forEach((e) => io.observe(e));
       }
     </script>
+    <script>import '../scripts/tap';</script>
     {beacon && <script is:inline defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon={JSON.stringify({ token: beacon })}></script>}
   </body>
 </html>

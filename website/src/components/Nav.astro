@@ -2,6 +2,7 @@
 import { dict, type Lang } from '../i18n/index';
 import { pagePath } from '../lib/seo';
 import StatusPill from './StatusPill.astro';
+import { PHONE_TEL, waLink } from '../lib/lang';
 
 interface Props {
   lang: Lang;
@@ -13,6 +14,12 @@ const t = dict(lang);
 const other: Lang = lang === 'en' ? 'ar' : 'en';
 const cur = (s: string) => (s === slug ? 'page' : undefined);
 ---
+{/* Phone strip: city, phone, WhatsApp. Phones only (CSS), master navy, scrolls away. Phone is a single LTR run inside RTL text. */}
+<div class="phone-strip">
+  <span class="phone-strip-city">{t.footer.city}</span>
+  <a class="phone-strip-tel" href={PHONE_TEL}><bdi dir="ltr">{t.footer.phone}</bdi></a>
+  <a class="phone-strip-wa" href={waLink('')} target="_blank" rel="noopener">{t.nav.stripWa}</a>
+</div>
 <header class="nav">
   <a class="nav-brand" href={pagePath(lang, '')}>
     <svg class="nav-mark" width="22" height="22" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
@@ -26,7 +33,7 @@ const cur = (s: string) => (s === slug ? 'page' : undefined);
     <a class="nav-link" data-chapter-link="retail" href={pagePath(lang, 'aura-retail')} aria-current={cur('aura-retail')}>{t.nav.retail}</a>
     <a class="nav-link" data-chapter-link="clinic" href={pagePath(lang, 'aura-clinic')} aria-current={cur('aura-clinic')}>{t.nav.clinic}</a>
     <a class="nav-link" data-chapter-link="gym" href={pagePath(lang, '') + '#gym'}>{t.nav.gym}</a>
-    <StatusPill kind="coming" />
+    <StatusPill kind="coming" lang={lang} />
     <a class="nav-link" href={pagePath(lang, 'about')} aria-current={cur('about')}>{t.nav.about}</a>
     <a class="nav-lang" hreflang={other} lang={other} href={pagePath(other, slug)}>{t.nav.switchTo}</a>
     <a class="nav-demo" href={pagePath(lang, 'contact')} aria-current={cur('contact')}>{t.nav.demo}</a>
@@ -40,7 +47,7 @@ const cur = (s: string) => (s === slug ? 'page' : undefined);
   <div id="nav-sheet" class="nav-sheet" hidden>
     <a class="nav-sheet-link" data-chapter-link="retail" href={pagePath(lang, 'aura-retail')} aria-current={cur('aura-retail')}>{t.nav.retail}</a>
     <a class="nav-sheet-link" data-chapter-link="clinic" href={pagePath(lang, 'aura-clinic')} aria-current={cur('aura-clinic')}>{t.nav.clinic}</a>
-    <a class="nav-sheet-link" data-chapter-link="gym" href={pagePath(lang, '') + '#gym'}>{t.nav.gym} <StatusPill kind="coming" /></a>
+    <a class="nav-sheet-link" data-chapter-link="gym" href={pagePath(lang, '') + '#gym'}>{t.nav.gym} <StatusPill kind="coming" lang={lang} /></a>
     <a class="nav-sheet-link" href={pagePath(lang, 'about')} aria-current={cur('about')}>{t.nav.about}</a>
     <a class="nav-sheet-link nav-lang" hreflang={other} lang={other} href={pagePath(other, slug)}>{t.nav.switchTo}</a>
     <a class="nav-sheet-link nav-demo" href={pagePath(lang, 'contact')} aria-current={cur('contact')}>{t.nav.demo}</a>

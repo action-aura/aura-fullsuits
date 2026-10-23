@@ -25,4 +25,35 @@ describe('worldMix', () => {
   it('past the last centre stays on the last world', () => expect(worldMix(S, 4000, 900).clinic).toBeCloseTo(1));
   it('dominant picks the largest weight', () => expect(dominant(worldMix(S, 1700, 900))).toBe('clinic'));
   it('handles no sections as master', () => expect(worldMix([], 0, 900).master).toBe(1));
+
+  // E1: the hand-over is a short band, not a section-long blend. Replaces the old reading of 'half and half midway'
+  // (which was only the single midpoint of a smoothstep over the whole 900px gap). What it can no longer catch: nothing
+  // that the new tests below do not; what it newly catches: a return to a long muddy blend.
+  it('a section shows its own world pure everywhere outside the band (no mid-tones)', () => {
+    const vh = 900, band = 0.22 * vh;
+    // master centre 450, retail centre 1350, mid 900; scrollY = c - vh/2
+    for (let y = 0; y <= 900; y += 10) {
+      const c = y + vh / 2, m = worldMix(S, y, vh);
+      if (c < 900 - band / 2) expect(m.master, `c=${c}`).toBeCloseTo(1, 6);
+      else if (c > 900 + band / 2) expect(m.retail, `c=${c}`).toBeCloseTo(1, 6);
+    }
+  });
+  it('the blended stretch is at most 22% of the viewport height of scroll', () => {
+    const vh = 900;
+    let blended = 0;
+    for (let y = 0; y <= 1800; y += 1) {
+      const m = worldMix(S, y, vh);
+      if (m.master > 0.001 && m.retail > 0.001) blended++;
+      if (m.retail > 0.001 && m.clinic > 0.001) blended++;
+    }
+    // two boundaries, each at most one band
+    expect(blended).toBeLessThanOrEqual(2 * Math.ceil(0.22 * vh));
+  });
+  it('the band scales with the viewport height, not the section height', () => {
+    const tall = [{ top: 0, height: 3000, world: 'master' as const }, { top: 3000, height: 3000, world: 'retail' as const }];
+    let blended = 0;
+    for (let y = 0; y <= 6000; y += 1) { const m = worldMix(tall, y, 900); if (m.master > 0.001 && m.retail > 0.001) blended++; }
+    expect(blended).toBeLessThanOrEqual(Math.ceil(0.22 * 900));
+    expect(blended).toBeGreaterThan(100);
+  });
 });

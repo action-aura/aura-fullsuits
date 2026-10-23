@@ -47,22 +47,22 @@ const crumbs = breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: t.na
         <div class="about-grid">
           <article class="about-card">
             <h3><a href={pagePath(lang, 'aura-retail')}>{a.products.retail.name}</a></h3>
-            <StatusPill kind="available" />
+            <StatusPill kind="available" lang={lang} />
             <p>{a.products.retail.line}</p>
           </article>
           <article class="about-card">
             <h3><a href={pagePath(lang, 'aura-clinic')}>{a.products.clinic.name}</a></h3>
-            <StatusPill kind="available" />
+            <StatusPill kind="available" lang={lang} />
             <p>{a.products.clinic.line}</p>
           </article>
           <article class="about-card">
             <h3>{a.products.gym.name}</h3>
-            <StatusPill kind="coming" />
+            <StatusPill kind="coming" lang={lang} />
             <p>{a.products.gym.line}</p>
           </article>
           <article class="about-card">
             <h3>{a.products.more.name}</h3>
-            <StatusPill kind="coming" />
+            <StatusPill kind="coming" lang={lang} />
             <p>{a.products.more.line}</p>
           </article>
         </div>
