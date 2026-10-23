@@ -97,7 +97,7 @@ errAttrs['data-err-error-challenge'] = form.errorChallenge;
   <input type="hidden" name="lang" value={lang} />
 
   <div class="hp" aria-hidden="true">
-    <label>Website<input name="website" tabindex="-1" autocomplete="off" /></label>
+    <label>{lang === 'ar' ? 'الموقع' : 'Website'}<input name="website" tabindex="-1" autocomplete="off" /></label>
   </div>
 
   {sitekey && <div class="cf-turnstile" data-sitekey={sitekey}></div>}

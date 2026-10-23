@@ -22,7 +22,6 @@ const other: Lang = lang === 'en' ? 'ar' : 'en';
         <FlatMark class="footer-mark" size={28} />
         {t.nav.brand}
       </a>
-      <p class="footer-tagline">{f.tagline}</p>
     </div>
 
     <nav class="footer-col" aria-label={f.products}>
@@ -48,7 +47,7 @@ const other: Lang = lang === 'en' ? 'ar' : 'en';
 
   <div class="footer-bottom">
     <span class="footer-city">{t.nav.brand} · {f.city}</span>
-    <a class="footer-phone num" href={PHONE_TEL}>{f.phone}</a>
+    <a class="footer-phone tel" href={PHONE_TEL}><bdi dir="ltr">{f.phone}</bdi></a>
     <a class="footer-wa" href={waLink(t.cta.waText)} target="_blank" rel="noopener">{t.cta.whatsapp}</a>
     <a class="footer-ig" href={INSTAGRAM} target="_blank" rel="noopener me">{f.instagram}</a>
     <a class="footer-lang" hreflang={other} lang={other} href={pagePath(other, slug)}>{t.nav.switchTo}</a>

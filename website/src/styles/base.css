@@ -164,6 +164,16 @@ h3 {
   unicode-bidi: isolate;
 }
 
+/* Phone numbers are not money: Plex Mono's dotted zero reads wrong in a phone number, so they stay in the page's own
+   sans with tabular digits (even column widths), still read left to right inside Arabic text. */
+.tel {
+  font-family: inherit;
+  font-weight: inherit;
+  font-variant-numeric: tabular-nums;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
 /* Arabic title sits directly under the Latin title, same ink, aligned to its start edge.
    After the :lang rules so its Plex Sans Arabic wins on a bilingual (lang=en) page. */
 .ar-title {

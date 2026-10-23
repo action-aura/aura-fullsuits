@@ -3,8 +3,8 @@
    animate; hover lift, press and arrow shift use the individual `translate`/`scale` properties driven by custom
    properties, so reduced motion switches them all off in one place. */
 
-/* z-index scheme: world-bg 0, jewel 1, world-scrim 2, main + footer 3, nav 10 (its phone sheet is 1 inside the nav),
-   phone strip 11 (only the About page has the fixed jewel layers, but the strip must clear them there) */
+/* z-index scheme: About's jewel band 0-1 (behind main), main + footer 3, nav 10 (its phone sheet is 1 inside the nav),
+   phone strip 11 */
 main,
 .footer {
   position: relative;
@@ -225,10 +225,6 @@ main,
   font-size: 15px;
   font-weight: 500;
   line-height: 1;
-}
-
-html[data-jewel] .nav {
-  border-block-end-color: transparent;
 }
 
 .nav-brand,
@@ -532,13 +528,6 @@ html[data-chapter="gym"] .nav-sheet-link[data-chapter-link="gym"] {
   display: block;
 }
 
-.footer-tagline {
-  margin-block-start: 14px;
-  color: var(--ink-muted);
-  font-size: 15px;
-  text-wrap: pretty;
-}
-
 .footer-title {
   margin-block-end: 16px;
   color: var(--ink-muted);
@@ -686,70 +675,34 @@ html[data-chapter="gym"] .nav-sheet-link[data-chapter-link="gym"] {
   }
 }
 
-/* Jewel layer */
+/* Jewel (About only): sits inside the navy band. The anchor is zero-height in the flow right after the nav; the band
+   hangs from it at exactly --bandh (set on .about-band, mirrored here so the stills size from the same number). */
+.jewel-anchor {
+  position: relative;
+  block-size: 0;
+  --bandh: max(560px, calc(100svh - 112px));
+}
+
+.jewel-band {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  block-size: var(--bandh);
+  overflow: hidden;
+  background: var(--navy);
+  pointer-events: none;
+}
+
 .jewel {
-  position: fixed;
+  position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 1;
 }
 
-/* World layers: 4 fixed fields (z 0) under the jewel (z 1), 4 fixed scrims (z 2) over it; each at opacity = its
-   world's share (--w-*). --jx/--jy are set on <html> and already mirrored for RTL, so the glow follows the jewel
-   and the desktop scrim stands on the copy side (1 - jx) without any RTL special case. */
-.world-bg,
-.world-scrim {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  will-change: opacity;
-  transition: opacity .6s var(--ease-out), visibility 0s;
-}
-
-/* Share 0: hidden after the fade-out finishes (visibility waits .6s); shown at once when the share rises. */
-.world-bg[data-off],
-.world-scrim[data-off] {
-  visibility: hidden;
-  transition: opacity .6s var(--ease-out), visibility 0s linear .6s;
-}
-
-.world-bg { z-index: 0; }
-.world-scrim { z-index: 2; }
-
-.bg-master { background: radial-gradient(34% 42% at calc(var(--jx, .73) * 100%) calc(var(--jy, .54) * 100%), rgba(47, 123, 123, .5), rgba(47, 123, 123, 0) 70%), linear-gradient(180deg, #0B1322 0%, #0E1729 50%, #15213A 100%); }
-.bg-retail { background: radial-gradient(34% 42% at calc(var(--jx, .73) * 100%) calc(var(--jy, .54) * 100%), rgba(201, 123, 61, .52), rgba(201, 123, 61, 0) 70%), linear-gradient(180deg, #15100D 0%, #1C1511 48%, #2C1C12 100%); }
-.bg-clinic { background: radial-gradient(34% 42% at calc(var(--jx, .73) * 100%) calc(var(--jy, .54) * 100%), rgba(140, 199, 238, .55), rgba(140, 199, 238, 0) 70%), linear-gradient(180deg, #F8FBFD 0%, #EEF4F8 50%, #D8E5EF 100%); }
-.bg-gym { background: radial-gradient(34% 42% at calc(var(--jx, .73) * 100%) calc(var(--jy, .54) * 100%), rgba(200, 50, 75, .5), rgba(200, 50, 75, 0) 68%), linear-gradient(180deg, #110709 0%, #1A0C12 50%, #2C1120 100%); }
-
-.sc-master { background: radial-gradient(ellipse 60% 120% at calc((1 - var(--jx, .73)) * 100%) 50%, rgba(14, 23, 41, .55) 0%, rgba(14, 23, 41, .45) 40%, rgba(14, 23, 41, .18) 70%, rgba(14, 23, 41, 0) 100%); }
-.sc-retail { background: radial-gradient(ellipse 60% 120% at calc((1 - var(--jx, .73)) * 100%) 50%, rgba(26, 21, 18, .55) 0%, rgba(26, 21, 18, .45) 40%, rgba(26, 21, 18, .18) 70%, rgba(26, 21, 18, 0) 100%); }
-.sc-clinic { background: radial-gradient(ellipse 60% 120% at calc((1 - var(--jx, .73)) * 100%) 50%, rgba(238, 244, 248, .6) 0%, rgba(238, 244, 248, .5) 40%, rgba(238, 244, 248, .2) 70%, rgba(238, 244, 248, 0) 100%); }
-.sc-gym { background: radial-gradient(ellipse 60% 120% at calc((1 - var(--jx, .73)) * 100%) 50%, rgba(26, 14, 20, .55) 0%, rgba(26, 14, 20, .45) 40%, rgba(26, 14, 20, .18) 70%, rgba(26, 14, 20, 0) 100%); }
-
+/* Desktop only: phones get a plain navy band from the section itself. */
 @media (max-width: 899px) {
-  .sc-master { background: linear-gradient(180deg, rgba(14, 23, 41, .86) 0%, rgba(14, 23, 41, .82) 62%, rgba(14, 23, 41, .5) 74%, rgba(14, 23, 41, .16) 84%, rgba(14, 23, 41, .16) 100%); }
-  .sc-retail { background: linear-gradient(180deg, rgba(26, 21, 18, .86) 0%, rgba(26, 21, 18, .82) 62%, rgba(26, 21, 18, .5) 74%, rgba(26, 21, 18, .16) 84%, rgba(26, 21, 18, .16) 100%); }
-  .sc-clinic { background: linear-gradient(180deg, rgba(238, 244, 248, .9) 0%, rgba(238, 244, 248, .86) 62%, rgba(238, 244, 248, .54) 74%, rgba(238, 244, 248, .18) 84%, rgba(238, 244, 248, .18) 100%); }
-  .sc-gym { background: linear-gradient(180deg, rgba(26, 14, 20, .86) 0%, rgba(26, 14, 20, .82) 62%, rgba(26, 14, 20, .5) 74%, rgba(26, 14, 20, .16) 84%, rgba(26, 14, 20, .16) 100%); }
-}
-
-.bg-master,
-.sc-master { opacity: var(--w-master, 1); }
-.bg-retail,
-.sc-retail { opacity: var(--w-retail, 0); }
-.bg-clinic,
-.sc-clinic { opacity: var(--w-clinic, 0); }
-.bg-gym,
-.sc-gym { opacity: var(--w-gym, 0); }
-
-@media (prefers-reduced-motion: reduce) {
-  .world-bg,
-  .world-scrim {
-    transition: opacity .3s linear, visibility 0s;
-  }
-  .world-bg[data-off],
-  .world-scrim[data-off] {
-    transition: opacity .3s linear, visibility 0s linear .3s;
+  .jewel-anchor {
+    display: none;
   }
 }
 
@@ -761,7 +714,7 @@ html[data-chapter="gym"] .nav-sheet-link[data-chapter-link="gym"] {
    (measured 2026-10-18: 900px wide at 648 tall with the old 900x1200 attributes). Frame numbers: tools/render-stills.mjs. */
 .jewel-still {
   position: absolute;
-  height: calc(72vh * var(--js, 1));
+  height: calc(var(--bandh) * .72 * var(--js, 1));
   width: auto;
   left: calc(var(--jx, .73) * 100%);
   top: calc(var(--jy, .54) * 100%);
@@ -780,11 +733,6 @@ html[data-chapter="gym"] .nav-sheet-link[data-chapter-link="gym"] {
     transform: translate(-50%, -9.72%);
   }
 }
-
-.still-master { opacity: var(--w-master, 1); }
-.still-retail { opacity: var(--w-retail, 0); }
-.still-clinic { opacity: var(--w-clinic, 0); }
-.still-gym { opacity: var(--w-gym, 0); }
 
 .jewel.is-live .jewel-still {
   opacity: 0;
@@ -815,16 +763,3 @@ html[data-chapter="gym"] .nav-sheet-link[data-chapter-link="gym"] {
     transition: none;
   }
 }
-
-/* --jhide (0..1) is how far the mark is hidden: 1 for a station with scale <= 0.01 (product pages after the hero on
-   phones), 1 - alpha for a dissolved station (desktop day rail and features grid), 0 otherwise. Set on <html> by
-   Jewel.astro; opacity sits on .jewel so it does not fight the per-world opacity of the stills. The .4s ease gives
-   the scroll-linked dissolve a little inertia; reduced motion removes it below, so the dissolve becomes a step. */
-.jewel { opacity: calc(1 - var(--jhide, 0)); transition: opacity .4s var(--ease-out); }
-@media (prefers-reduced-motion: reduce) { .jewel { transition: none; } }
-
-/* Reading pages (FAQ, Privacy, Terms): master still only, no canvas, none on phones. */
-.jewel[data-read] .jewel-canvas,
-.jewel[data-read] .jewel-still:not(.still-master) { display: none; }
-.jewel[data-read] .still-master { opacity: 1; }
-@media (max-width: 899px) { .jewel[data-read] { display: none; } }

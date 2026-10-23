@@ -1,8 +1,7 @@
 /* Design tokens, Look 1 "Live Till": a light ivory page with navy ink (directions.md sections 4 and 8.2).
    The old per-world dark palettes are gone. The legacy names (--field, --ink, --ink-muted, --hair, --accent,
    --link, --scrim, --glow) are kept so every component reskins from one place; they now point at the new roles.
-   The one exception is the About page, which still runs the 3D jewel on a dark field: Base.astro sets
-   data-jewel on <html> there and the block at the bottom of this file restores the dark values for it. */
+   The About page's 3D jewel lives inside a navy band (--navy) at the top of that page; there is no dark page palette. */
 
 :root {
   /* Look 1 palette */
@@ -53,30 +52,4 @@
   --ease-io: cubic-bezier(.77, 0, .175, 1);
   --ease-drawer: cubic-bezier(.32, .72, 0, 1);
   --wa: #25D366; /* WhatsApp green is never tinted */
-}
-
-/* About only: the jewel layer paints a dark field, so this page keeps the old master-navy palette. */
-html[data-jewel] {
-  --field-a: #0B1322;
-  --field-b: #0E1729;
-  --field-c: #15213A;
-  --field: var(--field-b);
-  --scrim: 14, 23, 41;
-  --accent: #8FD0D0;
-  --link: #8FD0D0;
-  --ink: #F6F4EF;
-  --ink-muted: rgba(246, 244, 239, .72);
-  --hair: rgba(246, 244, 239, .14);
-  --on-accent: #fff;
-  --nav-bg: transparent;
-  --mark-b: #F6F4EF;
-  --surface: rgba(255, 255, 255, .05);
-  color-scheme: dark;
-}
-
-/* Text sits over the mark on phones: more opaque body ink */
-@media (max-width: 899px) {
-  html[data-jewel] {
-    --ink-muted: rgba(246, 244, 239, .84);
-  }
 }

@@ -154,7 +154,8 @@ export function mountJewel(canvas, { phone }) {
   // Layout: the page owns the stations. Desktop scale 1 = 58% of the viewport height; phone scale 1 = mark width 95% of the view.
   const view = { w: 1, h: 1, desktop: true };
   function resize() {
-    const w = innerWidth, h = innerHeight, aspect = w / h, desktop = w >= 900;
+    // The canvas fills its host (the About band), not the viewport; the host is the whole page width, so `desktop` still follows the window.
+    const host = canvas.parentElement, w = host.clientWidth || innerWidth, h = host.clientHeight || innerHeight, aspect = w / h, desktop = innerWidth >= 900;
     renderer.setSize(w, h, false); camera.aspect = aspect; camera.updateProjectionMatrix();
     const visH = desktop ? 9.14 / 0.58 : (7.66 / 0.95) / aspect;   // scale 1: mark height = 58% of the view (desktop); mark width = 95% of the view (phone)
     const d = visH / 2 / Math.tan(camera.fov * Math.PI / 360), elev = 6 * Math.PI / 180;

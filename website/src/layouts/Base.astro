@@ -23,21 +23,18 @@ import PhoneStrip from '../components/PhoneStrip.astro';
 
 interface Props {
   lang: Lang; slug: string; title: string; description: string;
-  world?: 'master' | 'retail' | 'clinic' | 'gym'; jewel?: boolean; noindex?: boolean; jsonld?: object[];
+  world?: 'master' | 'retail' | 'clinic' | 'gym'; noindex?: boolean; jsonld?: object[];
   canonicalOverride?: string; xDefaultOverride?: string;
 }
-const { lang, slug, title, description, world = 'master', jewel = false, noindex = false, jsonld = [], canonicalOverride, xDefaultOverride } = Astro.props;
+const { lang, slug, title, description, world = 'master', noindex = false, jsonld = [], canonicalOverride, xDefaultOverride } = Astro.props;
 const t = dict(lang);
 const alt = alternates(slug);
 const self = canonicalOverride ?? canonical(lang, slug);
 // The 404 page has no card of its own, so it shares home's.
 const ogImage = `https://actionaura.me/og/${lang}-${!slug || slug === '404' ? 'home' : slug}.png`;
 const beacon = import.meta.env.PUBLIC_CF_BEACON_TOKEN;
-// Only the About page still runs the 3D jewel (Look 1 removed it elsewhere). There, seed the page world's shares
-// inline so the right field and still paint before the module script runs; every other page is plain light.
-const initialShares = jewel ? (['master', 'retail', 'clinic', 'gym'] as const).map((w) => `--w-${w}:${w === world ? 1 : 0}`).join(';') : undefined;
 ---
-<html lang={lang} dir={dir(lang)} data-world={world} data-jewel={jewel ? '' : undefined} style={initialShares}>
+<html lang={lang} dir={dir(lang)} data-world={world}>
   <head>
     <meta charset="utf-8" />
     <script is:inline>document.documentElement.classList.add('js')</script>
@@ -59,7 +56,7 @@ const initialShares = jewel ? (['master', 'retail', 'clinic', 'gym'] as const).m
     <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
-    <meta name="theme-color" content={jewel ? '#0E1729' : '#F6F4EF'} />
+    <meta name="theme-color" content="#F6F4EF" />
     {jsonld.map((o) => <script type="application/ld+json" set:html={JSON.stringify(o)} />)}
   </head>
   <body>

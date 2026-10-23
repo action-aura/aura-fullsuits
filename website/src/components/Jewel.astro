@@ -1,134 +1,74 @@
 ---
+// The 3D jewel, now only on About and only inside the navy band at the top of that page (Look 1: the rest of the site
+// is light). It is a sibling placed right after the nav and before <main>: the band section in <main> is transparent
+// and shows it through, and everything after the band is on the ivory page. Desktop only (phones get a plain navy
+// band with the text), and the station is pinned, so there is no scroll choreography any more.
 import { dict, type Lang } from '../i18n';
-interface Props { lang: Lang; fixed?: { x: number; y: number; scale: number }; stations?: 'home' | 'product' | 'about' | 'contact' | 'read' }
-const { lang, fixed, stations = 'home' } = Astro.props;
+interface Props { lang: Lang; station?: { x: number; y: number; scale: number } }
+const { lang, station = { x: 0.72, y: 0.5, scale: 1.1 } } = Astro.props;
 const t = dict(lang);
 ---
-<div class="world-bg bg-master" aria-hidden="true"></div>
-<div class="world-bg bg-retail" aria-hidden="true"></div>
-<div class="world-bg bg-clinic" aria-hidden="true"></div>
-<div class="world-bg bg-gym" aria-hidden="true"></div>
-<div class="jewel" aria-hidden="true" data-kind={stations} data-read={stations === 'read' ? '1' : undefined} data-fixed={fixed ? JSON.stringify(fixed) : undefined}>
-  {/* Stills are 1404x1296: the hero rest pose in a 13:12 frame 72/58 of the mark's height (tools/render-stills.mjs). The
-      attributes give the aspect before load; components.css sets height and width: auto, so the attribute width is never used. */}
-  {['master', 'retail', 'clinic', 'gym'].map((w) => (
-    <img class={`jewel-still still-${w}`} src={`/jewel/still-${w}.webp`} alt="" width="1404" height="1296" decoding="async" />
-  ))}
-  <canvas class="jewel-canvas"></canvas>
+<div class="jewel-anchor" aria-hidden="true">
+  <div class="jewel-band">
+    <div class="jewel" data-station={JSON.stringify(station)}>
+      {/* The still is 1404x1296: the hero rest pose in a 13:12 frame 72/58 of the mark's height (tools/render-stills.mjs).
+          The attributes give the aspect before load; components.css sets height and width: auto, so the attribute width is never used. */}
+      <img class="jewel-still still-master" src="/jewel/still-master.webp" alt="" width="1404" height="1296" decoding="async" />
+      <canvas class="jewel-canvas"></canvas>
+    </div>
+  </div>
 </div>
-<div class="world-scrim sc-master" aria-hidden="true"></div>
-<div class="world-scrim sc-retail" aria-hidden="true"></div>
-<div class="world-scrim sc-clinic" aria-hidden="true"></div>
-<div class="world-scrim sc-gym" aria-hidden="true"></div>
 <span class="visually-hidden">{t.a11y.jewel}</span>
 <script>
   import { pickTier } from '../scripts/jewel/tier';
-  import { stationsFor, stationAt, fitScale, footerFade, mirror, type PageKind, type Station } from '../scripts/jewel/stations';
+  import { fitScale, mirror } from '../scripts/jewel/stations';
 
   const root = document.documentElement;
   const layer = document.querySelector<HTMLElement>('.jewel')!;
-  layer.querySelectorAll<HTMLImageElement>('.jewel-still').forEach((img) => {
-    const hide = () => { img.hidden = true; };
-    if (img.complete && img.naturalWidth === 0) hide();
-    else img.addEventListener('error', hide, { once: true });
-  });
+  const img = layer.querySelector<HTMLImageElement>('.jewel-still')!;
+  const hide = () => { img.hidden = true; };
+  if (img.complete && img.naturalWidth === 0) hide();
+  else img.addEventListener('error', hide, { once: true });
   const canvas = layer.querySelector<HTMLCanvasElement>('.jewel-canvas')!;
   const rtl = root.dir === 'rtl';
   const phone = matchMedia('(max-width: 899px)').matches;
-  const kind = (layer.dataset.kind ?? 'home') as PageKind;
-  const found = stationsFor(kind, phone);
-  const isRead = found === 'none';
-  const stations: Station[] = isRead ? [] : found;
-  if (isRead) layer.dataset.read = '1';
-  const fixed = layer.dataset.fixed ? (JSON.parse(layer.dataset.fixed) as { x: number; y: number; scale: number }) : null;
-  // Read pages: master still only, pinned top-right at 28% of viewport height (0.48 / 58%).
-  const READ_STILL = { x: 0.86, y: 0.2, scale: 0.48 };
-  const pinned = isRead ? READ_STILL : fixed;
+  const raw = JSON.parse(layer.dataset.station!) as { x: number; y: number; scale: number };
+  // x is mirrored here for RTL (the CSS uses `left`, the one physical-property exception, so it must not mirror again).
+  const station = rtl ? mirror(raw) : raw;
   const nav = navigator as Navigator & { deviceMemory?: number; connection?: { saveData?: boolean } };
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const tier = pickTier({
-    reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, webgl2: () => !!document.createElement('canvas').getContext('webgl2'),
+    reducedMotion: reduced, webgl2: () => !!document.createElement('canvas').getContext('webgl2'),
     deviceMemory: nav.deviceMemory, saveData: nav.connection?.saveData, width: innerWidth, dpr: devicePixelRatio,
   });
   layer.dataset.tier = tier;
 
-  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  type Mix = { master: number; retail: number; clinic: number; gym: number };
-  type Scene = { setMix(m: Mix): void; setStation(s: { x: number; y: number; scale: number }): void; setProgress(p: number): void };
-  const dominantOf = (m: Mix) => (Object.keys(m) as (keyof Mix)[]).reduce((a, b) => (m[b] > m[a] ? b : a), 'master' as keyof Mix);
-  const markMix = (m: Mix) => { layer.dataset.mix = dominantOf(m); };
-  const currentMix = (): Mix => (root as any).__auraMix ?? { master: 1, retail: 0, clinic: 0, gym: 0 };
-  markMix(currentMix());
-  root.addEventListener('worldmix', (e) => markMix((e as CustomEvent).detail));
-
-  const apply = (s: Station) => {
-    // Phones: the big mark would swamp the copy on the 404 page, so cap its scale.
-    const sc = fixed && innerWidth < 900 ? Math.min(s.scale, 1) : s.scale;
-    // Desktop: fit the mark to the viewport. Hide check below still reads the station's own scale.
-    const fitted = phone ? sc : fitScale(s.scale, innerWidth, innerHeight);
-    // --jhide is how far the mark is hidden, 0..1: fully for a scale-0 station (product pages after the hero on
-    // phones), 1 - alpha for a dissolved station (desktop day rail and features grid), 0 otherwise,
-    // and it fades out as the footer rises (footerFade).
-    const foot = document.querySelector('footer');
-    const fade = foot ? footerFade(foot.getBoundingClientRect().top, innerHeight) : 0;
-    const hide = sc <= 0.01 ? 1 : Math.max(1 - (s.alpha ?? 1), fade);
-    root.style.setProperty('--jx', String(s.x));
-    root.style.setProperty('--jy', String(s.y));
-    root.style.setProperty('--js', String(fitted));
-    root.style.setProperty('--jhide', String(Math.round(hide * 1000) / 1000));
-    return { x: s.x, y: s.y, scale: fitted };
-  };
-  const centres = () => Array.from(document.querySelectorAll<HTMLElement>('[data-w]')).map(
-    (el) => el.getBoundingClientRect().top + scrollY + el.offsetHeight / 2);
-  let cs = pinned ? [] : centres();
+  type Scene = { setMix(m: Record<string, number>): void; setStation(s: { x: number; y: number; scale: number }): void; setProgress(p: number): void };
   let scene: Scene | null = null;
-  const progress = () => {
-    const p = scrollY / Math.max(1, document.documentElement.scrollHeight - innerHeight);
-    scene?.setProgress(Math.min(1, Math.max(0, p)));
-  };
+  // The band is not the viewport: fit the mark to the band's own box, like the old viewport fit.
   const place = () => {
-    let s;
-    // Pinned stations (read pages, 404) go through no stationAt, so mirror them here: on Arabic read pages the
-    // still sat top-right behind the right-aligned headings (invisible until Plan 3 shipped the still files).
-    if (pinned) s = rtl ? mirror(pinned) : pinned;
-    else {
-      const c = scrollY + innerHeight / 2;
-      let at = c;
-      if (reduced && cs.length) {
-        // Reduced motion: snap to the nearest station, no interpolation.
-        at = cs.reduce((a, b) => (Math.abs(b - c) < Math.abs(a - c) ? b : a));
-      }
-      s = stationAt(stations, cs, at, rtl);
-    }
-    const out = apply(s);
-    scene?.setStation(out);
-    progress();
-    return out;
+    const fitted = phone ? station.scale : fitScale(station.scale, layer.clientWidth || innerWidth, layer.clientHeight || innerHeight);
+    root.style.setProperty('--jx', String(station.x));
+    root.style.setProperty('--jy', String(station.y));
+    root.style.setProperty('--js', String(fitted));
+    scene?.setStation({ x: station.x, y: station.y, scale: fitted });
   };
-  const remeasure = () => { if (!pinned) cs = centres(); place(); };
-  if (!pinned) {
-    addEventListener('scroll', place, { passive: true });
-    addEventListener('load', remeasure);
-    document.fonts?.ready.then(remeasure);
-    const main = document.querySelector('main');
-    if (main && typeof ResizeObserver !== 'undefined') new ResizeObserver(remeasure).observe(main);
-  }
-  addEventListener('resize', remeasure);
+  addEventListener('resize', place);
   place();
 
-  if (tier === 'rich' && !isRead) {
+  if (tier === 'rich' && !phone) {
     addEventListener('load', async () => {
       try {
         const { mountJewel } = await import('../scripts/jewel/scene.js');
         const j = mountJewel(canvas, { phone });
         canvas.addEventListener('webglcontextlost', () => layer.classList.remove('is-live'));
-        const push = (m: Mix) => { j.setMix(m); layer.dataset.sceneMix = dominantOf(m); };
-        push(currentMix());
-        root.addEventListener('worldmix', (e) => push((e as CustomEvent).detail));
+        j.setMix({ master: 1, retail: 0, clinic: 0, gym: 0 });
+        j.setProgress(0);
         scene = j;
         place();
         layer.classList.add('is-live');
       } catch {
-        // Import or WebGL failed: stills stay visible, scroll placement keeps working.
+        // Import or WebGL failed: the still stays visible.
       }
     }, { once: true });
   }

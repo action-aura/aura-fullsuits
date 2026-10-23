@@ -44,6 +44,6 @@ export const contactEn = {
     call: '+962 78 006 9485',
     email: 'info@actionaura.me',
     office: 'Al-Rayyan Complex, Radio & Television St, Al-Muqabalain, Amman',
-    hours: 'Sunday to Thursday, 9:00 to 17:00', // OWNER: confirm hours
+    hours: 'Sunday to Thursday, 11:00 to 18:00', // OWNER: confirm hours
   },
 } as const;

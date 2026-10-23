@@ -13,12 +13,12 @@ export const ar: Dict = {
       description: 'أكشن أورا شركة برمجيات في عمّان. اكتشف أورا ريتيل، برنامج كاشير وإدارة محلات يعمل بدون إنترنت ويربط أجهزتك. احجز عرضًا تجريبيًا.',
     },
     retail: {
-      title: 'Aura Retail | برنامج كاشير وإدارة محلات',
+      title: 'أورا ريتيل | برنامج كاشير وإدارة محلات',
       description: 'كاشير على الكمبيوتر وتطبيق للمدير على الموبايل، يعمل بدون الإنترنت، مخزون، ديون الزبائن والموردين، تقارير، فروع متعددة وقارئ باركود.',
     },
     clinic: {
-      title: 'Aura Clinic | برنامج إدارة العيادات', // AR: drafted, native check pending
-      description: 'يغطي Aura Clinic المواعيد وملفات المرضى وخطط العلاج والفواتير للعيادات. مشفّر على جهاز العيادة ويعمل بدون الإنترنت.', // AR: drafted, native check pending
+      title: 'أورا كلينك | برنامج إدارة العيادات', // AR: drafted, native check pending
+      description: 'يغطي أورا كلينك المواعيد وملفات المرضى وخطط العلاج والفواتير للعيادات. مشفّر على جهاز العيادة ويعمل بدون الإنترنت.', // AR: drafted, native check pending
     },
     about: {
       title: 'من نحن والشركاء | أكشن أورا',
@@ -26,11 +26,11 @@ export const ar: Dict = {
     },
     faq: {
       title: 'الأسئلة الشائعة | أكشن أورا', // AR: drafted, native check pending
-      description: 'إجابات عن Aura Retail: العمل بدون الإنترنت، العربية، الأجهزة، الفروع، أمان البيانات، التركيب والتدريب. اسألنا عن الأسعار.', // AR: drafted, native check pending
+      description: 'إجابات عن أورا ريتيل: العمل بدون الإنترنت، العربية، الأجهزة، الفروع، أمان البيانات، التركيب والتدريب. اسألنا عن الأسعار.', // AR: drafted, native check pending
     },
     contact: {
       title: 'احجز عرضًا تجريبيًا | أكشن أورا',
-      description: 'احجز عرضًا تجريبيًا لـ Aura Retail أو تواصل معنا في عمّان على +962 78 006 9485.',
+      description: 'احجز عرضًا تجريبيًا لـ أورا ريتيل أو تواصل معنا في عمّان على +962 78 006 9485.',
     },
     privacy: {
       title: 'سياسة الخصوصية | أكشن أورا',
@@ -71,9 +71,42 @@ export const ar: Dict = {
   status: { available: 'متوفّر الآن', coming: 'قريبًا' },
   home: {
     hero: {
-      title: 'كبّر شغلك، واشتغل بذكاء', // AR: drafted, native check pending
-      lead: 'أكشن أورا نقطة البداية. أدِر عملك باحتراف، مع كاشير ومخزون وحسابات تبقى منظّمة حتى وأنت مرتاح.', // AR: drafted, native check pending
+      eyebrow: 'أورا ريتيل · متوفّر الآن',
+      title: 'جرّب الكاشير بنفسك.',
+      lead: 'اضغط على الأصناف وشوف الفاتورة تنحسب قدامك. هيك بتشتغل أورا ريتيل في محلّك، على ويندوز وأندرويد، وحتى لو قطع النت.', // AR: drafted, native check pending
+      hint: 'جرّب: اضغط على أي صنف', // AR: drafted, native check pending
     },
+    till: {
+      label: 'كاشير تجريبي مباشر', // AR: drafted, native check pending
+      brand: 'أورا ريتيل',
+      cashier: '· الكاشير 1',
+      online: 'متصل',
+      bill: 'الفاتورة',
+      empty: 'الفاتورة فاضية. اضغط على صنف.', // AR: drafted, native check pending
+      total: 'المجموع',
+      currency: 'د.أ',
+      pay: 'دفع نقدي',
+      done: 'تمت البيعة',
+      footnote: 'الأسعار في هذا المثال توضيحية.',
+      phoneApp: 'تطبيق المدير',
+      today: 'مبيعات اليوم',
+      count: 'عدد البيعات: ',
+      liveTotal: 'المجموع {n} د.أ', // AR: drafted, native check pending
+      liveDone: 'تمت البيعة، {n} د.أ', // AR: drafted, native check pending
+      items: [
+        { name: 'مياه 1.5 لتر', price: '0.350' },
+        { name: 'خبز عربي', price: '0.500' },
+        { name: 'لبنة 500 غم', price: '1.750' },
+        { name: 'شاي 100 كيس', price: '2.250' },
+        { name: 'بيبسي 330 مل', price: '0.400' },
+        { name: 'شيبس', price: '0.350' },
+      ],
+    },
+    facts: [
+      { title: 'يكمل البيع بدون إنترنت', body: 'النت قطع؟ الكاشير بيكمل، والمبيعات بتوصل لما يرجع.' }, // AR: drafted, native check pending
+      { title: 'موبايلك بيشوف الكاشير', body: 'تطبيق المدير بيورجيك شو بصير بالمحل وإنت برّا.' }, // AR: drafted, native check pending
+      { title: 'فريق في عمّان', body: 'بنركّب، وبندرّب، وبنضل معك.' }, // AR: drafted, native check pending
+    ],
     company: {
       title: 'أكشن أورا', accent: 'أورا',
       lead: 'شركة برمجيات أردنية تبني أنظمة تعمل كما تعمل المنشآت فعلًا.',
@@ -98,7 +131,6 @@ export const ar: Dict = {
     },
   },
   footer: {
-    tagline: 'كبّر شغلك، واشتغل بذكاء.', // AR: drafted, native check pending; the English brand line stays off /ar
     products: 'المنتجات', // AR: drafted, native check pending
     company: 'الشركة', // AR: drafted, native check pending
     privacy: 'الخصوصية', // AR: drafted, native check pending

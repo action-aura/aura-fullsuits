@@ -27,7 +27,7 @@ const crumbs = breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: c.ti
       <aside class="contact-direct">
         <h2>{direct.title}</h2>
         <WhatsAppPill lang={lang} />
-        <p><a href={PHONE_TEL}><bdi dir="ltr">{direct.call}</bdi></a></p>
+        <p><a class="tel" href={PHONE_TEL}><bdi dir="ltr">{direct.call}</bdi></a></p>
         <p><a href="mailto:info@actionaura.me">{direct.email}</a></p>
         <p>{direct.office}</p>
         <p>{direct.hours}</p>

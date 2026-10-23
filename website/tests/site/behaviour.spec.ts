@@ -5,20 +5,6 @@ test.use({
   launchOptions: { args: ['--use-gl=swiftshader', '--enable-webgl', '--ignore-gpu-blocklist'] },
 });
 
-const jx = (p: Page): Promise<number> =>
-  p.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--jx')));
-
-const scrollToSection = (p: Page, id: string, dy = 0): Promise<void> =>
-  p.evaluate(
-    ({ id, dy }) => {
-      const el = document.getElementById(id)!;
-      const r = el.getBoundingClientRect();
-      const top = window.scrollY + r.top + r.height / 2 - window.innerHeight / 2 + dy;
-      window.scrollTo({ top, behavior: 'instant' as ScrollBehavior });
-    },
-    { id, dy },
-  );
-
 test('sitemap has no duplicate hreflang', async ({ request }) => {
   const res = await request.get('/sitemap-0.xml');
   const xml = await res.text();
@@ -53,18 +39,28 @@ test('language switch is remembered by the chooser', async ({ browser }) => {
   await ctx.close();
 });
 
-// About is the only page that still has the jewel (Look 1 removed it everywhere else). Its first station is centred
-// (x .5), the story station sits at x .75; with the 3D chunk blocked the still must keep following scroll.
-test('stations still follow scroll when the 3D chunk fails (About)', async ({ page }) => {
+// About is the only page with the jewel, and it lives inside a navy band at the top (Look 1). The old scroll
+// "stations" are gone, so the old test that followed them is replaced by this one: with the 3D chunk blocked, the
+// still must stay inside the band, the band must be exactly as tall as the transparent hero section over it, and
+// nothing may be left of the dark page palette (the page behind the band is the light ivory).
+test('About: the still stays inside the navy band when the 3D chunk fails, and the page below is light', async ({ page }) => {
   await page.route('**/scene*.js', (r) => r.abort());
   await page.goto('/en/about/');
   await page.waitForLoadState('load');
   await page.waitForTimeout(1000);
-  expect(await jx(page)).toBeCloseTo(0.5, 2);
-  await scrollToSection(page, 'story');
-  await page.waitForTimeout(500);
-  expect(await jx(page)).toBeGreaterThan(0.6);
   await expect(page.locator('.jewel')).not.toHaveClass(/is-live/);
+  const band = await page.locator('.jewel-band').boundingBox();
+  const hero = await page.locator('#hero').boundingBox();
+  const still = await page.locator('.jewel-still').boundingBox();
+  expect(band && hero && still).toBeTruthy();
+  expect(Math.abs(band!.height - hero!.height), 'band is as tall as the hero section').toBeLessThanOrEqual(1);
+  expect(still!.y).toBeGreaterThanOrEqual(band!.y - 1);
+  expect(still!.y + still!.height).toBeLessThanOrEqual(band!.y + band!.height + 1);
+  const bg = await page.locator('.jewel-band').evaluate((e) => getComputedStyle(e).backgroundColor);
+  expect(bg).toBe('rgb(22, 35, 61)');
+  const below = await page.locator('#story').evaluate((e) => getComputedStyle(document.body).backgroundColor);
+  expect(below).toBe('rgb(246, 244, 239)');
+  expect(await page.evaluate(() => document.documentElement.hasAttribute('data-jewel'))).toBe(false);
 });
 
 type Box = { left: number; top: number; right: number; bottom: number };

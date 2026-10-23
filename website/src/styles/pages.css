@@ -35,13 +35,6 @@
   --frame-shadow: var(--shadow-card);
 }
 
-/* About keeps the dark jewel field, so its frames keep the old translucent look. */
-html[data-jewel] {
-  --frame-bg: rgba(255, 255, 255, .05);
-  --frame-img-line: rgba(255, 255, 255, .1);
-  --frame-shadow: var(--pill-shadow), 0 30px 60px -30px rgba(var(--scrim), .6);
-}
-
 .shot,
 .photo {
   margin: 0;
@@ -495,18 +488,48 @@ html[data-jewel] {
   }
 }
 
-/* ---------- About: centred hero, copy sits BELOW the jewel ---------- */
-.about-hero {
-  grid-template-columns: minmax(0, 1fr);
-  justify-items: center;
-  align-items: start;
-  text-align: center;
-  padding-block-start: 46vh;
+/* ---------- About: navy band at the top (the 3D jewel sits in it on desktop), light ivory page below ----------
+   Desktop: the jewel layer (Jewel.astro) is a sibling before <main>, exactly --bandh tall; this section is transparent
+   and exactly as tall, so the copy sits on the navy band at the start side and the mark on the other. Phones: no
+   jewel, the section paints its own navy. */
+.about-band {
+  --bandh: max(560px, calc(100svh - 112px));
+  position: relative;
+  background: var(--navy);
+  color: var(--ivory);
 }
 
-.about-hero > .copy {
-  grid-column: 1;
-  max-inline-size: 60ch;
+.about-band-inner {
+  inline-size: 100%;
+  max-inline-size: 1400px;
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+  padding-block: clamp(48px, 9vh, 88px);
+}
+
+.about-band h1 {
+  color: var(--ivory);
+}
+
+.about-band .lead {
+  color: rgba(246, 244, 239, .86);
+}
+
+@media (min-width: 900px) {
+  .about-band {
+    background: transparent;
+    block-size: var(--bandh);
+    display: grid;
+    align-items: center;
+  }
+
+  .about-band-inner {
+    padding-block: 0;
+  }
+
+  .about-band-inner > .copy {
+    max-inline-size: min(46%, 34rem);
+  }
 }
 
 .about-story,
@@ -586,10 +609,6 @@ html[data-jewel] {
 }
 
 @media (min-width: 900px) {
-  .about-hero {
-    padding-block-start: 74vh;
-  }
-
   .about-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 20px;
@@ -745,32 +764,40 @@ html[data-jewel] {
   align-items: center;
 }
 
+/* The submit button is the primary action (teal, filled) and WhatsApp the secondary (outlined navy), the same
+   pair and sizes as the home hero. Before this the two were the other way round. */
 .btn-send,
 .btn-send-wa {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  block-size: 52px;
+  padding-inline: 24px;
   border-radius: 999px;
   font: inherit;
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 500;
-  line-height: 1.2;
+  line-height: 1;
   cursor: pointer;
 }
 
 .btn-send {
-  padding: 12px 22px;
-  border: 1px solid var(--hair);
-  background: color-mix(in srgb, var(--field) 60%, transparent);
-  color: var(--ink);
-}
-
-.btn-send-wa {
-  padding: 12px 22px;
   border: 0;
   background: var(--btn);
   color: var(--on-accent);
-  box-shadow: var(--pill-shadow);
+}
+
+.btn-send-wa {
+  border: 1.5px solid var(--navy);
+  background: transparent;
+  color: var(--navy);
+}
+
+@media (max-width: 899px) {
+  .btn-send,
+  .btn-send-wa {
+    inline-size: 100%;
+  }
 }
 
 .btn-send:focus-visible,
@@ -853,7 +880,8 @@ html[data-jewel] {
   line-height: 1.6;
 }
 
-.contact-direct a:not([class]) {
+.contact-direct a:not([class]),
+.contact-direct a.tel {
   color: var(--ink);
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
@@ -868,11 +896,11 @@ html[data-jewel] {
 
 @media (hover: hover) and (pointer: fine) {
   .btn-send:hover {
-    border-color: var(--ink);
+    background: var(--btn-hover);
   }
 
   .btn-send-wa:hover {
-    background: var(--btn-hover);
+    background: color-mix(in srgb, var(--navy) 6%, transparent);
   }
 
   .demo-error-wa:hover {
@@ -880,55 +908,55 @@ html[data-jewel] {
   }
 }
 
-/* ---------- Look 1 layout: every page except About is a plain light page without the jewel ----------
+/* ---------- Look 1 layout: every page is a plain light page; only About has a jewel, inside its navy band ----------
    The old two-column grids left half the screen for the 3D mark. Without it that half would be an empty hole, so
    the copy takes the full width (still capped at a readable measure), and the fixed-nav top padding is gone: the nav
-   now sits in the flow below the phone strip. About keeps its original geometry (html[data-jewel]). */
-html:not([data-jewel]) .hero,
-html:not([data-jewel]) .close,
-html:not([data-jewel]) .chapter,
-html:not([data-jewel]) .page-hero,
-html:not([data-jewel]) .cta-block {
+   now sits in the flow below the phone strip. */
+.hero,
+.close,
+.chapter,
+.page-hero,
+.cta-block {
   grid-template-columns: minmax(0, 1fr);
   min-block-size: 0;
   align-items: start;
 }
 
-html:not([data-jewel]) .hero > .copy,
-html:not([data-jewel]) .close > .copy,
-html:not([data-jewel]) .chapter .copy,
-html:not([data-jewel]) .chapter.flip .copy,
-html:not([data-jewel]) .page-hero > .copy,
-html:not([data-jewel]) .cta-block > .copy {
+.hero > .copy,
+.close > .copy,
+.chapter .copy,
+.chapter.flip .copy,
+.page-hero > .copy,
+.cta-block > .copy {
   grid-column: 1;
   max-inline-size: 44rem;
 }
 
-html:not([data-jewel]) .hero,
-html:not([data-jewel]) .page-hero {
+.hero,
+.page-hero {
   padding-block: clamp(48px, 9vh, 96px) clamp(48px, 8vh, 80px);
 }
 
-html:not([data-jewel]) .chapter,
-html:not([data-jewel]) .close,
-html:not([data-jewel]) .cta-block {
+.chapter,
+.close,
+.cta-block {
   padding-block: clamp(40px, 8vh, 88px);
 }
 
-html:not([data-jewel]) .close,
-html:not([data-jewel]) .cta-block {
+.close,
+.cta-block {
   padding-block-end: clamp(72px, 12vh, 128px);
 }
 
-html:not([data-jewel]) .contact-grid {
+.contact-grid {
   padding-block: clamp(40px, 8vh, 80px) clamp(72px, 12vh, 128px);
 }
 
-html:not([data-jewel]) .read {
+.read {
   padding-block: clamp(40px, 8vh, 80px) clamp(72px, 12vh, 128px);
 }
 
 /* Chapter blocks alternate on a hairline so the home page still reads as separate sections */
-html:not([data-jewel]) .chapter + .chapter {
+.chapter + .chapter {
   border-block-start: 1px solid var(--hair);
 }

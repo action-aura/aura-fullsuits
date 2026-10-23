@@ -1,0 +1,71 @@
+---
+// Hero of the home page: the live till (directions.md 8.4). Server-rendered so the page reads complete without JS;
+// src/scripts/live-till.ts makes it sell. Prices are example prices (the footnote says so). The script reads the
+// item names and prices back out of the DOM, so the markup is the single source of truth.
+import { dict, type Lang } from '../i18n';
+import { pagePath } from '../lib/seo';
+import { waLink } from '../lib/lang';
+
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = dict(lang);
+const h = t.home.hero;
+const k = t.home.till;
+const arrow = lang === 'ar' ? '←' : '→';
+const BARS = [30, 44, 26, 52, 38, 58, 8];
+---
+<div class="lt-grid">
+  <div class="lt-copy">
+    <span class="lt-pill"><span class="lt-dot" aria-hidden="true"></span>{h.eyebrow}</span>
+    <h1>{h.title}</h1>
+    <p class="lt-lead">{h.lead}</p>
+    <div class="lt-btns">
+      <a class="lt-btn lt-btn-p" href={pagePath(lang, 'contact')}>{t.cta.demo}</a>
+      <a class="lt-btn lt-btn-s" href={waLink(t.cta.waText)} target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><path d="M12 3a9 9 0 0 0-7.8 13.5L3 21l4.6-1.2A9 9 0 1 0 12 3z" /></svg>
+        {t.cta.whatsapp}
+      </a>
+    </div>
+    <p class="lt-hint">{h.hint} <span class="lt-hint-side" aria-hidden="true">{arrow}</span><span class="lt-hint-down" aria-hidden="true">{'↓'}</span></p>
+  </div>
+
+  <div class="lt-till-wrap" data-till data-empty={k.empty} data-live-total={k.liveTotal} data-live-done={k.liveDone} role="group" aria-label={k.label}>
+    <div class="lt-till">
+      <div class="lt-th">
+        <div class="lt-th-l">
+          <svg viewBox="0 0 28 28" width="16" height="16" aria-hidden="true" focusable="false"><path d="M14 2 L3 26 H11 Z" fill="#8FD0D0" /><path d="M14 2 L25 26 H17 Z" fill="#F6F4EF" /></svg>
+          {k.brand}<span>{k.cashier}</span>
+        </div>
+        <div class="lt-chip"><i aria-hidden="true"></i>{k.online}</div>
+      </div>
+      <div class="lt-tbody">
+        <div class="lt-items">
+          {k.items.map((it) => (
+            <button type="button" class="lt-item" data-item data-name={it.name} data-price={it.price}>
+              <span class="lt-n">{it.name}</span>
+              <span class="num">{it.price}</span>
+            </button>
+          ))}
+        </div>
+        <div class="lt-bill">
+          <div class="lt-bh"><b>{k.bill}</b><span class="num" data-billno>#1042</span></div>
+          <ul class="lt-lines" data-lines><li class="lt-empty">{k.empty}</li></ul>
+          <div class="lt-div"></div>
+          <div class="lt-trow"><span class="lt-lb">{k.total}</span><span><span class="num lt-total" data-total>0.000</span><span class="lt-cur"> {k.currency}</span></span></div>
+          <button type="button" class="lt-pay" data-pay disabled>{k.pay}</button>
+          <div class="lt-done" data-done aria-hidden="true">{k.done} · <span class="num" data-donesum>0.000</span> {k.currency}</div>
+        </div>
+      </div>
+    </div>
+    <p class="lt-foot">{k.footnote}</p>
+    <div class="lt-phone"><div class="lt-pscr" data-pscr>
+      <div class="lt-pt">{k.phoneApp}</div>
+      <div class="lt-pk">{k.today}</div>
+      <div><span class="num lt-big" data-ptotal>0.000</span><span class="lt-pu"> {k.currency}</span></div>
+      <div class="lt-pcnt">{k.count}<span class="num" data-pcount>0</span></div>
+      <div class="lt-bars" data-bars>{BARS.map((px) => <i style={`height:${px}px`}></i>)}</div>
+    </div></div>
+    <p class="visually-hidden" aria-live="polite" data-live></p>
+  </div>
+</div>
+<script>import '../scripts/live-till';</script>

@@ -15,14 +15,16 @@ const t = dict(lang);
 const a = t.pages.about;
 const crumbs = breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: t.nav.about, slug: 'about' }]);
 ---
-<Base lang={lang} slug="about" jewel title={t.meta.about.title} description={t.meta.about.description} jsonld={[professionalServiceLd(lang), crumbs]}>
+<Base lang={lang} slug="about" title={t.meta.about.title} description={t.meta.about.description} jsonld={[professionalServiceLd(lang), crumbs]}>
   <Nav lang={lang} slug="about" />
-  <Jewel lang={lang} stations="about" />
+  <Jewel lang={lang} />
   <main id="main">
-    <section id="hero" data-w="master" class="page-hero about-hero">
-      <div class="copy reveal">
-        <h1>{a.hero.title}</h1>
-        <p class="lead">{a.hero.lead}</p>
+    <section id="hero" data-w="master" class="about-band">
+      <div class="about-band-inner">
+        <div class="copy reveal">
+          <h1>{a.hero.title}</h1>
+          <p class="lead">{a.hero.lead}</p>
+        </div>
       </div>
     </section>
 
@@ -102,8 +104,4 @@ const crumbs = breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: t.na
     </section>
   </main>
   <Footer lang={lang} slug="about" />
-  <script>
-    import { startWorlds } from '../../../scripts/worlds/apply';
-    startWorlds(document.documentElement);
-  </script>
 </Base>

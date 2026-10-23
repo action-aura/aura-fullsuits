@@ -47,6 +47,6 @@ export const contactAr: DeepStrings<typeof contactEn> = {
     call: '+962 78 006 9485',
     email: 'info@actionaura.me',
     office: 'مجمع الريان، شارع الإذاعة والتلفزيون، المقابلين، عمّان',
-    hours: 'من الأحد إلى الخميس، 9:00 إلى 17:00', // OWNER: confirm hours
+    hours: 'من الأحد إلى الخميس، 11:00 إلى 18:00', // OWNER: confirm hours
   },
 };

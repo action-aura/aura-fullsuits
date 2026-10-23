@@ -5,6 +5,9 @@ import Footer from '../../components/Footer.astro';
 import Chapter from '../../components/Chapter.astro';
 import WhatsAppPill from '../../components/WhatsAppPill.astro';
 import DemoLink from '../../components/DemoLink.astro';
+import LiveTill from '../../components/LiveTill.astro';
+import Facts from '../../components/Facts.astro';
+import '../../styles/live-till.css';
 import { dict, LANGS, type Lang } from '../../i18n';
 import { pagePath } from '../../lib/seo';
 import { organizationLd } from '../../lib/jsonld';
@@ -16,11 +19,10 @@ const t = dict(lang);
 <Base lang={lang} slug="" title={t.meta.home.title} description={t.meta.home.description} jsonld={[organizationLd(lang)]}>
   <Nav lang={lang} slug="" />
   <main id="main">
-    <section id="hero" data-w="master" class="hero">
-      <div class="copy reveal">
-        <h1>{t.home.hero.title}</h1>
-        <p class="lead">{t.home.hero.lead}</p>
-        <div class="ctas"><WhatsAppPill lang={lang} /><DemoLink lang={lang} /></div>
+    <section id="hero" class="lt-hero">
+      <div class="lt-wrap">
+        <LiveTill lang={lang} />
+        <Facts lang={lang} />
       </div>
     </section>
     <Chapter id="aura" lang={lang} world="master" title={t.home.company.title} accentWord={t.home.company.accent} lead={t.home.company.lead} />
