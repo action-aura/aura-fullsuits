@@ -6,6 +6,8 @@ const PRESSABLE = [
   '.wa-pill', '.demo-link', '.nav-demo', '.nav-toggle', '.chapter-link', '.nav-sheet-link', '.btn-send', '.btn-send-wa',
   // E2: the playable retail demos
   '.lt-item', '.lt-pay', '.of-sw', '.of-new', '.wd-tab',
+  // E3: clinic booking slots and gym member cards
+  '.bk-free', '.ck-card',
 ].join(',');
 
 const reduced = matchMedia('(prefers-reduced-motion: reduce)');

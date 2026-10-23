@@ -26,14 +26,22 @@ export const HOME_DESKTOP: Station[] = [
   { x: 0.27, y: 0.54, scale: CHAPTER_SCALE, alpha: 0 },  // retail: what it does (pinned)
   { x: 0.27, y: 0.54, scale: CHAPTER_SCALE, alpha: 0 },  // retail: tail gate (after the pinned stage)
   { x: 0.73, y: 0.54, scale: CHAPTER_SCALE },  // clinic
+  // E3: the clinic and the gym each get a full-width preview card after their copy, so each gets the same treatment
+  // as the retail demos: a zero-height gate before it, the card (alpha 0) and a zero-height gate after it.
+  { x: 0.73, y: 0.54, scale: CHAPTER_SCALE, alpha: 0 },  // clinic: gate
+  { x: 0.73, y: 0.54, scale: CHAPTER_SCALE, alpha: 0 },  // clinic: booking preview
+  { x: 0.73, y: 0.54, scale: CHAPTER_SCALE, alpha: 0 },  // clinic: tail gate
   { x: 0.27, y: 0.54, scale: CHAPTER_SCALE },  // gym (copy flipped right)
+  { x: 0.27, y: 0.54, scale: CHAPTER_SCALE, alpha: 0 },  // gym: gate
+  { x: 0.27, y: 0.54, scale: CHAPTER_SCALE, alpha: 0 },  // gym: check-in preview
+  { x: 0.27, y: 0.54, scale: CHAPTER_SCALE, alpha: 0 },  // gym: tail gate
   { x: 0.73, y: 0.56, scale: CHAPTER_SCALE },  // close
 ];
 // Phones: the mark lives in the hero only. Every entry is the same pose, so nothing glides or shrinks behind a
 // chapter's text; the Jewel script places the pose under the hero copy (phoneHeroPose) and fades it out as the hero
 // leaves (phoneHeroFade). x is ignored on phones (centred).
 const PHONE_POSE: Station = { x: 0.5, y: 0.62, scale: 0.6 };
-export const HOME_PHONE: Station[] = Array.from({ length: 11 }, () => ({ ...PHONE_POSE }));
+export const HOME_PHONE: Station[] = Array.from({ length: 17 }, () => ({ ...PHONE_POSE }));
 
 // One station per [data-w] section of ProductPage.astro, in DOM order: hero, day rail, features, details, demo CTA.
 // stationAt caps at the number of section centres, so an extra entry is unreachable: a sixth entry once made the .9

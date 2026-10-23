@@ -1,0 +1,66 @@
+---
+// Clinic chapter, preview: book an appointment (E3). Server-rendered with three booked slots so the page reads complete
+// without JS; src/scripts/clinic-book.ts makes the free slots work. Every word the script writes comes from data-*
+// attributes and the patients list rendered here, so the script holds no language of its own. The weekday name is
+// written by the script (it is "today", so it cannot be known at build time).
+// Claims: appointments, patient files, treatment plans, invoices. Nothing about reminders or messages.
+import { dict, type Lang } from '../i18n';
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const b = dict(lang).home.book;
+// 8 slots; the first three patients are already booked (slot index -> patient index).
+const SLOTS = ['10:00', '11:00', '12:00', '13:30', '14:30', '15:30', '16:30', '17:30'];
+const BOOKED: Record<number, number> = { 0: 0, 2: 1, 5: 2 };
+const first = b.patients[2];
+---
+<section class="demo demo-clinic" id="book" data-w="clinic" aria-labelledby="bk-h" data-book data-lang={lang}
+  data-announce={b.announce} data-booked-word={b.booked}>
+  <div class="demo-inner">
+    <div class="demo-copy reveal">
+      <p class="demo-eyebrow">{b.eyebrow}</p>
+      <h2 id="bk-h">{b.title}</h2>
+      <p class="lead">{b.lead}</p>
+    </div>
+    <div class="demo-stage reveal-card">
+      <div class="dc bk" role="group" aria-label={b.label}>
+        <div class="dc-head">
+          <div class="dc-head-l"><span class="dc-day" data-bk-day>{b.today}</span></div>
+          <div class="dc-count"><span class="dc-count-n num" data-bk-count>{Object.keys(BOOKED).length}</span> {b.count}</div>
+        </div>
+        <div class="bk-body">
+          <ul class="bk-slots" data-bk-slots>
+            {SLOTS.map((t, i) => {
+              const p = BOOKED[i] !== undefined ? b.patients[BOOKED[i]] : null;
+              return (
+                <li class:list={['bk-slot', { 'is-booked': !!p }]} data-slot={t}>
+                  <span class="bk-time num">{t}</span>
+                  {p ? (
+                    <span class="bk-fill" data-patient={BOOKED[i]}><b>{p.name}</b> · {p.tx}<span class="visually-hidden"> ({b.booked})</span></span>
+                  ) : (
+                    <button type="button" class="bk-free" data-bk-free aria-label={b.bookFree.replace('{t}', t)}>{b.free}</button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          <aside class="bk-file" aria-labelledby="bk-file-h">
+            <h3 id="bk-file-h" class="bk-file-h">{b.fileTitle}</h3>
+            <div class="bk-avatar" aria-hidden="true" data-bk-av>{first.name.slice(0, 1)}</div>
+            <p class="bk-pname" data-bk-name>{first.name}</p>
+            <dl class="bk-dl">
+              <dt>{b.lastVisit}</dt><dd data-bk-last>{first.last}</dd>
+              <dt>{b.plan}</dt><dd data-bk-plan>{first.plan}</dd>
+            </dl>
+            <p class="bk-tx" data-bk-tx>{first.tx}</p>
+          </aside>
+        </div>
+        <ol hidden data-bk-patients>
+          {b.patients.map((p) => <li data-n={p.name} data-t={p.tx} data-l={p.last} data-p={p.plan}></li>)}
+        </ol>
+      </div>
+      <p class="dc-foot">{b.footnote}</p>
+    </div>
+    <p class="visually-hidden" aria-live="polite" data-bk-live></p>
+  </div>
+</section>
+<script>import '../scripts/clinic-book';</script>

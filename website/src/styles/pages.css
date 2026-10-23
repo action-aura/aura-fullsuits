@@ -35,7 +35,8 @@
   --frame-shadow: var(--pill-shadow), 0 30px 60px -30px rgba(var(--scrim), .6);
 }
 
-[data-world="clinic"] {
+[data-world="clinic"],
+.demo[data-w="clinic"] {
   --frame-bg: rgba(22, 35, 61, .05);
   --frame-img-line: rgba(0, 0, 0, .1);
 }

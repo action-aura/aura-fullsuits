@@ -150,6 +150,53 @@ export const ar: Dict = {
         { tab: 'فروع', fact: 'أكثر من فرع بنظام واحد، وموبايلك بيورجيك مبيعات كل فرع.', alt: 'شاشة اليوم في أورا ريتيل: بطاقة لكل فرع مع مبيعاته، ومخطط لآخر أربعة عشر يومًا.' },
       ],
     },
+    // E3: clinic booking and gym check-in previews. Claims are only: appointments, patient files, treatment plans,
+    // invoices (clinic); members, subscriptions, attendance check-in (gym). Names and treatments are made up.
+    book: {
+      eyebrow: 'جرّب الحجز', // AR: drafted, native check pending
+      title: 'احجز موعدًا بضغطة وحدة.', // AR: drafted, native check pending
+      lead: 'اضغط على وقت فاضي، وشوف الموعد بينحجز باسم مريض وملفه بيفتح بجانبه.', // AR: drafted, native check pending
+      label: 'حجز مواعيد تجريبي', // AR: drafted, native check pending
+      today: 'اليوم',
+      count: 'مواعيد اليوم',
+      free: 'متاح',
+      bookFree: 'احجز الساعة {t}',
+      booked: 'محجوز',
+      fileTitle: 'ملف المريض',
+      lastVisit: 'آخر زيارة',
+      plan: 'خطة العلاج',
+      announce: 'تم حجز الساعة {t} للمريض {name}، {tx}. مواعيد اليوم: {n}.', // AR: drafted, native check pending
+      footnote: 'هذا عرض توضيحي.',
+      patients: [
+        { name: 'سارة', tx: 'تنظيف أسنان', last: 'قبل 6 أشهر', plan: 'الخطوة 1 من 2' },
+        { name: 'أحمد', tx: 'فحص دوري', last: 'قبل 4 أشهر', plan: 'الخطوة 1 من 1' },
+        { name: 'لينا', tx: 'حشوة', last: 'قبل أسبوعين', plan: 'الخطوة 2 من 3' },
+        { name: 'خالد', tx: 'تبييض', last: 'قبل 3 أسابيع', plan: 'الخطوة 1 من 2' },
+        { name: 'ريم', tx: 'متابعة تقويم', last: 'قبل شهر', plan: 'الخطوة 5 من 8' },
+        { name: 'يوسف', tx: 'علاج عصب', last: 'قبل 10 أيام', plan: 'الخطوة 2 من 3' },
+        { name: 'هنادي', tx: 'فحص أطفال', last: 'قبل سنة', plan: 'الخطوة 1 من 1' },
+        { name: 'ليث', tx: 'تنظيف أسنان', last: 'قبل 5 أشهر', plan: 'الخطوة 1 من 2' },
+      ],
+    },
+    checkin: {
+      eyebrow: 'جرّب الدخول', // AR: drafted, native check pending
+      title: 'اضغط على عضو وشوف شو بصير عند الباب.', // AR: drafted, native check pending
+      lead: 'صاحب الاشتراك الساري بيدخل، والمنتهي بيرجع للاستقبال.', // AR: drafted, native check pending
+      label: 'تسجيل دخول أعضاء تجريبي', // AR: drafted, native check pending
+      soon: 'قريبًا',
+      visits: 'زيارات اليوم',
+      door: 'الباب',
+      idle: 'اختر عضوًا',
+      welcome: 'أهلين يا {name} · {days}',
+      expiredMsg: 'الاشتراك منتهي · جدّد عند الاستقبال',
+      expiredShort: 'منتهي',
+      footnote: 'هذا عرض توضيحي.',
+      members: [
+        { name: 'عمر', days: 'باقي 12 يوم', ok: 'true' },
+        { name: 'دانة', days: 'باقي 3 أيام', ok: 'true' },
+        { name: 'كريم', days: 'منتهي', ok: 'false' },
+      ],
+    },
     clinic: {
       title: 'أورا كلينك', accent: 'كلينك',
       lead: 'المواعيد وملفات المرضى وخطط العلاج والفواتير، في النظام الهادئ نفسه.', // AR: drafted, native check pending

@@ -106,8 +106,10 @@
 }
 
 /* The empty station after the pinned stage (see stations.ts). */
+/* E3: 24vh left a stretch of empty brown after the pinned stage; 8vh is enough for the mark's gate and the next chapter
+   arrives promptly. */
 .demo-tail {
-  block-size: 24vh;
+  block-size: 8vh;
 }
 
 @media (max-width: 899px) {
@@ -352,27 +354,31 @@
 }
 
 .lt-done {
+  /* E3: the banner covers the WHOLE bill panel (header, lines, total, pay), so no line is ever half-clipped under it
+     mid-animation. It only fades (opacity), so there is no moving edge to cut a line. */
   position: absolute;
-  inset-block-start: 44px;
-  inset-inline: 16px;
-  padding: 14px;
-  border-radius: 12px;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: .35em;
+  padding: 16px;
   background: var(--accent);
   color: var(--dev-ink);
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 600;
+  line-height: 1.5;
   text-align: center;
   pointer-events: none;
   visibility: hidden;
   opacity: 0;
-  transform: translateY(-12px);
-  transition: opacity 260ms var(--ease-out), transform 260ms var(--ease-out), visibility 0s linear 260ms;
+  transition: opacity 220ms var(--ease-out), visibility 0s linear 220ms;
 }
 
 .lt-done.lt-show {
   visibility: visible;
   opacity: 1;
-  transform: translateY(0);
   transition-delay: 0s;
 }
 
@@ -1107,7 +1113,6 @@
 
   .lt-done {
     transition: none;
-    transform: none;
   }
 
   .of-th,

@@ -162,7 +162,7 @@ test('reduced motion: the demo cards are at rest from the first frame, nothing t
   await page.goto('/en/');
   await page.waitForLoadState('load');
   const states = await page.evaluate(() => Array.from(document.querySelectorAll('.reveal-card')).map((el) => { const cs = getComputedStyle(el); return { o: cs.opacity, t: cs.transform, d: cs.transitionDuration }; }));
-  expect(states.length).toBe(3);
+  expect(states.length).toBe(5); // till, offline, what, clinic booking, gym check-in (E3)
   for (const s of states) { expect(s.o).toBe('1'); expect(s.t).toBe('none'); expect(s.d).toBe('0s'); }
   await ctx.close();
 });
@@ -181,7 +181,8 @@ test('tap: demo buttons scale to .97 on pointerdown and glow in the retail accen
     const box = (await btn.boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
-    await page.waitForTimeout(220);
+    // 170ms: past the 120ms press transition, well inside the 480ms glow. 220ms lost the glow when the machine was loaded.
+    await page.waitForTimeout(170);
     expect(await scale(), `${sel} pressed`).toBe('0.97');
     const glow = await page.evaluate(() => { const g = document.querySelector('.tap-glow'); return g ? getComputedStyle(g).backgroundImage : ''; });
     expect(glow, `${sel} glow`).toContain('radial-gradient');

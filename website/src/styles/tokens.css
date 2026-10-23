@@ -36,8 +36,9 @@
   color-scheme: dark;
 }
 
-/* Light room */
-[data-world="clinic"] {
+/* Light room (.demo[data-w="clinic"]: the booking preview carries the tokens itself, as the retail demos do) */
+[data-world="clinic"],
+.demo[data-w="clinic"] {
   --field-a: #F8FBFD;
   --field-b: #EEF4F8;
   --field-c: #D8E5EF;
@@ -52,7 +53,8 @@
   color-scheme: light;
 }
 
-[data-world="gym"] {
+[data-world="gym"],
+.demo[data-w="gym"] {
   --field-a: #110709;
   --field-b: #1A0C12;
   --field-c: #2C1120;
@@ -73,11 +75,13 @@
   [data-world="retail"],
   .demo[data-w="retail"],
   .wd[data-w="retail"],
-  [data-world="gym"] {
+  [data-world="gym"],
+  .demo[data-w="gym"] {
     --ink-muted: rgba(246, 244, 239, .84);
   }
 
-  [data-world="clinic"] {
+  [data-world="clinic"],
+  .demo[data-w="clinic"] {
     --ink-muted: #2F3C52;
   }
 }

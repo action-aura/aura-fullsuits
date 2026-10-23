@@ -1,0 +1,46 @@
+---
+// Gym chapter, preview: member check-in (E3). Server-rendered in its idle state; src/scripts/gym-checkin.ts makes the
+// cards work. The product is coming soon and the card says so. Claims: members, subscriptions, attendance check-in.
+import { dict, type Lang } from '../i18n';
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const c = dict(lang).home.checkin;
+---
+<section class="demo demo-gym flip" id="checkin" data-w="gym" aria-labelledby="ck-h" data-checkin
+  data-welcome={c.welcome} data-expired={c.expiredMsg} data-idle={c.idle}>
+  <div class="demo-inner">
+    <div class="demo-copy reveal">
+      <p class="demo-eyebrow">{c.eyebrow}</p>
+      <h2 id="ck-h">{c.title}</h2>
+      <p class="lead">{c.lead}</p>
+    </div>
+    <div class="demo-stage reveal-card">
+      <div class="dc ck" role="group" aria-label={c.label}>
+        <div class="dc-head">
+          <div class="dc-head-l"><span class="dc-soon">{c.soon}</span></div>
+          <div class="dc-count"><span class="dc-count-n num" data-ck-visits>0</span> {c.visits}</div>
+        </div>
+        <div class="ck-body">
+          <ul class="ck-members">
+            {c.members.map((m) => (
+              <li>
+                <button type="button" class:list={['ck-card', { 'is-expired': m.ok === 'false' }]} data-member data-name={m.name} data-days={m.days} data-ok={m.ok}>
+                  <span class="ck-av" aria-hidden="true">{m.name.slice(0, 1)}</span>
+                  <span class="ck-name">{m.name}</span>
+                  <span class="ck-days">{m.days}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div class="ck-door" data-ck-door data-state="idle">
+            <p class="ck-door-l">{c.door}</p>
+            <p class="ck-msg" data-ck-msg>{c.idle}</p>
+          </div>
+        </div>
+      </div>
+      <p class="dc-foot">{c.footnote}</p>
+    </div>
+    <p class="visually-hidden" aria-live="polite" data-ck-live></p>
+  </div>
+</section>
+<script>import '../scripts/gym-checkin';</script>
