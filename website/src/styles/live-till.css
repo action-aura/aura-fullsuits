@@ -378,7 +378,7 @@ section.cl h2 { max-inline-size: 14em; font-size: clamp(40px, 7vw, 96px); line-h
 .cl-phone-box { margin-block-start: 72px; }
 .cl-label { font-size: 20px; line-height: 1.6; font-weight: 600; text-align: start; }
 .cl-phone { display: inline-block; white-space: nowrap; font-size: clamp(40px, 14.5vw, 200px); line-height: .95; font-weight: 700; color: var(--navy); text-decoration: none; transition: color 200ms; }
-.cl-phone:hover { color: var(--copper-dk); }
+.cl-phone:hover { color: var(--teal-dk); }
 .cl-phone:focus-visible { outline: 3px solid var(--teal-dk); outline-offset: 6px; border-radius: 6px; }
 .cl-platforms { margin-block-start: 24px; font-size: 16px; line-height: 1.6; color: var(--ink2); text-align: start; }
 @media (max-width: 900px) {

@@ -35,7 +35,6 @@ a {
   color: inherit;
 }
 
-.prose a,
 .lead a {
   color: var(--link);
   text-decoration-thickness: 1px;
@@ -189,10 +188,6 @@ h3 {
   text-transform: none !important;
 }
 
-.hero .ar-title {
-  font-size: clamp(1.35rem, 1rem + 1.4vw, 2.1rem);
-}
-
 body:lang(ar) {
   font-size: 1.0625rem;
   line-height: 1.9;
@@ -274,50 +269,6 @@ body:lang(ar) {
     transform: none;
     transition: none;
     transition-delay: 0s !important;
-  }
-}
-
-/* Hero and close layout (prototype logo-worlds.html lines 86-97): same box as .chapter, copy in column 1 */
-.hero,
-.close {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  inline-size: 100%;
-  max-inline-size: 1400px;
-  margin-inline: auto;
-  padding-inline: var(--gutter);
-}
-
-@media (min-width: 900px) {
-  .hero,
-  .close {
-    grid-template-columns: minmax(0, 46%) 1fr;
-    align-items: center;
-  }
-
-  .hero > .copy,
-  .close > .copy {
-    grid-column: 1;
-  }
-}
-
-.hero {
-  min-block-size: 100vh;
-  min-block-size: 100svh;
-  padding-block: 72px 88px;
-}
-
-.close {
-  min-block-size: 70vh;
-  padding-block: clamp(88px, 14vh, 150px) clamp(120px, 18vh, 200px);
-}
-
-@media (max-width: 899px) {
-  .hero,
-  .close {
-    align-items: start;
-    padding-block-start: min(16vh, 140px);
   }
 }
 

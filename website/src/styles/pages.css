@@ -187,10 +187,6 @@
   .bento > .cell:has(.shot) {
     grid-column: span 3;
   }
-
-  .bento-5 > .cell:nth-child(n + 4) {
-    grid-column: span 3;
-  }
 }
 
 /* ---------- Photo pair (the close of the Retail features chapter) ----------
@@ -212,7 +208,7 @@
   }
 }
 
-/* ---------- CTA block (same grid as .close; copy opposite the jewel) ---------- */
+/* ---------- CTA block (copy opposite the jewel) ---------- */
 .cta-block {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -232,7 +228,7 @@
   }
 }
 
-/* ---------- Page hero (product + about): laid out like .hero ---------- */
+/* ---------- Page hero (product + about) ---------- */
 .page-hero {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -912,8 +908,6 @@
    The old two-column grids left half the screen for the 3D mark. Without it that half would be an empty hole, so
    the copy takes the full width (still capped at a readable measure), and the fixed-nav top padding is gone: the nav
    now sits in the flow below the phone strip. */
-.hero,
-.close,
 .chapter,
 .page-hero,
 .cta-block {
@@ -922,8 +916,6 @@
   align-items: start;
 }
 
-.hero > .copy,
-.close > .copy,
 .chapter .copy,
 .chapter.flip .copy,
 .page-hero > .copy,
@@ -932,18 +924,15 @@
   max-inline-size: 44rem;
 }
 
-.hero,
 .page-hero {
   padding-block: clamp(48px, 9vh, 96px) clamp(48px, 8vh, 80px);
 }
 
 .chapter,
-.close,
 .cta-block {
   padding-block: clamp(40px, 8vh, 88px);
 }
 
-.close,
 .cta-block {
   padding-block-end: clamp(72px, 12vh, 128px);
 }
