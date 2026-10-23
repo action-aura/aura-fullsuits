@@ -174,7 +174,11 @@
 .of-demo { position: relative; display: flex; align-items: center; gap: 28px; }
 .of-till { position: relative; flex: 1; min-inline-size: 0; min-block-size: 340px; border-radius: 20px; }
 /* The clip sits inside so the queue badge can overhang the till's top edge. */
-.of-tin { overflow: hidden; min-block-size: 340px; background: var(--paper); color: var(--navy); border-radius: 20px; }
+.of-tin { overflow: hidden; min-block-size: 340px; background: var(--paper); color: var(--navy); border-radius: 20px; box-shadow: 0 0 0 1px rgba(246, 244, 239, .18); }
+/* The till header is navy and the band is navy, so on this band the card lost its top edge and the chip floated. A lighter
+   header plus the 1px ring above make the card read as a device. The queue badge sits ABOVE the card (start corner), clear of
+   the header chip at every width. */
+.of .lt-th { background: var(--navy-2); }
 .of-chip-off { padding: 4px 10px; border-radius: 999px; background: var(--copper); color: var(--navy); }
 .of-chip-off i { display: none; }
 .of-tb { padding: 16px; }
@@ -189,7 +193,7 @@
 .of-st { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--copper-dk); }
 .of-st.of-ok { color: var(--teal); }
 .of-badge {
-  position: absolute; z-index: 3; inset-block-start: -12px; inset-inline-start: 16px; padding: 4px 12px; border-radius: 999px;
+  position: absolute; z-index: 3; inset-block-start: -38px; inset-inline-start: 0; padding: 4px 12px; border-radius: 999px;
   background: var(--copper); color: var(--navy); font-size: 13px; font-weight: 700; line-height: 1.6; pointer-events: none;
   opacity: 0; transform: scale(.6); transition: transform 200ms, opacity 200ms;
 }
@@ -212,7 +216,7 @@
   .of-wrap { grid-template-columns: 1fr; gap: 40px; padding-inline: 16px; }
   .of h2 { font-size: 32px; }
   .of .of-lead { font-size: 17px; }
-  .of-demo { flex-direction: column; gap: 0; }
+  .of-demo { flex-direction: column; gap: 0; margin-block-start: 28px; } /* room for the queue badge that sits above the till */
   .of-till { inline-size: 100%; flex: none; }
   .of-cable { display: none; }
   .of-vline { display: block; position: relative; inline-size: 2px; block-size: 80px; overflow: hidden; }
@@ -227,4 +231,43 @@
   .of-new:active { transform: none; }
   .of-sales li.of-in, .of .lt-pscr.lt-ping { animation: none; }
   .of-cable path, .of-vline::before { animation: none; }
+}
+
+/* ---- What it does (directions.md 3 item 6) ---- */
+.wd { background: var(--ivory); color: var(--navy); }
+.wd-wrap { inline-size: 100%; max-inline-size: 1360px; margin-inline: auto; padding-inline: 32px; }
+.wd .wd-eyebrow { font-size: 14px; font-weight: 500; line-height: 1.6; color: var(--teal-dk); }
+.wd h2 { margin-block-start: 8px; font-size: 40px; line-height: 1.25; font-weight: 700; letter-spacing: 0; text-wrap: balance; color: var(--navy); }
+.wd-grid { margin-block-start: 32px; display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 32px; align-items: center; }
+.wd-list { display: flex; flex-direction: column; gap: 4px; }
+.wd-tab { display: flex; align-items: baseline; gap: 14px; padding-block: 8px; padding-inline: 0; border: 0; background: none; font: inherit; font-size: 34px; line-height: 1.4; font-weight: 400; color: #636B7D; text-align: start; cursor: pointer; }
+.wd-tab[aria-selected="true"] { font-weight: 700; color: var(--navy); }
+.wd-n { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--copper-dk); }
+.wd-tab:focus-visible { outline: 2px solid var(--teal); outline-offset: 4px; border-radius: 6px; }
+.wd-panels { display: grid; }
+.wd-panel { grid-area: 1 / 1; display: grid; grid-template-columns: minmax(0, 1fr) 210px; gap: 32px; align-items: center; opacity: 0; visibility: hidden; transition: opacity 400ms ease, visibility 0s 400ms; }
+.wd-panel[data-active="true"] { opacity: 1; visibility: visible; transition: opacity 400ms ease, visibility 0s; }
+.wd-frame { margin: 0; aspect-ratio: 2.2 / 1; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); box-shadow: var(--shadow-card); }
+.wd-img { display: block; inline-size: 100%; block-size: 100%; object-fit: cover; object-position: top; }
+.wd-fact { padding-inline-start: 16px; border-inline-start: 2px solid var(--copper); font-size: 20px; line-height: 1.7; color: var(--navy); text-align: start; }
+@media (min-width: 900px) {
+  .wd-track { block-size: 300vh; }
+  .wd-stick { position: sticky; inset-block-start: 72px; block-size: calc(100vh - 72px); display: flex; align-items: center; }
+}
+@media (max-width: 899.98px) {
+  .wd { padding-block: 72px; }
+  .wd-wrap { padding-inline: 16px; }
+  .wd h2 { font-size: 32px; }
+  .wd-grid { display: block; margin-block-start: 24px; }
+  .wd-list { flex-direction: row; flex-wrap: wrap; gap: 6px; }
+  .wd-tab { flex: 1 1 auto; justify-content: center; min-block-size: 44px; padding-inline: 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); font-size: 15px; font-weight: 500; color: var(--navy); }
+  .wd-tab[aria-selected="true"] { background: var(--navy); border-color: var(--navy); color: var(--ivory); font-weight: 700; }
+  .wd-n { display: none; }
+  .wd-panels { display: block; margin-block-start: 20px; }
+  .wd-panel { display: none; opacity: 1; visibility: visible; transition: none; }
+  .wd-panel[data-active="true"] { display: block; }
+  .wd-fact { margin-block-start: 16px; font-size: 17px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wd-panel, .wd-panel[data-active="true"] { transition: none; }
 }

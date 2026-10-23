@@ -120,6 +120,17 @@ export const en = {
       toastFew: '{n} sales arrived',
       toastMany: '{n} sales arrived',
     },
+    what: {
+      eyebrow: 'What it does',
+      title: 'Four things that run the shop.',
+      listLabel: 'Parts of the program',
+      items: [
+        { tab: 'Sell', fact: 'Scan the barcode with the reader and the item lands on the bill by itself.', alt: 'The Aura Retail till: a bill with five items and the payment buttons, next to the product grid.' },
+        { tab: 'Stock', fact: 'Every item and its quantity in front of you, and an item running out is marked.', alt: 'The Aura Retail products list with quantities, and one item running low flagged with a warning.' },
+        { tab: 'Accounts', fact: 'What you are owed and what you owe: customers on one side, suppliers on the other.', alt: 'The Aura Retail receivables screen: debt ages and a table of customer names and balances.' },
+        { tab: 'Branches', fact: 'More than one branch in one system, and your phone shows the sales of each branch.', alt: 'The Aura Retail Today screen: a card for each branch with its sales, and a chart of the last fourteen days.' },
+      ],
+    },
     company: {
       title: 'Action Aura', accent: 'Aura',
       lead: 'A Jordanian software company building systems that work the way businesses do.',

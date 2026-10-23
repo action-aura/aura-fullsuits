@@ -1,0 +1,47 @@
+---
+// Home section 6 "What it does" (directions.md 3 item 6). One set of controls serves both layouts: a role=tablist of four
+// buttons that is a big pinned list on desktop (>=900px) and a row of chips on phones. Server-rendered with item 0 active, so the
+// page reads complete without JS; src/scripts/what-it-does.ts drives the active item (scroll progress on desktop, click and
+// arrow keys everywhere). Every panel is a real tabpanel holding its screenshot and its one fact.
+import { Image } from 'astro:assets';
+import { dict, type Lang } from '../i18n';
+import { WHAT_SHOTS } from '../lib/shots';
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const w = dict(lang).home.what;
+---
+<section class="wd" id="what" aria-labelledby="wd-h" data-wd>
+  <div class="wd-track" data-wd-track>
+    <div class="wd-stick">
+      <div class="wd-wrap">
+        <header class="wd-head">
+          <p class="wd-eyebrow">{w.eyebrow}</p>
+          <h2 id="wd-h">{w.title}</h2>
+        </header>
+        <div class="wd-grid">
+          <div class="wd-list" role="tablist" aria-label={w.listLabel} data-wd-list>
+            {w.items.map((it, i) => (
+              <button type="button" role="tab" class="wd-tab" id={`wd-t${i}`} aria-controls={`wd-p${i}`}
+                aria-selected={i === 0 ? 'true' : 'false'} tabindex={i === 0 ? 0 : -1} data-wd-tab={i}>
+                <span class="wd-n num" aria-hidden="true">{`0${i + 1}`}</span><span class="wd-tx">{it.tab}</span>
+              </button>
+            ))}
+          </div>
+          <div class="wd-panels">
+            {w.items.map((it, i) => (
+              <div class="wd-panel" role="tabpanel" id={`wd-p${i}`} aria-labelledby={`wd-t${i}`} data-wd-panel={i}
+                data-active={i === 0 ? 'true' : 'false'}>
+                <figure class="wd-frame">
+                  <Image src={WHAT_SHOTS[i][lang]} alt={it.alt} widths={[640, 960, 1440, 1920]}
+                    sizes="(min-width: 900px) 62vw, 92vw" loading="lazy" decoding="async" class="wd-img" />
+                </figure>
+                <p class="wd-fact">{it.fact}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<script>import '../scripts/what-it-does';</script>

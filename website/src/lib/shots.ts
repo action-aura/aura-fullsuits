@@ -8,6 +8,14 @@ import trialBalanceEn from '../assets/shots/trial-balance-en.png';
 import productsEn from '../assets/shots/products-en.png';
 import customersEn from '../assets/shots/customers-en.png';
 import posNightEn from '../assets/shots/pos-night-en.png';
+import sellAr from '../assets/shots/sell-ar.png';
+import sellEn from '../assets/shots/sell-en.png';
+import stockAr from '../assets/shots/stock-ar.png';
+import stockEn from '../assets/shots/stock-en.png';
+import owedAr from '../assets/shots/owed-ar.png';
+import owedEn from '../assets/shots/owed-en.png';
+import branchesAr from '../assets/shots/branches-ar.png';
+import branchesEn from '../assets/shots/branches-en.png';
 
 export type ShotKey = 'pos' | 'dashboard' | 'reports' | 'trialBalance' | 'products' | 'customers' | 'posNight';
 
@@ -50,3 +58,12 @@ export const SHOTS: Record<ShotKey, { en: ImageMetadata; ar: ImageMetadata | nul
 };
 
 export const isShotKey = (k: string): k is ShotKey => k in SHOTS;
+
+// Home "what it does" section: demo-data crops of the real app, one per language, same 2.2:1 frame. Order matches
+// i18n home.what.items. Alt text lives in the i18n files (it is copy), not here.
+export const WHAT_SHOTS: { en: ImageMetadata; ar: ImageMetadata }[] = [
+  { en: sellEn, ar: sellAr },
+  { en: stockEn, ar: stockAr },
+  { en: owedEn, ar: owedAr },
+  { en: branchesEn, ar: branchesAr },
+];
