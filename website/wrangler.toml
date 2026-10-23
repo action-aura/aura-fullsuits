@@ -14,7 +14,7 @@ migrations_dir = "migrations"
 # Non-secret runtime settings. Lead alerts go by SMTP through the Namecheap Private Email
 # mailbox; SMTP_PASS is a Pages secret set by the owner in the dashboard (2026-10-19).
 [vars]
-NOTIFY_PROVIDER = "smtp"
+NOTIFY_PROVIDER = "smtp,owner"
 SMTP_HOST = "mail.privateemail.com"
 SMTP_PORT = "465"
 SMTP_USER = "info@actionaura.me"
