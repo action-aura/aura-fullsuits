@@ -81,7 +81,7 @@ test.describe('keyboard', () => {
       await page.goto(p);
       await page.waitForLoadState('load');
 
-      type Stop = { id: string; tag: string; href: string; visible: boolean; detail: string; desc: string };
+      type Stop = { id: string; tag: string; href: string; visible: boolean; detail: string; desc: string; inCf: boolean; isBody: boolean };
       const stops: Stop[] = [];
       for (let i = 0; i < 60; i++) {
         await page.keyboard.press('Tab');
@@ -96,8 +96,13 @@ test.describe('keyboard', () => {
           // message box and the send button. Its elements cannot take focus back after blur(), so the blur/focus probe
           // below dropped focus to <body> and the next Tab restarted from the skip link: the loop never got past the
           // widget and "demo-send reached by Tab" failed although a real keyboard walk reaches it in ~24 stops
-          // (measured 2026-10-23). The probe is skipped for those third-party stops only; every stop of ours is still probed.
-          const thirdParty = el === document.body || !!el.closest('.cf-turnstile');
+          // (measured 2026-10-23). While focus is inside Turnstile's cross-origin frame the parent reports <body>
+          // (measured on /ar/contact/: 4 body stops, then 3 .cf-turnstile divs). The probe is skipped for those stops
+          // only; every stop of ours is still probed. A <body> stop is excused after the walk ONLY when it sits in one
+          // unbroken run with a .cf-turnstile stop; anywhere else focus on <body> is a real focus loss and fails.
+          const inCf = !!el.closest('.cf-turnstile');
+          const isBody = el === document.body;
+          const thirdParty = inCf || isBody;
           let resting = focused;
           if (!thirdParty) {
             el.blur();
@@ -110,7 +115,9 @@ test.describe('keyboard', () => {
             id: el.id,
             tag: el.tagName.toLowerCase(),
             href: el.getAttribute('href') ?? '',
-            visible: thirdParty || outlineOk || shadowOk,
+            visible: inCf || outlineOk || shadowOk,
+            inCf,
+            isBody,
             detail: `focused[outline ${focused.style} ${focused.width}; shadow ${focused.shadow}] resting[outline ${resting.style} ${resting.width}; shadow ${resting.shadow}]`,
             desc: `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.className ? '.' + String(el.className).split(/\s+/).join('.') : ''}`,
           };
@@ -127,6 +134,15 @@ test.describe('keyboard', () => {
         expect(order[i], `${FIELD_IDS[i]} comes after ${FIELD_IDS[i - 1]}`).toBeGreaterThan(order[i - 1]);
       }
 
+      // Excuse <body> stops only inside a contiguous run of body/Turnstile stops that contains a Turnstile stop.
+      for (let i = 0; i < stops.length; ) {
+        if (!stops[i].isBody && !stops[i].inCf) { i++; continue; }
+        let j = i;
+        while (j < stops.length && (stops[j].isBody || stops[j].inCf)) j++;
+        const cfRun = stops.slice(i, j).some((s) => s.inCf);
+        if (cfRun) for (let k = i; k < j; k++) stops[k].visible = true;
+        i = j;
+      }
       const invisible = stops.filter((s) => !s.visible).map((s) => `${s.desc} ${s.detail}`);
       expect(invisible, `stops without a visible focus indicator:\n${invisible.join('\n')}`).toEqual([]);
     });
