@@ -2,16 +2,15 @@
 import Base from '../../layouts/Base.astro';
 import Nav from '../../components/Nav.astro';
 import Footer from '../../components/Footer.astro';
-import Chapter from '../../components/Chapter.astro';
-import WhatsAppPill from '../../components/WhatsAppPill.astro';
-import DemoLink from '../../components/DemoLink.astro';
 import LiveTill from '../../components/LiveTill.astro';
 import Facts from '../../components/Facts.astro';
 import OfflineSwitch from '../../components/OfflineSwitch.astro';
 import WhatItDoes from '../../components/WhatItDoes.astro';
+import SetupChecklist from '../../components/SetupChecklist.astro';
+import ProductCards from '../../components/ProductCards.astro';
+import Close from '../../components/Close.astro';
 import '../../styles/live-till.css';
 import { dict, LANGS, type Lang } from '../../i18n';
-import { pagePath } from '../../lib/seo';
 import { organizationLd } from '../../lib/jsonld';
 
 export function getStaticPaths() { return LANGS.map((lang) => ({ params: { lang } })); }
@@ -29,18 +28,9 @@ const t = dict(lang);
     </section>
     <OfflineSwitch lang={lang} />
     <WhatItDoes lang={lang} />
-    <Chapter id="aura" lang={lang} world="master" title={t.home.company.title} accentWord={t.home.company.accent} lead={t.home.company.lead} />
-    <Chapter id="retail" lang={lang} world="retail" status="available" flip title={t.home.retail.title} accentWord={t.home.retail.accent} lead={t.home.retail.lead} link={{ href: pagePath(lang, 'aura-retail'), label: t.home.retail.link }} />
-    <Chapter id="clinic" lang={lang} world="clinic" status="available" title={t.home.clinic.title} accentWord={t.home.clinic.accent} lead={t.home.clinic.lead} link={{ href: pagePath(lang, 'aura-clinic'), label: t.home.clinic.link }} />
-    <Chapter id="gym" lang={lang} world="gym" status="coming" flip title={t.home.gym.title} accentWord={t.home.gym.accent} lead={t.home.gym.lead} />
-    <section id="talk" data-w="master" class="close">
-      <div class="copy reveal">
-        <h2>{t.home.close.title}</h2>
-        <p class="lead">{t.home.close.lead}</p>
-        <div class="ctas"><WhatsAppPill lang={lang} /><DemoLink lang={lang} /></div>
-        <p class="price-line">{t.cta.price}</p>
-      </div>
-    </section>
+    <SetupChecklist lang={lang} />
+    <ProductCards lang={lang} />
+    <Close lang={lang} />
   </main>
   <Footer lang={lang} slug="" />
 </Base>

@@ -1,0 +1,44 @@
+---
+// Home section 8 "Our products" (directions.md 3 item 8): quiet, three flat cards. Retail is the available one and links
+// to its page. Clinic and Gym are greyed with a taped "coming soon" note (the note is borrowed from Direction 3,
+// directions.md 1214-1222) that offers a WhatsApp message with the product name already written. The Gym card is the
+// #gym target of the nav. Hover, keyboard focus or a tap lifts the note a few pixels (transform only; src/scripts/products.ts
+// only toggles .peek for touch).
+import { dict, type Lang } from '../i18n';
+import { pagePath } from '../lib/seo';
+import { waLink } from '../lib/lang';
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = dict(lang);
+const p = t.home.products;
+const soon = [
+  { id: 'clinic', cls: 'pr-clinic', name: p.clinic.name, line: p.clinic.line, wa: waLink(p.waClinic) },
+  { id: 'gym', cls: 'pr-gym', name: p.gym.name, line: p.gym.line, wa: waLink(p.waGym) },
+];
+const ARROW = '<path d="M2 8h12M9 3l5 5-5 5"/>';
+---
+<section class="pr" id="products" data-w="master" aria-labelledby="pr-h">
+  <div class="pr-wrap">
+    <h2 id="pr-h">{p.title}</h2>
+    <div class="pr-grid">
+      <article class="pr-card pr-retail" id="retail">
+        <span class="pr-chip">{t.status.available}</span>
+        <h3>{p.retail.name}</h3>
+        <p class="pr-line">{p.retail.line}</p>
+        <a class="pr-link" href={pagePath(lang, 'aura-retail')}>{p.retail.link}<svg class="pr-arrow" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" set:html={ARROW} /></a>
+      </article>
+      {soon.map((c) => (
+        <article class:list={['pr-card', 'pr-soon', c.cls]} id={c.id} data-pr-card>
+          <h3><span class="pr-dot" aria-hidden="true"></span>{c.name}</h3>
+          <p class="pr-line">{c.line}</p>
+          <div class="pr-note">
+            <p class="pr-nt">{p.noteTitle}</p>
+            <p class="pr-ask">{p.noteAsk}</p>
+            <a class="pr-wa" href={c.wa} target="_blank" rel="noopener">{p.noteLink}</a>
+          </div>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>
+<script>import '../scripts/products';</script>

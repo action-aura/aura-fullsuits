@@ -131,27 +131,47 @@ export const en = {
         { tab: 'Branches', fact: 'More than one branch in one system, and your phone shows the sales of each branch.', alt: 'The Aura Retail Today screen: a card for each branch with its sales, and a chart of the last fourteen days.' },
       ],
     },
-    company: {
-      title: 'Action Aura', accent: 'Aura',
-      lead: 'A Jordanian software company building systems that work the way businesses do.',
+    setup: {
+      eyebrow: 'Setup and training',
+      title: 'From day one, we are with you.',
+      lead: 'Our team in Amman installs the software in your shop, trains your staff, and stays on the line.',
+      listLabel: 'Setup steps',
+      progress: 'Progress',
+      done: 'Done',
+      items: [
+        'We install the software on the shop computer',
+        'We enter your items and stock',
+        'We connect your phone to the till',
+        'We train your staff to sell',
+        'And we stay with you if you need us',
+      ],
     },
-    retail: {
-      title: 'Aura Retail', accent: 'Retail',
-      lead: 'The till that keeps selling offline. Barcode scanning, stock, receivables and payables, and a phone that mirrors the counter.',
-      link: 'See Aura Retail',
-    },
-    clinic: {
-      title: 'Aura Clinic', accent: 'Clinic',
-      lead: 'Appointments, patient records, treatment plans and billing, in the same calm system.',
-      link: 'See Aura Clinic',
-    },
-    gym: {
-      title: 'Aura Gym', accent: 'Gym',
-      lead: 'Members, plans and check-ins for gyms and studios. In the works at Action Aura.',
+    products: {
+      title: 'Our products',
+      retail: {
+        name: 'Aura Retail',
+        line: 'The till that keeps selling offline. Barcode scanning, stock, and what you are owed and what you owe.',
+        link: 'See Aura Retail',
+      },
+      clinic: {
+        name: 'Aura Clinic',
+        line: 'Appointments, patient records, treatment plans and billing, in a calm system.',
+      },
+      gym: {
+        name: 'Aura Gym',
+        line: 'Members, plans and check-ins, for gyms and studios.',
+      },
+      noteTitle: 'Coming soon',
+      noteAsk: 'Want us to tell you when it opens?',
+      noteLink: 'Tell me on WhatsApp',
+      waClinic: 'Hello, please tell me when Aura Clinic opens.',
+      waGym: 'Hello, please tell me when Aura Gym opens.',
     },
     close: {
-      title: 'Tell us about your shop.',
-      lead: 'Our team in Amman installs, trains and supports.',
+      title: 'Go bigger. Go smarter.',
+      price: 'Pricing depends on your shop. Ask us.',
+      platforms: 'Runs on Windows and Android',
+      phoneLabel: 'Call us',
     },
   },
   footer: {

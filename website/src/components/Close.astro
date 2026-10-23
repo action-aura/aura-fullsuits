@@ -1,0 +1,32 @@
+---
+// Home section 9, the close (directions.md 3 item 9). The big headline (the brand line lives here, in English on /en and
+// as "كبّر شغلك، واشتغل بذكاء." on /ar), the price answer, the two buttons, and the phone number set very large and
+// full width as a tel: link (borrowed from Direction 2). The number stays in the page's sans with tabular digits,
+// not Plex Mono, and reads left to right. src/scripts/close.ts only fits the number to the width.
+import { dict, type Lang } from '../i18n';
+import { pagePath } from '../lib/seo';
+import { waLink, PHONE_TEL } from '../lib/lang';
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = dict(lang);
+const c = t.home.close;
+---
+<section class="cl" id="talk" data-w="master" aria-labelledby="cl-h">
+  <div class="cl-wrap">
+    <h2 id="cl-h">{c.title}</h2>
+    <p class="cl-price">{c.price}</p>
+    <div class="lt-btns cl-btns">
+      <a class="lt-btn lt-btn-p" href={pagePath(lang, 'contact')}>{t.cta.demo}</a>
+      <a class="lt-btn lt-btn-s" href={waLink(t.cta.waText)} target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false"><path d="M12 3a9 9 0 0 0-7.8 13.5L3 21l4.6-1.2A9 9 0 1 0 12 3z" /></svg>
+        {t.cta.whatsapp}
+      </a>
+    </div>
+    <div class="cl-phone-box" data-cl-box>
+      <p class="cl-label">{c.phoneLabel}</p>
+      <a class="tel cl-phone" href={PHONE_TEL} dir="ltr" data-cl-phone>078 006 9485</a>
+    </div>
+    <p class="cl-platforms">{c.platforms}</p>
+  </div>
+</section>
+<script>import '../scripts/close';</script>

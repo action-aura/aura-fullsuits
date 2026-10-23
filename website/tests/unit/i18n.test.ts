@@ -48,8 +48,18 @@ describe('dictionaries', () => {
     expect(dir('en')).toBe('ltr');
   });
 
-  it.each(LANGS)('%s chapter accents appear inside their titles', (lang) => {
+  // Brand line placement (owner 2026-10-23): "Go bigger. Go smarter." is the English close headline. The Arabic page has
+  // its own headline and must not carry the English words anywhere in its dictionary.
+  it('the English brand line is the en close title and appears nowhere in the Arabic dictionary', () => {
+    expect(dict('en').home.close.title).toBe('Go bigger. Go smarter.');
+    for (const [k, v] of leaves(dict('ar'))) expect(/go bigger|go smarter/i.test(v), `ar ${k}`).toBe(false);
+  });
+
+  it.each(LANGS)('%s setup checklist has five steps and the product notes carry a prefilled WhatsApp text for each', (lang) => {
     const h = dict(lang).home;
-    for (const k of ['company', 'retail', 'clinic', 'gym'] as const) expect(h[k].title.includes(h[k].accent), `${lang} ${k}`).toBe(true);
+    expect(h.setup.items).toHaveLength(5);
+    expect(h.products.waClinic.trim()).not.toBe('');
+    expect(h.products.waGym.trim()).not.toBe('');
+    expect(h.products.waClinic).not.toBe(h.products.waGym);
   });
 });

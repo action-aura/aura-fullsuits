@@ -1,0 +1,72 @@
+---
+// Home section 7 "From day one" (directions.md 8.6): a hairline frame with + crop marks, a 001-005 checklist that
+// ticks one row every 700ms once the section is in view, a copper progress line, and a line drawing of a counter that
+// draws itself and then fills with colour. Server-rendered so the page reads complete without JS (the .js class on
+// <html> is what switches the pending state on); src/scripts/setup.ts runs the timeline.
+import { dict, type Lang } from '../i18n';
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const s = dict(lang).home.setup;
+
+// The drawing, exactly as specified. `cls` is the draw step (s1..s4), `fill` marks the shapes that colour in at the end.
+type Part = { tag: 'path' | 'rect'; cls: string; d?: string; fill?: string; x?: number; y?: number; w?: number; h?: number; rx?: number; arc?: boolean };
+const PARTS: Part[] = [
+  { tag: 'path', cls: 's1', d: 'M20 380H500' },
+  { tag: 'path', cls: 's1', d: 'M60 380V250H380V380Z', fill: '#EFE9DD' },
+  { tag: 'path', cls: 's1', d: 'M48 250H392' },
+  { tag: 'path', cls: 's1', d: 'M200 250V232M180 232H220' },
+  { tag: 'rect', cls: 's1', x: 130, y: 130, w: 140, h: 102, rx: 8, fill: '#E4F3F3' },
+  { tag: 'path', cls: 's1', d: 'M300 250L310 205L338 200L344 214L322 220L318 250Z' },
+  { tag: 'path', cls: 's2', d: 'M420 380V90M500 380V90M420 150H500M420 230H500M420 310H500' },
+  { tag: 'rect', cls: 's2', x: 428, y: 118, w: 28, h: 32, rx: 2, fill: '#F7E9DC' },
+  { tag: 'rect', cls: 's2', x: 462, y: 126, w: 30, h: 24, rx: 2, fill: '#F7E9DC' },
+  { tag: 'rect', cls: 's2', x: 430, y: 196, w: 22, h: 34, rx: 2, fill: '#F7E9DC' },
+  { tag: 'rect', cls: 's2', x: 458, y: 204, w: 34, h: 26, rx: 2, fill: '#F7E9DC' },
+  { tag: 'rect', cls: 's2', x: 428, y: 282, w: 64, h: 28, rx: 2, fill: '#F7E9DC' },
+  { tag: 'rect', cls: 's3', x: 24, y: 70, w: 56, h: 100, rx: 10, fill: '#E4F3F3' },
+  { tag: 'path', cls: 's3', d: 'M46 158H58' },
+  { tag: 'path', cls: 's3 arc', d: 'M86 110Q108 92 126 140', arc: true },
+  { tag: 'path', cls: 's4', d: 'M146 150H214M146 166H200M146 182H208M226 150H254M226 200H254' },
+];
+const TICK = '<path d="M5 12l4 4 10-10"/>';
+---
+<section class="su" id="setup" data-w="master" aria-labelledby="su-h" data-setup>
+  <div class="su-wrap">
+    <div class="su-frame">
+      <span class="su-plus su-pa" aria-hidden="true">+</span><span class="su-plus su-pb" aria-hidden="true">+</span>
+      <span class="su-plus su-pc" aria-hidden="true">+</span><span class="su-plus su-pd" aria-hidden="true">+</span>
+      <div class="su-copy">
+        <p class="su-eyebrow">{s.eyebrow}</p>
+        <h2 id="su-h">{s.title}</h2>
+        <p class="su-lead">{s.lead}</p>
+        <ol class="su-boot" aria-label={s.listLabel} data-su-list>
+          {s.items.map((text, i) => (
+            <li data-su-row={i + 1}>
+              <span class="num su-no">{`00${i + 1}`}</span>
+              <span class="su-tx">{text}</span>
+              <span class="su-st">
+                <span class="num su-wait" aria-hidden="true">···</span>
+                <span class="su-ok"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" set:html={TICK} />{s.done}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+        <div class="su-prog" role="progressbar" aria-label={s.progress} aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" data-su-bar>
+          <div class="su-track"><div class="su-fill" data-su-fill></div></div>
+          <span class="num su-pct su-pct-live" data-su-pct>0%</span>
+          <span class="num su-pct su-pct-static">100%</span>
+        </div>
+      </div>
+      <div class="su-draw">
+        <svg class="su-svg" viewBox="0 0 520 420" width="100%" fill="none" stroke="#16233D" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" data-su-svg>
+          {PARTS.map((p) => p.tag === 'rect'
+            ? <rect class={p.cls + (p.fill ? ' f' : '')} style={p.fill ? `fill:${p.fill}` : undefined} pathLength="1" x={p.x} y={p.y} width={p.w} height={p.h} rx={p.rx} />
+            : p.arc
+              ? <path class={p.cls} d={p.d} stroke="#2F7B7B" stroke-dasharray="3 5" />
+              : <path class={p.cls + (p.fill ? ' f' : '')} style={p.fill ? `fill:${p.fill}` : undefined} pathLength="1" d={p.d} />)}
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+<script>import '../scripts/setup';</script>
