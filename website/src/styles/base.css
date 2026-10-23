@@ -239,6 +239,17 @@ body:lang(ar) {
   transform: translate3d(0, 20px, 0);
 }
 
+/* Demo cards (the playable parts of the retail chapter) enter once as a whole: rise 28px and grow from .96. Same observer,
+   same transform/opacity-only rule, and in reduced motion they are simply there. */
+.js .reveal-card {
+  transition: opacity .7s var(--ease-out), transform .7s var(--ease-out);
+}
+
+.js .reveal-card:not(.in) {
+  opacity: 0;
+  transform: translate3d(0, 28px, 0) scale(.96);
+}
+
 .js .reveal > :nth-child(2) { transition-delay: .07s; }
 .js .reveal > :nth-child(3) { transition-delay: .14s; }
 .js .reveal > :nth-child(4) { transition-delay: .21s; }
@@ -252,6 +263,8 @@ body:lang(ar) {
   }
 
   /* Final states, no movement, no fade. */
+  .js .reveal-card,
+  .js .reveal-card:not(.in),
   .js .reveal > *,
   .js .reveal:not(.in) > * {
     opacity: 1;

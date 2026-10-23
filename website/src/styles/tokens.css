@@ -17,7 +17,11 @@
   color-scheme: dark;
 }
 
-[data-world="retail"] {
+/* .demo / .wd (the playable parts of the home retail chapter, data-w="retail") carry the same tokens themselves, so a
+   demo that is still entering while the page world is a neighbour never shows the wrong accent or ink. */
+[data-world="retail"],
+.demo[data-w="retail"],
+.wd[data-w="retail"] {
   --field-a: #15100D;
   --field-b: #1C1511;
   --field-c: #2C1C12;
@@ -67,6 +71,8 @@
 @media (max-width: 899px) {
   :root,
   [data-world="retail"],
+  .demo[data-w="retail"],
+  .wd[data-w="retail"],
   [data-world="gym"] {
     --ink-muted: rgba(246, 244, 239, .84);
   }

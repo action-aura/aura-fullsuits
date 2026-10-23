@@ -32,7 +32,15 @@ describe('dictionaries', () => {
 
   it('never claims banned features or prices', () => {
     const banned = /(JoFotara|e-invoic|iPhone|\biOS\b|cash drawer|JOD\b|\bJD\b|دينار|د\.أ|testimonial|14[- ]day|grace period|customers? trust|\d[\d,.]*\+?\s*(shops|customers|clients|stores)\b|[\d٠-٩][\d٠-٩,.]*\+?\s*(عميل|زبون|محل|متجر)|Android\s*print|جوفوترة|جو فوترة|الفوترة الإلكترونية|فوترة إلكترونية|آيفون|ايفون|درج النقود|درج الكاش|فترة سماح|آراء العملاء|طباعة.{0,20}أندرويد)/i;
-    for (const [k, v] of [...en, ...ar]) expect(banned.test(v), `${k}: ${v}`).toBe(false);
+    // The retail chapter's live till shows EXAMPLE item prices with a currency label (owner approved 2026-10-23, and the
+    // footnote says the prices are illustrative). Exactly these three keys carry the currency; every other string,
+    // including all other keys under home.till, stays banned. This can no longer catch a currency word added to those
+    // three keys, so it is not a place to put a real product price.
+    const TILL_CURRENCY_KEYS = new Set(['home.till.currency', 'home.till.liveTotal', 'home.till.liveDone']);
+    for (const [k, v] of [...en, ...ar]) {
+      if (TILL_CURRENCY_KEYS.has(k)) continue;
+      expect(banned.test(v), `${k}: ${v}`).toBe(false);
+    }
   });
 
   it('dir is rtl for arabic only', () => {

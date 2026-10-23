@@ -4,6 +4,8 @@
 // Reduced motion: no glow, no class; components.css keeps only an instant colour state through :active.
 const PRESSABLE = [
   '.wa-pill', '.demo-link', '.nav-demo', '.nav-toggle', '.chapter-link', '.nav-sheet-link', '.btn-send', '.btn-send-wa',
+  // E2: the playable retail demos
+  '.lt-item', '.lt-pay', '.of-sw', '.of-new', '.wd-tab',
 ].join(',');
 
 const reduced = matchMedia('(prefers-reduced-motion: reduce)');

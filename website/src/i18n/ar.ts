@@ -83,6 +83,73 @@ export const ar: Dict = {
       lead: 'الكاشير الذي يكمل البيع بدون إنترنت. قارئ باركود، ومخزون، وما لك وما عليك، وهاتف يعرض ما يجري على الكاشير.', // AR: drafted, native check pending
       link: 'تعرّف على أورا ريتيل', // AR: drafted, native check pending
     },
+    // The three playable parts of the retail chapter (E2). Wording ported from the rejected look's i18n (copy rules
+    // already applied there); only the three intro blocks (eyebrow/title/lead of till, the headings of offline/what) are new.
+    till: {
+      eyebrow: 'جرّب الكاشير', // AR: drafted, native check pending
+      title: 'اضغط على الأصناف وشوف الفاتورة.', // AR: drafted, native check pending
+      lead: 'اختر كم صنف، ادفع، وشوف البيعة بتوصل لموبايل المدير.', // AR: drafted, native check pending
+      label: 'كاشير تجريبي مباشر', // AR: drafted, native check pending
+      brand: 'أورا ريتيل',
+      cashier: '· الكاشير 1',
+      online: 'متصل',
+      bill: 'الفاتورة',
+      empty: 'الفاتورة فاضية. اضغط على صنف.', // AR: drafted, native check pending
+      total: 'المجموع',
+      currency: 'د.أ',
+      pay: 'دفع نقدي',
+      done: 'تمت البيعة',
+      footnote: 'الأسعار في هذا المثال توضيحية.',
+      phoneApp: 'تطبيق المدير',
+      today: 'مبيعات اليوم',
+      count: 'عدد البيعات: ',
+      liveTotal: 'المجموع {n} د.أ', // AR: drafted, native check pending
+      liveDone: 'تمت البيعة، {n} د.أ', // AR: drafted, native check pending
+      items: [
+        { name: 'مياه 1.5 لتر', price: '0.350' },
+        { name: 'خبز عربي', price: '0.500' },
+        { name: 'لبنة 500 غم', price: '1.750' },
+        { name: 'شاي 100 كيس', price: '2.250' },
+        { name: 'بيبسي 330 مل', price: '0.400' },
+        { name: 'شيبس', price: '0.350' },
+      ],
+    },
+    offline: {
+      eyebrow: 'جرّبها بإيدك',
+      title: 'اقطع النت بإيدك، وشوف شو بصير.',
+      lead: 'اضغط على المفتاح. الكاشير بيضل يبيع، والمبيعات بتنحفظ على الجهاز. أول ما يرجع النت، بتوصل لموبايلك لحالها.', // AR: drafted, native check pending
+      switchLabel: 'الإنترنت',
+      on: 'شغّال',
+      off: 'مقطوع',
+      newSale: 'بيعة جديدة',
+      note: 'هذا عرض توضيحي. البرنامج الحقيقي بيشتغل بنفس الطريقة.', // AR: drafted, native check pending
+      chipOn: 'متصل · كل شي واصل',
+      chipOff: 'بدون إنترنت · البيع شغّال',
+      recent: 'آخر البيعات',
+      empty: 'لسا ما في بيعات. اضغط بيعة جديدة.', // AR: drafted, native check pending
+      queued: 'بانتظار',
+      sent: 'تم الإرسال',
+      badge: 'بانتظار الإرسال',
+      lastUpdate: 'آخر تحديث: ',
+      demoLabel: 'عرض الكاشير والموبايل', // AR: drafted, native check pending
+      announceOff: 'الإنترنت مقطوع. الكاشير بيكمل البيع.', // AR: drafted, native check pending
+      announceOn: 'الإنترنت رجع.', // AR: drafted, native check pending
+      toastOne: 'وصلت بيعة وحدة',
+      toastTwo: 'وصلت بيعتين',
+      toastFew: 'وصلت {n} بيعات',
+      toastMany: 'وصلت {n} بيعة',
+    },
+    what: {
+      eyebrow: 'شو بيعمل',
+      title: 'أربع أشياء بتمشّي المحل.',
+      listLabel: 'أقسام البرنامج',
+      items: [
+        { tab: 'بيع', fact: 'اقرأ الباركود بالقارئ، والصنف بينزل على الفاتورة لحاله.', alt: 'شاشة البيع في أورا ريتيل: فاتورة بخمسة أصناف وأزرار الدفع، وبجانبها الأصناف.' },
+        { tab: 'مخزون', fact: 'كل صنف وكميته قدامك، والصنف اللي قارب يخلص بينعلّم.', alt: 'قائمة المنتجات في أورا ريتيل مع الكميات، وصنف قاربت كميته على الانتهاء معلّم بتحذير.' },
+        { tab: 'حسابات', fact: 'ما لك وما عليك: شو على الزبائن، وشو عليك للموردين.', alt: 'شاشة المستحقات في أورا ريتيل: أعمار الديون وجدول بأسماء الزبائن والأرصدة.' },
+        { tab: 'فروع', fact: 'أكثر من فرع بنظام واحد، وموبايلك بيورجيك مبيعات كل فرع.', alt: 'شاشة اليوم في أورا ريتيل: بطاقة لكل فرع مع مبيعاته، ومخطط لآخر أربعة عشر يومًا.' },
+      ],
+    },
     clinic: {
       title: 'أورا كلينك', accent: 'كلينك',
       lead: 'المواعيد وملفات المرضى وخطط العلاج والفواتير، في النظام الهادئ نفسه.', // AR: drafted, native check pending

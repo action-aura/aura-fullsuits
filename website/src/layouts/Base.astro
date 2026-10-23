@@ -59,7 +59,7 @@ const initialShares = (['master', 'retail', 'clinic', 'gym'] as const).map((w) =
     <a class="visually-hidden" href="#main">{t.a11y.skip}</a>
     <slot />
     <script>
-      const els = document.querySelectorAll<HTMLElement>('.reveal');
+      const els = document.querySelectorAll<HTMLElement>('.reveal, .reveal-card');
       if (!('IntersectionObserver' in window)) els.forEach((e) => e.classList.add('in'));
       else {
         const io = new IntersectionObserver((entries) => {

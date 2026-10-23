@@ -1,17 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { HOME_DESKTOP, HOME_PHONE, PHONE_MARK_MAX, PHONE_MARK_MIN, fitScale, footerFade, mirror, phoneHeroFade, phoneHeroPose, stationAt, stationsFor, type Station } from '../../src/scripts/jewel/stations';
 
-const C = [450, 1350, 2250, 3150, 4050, 4950];
+// One centre per [data-w] section of the home page, 900px apart: hero, aura, retail, gate, till, offline, what, tail gate, clinic, gym, close.
+const C = Array.from({ length: 11 }, (_, i) => 450 + 900 * i);
 const VH = 900;
 
 describe('stations', () => {
-  it('home has six desktop and six phone stations', () => {
-    expect(HOME_DESKTOP).toHaveLength(6); expect(HOME_PHONE).toHaveLength(6);
+  it('home has eleven desktop and eleven phone stations (E2: retail grew three demos and two gates)', () => {
+    expect(HOME_DESKTOP).toHaveLength(11); expect(HOME_PHONE).toHaveLength(11);
   });
   it('sits exactly on a station at its centre', () => expect(stationAt(HOME_DESKTOP, C, 2250, false, VH)).toEqual(HOME_DESKTOP[2]));
   it('clamps before the first and after the last centre', () => {
     expect(stationAt(HOME_DESKTOP, C, -999, false, VH)).toEqual(HOME_DESKTOP[0]);
-    expect(stationAt(HOME_DESKTOP, C, 99999, false, VH)).toEqual(HOME_DESKTOP[5]);
+    expect(stationAt(HOME_DESKTOP, C, 99999, false, VH)).toEqual(HOME_DESKTOP[10]);
   });
   it('rtl mirrors x and never y or scale', () => {
     const s = stationAt(HOME_DESKTOP, C, 450, true, VH);
@@ -99,8 +100,14 @@ describe('stationsFor', () => {
     }
   });
 
-  it('desktop chapters sit on the side opposite the copy: retail and gym (copy flipped right) left, the rest right', () => {
-    expect(HOME_DESKTOP.map((st) => (st.x < 0.5 ? 'L' : 'R')).join('')).toBe('RRLRLR');
+  it('desktop chapters sit on the side opposite the copy: retail (with its demos) and gym (copy flipped right) left, the rest right', () => {
+    expect(HOME_DESKTOP.map((st) => (st.x < 0.5 ? 'L' : 'R')).join('')).toBe('RRLLLLLLRLR');
+  });
+
+  // E2: a full-width demo has no clear side, so the mark dissolves for the three demos and the two gates around them, and is
+  // whole everywhere else. Can no longer catch: a DEMO station that keeps the mark visible (the jewel-over-the-till bug).
+  it('home desktop dissolves the mark for the two gates and the three demos between them, and nowhere else', () => {
+    expect(HOME_DESKTOP.map((st) => st.alpha ?? 1)).toEqual([1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1]);
   });
 
   it('home returns the existing HOME tables by reference', () => {

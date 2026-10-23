@@ -175,7 +175,9 @@ test('world field at mid-chapter equals that world token, with no other world sh
 });
 
 test('world blends are short: no stretch of scroll longer than a quarter viewport shows two worlds at once', async ({ page }) => {
-  test.setTimeout(120_000);
+  // E2: the home page is about 4000px longer (three demos), so this 15px sweep has about 60% more samples: budget raised
+  // from 120s to 300s. The sweep and every assertion are unchanged.
+  test.setTimeout(300_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/en/');
   await page.waitForLoadState('load');
