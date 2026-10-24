@@ -779,3 +779,330 @@ def test_two_different_keys_are_still_two_real_issuances(app, seeded):
     assert first["full_key"] and second["full_key"] and first["full_key"] != second["full_key"]
     counts = _issuance_row_counts(app, customer_id=customer_id)
     assert (counts["subscriptions"], counts["licenses"], counts["issuance_events"]) == (2, 2, 2)
+
+
+# -- Step 0 fix round 2: what the first fix's own suite did not guard ---------
+#
+# An independent adversarial pass over 16cbc323 found (probes A1-A3, A6):
+#   - the crash-retry RESUME path compared only customer and package, never
+#     the device count: a first attempt that crashed inside issue_license_key
+#     with extra_devices=0, resubmitted with the same key and extra_devices=5,
+#     issued a 2-device licence while the operator asked for 7;
+#   - two of the three replay conflict checks (device count, customer) could
+#     be deleted with this file still green;
+#   - a retry that switched from an inline new customer to an existing one
+#     left the inline Customer the crashed attempt had created orphaned, and
+#     the reverse switch created a brand-new orphan Customer before refusing.
+# The rule these tests pin: a key either finishes the ONE issuance it started
+# (same customer choice, same package, same device count) or is refused
+# before anything is written.
+
+def _crash_once(monkeypatch, name, message):
+    """Make the issuance module's own reference to `name` raise once, then
+    behave normally -- a crash at that exact step, then a working retry."""
+    import app.licensing.issuance as issuance_module
+
+    real = getattr(issuance_module, name)
+    calls = {"n": 0}
+
+    def _fails_once(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError(message)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(issuance_module, name, _fails_once)
+
+
+def _crashed_attempt(app, **kwargs):
+    with app.app_context():
+        from app.extensions import db_session
+        from app.licensing.issuance import issue_license_direct
+
+        with pytest.raises(RuntimeError):
+            issue_license_direct(license_pepper="test-pepper", **kwargs)
+        db_session.rollback()
+
+
+def _licence_and_subscription_for(app, customer_id):
+    from app.extensions import db_session
+    from app.models.licensing import License
+    from app.models.subscriptions import Subscription
+
+    with app.app_context():
+        db_session.expire_all()
+        licences = db_session.query(License).filter_by(customer_id=customer_id).all()
+        subscriptions = db_session.query(Subscription).filter_by(customer_id=customer_id).all()
+        return (
+            [(row.status, row.device_limit) for row in licences],
+            [(row.status, row.device_allowance) for row in subscriptions],
+        )
+
+
+def test_resume_after_a_crash_inside_key_issuance_with_more_devices_is_refused(app, seeded, monkeypatch):
+    """Probe A1. The licence row is already DRAFT with 2 devices; the
+    resubmit asks for 2 + 5 = 7. Issuing it would show the operator a key
+    for 7 devices that activates on 2. Refused, and nothing changes."""
+    staff_id = make_staff(app, "resume1@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "RESUME_DEV_PLAN", billing_model="MONTHLY", billing_interval_months=1,
+                             included_device_count=2, max_device_count=10)
+    customer_id = _seed_customer(app, staff_id, "Resume Devices Co")
+    key = str(uuid.uuid4())
+    _crash_once(monkeypatch, "issue_license_key", "simulated crash inside issue_license_key")
+    _crashed_attempt(app, customer_id=customer_id, plan_id=plan_id, extra_devices=0, idempotency_key=key,
+                     actor_staff_user_id=staff_id)
+    assert _licence_and_subscription_for(app, customer_id) == ([("DRAFT", 2)], [("ACTIVE", 2)])
+
+    with app.app_context():
+        from app.licensing.issuance import LicenseIssuanceError, issue_license_direct
+
+        with pytest.raises(LicenseIssuanceError) as refused:
+            issue_license_direct(
+                customer_id=customer_id, plan_id=plan_id, extra_devices=5, idempotency_key=key,
+                actor_staff_user_id=staff_id, license_pepper="test-pepper",
+            )
+    # The refusal tells the operator what the interrupted attempt was for,
+    # so they can finish THAT one rather than guess.
+    assert "2 device" in str(refused.value)
+    assert _licence_and_subscription_for(app, customer_id) == ([("DRAFT", 2)], [("ACTIVE", 2)])
+    assert _issuance_row_counts(app, customer_id=customer_id)["issuance_events"] == 0
+
+
+def test_resume_after_a_crash_before_the_licence_with_more_devices_is_refused(app, seeded, monkeypatch):
+    """Same rule one step earlier: only the Subscription exists (allowance 2)
+    when the resubmit asks for 7. A licence must not be created for 7 under
+    a subscription that allows 2."""
+    staff_id = make_staff(app, "resume2@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "RESUME_SUBDEV_PLAN", billing_model="MONTHLY", billing_interval_months=1,
+                             included_device_count=2, max_device_count=10)
+    customer_id = _seed_customer(app, staff_id, "Resume Allowance Co")
+    key = str(uuid.uuid4())
+    _crash_once(monkeypatch, "create_license", "simulated crash between subscription and licence")
+    _crashed_attempt(app, customer_id=customer_id, plan_id=plan_id, extra_devices=0, idempotency_key=key,
+                     actor_staff_user_id=staff_id)
+    assert _licence_and_subscription_for(app, customer_id) == ([], [("ACTIVE", 2)])
+
+    with app.app_context():
+        from app.licensing.issuance import LicenseIssuanceError, issue_license_direct
+
+        with pytest.raises(LicenseIssuanceError):
+            issue_license_direct(
+                customer_id=customer_id, plan_id=plan_id, extra_devices=5, idempotency_key=key,
+                actor_staff_user_id=staff_id, license_pepper="test-pepper",
+            )
+    assert _licence_and_subscription_for(app, customer_id) == ([], [("ACTIVE", 2)])
+
+
+def test_resume_refuses_a_draft_licence_whose_device_limit_differs_from_the_request(app, seeded, monkeypatch):
+    """Defence in depth for the licence row itself. Every write path keeps
+    the licence's device_limit equal to the subscription's allowance, so this
+    state is manufactured on purpose (a hand edit, or a future writer that
+    touches one and not the other): the subscription still matches the
+    request, the DRAFT licence does not. The key must not be issued onto a
+    licence that differs from what the operator asked for."""
+    staff_id = make_staff(app, "resume3@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "RESUME_LICDEV_PLAN", billing_model="MONTHLY", billing_interval_months=1,
+                             included_device_count=2, max_device_count=10)
+    customer_id = _seed_customer(app, staff_id, "Resume Licence Row Co")
+    key = str(uuid.uuid4())
+    _crash_once(monkeypatch, "issue_license_key", "simulated crash inside issue_license_key")
+    _crashed_attempt(app, customer_id=customer_id, plan_id=plan_id, extra_devices=0, idempotency_key=key,
+                     actor_staff_user_id=staff_id)
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.licensing import License
+
+        db_session.query(License).filter_by(customer_id=customer_id).update({"device_limit": 9})
+        db_session.commit()
+
+        from app.licensing.issuance import LicenseIssuanceError, issue_license_direct
+
+        with pytest.raises(LicenseIssuanceError):
+            issue_license_direct(
+                customer_id=customer_id, plan_id=plan_id, extra_devices=0, idempotency_key=key,
+                actor_staff_user_id=staff_id, license_pepper="test-pepper",
+            )
+    assert _licence_and_subscription_for(app, customer_id) == ([("DRAFT", 9)], [("ACTIVE", 2)])
+
+
+def test_resume_after_a_crash_inside_key_issuance_with_the_same_payload_issues_once(app, seeded, monkeypatch):
+    """Allow half of the three tests above: the honest retry -- same key,
+    same customer, package and device count -- still finishes the ONE
+    issuance the crashed attempt started, and reveals its key."""
+    staff_id = make_staff(app, "resume4@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "RESUME_SAME_PLAN", billing_model="MONTHLY", billing_interval_months=1,
+                             included_device_count=2, max_device_count=10)
+    customer_id = _seed_customer(app, staff_id, "Resume Same Co")
+    key = str(uuid.uuid4())
+    _crash_once(monkeypatch, "issue_license_key", "simulated crash inside issue_license_key")
+    _crashed_attempt(app, customer_id=customer_id, plan_id=plan_id, extra_devices=3, idempotency_key=key,
+                     actor_staff_user_id=staff_id)
+
+    with app.app_context():
+        from app.licensing.issuance import issue_license_direct
+
+        result = issue_license_direct(
+            customer_id=customer_id, plan_id=plan_id, extra_devices=3, idempotency_key=key,
+            actor_staff_user_id=staff_id, license_pepper="test-pepper",
+        )
+    assert result["full_key"] is not None and result["replayed"] is False
+    assert _issuance_row_counts(app, customer_id=customer_id) == ONE_OF_EACH
+    assert _licence_and_subscription_for(app, customer_id) == ([("ISSUED", 5)], [("ACTIVE", 5)])
+
+
+def test_replay_with_more_devices_is_refused(app, seeded):
+    """Probe A2. Guards the replay check's device-count comparison, which
+    could be deleted with every other test in this file still green."""
+    staff_id = make_staff(app, "replay1@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "REPLAY_DEV_PLAN", billing_model="MONTHLY", billing_interval_months=1,
+                             included_device_count=2, max_device_count=10)
+    customer_id = _seed_customer(app, staff_id, "Replay Devices Co")
+    key = str(uuid.uuid4())
+    with app.app_context():
+        from app.licensing.issuance import LicenseIssuanceError, issue_license_direct
+
+        issue_license_direct(
+            customer_id=customer_id, plan_id=plan_id, extra_devices=0, idempotency_key=key,
+            actor_staff_user_id=staff_id, license_pepper="test-pepper",
+        )
+        with pytest.raises(LicenseIssuanceError):
+            issue_license_direct(
+                customer_id=customer_id, plan_id=plan_id, extra_devices=3, idempotency_key=key,
+                actor_staff_user_id=staff_id, license_pepper="test-pepper",
+            )
+    assert _issuance_row_counts(app, customer_id=customer_id) == ONE_OF_EACH
+    assert _licence_and_subscription_for(app, customer_id) == ([("ISSUED", 2)], [("ACTIVE", 2)])
+
+
+def test_replay_for_a_different_customer_is_refused_and_never_returns_the_first_customers_licence(app, seeded):
+    """Probe A3. Same key, same package, a DIFFERENT existing customer. A
+    'replayed' answer here would hand the second customer the ids of the
+    first customer's licence. Refused; the second customer gets nothing."""
+    staff_id = make_staff(app, "replay2@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "REPLAY_CUST_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    first_customer = _seed_customer(app, staff_id, "Replay Customer One Co")
+    second_customer = _seed_customer(app, staff_id, "Replay Customer Two Co")
+    key = str(uuid.uuid4())
+    with app.app_context():
+        from app.licensing.issuance import LicenseIssuanceError, issue_license_direct
+
+        issue_license_direct(
+            customer_id=first_customer, plan_id=plan_id, idempotency_key=key,
+            actor_staff_user_id=staff_id, license_pepper="test-pepper",
+        )
+        with pytest.raises(LicenseIssuanceError):
+            issue_license_direct(
+                customer_id=second_customer, plan_id=plan_id, idempotency_key=key,
+                actor_staff_user_id=staff_id, license_pepper="test-pepper",
+            )
+    assert _issuance_row_counts(app, customer_id=first_customer) == ONE_OF_EACH
+    assert _issuance_row_counts(app, customer_id=second_customer)["subscriptions"] == 0
+    assert _issuance_row_counts(app, customer_id=second_customer)["licenses"] == 0
+
+
+def test_replay_with_a_different_inline_customer_name_is_refused(app, seeded):
+    """The inline-customer branch of the same replay check: same key, a
+    different new-customer name is a different customer."""
+    staff_id = make_staff(app, "replay3@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "REPLAY_INLINE_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    key = str(uuid.uuid4())
+    with app.app_context():
+        from app.licensing.issuance import LicenseIssuanceError, issue_license_direct
+
+        issue_license_direct(
+            new_customer_legal_name="Replay Inline First Co", plan_id=plan_id, idempotency_key=key,
+            actor_staff_user_id=staff_id, license_pepper="test-pepper",
+        )
+        with pytest.raises(LicenseIssuanceError):
+            issue_license_direct(
+                new_customer_legal_name="Replay Inline Second Co", plan_id=plan_id, idempotency_key=key,
+                actor_staff_user_id=staff_id, license_pepper="test-pepper",
+            )
+    assert _issuance_row_counts(app, legal_name="Replay Inline First Co") == ONE_OF_EACH
+    assert _issuance_row_counts(app, legal_name="Replay Inline Second Co")["customers"] == 0
+
+
+def test_resume_switching_from_an_inline_to_an_existing_customer_is_refused(app, seeded, monkeypatch):
+    """Probe A6. The crashed attempt created the inline Customer (its id is
+    derived from the key) and nothing else. Resubmitting the same form with
+    an existing customer picked instead used to issue to that customer and
+    strand the inline one. A changed customer choice is a different
+    issuance: refused, nothing new written, the original still finishable."""
+    staff_id = make_staff(app, "switch1@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "SWITCH_TO_EXISTING_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    existing = _seed_customer(app, staff_id, "Switch Existing Co")
+    key = str(uuid.uuid4())
+    _crash_once(monkeypatch, "create_subscription", "simulated crash after the customer committed")
+    _crashed_attempt(app, new_customer_legal_name="Switch Inline Co", plan_id=plan_id, idempotency_key=key,
+                     actor_staff_user_id=staff_id)
+    assert _issuance_row_counts(app, legal_name="Switch Inline Co")["customers"] == 1
+
+    with app.app_context():
+        from app.licensing.issuance import LicenseIssuanceError, issue_license_direct
+
+        with pytest.raises(LicenseIssuanceError) as refused:
+            issue_license_direct(
+                customer_id=existing, plan_id=plan_id, idempotency_key=key,
+                actor_staff_user_id=staff_id, license_pepper="test-pepper",
+            )
+    assert "Switch Inline Co" in str(refused.value)
+    assert _issuance_row_counts(app, customer_id=existing)["subscriptions"] == 0
+
+    # Resubmitting the original choice finishes it: one of each, no orphan.
+    with app.app_context():
+        from app.licensing.issuance import issue_license_direct
+
+        result = issue_license_direct(
+            new_customer_legal_name="Switch Inline Co", plan_id=plan_id, idempotency_key=key,
+            actor_staff_user_id=staff_id, license_pepper="test-pepper",
+        )
+    assert result["full_key"] is not None
+    assert _issuance_row_counts(app, legal_name="Switch Inline Co") == ONE_OF_EACH
+
+
+def test_resume_switching_from_an_existing_to_an_inline_customer_creates_no_customer(app, seeded, monkeypatch):
+    """The reverse switch. The crashed attempt committed a Subscription for
+    the existing customer; the resubmit names a new inline customer instead.
+    It used to CREATE that new Customer and only then notice the mismatch --
+    a fresh orphan on every such retry. Refused before any write."""
+    staff_id = make_staff(app, "switch2@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "SWITCH_TO_INLINE_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    existing = _seed_customer(app, staff_id, "Switch Back Existing Co")
+    key = str(uuid.uuid4())
+    _crash_once(monkeypatch, "create_license", "simulated crash between subscription and licence")
+    _crashed_attempt(app, customer_id=existing, plan_id=plan_id, idempotency_key=key, actor_staff_user_id=staff_id)
+
+    with app.app_context():
+        from app.licensing.issuance import LicenseIssuanceError, issue_license_direct
+
+        with pytest.raises(LicenseIssuanceError):
+            issue_license_direct(
+                new_customer_legal_name="Switch Back Inline Co", plan_id=plan_id, idempotency_key=key,
+                actor_staff_user_id=staff_id, license_pepper="test-pepper",
+            )
+    assert _issuance_row_counts(app, legal_name="Switch Back Inline Co")["customers"] == 0
+
+
+def test_resume_picking_the_customer_the_crashed_attempt_created_still_finishes(app, seeded, monkeypatch):
+    """Allow half of the customer-switch refusal. After a crash the inline
+    customer exists and shows up in the customer list; an operator who picks
+    THAT customer from the list on the same form is finishing the same
+    issuance, not starting a different one."""
+    staff_id = make_staff(app, "switch3@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "SWITCH_SAME_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    key = str(uuid.uuid4())
+    _crash_once(monkeypatch, "create_subscription", "simulated crash after the customer committed")
+    _crashed_attempt(app, new_customer_legal_name="Switch Picked Co", plan_id=plan_id, idempotency_key=key,
+                     actor_staff_user_id=staff_id)
+    with app.app_context():
+        from app.extensions import db_session
+        from app.licensing.issuance import issue_license_direct
+        from app.models.customers import Customer
+
+        created = db_session.query(Customer).filter_by(legal_name="Switch Picked Co").one().id
+        result = issue_license_direct(
+            customer_id=created, plan_id=plan_id, idempotency_key=key,
+            actor_staff_user_id=staff_id, license_pepper="test-pepper",
+        )
+    assert result["full_key"] is not None and result["customer_id"] == created
+    assert _issuance_row_counts(app, legal_name="Switch Picked Co") == ONE_OF_EACH

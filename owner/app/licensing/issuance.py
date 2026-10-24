@@ -262,6 +262,85 @@ def _replay_if_already_issued(
     }
 
 
+def _interrupted_issuance_conflict(customer_name: str, plan: Plan | None, devices: int) -> LicenseIssuanceError:
+    plan_name = plan.name if plan is not None else "an unknown package"
+    return LicenseIssuanceError(
+        "An earlier submit of this form was interrupted part-way with different details: "
+        f"customer {customer_name}, package {plan_name}, {devices} device(s). "
+        "Submit it again with exactly those details to finish that licence."
+    )
+
+
+def _resumable_rows(
+    idempotency_key: str, *, customer: Customer | None, legal_name: str, plan: Plan, device_limit: int
+) -> tuple[Customer | None, Subscription | None, License | None]:
+    """The rows an earlier, interrupted attempt with this key committed, IF
+    this request is the same issuance; otherwise refuses -- before any write.
+
+    Step 0 fix round 2 (2026-10-24). The resume path used to compare only
+    customer and package, and only one row at a time, AS it wrote:
+      - a crash inside issue_license_key (licence DRAFT, 2 devices), then a
+        resubmit with the same key and 5 extra devices, issued the 2-device
+        licence -- the operator was shown a key for 7 devices that activates
+        on 2 (adversarial probe A1);
+      - an inline customer committed by the crashed attempt, then a resubmit
+        with an EXISTING customer picked, issued to that customer and left
+        the inline one orphaned (probe A6);
+      - the reverse switch created a NEW inline Customer and only then
+        noticed the subscription belonged to someone else -- an orphan made
+        by the refusal itself.
+    A key names one issuance: the same customer choice, package and device
+    count every time, exactly the replay check's rule. Everything the
+    request determines is compared here against every row that exists, and
+    a mismatch is refused with what the interrupted attempt was for, so the
+    operator can finish THAT licence instead of stranding its rows."""
+    derived_customer = db_session.get(Customer, _row_id_for(idempotency_key, "customer"))
+    subscription = db_session.get(Subscription, _row_id_for(idempotency_key, "subscription"))
+    license_row = db_session.get(License, _row_id_for(idempotency_key, "license"))
+
+    # Who the interrupted attempt was for, for the refusal message.
+    started_for = license_row or subscription
+    if started_for is not None:
+        original = (started_for.customer.legal_name, started_for.plan,
+                    license_row.device_limit if license_row is not None else subscription.device_allowance)
+    elif derived_customer is not None:
+        original = (derived_customer.legal_name, plan, device_limit)
+    else:
+        return None, None, None  # nothing was started under this key
+
+    if customer is None:
+        if derived_customer is not None and derived_customer.legal_name != legal_name:
+            raise _interrupted_issuance_conflict(*original)
+        expected_customer_id = _row_id_for(idempotency_key, "customer")
+    else:
+        # An inline customer the crashed attempt created is still the same
+        # issuance if the operator now picks THAT customer from the list;
+        # any other existing customer is a different issuance.
+        if derived_customer is not None and derived_customer.id != customer.id:
+            raise _interrupted_issuance_conflict(*original)
+        expected_customer_id = customer.id
+
+    requested = (expected_customer_id, plan.id, device_limit)
+    if subscription is not None and (subscription.customer_id, subscription.plan_id, subscription.device_allowance) != requested:
+        raise _interrupted_issuance_conflict(*original)
+    if license_row is not None and (license_row.customer_id, license_row.plan_id, license_row.device_limit) != requested:
+        raise _interrupted_issuance_conflict(*original)
+
+    if subscription is not None and subscription.status not in _RESUMABLE_SUBSCRIPTION_STATUSES:
+        raise LicenseIssuanceError(
+            f"The subscription started by an earlier attempt is now {subscription.status}; "
+            "it cannot be resumed. Open a fresh issuance form."
+        )
+    if license_row is not None and license_row.status != "DRAFT":
+        # Unreachable in a consistent database: ISSUED and its event commit
+        # together, and an event sends the caller down the replay path.
+        # Refused rather than guessed at if it ever happens.
+        raise LicenseIssuanceError(
+            f"The licence started by an earlier attempt is already {license_row.status}; check the licence list."
+        )
+    return derived_customer, subscription, license_row
+
+
 def issue_license_direct(
     *,
     customer_id=None,
@@ -345,18 +424,20 @@ def issue_license_direct(
 
         start, end = resolve_license_term(plan, as_of=as_of)
 
+        # The last check before any write: rows an interrupted attempt with
+        # this key committed are reused only if this request is the same
+        # issuance (see _resumable_rows).
+        derived_customer, subscription, license_row = _resumable_rows(
+            idempotency_key, customer=customer, legal_name=legal_name, plan=plan, device_limit=device_limit
+        )
+
         # -- writes start here; each step reuses what an earlier, failed
         # attempt with this same key already committed (see _row_id_for).
         if customer is None:
-            customer_row_id = _row_id_for(idempotency_key, "customer")
-            customer = db_session.get(Customer, customer_row_id)
-            if customer is None:
-                customer = create_customer({"id": customer_row_id, "legal_name": legal_name}, actor_staff_user_id)
-            elif customer.legal_name != legal_name:
-                raise LicenseIssuanceError(_KEY_ALREADY_USED_FOR_DIFFERENT_ISSUANCE)
+            customer = derived_customer or create_customer(
+                {"id": _row_id_for(idempotency_key, "customer"), "legal_name": legal_name}, actor_staff_user_id
+            )
 
-        subscription_row_id = _row_id_for(idempotency_key, "subscription")
-        subscription = db_session.get(Subscription, subscription_row_id)
         if subscription is None:
             # Canonical service call -- never a direct model-row insert. Ceremony cut
             # per spec B.2: billing_cycle is derived from plan.billing_model (never a
@@ -367,7 +448,7 @@ def issue_license_direct(
             # direct path does.
             subscription = create_subscription(
                 {
-                    "id": subscription_row_id,
+                    "id": _row_id_for(idempotency_key, "subscription"),
                     "customer_id": customer.id,
                     "product_id": plan.product_id,
                     "plan_id": plan.id,
@@ -378,13 +459,6 @@ def issue_license_direct(
                 },
                 actor_staff_user_id,
             )
-        elif subscription.customer_id != customer.id or subscription.plan_id != plan.id:
-            raise LicenseIssuanceError(_KEY_ALREADY_USED_FOR_DIFFERENT_ISSUANCE)
-        elif subscription.status not in _RESUMABLE_SUBSCRIPTION_STATUSES:
-            raise LicenseIssuanceError(
-                f"The subscription started by an earlier attempt is now {subscription.status}; "
-                "it cannot be resumed. Open a fresh issuance form."
-            )
         # create_subscription always creates DRAFT (subscriptions/services.py) --
         # ceremony cut per spec B.2: auto-ACTIVE at issue, the same transition
         # fulfillment.py performs for the sales pipeline, so ops screens and Part
@@ -392,13 +466,11 @@ def issue_license_direct(
         if subscription.status == "DRAFT":
             transition_subscription(subscription, "ACTIVE", actor_staff_user_id, reason="Issued via the direct issuance screen.")
 
-        license_row_id = _row_id_for(idempotency_key, "license")
-        license_row = db_session.get(License, license_row_id)
         if license_row is None:
             # Canonical service call -- never a direct model-row insert.
             license_row = create_license(
                 {
-                    "id": license_row_id,
+                    "id": _row_id_for(idempotency_key, "license"),
                     "customer_id": customer.id,
                     "subscription_id": subscription.id,
                     "product_id": plan.product_id,
@@ -409,13 +481,6 @@ def issue_license_direct(
                     "valid_until": end,
                 },
                 actor_staff_user_id,
-            )
-        elif license_row.status != "DRAFT":
-            # Unreachable in a consistent database: ISSUED and its event
-            # commit together, and an event sends us down the replay path
-            # above. Refused rather than guessed at if it ever happens.
-            raise LicenseIssuanceError(
-                f"The licence started by an earlier attempt is already {license_row.status}; check the licence list."
             )
 
         # The one real key-issuance authority -- never constructs the key or

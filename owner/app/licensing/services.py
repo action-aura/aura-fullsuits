@@ -47,11 +47,45 @@ def issue_license_key(
 ) -> tuple[License, str | None]:
     """Returns (license, full_key_or_None). full_key is None when this call is a
     replay of an already-processed idempotency_key (Part O: 'prevent duplicate
-    issuance from repeated requests... use idempotency')."""
+    issuance from repeated requests... use idempotency').
+
+    Step 0 fix round 2 (2026-10-24), two gaps measured by an adversarial
+    probe (tests/test_licensing.py, "fix round 2" section):
+      - nothing locked the row, so two issues of the SAME DRAFT licence with
+        DIFFERENT idempotency keys (two tabs of the detail page: each render
+        mints its own key) both passed the DRAFT check below and both
+        revealed a key. Only the last write is the key the licence verifies
+        against; the other was shown once and never works. The row is now
+        locked (SELECT ... FOR UPDATE) BEFORE the replay and status checks,
+        so the second caller waits, then sees ISSUED and is refused -- or,
+        with the same key, sees the event and is a clean replay.
+      - the replay matched the key alone. A key spent on licence 1 and sent
+        against licence 2 answered "already issued" for licence 2, still
+        DRAFT. A key now replays only on the licence it was used for.
+
+    Lock order, for every caller: issue_license_direct and fulfill_order
+    take their per-key advisory lock (on a dedicated connection) first and
+    this row lock second; the detail-page route takes only this one. This
+    lock is held on db_session's own transaction and released by the commit
+    below; nothing acquires an advisory lock while holding it, so no cycle
+    is possible. Not released on the refusal/replay returns: those wrote
+    nothing, and the caller's own commit/rollback (or request teardown's
+    db_session.remove()) ends the transaction, exactly as before."""
+    license_row = db_session.execute(
+        select(License)
+        .where(License.id == license_row.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalars().one()
+
     existing_event = db_session.execute(
         select(LicenseKeyIssuanceEvent).where(LicenseKeyIssuanceEvent.idempotency_key == idempotency_key)
     ).scalars().first()
     if existing_event is not None:
+        if existing_event.license_id != license_row.id:
+            raise InvalidLicenseTransitionError(
+                "This issue form was already used for a different licence. Reload this licence's page and try again."
+            )
         return license_row, None
 
     if license_row.status not in ("DRAFT",):

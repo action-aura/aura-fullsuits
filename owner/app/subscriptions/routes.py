@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
@@ -167,15 +167,32 @@ def create_payment():
     # past events are legitimate), but record_payment now refuses CONFIRMED:
     # this route's gate is payments.create, which SALES holds, and it used to
     # let a salesperson record money as confirmed with no checker at all.
+    #
+    # Amount and date are parsed BEFORE that call (Step 0 fix round 2): a
+    # mistyped amount raised decimal.InvalidOperation and a missing date a
+    # TypeError -- neither is a ValueError, so both escaped as a 500. And
+    # "NaN" parses as a Decimal that Postgres NUMERIC happily stores, which
+    # would have recorded a payment of NaN. Not-a-finite-number is not an
+    # amount.
+    try:
+        amount = Decimal(request.form.get("amount", "0"))
+    except InvalidOperation:
+        amount = None
+    if amount is None or not amount.is_finite():
+        return jsonify({"error": "invalid_amount", "message": "Amount must be a number, e.g. 75.00."}), 400
+    try:
+        payment_date = date.fromisoformat(request.form.get("payment_date") or "")
+    except ValueError:
+        return jsonify({"error": "invalid_payment_date", "message": "Payment date must be a date, e.g. 2026-10-24."}), 400
     try:
         payment = record_payment(
             {
                 "customer_id": request.form.get("customer_id"),
                 "subscription_id": request.form.get("subscription_id") or None,
-                "amount": Decimal(request.form.get("amount", "0")),
+                "amount": amount,
                 "currency": request.form.get("currency", "USD"),
                 "method": request.form.get("method") or None,
-                "payment_date": date.fromisoformat(request.form.get("payment_date")),
+                "payment_date": payment_date,
                 "reference": request.form.get("reference") or None,
                 "status": request.form.get("status", "PENDING"),
             },

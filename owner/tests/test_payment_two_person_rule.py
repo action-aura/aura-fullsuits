@@ -255,6 +255,41 @@ def test_legacy_record_route_still_records_a_pending_payment(app, client, seeded
         assert db_session.query(PaymentRecord).filter_by(status="PENDING", subscription_id=sub_id).count() == 1
 
 
+@pytest.mark.parametrize(
+    "bad_field",
+    [
+        {"amount": "seventy-five"},  # decimal.InvalidOperation is not a ValueError: it escaped as a 500
+        {"amount": "NaN"},  # parses as a Decimal, and Postgres NUMERIC stores it: a NaN payment
+        {"amount": "Infinity"},
+        {"payment_date": None},  # date.fromisoformat(None) is a TypeError: a 500
+        {"payment_date": "24/10/2026"},
+    ],
+    ids=["amount-words", "amount-nan", "amount-infinity", "date-missing", "date-wrong-format"],
+)
+def test_legacy_record_route_with_invalid_amount_or_date_is_a_400_not_a_crash(app, client, seeded, bad_field):
+    """Fix round 2: the record route only handled the refusals record_payment
+    raises. A mistyped amount or a missing/garbled date failed while
+    building the record -- before record_payment ran -- and was a 500. Now a
+    clear 400, and nothing is recorded."""
+    staff_id = make_staff(app, "tpr-n@example.com", role_codes=["FINANCE"])
+    sub_id, customer_id = _make_subscription(app, staff_id)
+    force_login(client, app, staff_id)
+    form = {
+        "csrf_token": _csrf_for(client, sub_id), "customer_id": str(customer_id), "subscription_id": str(sub_id),
+        "amount": "75.00", "currency": "USD", "payment_date": date.today().isoformat(), "status": "PENDING",
+    }
+    form.update(bad_field)
+    form = {k: v for k, v in form.items() if v is not None}
+    resp = client.post("/subscriptions/payments", data=form)
+    assert resp.status_code == 400
+    assert resp.get_json()["error"]
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.subscriptions import PaymentRecord
+
+        assert db_session.query(PaymentRecord).filter_by(subscription_id=sub_id).count() == 0
+
+
 def test_record_form_no_longer_offers_confirmed(app, client, seeded):
     """The record form used to offer CONFIRMED as a starting status -- an
     option the service now refuses. Offering it would only produce errors."""
