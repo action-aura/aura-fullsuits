@@ -1143,13 +1143,47 @@ def local_company_id_from_registry() -> Optional[str]:
         conn.close()
 
 
-#: KEEP-SELLING C3: how often (at most) a paused SyncService persists "the pause was seen now".
-#: The persisted value is therefore at most this many seconds older than the last observation, and
-#: that is the whole error bound on the pause clock across a restart (in-process the in-memory value
-#: is updated on every observation). 60 s against a 72 h stop is noise; the throttle exists so a busy
-#: health poll (the UI polls it) does not turn into one SQLite write per request for the whole lapse.
-#: A transition INTO the pause is always written regardless of this interval.
+#: KEEP-SELLING C3: how often (at most) the sync TIMER TICK persists "the pause was seen now".
+#: The persisted value is therefore at most this many seconds plus one tick older than the last
+#: observation, and that is the whole error bound on the pause clock across a restart (in-process
+#: the in-memory value is updated on every observation). 60 s against a 72 h stop is noise. Only the
+#: timer tick writes (read paths never do -- see `_note_paused`); the first tick after entering the
+#: pause is written regardless of this interval.
 PAUSE_CLOCK_WRITE_INTERVAL_SECONDS = 60.0
+
+#: KEEP-SELLING E1: busy timeout (ms) of the connection the tick uses to persist the pause clock.
+#: Short on purpose: if a sale holds the write lock the persist is skipped and retried next tick
+#: rather than waiting out the default 30 s.
+_PAUSE_PERSIST_BUSY_MS = 300
+
+#: KEEP-SELLING E3: a stored `last_paused_seen_at` later than now + this many seconds is IGNORED.
+#: Why: the stamp is an unsigned column and the clock it came from can jump (a wrong date later
+#: corrected). A stamp in the future makes `now - max(last success, stamp)` negative, which is
+#: "less than 72 h behind" forever -- the 72h sales stop would be switched off by a single bad
+#: value (measured on the real server: stamp = now + 365 d, 100 h behind, not paused -> sale 200
+#: instead of 403). A few minutes of tolerance covers ordinary clock skew between writes; in-memory
+#: observations are always "now", so they are unaffected.
+_PAUSE_STAMP_FUTURE_TOLERANCE_SECONDS = 300.0
+
+
+def _usable_pause_stamp(value) -> Optional[datetime]:
+    """Parse a stored `last_paused_seen_at`; None if absent, unparseable, timezone-naive (only
+    producible by tampering/corruption) or more than the tolerance in the future (E3)."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        logger.warning("SyncService: ignoring unparseable last_paused_seen_at %r", value)
+        return None
+    if parsed.tzinfo is None:
+        logger.warning("SyncService: ignoring timezone-naive last_paused_seen_at %r", value)
+        return None
+    if (parsed - datetime.now(timezone.utc)).total_seconds() > _PAUSE_STAMP_FUTURE_TOLERANCE_SECONDS:
+        logger.warning("SyncService: ignoring last_paused_seen_at %r: it is in the future "
+                       "(the clock jumped); the 72h stop must not be switched off by it.", value)
+        return None
+    return parsed
 
 
 def _monotonic() -> float:
@@ -1578,11 +1612,15 @@ class SyncService:
         elif not paused and previous is True:
             logger.info("Sync RESUMED: the licence no longer pauses sync; catching up the queued rows.")
         if paused:
-            self._note_paused(entered=previous is not True)
+            self._note_paused()
+        elif previous is True:
+            # Left the pause: the next pause (a later lapse) is a fresh ENTRY and the very next
+            # tick must write it regardless of the throttle. In-memory only -- see _note_paused.
+            self._pause_clock_written_at = None
         return paused
 
-    def _note_paused(self, entered: bool) -> None:
-        """KEEP-SELLING C3: remember that the pause was seen NOW.
+    def _note_paused(self) -> None:
+        """KEEP-SELLING C3: remember, IN MEMORY ONLY, that the pause was seen NOW.
 
         Why: the 72-hour sales stop measures time since the last successful sync, and a pause is
         time the shop was not ALLOWED to sync. Once the subscription is renewed the pause flag goes
@@ -1590,42 +1628,57 @@ class SyncService:
         would be refused (measured live: HTTP 403 after a 100 h lapse). `get_health()` therefore
         also reports `seconds_behind_excluding_pause`, measured from max(last success, this).
 
-        The in-memory value is refreshed on EVERY observation (exact within a process). The
-        database write is throttled to once per `PAUSE_CLOCK_WRITE_INTERVAL_SECONDS` -- so after a
-        restart the persisted value is at most that much older than the last observation, which is
-        the entire error bound -- except that a transition INTO the pause is always written.
+        READ PATHS NEVER WRITE (fix round 2, E1). This runs from `_licence_paused()`, which
+        get_health() calls, and create_sale calls get_health() INSIDE its own BEGIN IMMEDIATE.
+        The first version persisted from here while holding `_health_lock` on a 30 s busy-timeout
+        connection: a timer/health write racing a sale's write lock waited out the timeout while
+        the sale waited on `_health_lock` -- a sale measured at 65.30 s (lockrepro.py). So this
+        method only refreshes the in-memory value (exact within a process; no I/O; cannot raise);
+        the database write lives in `_persist_pause_clock`, reached only from the timer tick.
+        Restart error bound: PAUSE_CLOCK_WRITE_INTERVAL_SECONDS plus one tick (the persisted value
+        is the instant of a tick, not of the last health poll)."""
+        with self._health_lock:
+            self._health["last_paused_seen_at"] = datetime.now(timezone.utc).isoformat()
 
-        Never raises: a failure to persist must not turn "sync is paused on purpose" into an
-        exception inside push_once/pull_once/get_health (which would stop a shop selling for a
-        bookkeeping reason). It is logged once, and the persist is retried on the next observation
-        because the throttle stamp only advances on success."""
+    def _persist_pause_clock(self) -> None:
+        """KEEP-SELLING C3/E1: write the in-memory pause clock to the store. Called ONLY from the
+        sync timer tick (`run_once`) while paused -- never from a request or health path.
+
+        At most once per `PAUSE_CLOCK_WRITE_INTERVAL_SECONDS`; the first tick after entering the
+        pause (`_pause_clock_written_at is None`) always writes. The value is copied under
+        `_health_lock` and the write happens AFTER the lock is released, on a connection with a
+        SHORT busy timeout: if a sale (or anything) holds the write lock the persist is skipped and
+        retried on the next tick (the throttle stamp advances only on success), so a locked
+        database costs the timer thread at most `_PAUSE_PERSIST_BUSY_MS` and costs a sale nothing.
+        Never raises; a failure is logged once (deduped)."""
+        store = self._local_freshness_store
+        hook = getattr(store, "record_paused_seen", None) if store is not None else None
+        if hook is None:
+            return
         try:
-            self._ensure_freshness_loaded()
-            now = datetime.now(timezone.utc).isoformat()
             now_mono = _monotonic()
+            written = self._pause_clock_written_at
+            if written is not None and now_mono - written < PAUSE_CLOCK_WRITE_INTERVAL_SECONDS:
+                return
             with self._health_lock:
-                self._health["last_paused_seen_at"] = now
-                store = self._local_freshness_store
-                hook = getattr(store, "record_paused_seen", None) if store is not None else None
-                if hook is None:
-                    return
-                written = self._pause_clock_written_at
-                if not entered and written is not None \
-                        and now_mono - written < PAUSE_CLOCK_WRITE_INTERVAL_SECONDS:
-                    return
-                conn = self._get_conn()
-                try:
-                    hook(conn, now)
-                    conn.commit()
-                finally:
-                    conn.close()
-                self._pause_clock_written_at = now_mono
+                stamp = self._health["last_paused_seen_at"]
+            if not stamp:
+                return
+            conn = self._get_conn()
+            try:
+                conn.execute(f"PRAGMA busy_timeout = {_PAUSE_PERSIST_BUSY_MS}")
+                hook(conn, stamp)
+                conn.commit()
+            finally:
+                conn.close()
+            self._pause_clock_written_at = now_mono
         except Exception:  # noqa: BLE001 -- bookkeeping must never stop a till selling
             if not self._pause_clock_error_logged:
                 self._pause_clock_error_logged = True
                 logger.warning(
-                    "SyncService: could not persist the licence pause clock; the 72h offline stop "
-                    "may count the lapse after a restart. Selling is unaffected.", exc_info=True)
+                    "SyncService: could not persist the licence pause clock (retrying on the next "
+                    "tick); the 72h offline stop may count the lapse after a restart. Selling is "
+                    "unaffected.", exc_info=True)
 
     def push_once(self) -> None:
         """Drains sync_outbox to Owner in sequential chunks of at most
@@ -9011,6 +9064,8 @@ class SyncService:
         now") NOR a failure (which would raise a false "sync failing" alarm).
         The pause is reported through get_health()['paused_by_licence']."""
         if self._licence_paused():
+            # The ONLY place the pause clock reaches the database (E1: read paths never write).
+            self._persist_pause_clock()
             return
         try:
             self.push_once()
@@ -9100,7 +9155,11 @@ class SyncService:
                 # KEEP-SELLING C3: keep the LATER of what this process already observed and what
                 # was persisted (both ISO-8601 UTC, so string order is time order). A pause seen
                 # before the first load must never be rolled back to an older stored value.
-                seen = [v for v in (self._health.get("last_paused_seen_at"), persisted.get("paused_seen_at")) if v]
+                # E3: a persisted stamp from the future is dropped here (see _usable_pause_stamp), so
+                # it never reaches memory or get_health()['last_paused_seen_at'].
+                stored = persisted.get("paused_seen_at")
+                stored = stored if _usable_pause_stamp(stored) is not None else None
+                seen = [v for v in (self._health.get("last_paused_seen_at"), stored) if v]
                 self._health["last_paused_seen_at"] = max(seen) if seen else None
                 self._freshness_loaded = True
 
@@ -9356,12 +9415,12 @@ class SyncService:
         if not timestamps:
             return None
         instants = [datetime.fromisoformat(ts) for ts in timestamps]
-        if last_paused_seen_at:
-            try:
-                instants.append(datetime.fromisoformat(last_paused_seen_at))
-            except ValueError:
-                logger.warning("SyncService: ignoring unparseable last_paused_seen_at %r", last_paused_seen_at)
-        return (datetime.now(timezone.utc) - max(instants)).total_seconds()
+        paused_seen = _usable_pause_stamp(last_paused_seen_at)
+        if paused_seen is not None:
+            instants.append(paused_seen)
+        # Clamped at 0 (E3, second line of defence): a negative figure reads as "fresher than now"
+        # and would hide a real 72h breach; the future-stamp filter above is the first line.
+        return max(0.0, (datetime.now(timezone.utc) - max(instants)).total_seconds())
 
     @staticmethod
     def _elapsed_since_last_success(push: dict, pull: dict) -> tuple:
