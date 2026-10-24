@@ -83,7 +83,13 @@ for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
 
 DATA = Path(tempfile.mkdtemp(prefix='aura_retail_offline_stop_'))
 (DATA / 'database' / 'subsystems').mkdir(parents=True, exist_ok=True)
-os.environ.update(AURA_STANDALONE='1', AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA))
+# AURA_SITE_RELAY_ENABLED='0' (keep-selling fix round 2, E4): without it the app self-elects LAN hub
+# ~15.6 s after init_app() and register_active_service() REPLACES the SyncService each test installs,
+# so a deny-half test (a different one each run) sometimes talked to the hub's service instead of its
+# own -- measured 3 failed runs of 6. Nothing here exercises the LAN hub, so the file turns it off,
+# same as retail_money_sync_test.py and its siblings.
+os.environ.update(AURA_STANDALONE='1', AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA),
+                  AURA_SITE_RELAY_ENABLED='0')
 os.environ.pop('AURA_DEV', None)
 # Deliberately NOT set: SYNC_RELAY_BASE_URL. app.py only constructs and
 # registers its OWN SyncService when that is configured (see
@@ -848,7 +854,7 @@ def test_the_pause_clock_survives_a_restart_and_the_renewed_shop_sells():
     _mark_behind(100)
     assert _paused_seen_column() is None
     first = _pause_clock_service(True)
-    first.get_health()  # one observation of the pause is all it takes
+    first.run_once()  # E1: one TIMER TICK of the pause persists it; get_health() is memory-only
     stamped = _paused_seen_column()
     assert stamped is not None, 'the paused observation must have written the column'
     assert (datetime.now(timezone.utc) - datetime.fromisoformat(stamped)).total_seconds() < 60
@@ -858,6 +864,49 @@ def test_the_pause_clock_survives_a_restart_and_the_renewed_shop_sells():
     assert health['last_paused_seen_at'] == stamped
     r = _sell(admin, pid)
     assert r.status_code == 200, r.get_json()
+
+
+def _set_future_paused_seen(seconds_ahead):
+    ts = (datetime.now(timezone.utc) + timedelta(seconds=seconds_ahead)).isoformat()
+    conn = sch.get_retail_conn()
+    try:
+        sch.record_paused_seen(conn, ts)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_a_pause_stamp_from_the_future_does_not_switch_the_72h_stop_off():
+    """E3. Measured on the real server: last_paused_seen_at = now + 365 d, 100 h behind, NOT paused
+    -> the figure went negative and the sale returned 200 (the previous commit gave 403). Asserts the
+    stamp really is in the column and the device really is past 72 h, so a 403 is the guard working."""
+    admin, cid, pid = _new_shop()
+    _mark_behind(100)
+    _set_future_paused_seen(365 * 86400)
+    assert _paused_seen_column() is not None, 'fixture: the future stamp must be stored'
+    service = _pause_clock_service(False)
+    register_active_service(service)
+    health = service.get_health()
+    assert health['paused_by_licence'] is False
+    assert health['seconds_since_last_success'] > SYNC_SALES_STOP_THRESHOLD_SECONDS
+    assert health['seconds_behind_excluding_pause'] > SYNC_SALES_STOP_THRESHOLD_SECONDS
+    before = _sales_count(cid)
+    r = _sell(admin, pid)
+    assert r.status_code == 403, r.get_json()
+    assert _sales_count(cid) == before, 'a blocked sale must write nothing'
+    assert retail_api._is_device_behind_on_sync() is True
+
+
+def test_a_pause_stamp_within_the_skew_tolerance_is_still_honoured():
+    """Allow half of E3: +60 s (ordinary clock skew) is not "the future" -- the renewed shop sells."""
+    admin, cid, pid = _new_shop()
+    _mark_behind(100)
+    _set_future_paused_seen(60)
+    register_active_service(_pause_clock_service(False))
+    before = _sales_count(cid)
+    r = _sell(admin, pid)
+    assert r.status_code == 200, r.get_json()
+    assert _sales_count(cid) == before + 1
 
 
 def test_the_predicates_read_the_pause_aware_key_and_fall_back_when_it_is_absent(monkeypatch):

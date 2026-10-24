@@ -26,7 +26,12 @@ for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
 
 DATA = Path(tempfile.mkdtemp(prefix="aura_retail_sync_pause_wiring_"))
 (DATA / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
-os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA))
+# AURA_SITE_RELAY_ENABLED="0" (keep-selling fix round 2, E4): same hazard as
+# retail_offline_sales_stop_test.py -- left unset, the app self-elects LAN hub a few seconds after
+# init_app() and register_active_service() swaps services behind the test's back. The hub's own
+# pause wiring is proven (with the hub pinned ON) in retail_sync_licence_pause_hub_wiring_test.py.
+os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA),
+                  AURA_SITE_RELAY_ENABLED="0")
 os.environ.pop("AURA_DEV", None)
 # An address nothing listens on: the services must be CONSTRUCTED and wired; we never let a tick
 # reach the network (the pause is exactly what is under test).
@@ -111,7 +116,7 @@ def test_the_real_apps_store_persists_the_pause_clock_so_a_renewed_shop_is_not_c
     svc._pause_clock_written_at = None  # the throttle must not hide this write from the test
     assert column() is None
     _set_state("SUBSCRIPTION_LAPSED")
-    svc.get_health()
+    svc.run_once()  # E1: only the timer tick persists the clock; get_health() is memory-only
     stamped = column()
     assert stamped is not None, "a lapsed service observed the pause but the real store wrote nothing"
     # Pretend the last real sync was 100 h ago, then renew: the lapse must not count.
