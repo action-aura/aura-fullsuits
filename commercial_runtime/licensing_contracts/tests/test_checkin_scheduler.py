@@ -968,6 +968,87 @@ def test_restored_older_database_30_days_since_checkin_is_restricted_under_restr
     assert result == LicenseState.RESTRICTED
 
 
+# ── E2 (fix round 2): the offline floor must not trust the UNSIGNED last_successful_checkin_at ──
+# The floor used to be measured from that column alone. Editing it to "now" (or to NULL) after a
+# restart therefore gave ACTIVE_OFFLINE at 365 days. It is now measured from
+# min(column, the stored assertion's SIGNED issued_at). Every test pins the verdict AND that the
+# offline check-in really ran (client.checkin_calls == 1), so a pass cannot be a skipped evaluation.
+
+def _tamper_last_success(state_repo, value):
+    record = state_repo.load()
+    record.last_successful_checkin_at = value
+    state_repo.save(record)
+
+
+def _run_tampered(owner_key, trust_store, state_repo, events, *, days_ago, last_success, policy=None):
+    _expired_assertion_record(owner_key, state_repo, days_ago=days_ago, policy=policy)
+    _tamper_last_success(state_repo, last_success)
+    client, scheduler = _offline_scheduler(trust_store, state_repo, events)
+    result = scheduler.run_once()
+    assert client.checkin_calls == 1, "the offline attempt must really have been made"
+    return result
+
+
+def test_editing_last_success_to_now_does_not_buy_unlimited_offline_selling(
+    owner_key, trust_store, state_repo, events
+):
+    result = _run_tampered(
+        owner_key, trust_store, state_repo, events, days_ago=365, last_success=NOW.isoformat())
+    assert result == LicenseState.RESTRICTED
+
+
+def test_a_far_future_last_success_does_not_buy_offline_selling_either(
+    owner_key, trust_store, state_repo, events
+):
+    result = _run_tampered(
+        owner_key, trust_store, state_repo, events, days_ago=60,
+        last_success=(NOW + timedelta(days=3650)).isoformat())
+    assert result == LicenseState.RESTRICTED
+
+
+def test_a_null_last_success_falls_back_to_the_signed_issued_at(
+    owner_key, trust_store, state_repo, events
+):
+    assert _run_tampered(
+        owner_key, trust_store, state_repo, events, days_ago=60, last_success=None
+    ) == LicenseState.RESTRICTED
+
+
+def test_a_null_last_success_under_warn_only_still_sells_as_grace_period(
+    owner_key, trust_store, state_repo, events
+):
+    # The direction that must NOT tighten: WARN_ONLY never blocks on time alone.
+    assert _run_tampered(
+        owner_key, trust_store, state_repo, events, days_ago=60, last_success=None,
+        policy=_WARN_ONLY_POLICY,
+    ) == LicenseState.GRACE_PERIOD
+
+
+def test_a_naive_last_success_never_raises_and_is_bounded_by_issued_at(
+    owner_key, trust_store, state_repo, events
+):
+    naive_now = NOW.replace(tzinfo=None).isoformat()
+    # 60 days old assertion + a naive "now": no TypeError, and the signed issued_at still restricts.
+    assert _run_tampered(
+        owner_key, trust_store, state_repo, events, days_ago=60, last_success=naive_now
+    ) == LicenseState.RESTRICTED
+    # ... and an honest 2-day-old shop with a naive value is not over-tightened.
+    assert _run_tampered(
+        owner_key, trust_store, state_repo, events, days_ago=2, last_success=naive_now
+    ) == LicenseState.ACTIVE_OFFLINE
+
+
+def test_an_honest_shop_that_checked_in_an_hour_ago_is_unaffected(
+    owner_key, trust_store, state_repo, events
+):
+    # Assertion issued 2 days ago (expired), but the shop DID check in an hour ago: min() keeps the
+    # honest, older signed bound and 2 days is well inside the 14-day grace.
+    assert _run_tampered(
+        owner_key, trust_store, state_repo, events, days_ago=2,
+        last_success=(NOW - timedelta(hours=1)).isoformat(),
+    ) == LicenseState.ACTIVE_OFFLINE
+
+
 def test_assertion_not_yet_valid_by_wall_clock_is_local_state_corrupt(
     owner_key, trust_store, state_repo, events
 ):

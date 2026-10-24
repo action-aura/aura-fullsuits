@@ -222,6 +222,20 @@ _STATE_ENTRY_EVENTS = {
 }
 
 
+def _aware_datetime_or_none(value) -> Optional[datetime]:
+    """Parse an ISO-8601 string into an AWARE datetime, or None if it is missing, unparseable or
+    timezone-naive. Naive values are treated as absent on purpose: every writer in this package
+    stamps UTC-aware values, so a naive one can only come from tampering/corruption, and
+    subtracting it from an aware `now` raises TypeError (it used to escape `run_once`)."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
 class LicenseCheckInScheduler:
     def __init__(
         self,
@@ -625,23 +639,30 @@ class LicenseCheckInScheduler:
                 # That is no weaker than before this branch (which also relied
                 # on the wall clock, via the TTL check) and it restores the
                 # bound the signed offline policy intends. Negative -> 0.
-                if verified is not None and record.last_successful_checkin_at:
+                #
+                # E2 (fix round 2): the floor is measured from min(last_successful_checkin_at,
+                # the assertion's SIGNED issued_at), not from the column alone. The column is an
+                # UNSIGNED licensing.db value: setting it to "now", or NULL, after a restart gave
+                # an ACTIVE_OFFLINE verdict at 365 days (measured with attack_floor.py -- the
+                # previous commit gave LOCAL_STATE_CORRUPT there). The stored assertion is the one
+                # issued at the last successful check-in, so its issued_at is the honest lower
+                # bound on how long ago that was, and it cannot be edited without breaking the
+                # signature (re-verified just above). A NULL or timezone-naive column (only
+                # producible by tampering) counts as absent -> issued_at alone; never an exception.
+                floor_start = self._offline_floor_start(record, envelope)
+                if verified is not None and floor_start is not None:
                     offline_floor_seconds = max(
-                        0.0,
-                        (
-                            datetime.now(timezone.utc)
-                            - datetime.fromisoformat(record.last_successful_checkin_at)
-                        ).total_seconds(),
-                    )
+                        0.0, (datetime.now(timezone.utc) - floor_start).total_seconds())
             if verified is None:
                 self._events.record("LOCAL_STATE_CORRUPT")
                 return LicenseState.LOCAL_STATE_CORRUPT
 
         anchor = self._resolve_anchor(record)
+        # A naive/unparseable stored value is treated as absent (E2): it used to make this
+        # subtraction raise TypeError out of run_once().
         last_checkin = (
-            datetime.fromisoformat(record.last_successful_checkin_at)
-            if record.last_successful_checkin_at
-            else verified.evidence.not_before
+            _aware_datetime_or_none(record.last_successful_checkin_at)
+            or verified.evidence.not_before
         )
         return evaluate_policy(
             evidence=verified.evidence,
@@ -652,6 +673,19 @@ class LicenseCheckInScheduler:
             local_safety_ceiling_seconds=self._safety_ceiling,
             offline_elapsed_floor_seconds=offline_floor_seconds,
         )
+
+    @staticmethod
+    def _offline_floor_start(record: LicenseStateRecord, envelope: dict) -> Optional[datetime]:
+        """Earliest honest start of the current offline stretch: min of the stored last-check-in
+        column (if present, parseable and timezone-aware) and the stored assertion's SIGNED
+        issued_at. None only if neither is usable. See the E2 note in `_reevaluate`."""
+        candidates = [_aware_datetime_or_none(record.last_successful_checkin_at)]
+        try:
+            candidates.append(_aware_datetime_or_none(envelope["payload"]["issued_at"]))
+        except (KeyError, TypeError):
+            pass
+        usable = [c for c in candidates if c is not None]
+        return min(usable) if usable else None
 
     def _resolve_anchor(self, record: LicenseStateRecord) -> TrustedTimeAnchor:
         """Phase 7V-F fix (found via live production-like validation):
