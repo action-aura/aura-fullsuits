@@ -421,3 +421,40 @@ def test_subscription_active_unaffected_by_new_commercial_checks():
         last_checkin_attempt_ok=True,
     )
     assert result == LicenseState.ACTIVE_ONLINE
+
+
+# -- offline_elapsed_floor_seconds (keep-selling fix round, C1) ---------------
+# After a restart the trusted clock reports ~0 offline time; the caller can
+# pass a wall-clock figure as a FLOOR. It may only ever tighten.
+
+def _floor_eval(floor, *, last_checkin_age=timedelta(hours=1), wall_now=NOW, ok=False):
+    return evaluate(
+        evidence=_evidence(),
+        anchor=new_anchor(NOW),  # trusted "now" ~ NOW: ~0 trusted offline time
+        local_wall_clock_now=wall_now,
+        last_successful_checkin_at=NOW - last_checkin_age,
+        last_checkin_attempt_ok=ok,
+        offline_elapsed_floor_seconds=floor,
+    )
+
+
+def test_floor_larger_than_trusted_elapsed_wins():
+    # trusted elapsed = 1h -> ACTIVE_OFFLINE; a 15-day floor must win.
+    assert _floor_eval(None) == LicenseState.ACTIVE_OFFLINE
+    assert _floor_eval(15 * 86400.0) == LicenseState.RESTRICTED
+
+
+def test_floor_smaller_than_trusted_elapsed_never_loosens():
+    # trusted elapsed = 15 days (restricted); a tiny floor must not rescue it.
+    age = timedelta(days=15)
+    assert _floor_eval(None, last_checkin_age=age) == LicenseState.RESTRICTED
+    assert _floor_eval(60.0, last_checkin_age=age) == LicenseState.RESTRICTED
+
+
+def test_floor_none_is_byte_for_byte_todays_behaviour():
+    for age in (timedelta(hours=1), timedelta(days=5), timedelta(days=15)):
+        omitted = evaluate(
+            evidence=_evidence(), anchor=new_anchor(NOW), local_wall_clock_now=NOW,
+            last_successful_checkin_at=NOW - age, last_checkin_attempt_ok=False,
+        )
+        assert _floor_eval(None, last_checkin_age=age) == omitted

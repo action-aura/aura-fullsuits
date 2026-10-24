@@ -573,6 +573,9 @@ class LicenseCheckInScheduler:
                 trusted_now=trusted_now,
             )
 
+        # Wall-clock lower bound on offline time, set ONLY on the
+        # ASSERTION_EXPIRED path below (None everywhere else = unchanged).
+        offline_floor_seconds = None
         try:
             verified = _verify_at(datetime.now(timezone.utc))
         except AssertionVerificationError as exc:
@@ -603,6 +606,33 @@ class LicenseCheckInScheduler:
                     verified = _verify_at(datetime.fromisoformat(envelope["payload"]["expires_at"]))
                 except (AssertionVerificationError, KeyError, TypeError, ValueError):
                     verified = None
+                # The 24h assertion TTL used to be the (accidental) bound on
+                # offline time: past it the assertion was rejected outright.
+                # Re-verifying at expires_at removed that bound, and the
+                # trusted-time anchor does not replace it -- after a RESTART
+                # the anchor re-pins the stored issued_at to monotonic-now, so
+                # trusted "now" ~ issued_at and the trusted clock reports ~0
+                # offline time whether 2 or 365 days have passed (residual-risk
+                # register #7, docs/licensing/phase7v-final/
+                # final-residual-risk-register.md; proven by the verifier at
+                # 2/15/60/365 days: ACTIVE_OFFLINE every time).
+                #
+                # So hand evaluate() the wall-clock gap since the last
+                # successful check-in as a FLOOR on elapsed_offline. It is
+                # max()'d with the trusted figure, so the wall clock can only
+                # make the device reach grace/restriction SOONER, never later:
+                # a rolled-back wall clock leaves the trusted value in charge.
+                # That is no weaker than before this branch (which also relied
+                # on the wall clock, via the TTL check) and it restores the
+                # bound the signed offline policy intends. Negative -> 0.
+                if verified is not None and record.last_successful_checkin_at:
+                    offline_floor_seconds = max(
+                        0.0,
+                        (
+                            datetime.now(timezone.utc)
+                            - datetime.fromisoformat(record.last_successful_checkin_at)
+                        ).total_seconds(),
+                    )
             if verified is None:
                 self._events.record("LOCAL_STATE_CORRUPT")
                 return LicenseState.LOCAL_STATE_CORRUPT
@@ -620,6 +650,7 @@ class LicenseCheckInScheduler:
             last_successful_checkin_at=last_checkin,
             last_checkin_attempt_ok=checkin_ok,
             local_safety_ceiling_seconds=self._safety_ceiling,
+            offline_elapsed_floor_seconds=offline_floor_seconds,
         )
 
     def _resolve_anchor(self, record: LicenseStateRecord) -> TrustedTimeAnchor:

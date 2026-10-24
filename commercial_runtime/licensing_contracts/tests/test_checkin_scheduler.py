@@ -810,12 +810,20 @@ def _expired_assertion_record(owner_key, state_repo, *, days_ago=2, payload_over
     _seed_activated_record(
         state_repo,
         assertion_envelope_json=json.dumps(envelope),
-        # Anchor = now, exactly as the existing long-offline test pins it: the
-        # anchor models "this process has been counting since a sync just now",
-        # so the evaluator sees REAL elapsed time since last_successful_checkin_at.
-        # An anchor at the old issued_at would collapse elapsed to ~0 and make
-        # every offline assertion below pass for the wrong reason.
-        trusted_time_anchor_server_time=NOW.isoformat(),
+        # REAL persisted shape, exactly what _persist_fresh_assertion writes
+        # (checkin_scheduler.py): anchor server_time = the payload's issued_at
+        # and last check-in = issued_at. The autouse fixture clears the anchor
+        # cache, so the scheduler behaves as a FRESH PROCESS: the anchor
+        # re-pins issued_at to monotonic-now and trusted "now" is ~issued_at,
+        # i.e. the trusted clock has seen ~0 offline time no matter how many
+        # days really passed.
+        #
+        # The old fixture pinned the anchor to NOW, a state the real app never
+        # stores, and so hid that restart resets the trusted offline clock:
+        # with the 24h-TTL bound removed, a restarted device sat in
+        # ACTIVE_OFFLINE at 2, 15, 60 and 365 days (verifier's measurement).
+        # The wall-clock floor in _reevaluate() is what bounds it now.
+        trusted_time_anchor_server_time=issued.isoformat(),
         last_successful_checkin_at=issued.isoformat(),
     )
     return envelope
@@ -850,7 +858,7 @@ def test_expired_assertion_with_tampered_signature_is_still_local_state_corrupt(
     _seed_activated_record(
         state_repo,
         assertion_envelope_json=json.dumps(envelope),
-        trusted_time_anchor_server_time=NOW.isoformat(),
+        trusted_time_anchor_server_time=(NOW - timedelta(days=2)).isoformat(),
         last_successful_checkin_at=(NOW - timedelta(days=2)).isoformat(),
     )
     _, scheduler = _offline_scheduler(trust_store, state_repo, events)
@@ -890,3 +898,102 @@ def test_expired_assertion_past_grace_with_restrict_policy_is_still_restricted(
     _, scheduler = _offline_scheduler(trust_store, state_repo, events)
 
     assert scheduler.run_once() == LicenseState.RESTRICTED
+
+
+# ── Restart must not reset the offline clock (fix round, C1) ──
+# These use the real persisted shape from _expired_assertion_record (anchor =
+# issued_at, fresh process). Each pins a state AND that the offline check-in
+# really ran.
+
+_WARN_ONLY_POLICY = {**_standard_policy(), "hard_expiry_behavior": "WARN_ONLY"}
+
+
+def _run_expired(owner_key, trust_store, state_repo, events, *, days_ago, policy=None, payload_overrides=None):
+    _expired_assertion_record(
+        owner_key, state_repo, days_ago=days_ago, policy=policy, payload_overrides=payload_overrides
+    )
+    client, scheduler = _offline_scheduler(trust_store, state_repo, events)
+    result = scheduler.run_once()
+    assert client.checkin_calls == 1, "the offline attempt must really have been made"
+    return result
+
+
+@pytest.mark.parametrize("days_ago", [15, 60, 365])
+def test_expired_assertion_restrict_policy_is_restricted_after_restart_at_any_age(
+    owner_key, trust_store, state_repo, events, days_ago
+):
+    result = _run_expired(owner_key, trust_store, state_repo, events, days_ago=days_ago)
+    assert result == LicenseState.RESTRICTED
+    assert state_repo.load().current_state == "RESTRICTED"
+
+
+def test_expired_assertion_warn_only_past_grace_still_sells_as_grace_period(
+    owner_key, trust_store, state_repo, events
+):
+    # The direction that must NOT tighten: WARN_ONLY never blocks on time alone.
+    result = _run_expired(owner_key, trust_store, state_repo, events, days_ago=15, policy=_WARN_ONLY_POLICY)
+    assert result == LicenseState.GRACE_PERIOD
+
+
+def test_expired_assertion_two_days_after_restart_is_active_offline_and_sells(
+    owner_key, trust_store, state_repo, events
+):
+    # 2d of a 14d grace with warning at 4d: the floor must not over-tighten.
+    result = _run_expired(owner_key, trust_store, state_repo, events, days_ago=2)
+    assert result == LicenseState.ACTIVE_OFFLINE
+
+
+def test_expired_assertion_inside_warning_window_after_restart_is_warning_and_sells(
+    owner_key, trust_store, state_repo, events
+):
+    result = _run_expired(owner_key, trust_store, state_repo, events, days_ago=5)
+    assert result == LicenseState.WARNING
+
+
+def test_expired_assertion_with_signed_subscription_expired_after_restart_is_lapsed(
+    owner_key, trust_store, state_repo, events
+):
+    result = _run_expired(
+        owner_key, trust_store, state_repo, events, days_ago=365,
+        payload_overrides={"subscription_status": "EXPIRED"},
+    )
+    assert result == LicenseState.SUBSCRIPTION_LAPSED
+
+
+def test_restored_older_database_30_days_since_checkin_is_restricted_under_restrict_policy(
+    owner_key, trust_store, state_repo, events
+):
+    # A DB restored from backup: assertion and check-in both ~30 days old.
+    result = _run_expired(owner_key, trust_store, state_repo, events, days_ago=30)
+    assert result == LicenseState.RESTRICTED
+
+
+def test_assertion_not_yet_valid_by_wall_clock_is_local_state_corrupt(
+    owner_key, trust_store, state_repo, events
+):
+    # C2: pins that ONLY ASSERTION_EXPIRED gets the re-verify. A not-yet-valid
+    # assertion (not_before in the future beyond tolerance) must still be
+    # treated as corrupt; if the re-verify were widened to every reason code,
+    # the second pass at expires_at would accept it and it would sell.
+    import json
+
+    issued = NOW + timedelta(days=3)
+    envelope = _envelope(
+        owner_key, "owner-1",
+        _payload(
+            issued_at=issued.isoformat(),
+            not_before=(issued - timedelta(minutes=5)).isoformat(),
+            expires_at=(issued + timedelta(days=1)).isoformat(),
+        ),
+    )
+    _seed_activated_record(
+        state_repo,
+        assertion_envelope_json=json.dumps(envelope),
+        trusted_time_anchor_server_time=NOW.isoformat(),
+        last_successful_checkin_at=NOW.isoformat(),
+    )
+    client, scheduler = _offline_scheduler(trust_store, state_repo, events)
+
+    assert scheduler.run_once() == LicenseState.LOCAL_STATE_CORRUPT
+    assert client.checkin_calls == 1
+    assert "LOCAL_STATE_CORRUPT" in [e.event_type for e in events.recent()]
