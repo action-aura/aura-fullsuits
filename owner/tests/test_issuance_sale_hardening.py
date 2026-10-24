@@ -660,9 +660,23 @@ def test_sale_whose_money_was_allocated_cannot_be_rejected(app, seeded, monkeypa
     with pytest.raises(DirectSaleError, match="already confirmed"):
         reject()
     with app.app_context():
-        from app.subscriptions.services import correct_payment
+        from app.subscriptions.services import PaymentAllocatedError, correct_payment
 
-        correct_payment(_payment(result["payment_id"]), "FAILED", "the bank recalled the transfer", other)
+        # Step 0 fix round 4: the old correct route can no longer set an
+        # allocated payment FAILED (tests/test_payment_allocation_ownership.py)
+        # -- this setup used that very hole. Pinned here: it is refused.
+        with pytest.raises(PaymentAllocatedError):
+            correct_payment(_payment(result["payment_id"]), "FAILED", "the bank recalled the transfer", other)
+        # But rows written that way BEFORE the fix exist in live databases,
+        # so the reject rule must still key on the allocation, not the
+        # status. The same state, written directly, as such a row stands.
+        from sqlalchemy import update
+
+        from app.extensions import db_session
+        from app.models.subscriptions import PaymentRecord
+
+        db_session.execute(update(PaymentRecord).where(PaymentRecord.id == result["payment_id"]).values(status="FAILED"))
+        db_session.commit()
     with pytest.raises(DirectSaleError, match="already allocated"):
         reject()
     assert _state(app, result) == ("FAILED", "CONFIRMED")

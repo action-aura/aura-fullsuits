@@ -908,6 +908,8 @@ def localize_commercial_sales_error(code: str, **params) -> str:
         "ALLOCATION_EXCEEDS_OUTSTANDING": _("Allocation amount (%(amount)s) exceeds the invoice outstanding balance (%(outstanding)s)."),
         "CURRENCY_MISMATCH": _("Currency %(given)s does not match the required currency %(expected)s."),
         "PAYMENT_CUSTOMER_MISMATCH": _("This payment belongs to a different customer than the invoice."),
+        "PAYMENT_BELONGS_TO_ANOTHER_SALE": _("This payment belongs to another sale; it can only be allocated to that sale's own invoice."),
+        "PAYMENT_BELONGS_TO_ANOTHER_INVOICE": _("This payment was recorded for a different invoice; it can only be allocated to that invoice."),
         "INVALID_CURRENCY_CODE": _("Currency must be a 3-letter ISO 4217 code."),
         "EMPTY_DOCUMENT": _("A document must have at least one line."),
         "INVALID_QUOTE_TRANSITION": _("Cannot change quote status from %(from_status)s to %(to_status)s."),
@@ -944,6 +946,16 @@ def localize_commercial_sales_error(code: str, **params) -> str:
     if template is None:
         return code
     return template % params if params else template
+
+
+def localize_payment_correction_error(code: str) -> str:
+    """Step 0 fix round 4 -- app.subscriptions.services.PaymentAllocatedError
+    (its .code), shown by the legacy /subscriptions/payments/<id>/correct
+    route. The service's own str(exc) stays English and request-free."""
+    messages = {
+        "PAYMENT_ALLOCATED": _("This payment is confirmed and allocated to an invoice. Reverse the allocation on the invoice page first, then correct the payment."),
+    }
+    return messages.get(code, code)
 
 
 def localize_direct_sale_error(code: str, **params) -> str:

@@ -8772,3 +8772,15 @@ msgstr "+ 1 extra device"
 #: app/templates/licensing/sales_pending.html
 msgid "+ %(count)d extra devices"
 msgstr "+ %(count)d extra devices"
+
+#: app/i18n_labels.py
+msgid "This payment belongs to another sale; it can only be allocated to that sale's own invoice."
+msgstr "This payment belongs to another sale; it can only be allocated to that sale's own invoice."
+
+#: app/i18n_labels.py
+msgid "This payment was recorded for a different invoice; it can only be allocated to that invoice."
+msgstr "This payment was recorded for a different invoice; it can only be allocated to that invoice."
+
+#: app/i18n_labels.py
+msgid "This payment is confirmed and allocated to an invoice. Reverse the allocation on the invoice page first, then correct the payment."
+msgstr "This payment is confirmed and allocated to an invoice. Reverse the allocation on the invoice page first, then correct the payment."

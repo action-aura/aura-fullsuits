@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.auth.session import has_recent_auth, load_current_staff
 from app.extensions import db_session
+from app.i18n_labels import localize_payment_correction_error
 from app.models.customers import Customer
 from app.models.catalog import Plan
 from app.models.subscriptions import PaymentRecord, Subscription
@@ -18,6 +19,7 @@ from app.subscriptions import list_queries
 from app.subscriptions.services import (
     VALID_TRANSITIONS,
     InvalidTransitionError,
+    PaymentAllocatedError,
     PaymentSelfVerificationError,
     correct_payment,
     create_subscription,
@@ -224,6 +226,11 @@ def correct_payment_route(payment_id):
         # The recorder trying to confirm their own payment: refused, same
         # rule (and same 403 shape) as commercial_sales' confirm route.
         return jsonify({"error": "self_verification_forbidden", "message": str(exc)}), 403
+    except PaymentAllocatedError as exc:
+        # Confirmed money with a live allocation (Step 0 fix round 4): 409,
+        # the record's current state forbids it -- the translated message
+        # names the way out (reverse the allocation first).
+        return jsonify({"error": "payment_allocated", "message": localize_payment_correction_error(exc.code)}), 409
     except ValueError as exc:
         # An unknown status used to escape as an unhandled ValueError (500).
         return jsonify({"error": str(exc)}), 400

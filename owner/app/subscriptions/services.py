@@ -9,6 +9,7 @@ from app.audit.services import record as audit_record
 from app.commercial_sales.sale_attribution import sale_owner_staff_user_id_for_payment
 from app.extensions import db_session
 from app.models.commercial_ops import PaymentCorrectionHistory
+from app.models.commercial_sales import PaymentAllocation
 from app.models.subscriptions import PaymentRecord, RenewalRecord, Subscription, SubscriptionStatusHistory
 
 VALID_TRANSITIONS: dict[str, set[str]] = {
@@ -67,6 +68,24 @@ class PaymentSelfVerificationError(ValueError):
 
     A ValueError subclass so existing `except ValueError` callers still
     treat it as a refused write, never as a crash."""
+
+
+class PaymentAllocatedError(ValueError):
+    """A CONFIRMED payment would stop being CONFIRMED while a live (not
+    reversed) allocation of it stands.
+
+    Step 0 fix round 4 (2026-10-24). The allocation is what posted the
+    seller's commission and let the sale issue its licence; the legacy
+    POST /subscriptions/payments/<id>/correct route could still set such a
+    payment FAILED/VOIDED/REFUNDED/PENDING, leaving the allocation, the
+    commission and the licence standing on money the books now say never
+    arrived (measured on 69608e4b, tests/test_payment_allocation_ownership.py).
+    Unwinding goes through the invoice page: reverse the allocation first.
+
+    A ValueError subclass, like PaymentSelfVerificationError, so existing
+    `except ValueError` callers treat it as a refused write."""
+
+    code = "PAYMENT_ALLOCATED"
 
 
 def transition_subscription(subscription: Subscription, to_status: str, actor_staff_user_id, reason: str | None = None) -> None:
@@ -220,6 +239,24 @@ def correct_payment(payment: PaymentRecord, new_status: str, note: str, actor_st
     # checks below and the "before" written to the history row must not
     # come from a row that changed since the caller loaded it.
     payment = lock_payment_for_update(payment)
+    # Confirmed money that was allocated stays confirmed until the
+    # allocation is reversed (PaymentAllocatedError). Decided under the
+    # payment row lock that allocate_payment also takes first, so a
+    # correction and an allocation of one payment cannot both pass: the
+    # second sees the first's committed result. Only LEAVING CONFIRMED is
+    # refused -- re-saving it as CONFIRMED (a note fix) and correcting a
+    # confirmed payment nobody allocated yet both stay allowed.
+    if payment.status == "CONFIRMED" and new_status != "CONFIRMED":
+        live_allocation = db_session.execute(
+            select(PaymentAllocation.id).where(
+                PaymentAllocation.payment_record_id == payment.id, PaymentAllocation.reversed_at.is_(None)
+            )
+        ).first()
+        if live_allocation is not None:
+            release_lock_and_raise(PaymentAllocatedError(
+                "This payment is confirmed and allocated to an invoice. Reverse the allocation on the invoice "
+                "page first, then correct the payment."
+            ))
     # The two-person rule, for every caller (confirm_payment checks it too,
     # before calling here; the legacy correct route did not check it at
     # all). Keyed on the RESULT being CONFIRMED, not on the transition into

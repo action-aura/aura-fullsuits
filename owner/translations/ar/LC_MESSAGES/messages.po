@@ -8731,3 +8731,15 @@ msgstr "+ جهاز إضافي واحد"
 #: app/templates/licensing/sales_pending.html
 msgid "+ %(count)d extra devices"
 msgstr "+ %(count)d أجهزة إضافية"
+
+#: app/i18n_labels.py
+msgid "This payment belongs to another sale; it can only be allocated to that sale's own invoice."
+msgstr "تخص هذه الدفعة عملية بيع أخرى؛ لا يمكن تخصيصها إلا لفاتورة تلك العملية نفسها."
+
+#: app/i18n_labels.py
+msgid "This payment was recorded for a different invoice; it can only be allocated to that invoice."
+msgstr "سُجلت هذه الدفعة لفاتورة أخرى؛ لا يمكن تخصيصها إلا لتلك الفاتورة."
+
+#: app/i18n_labels.py
+msgid "This payment is confirmed and allocated to an invoice. Reverse the allocation on the invoice page first, then correct the payment."
+msgstr "هذه الدفعة مؤكدة ومخصصة لفاتورة. ألغِ التخصيص من صفحة الفاتورة أولًا، ثم صحّح الدفعة."

@@ -69,6 +69,8 @@ class CommercialSalesError(StableCodeError):
         "ALLOCATION_EXCEEDS_OUTSTANDING": "Allocation amount ({amount}) exceeds the invoice outstanding balance ({outstanding}).",
         "CURRENCY_MISMATCH": "Currency {given} does not match the required currency {expected}.",
         "PAYMENT_CUSTOMER_MISMATCH": "This payment belongs to a different customer than the invoice.",
+        "PAYMENT_BELONGS_TO_ANOTHER_SALE": "This payment belongs to another sale; it can only be allocated to that sale's own invoice.",
+        "PAYMENT_BELONGS_TO_ANOTHER_INVOICE": "This payment was recorded for a different invoice; it can only be allocated to that invoice.",
         "INVALID_CURRENCY_CODE": "Currency must be a 3-letter ISO 4217 code.",
         "EMPTY_DOCUMENT": "A document must have at least one line.",
         # Transitions

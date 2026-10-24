@@ -16,6 +16,7 @@ from app.audit.services import record as audit_record
 from app.commercial_sales.calculator import resolve_invoice_status, validate_allocation_amount
 from app.commercial_sales.errors import CommercialSalesError
 from app.commercial_sales.invoices import confirmed_allocated_amount
+from app.commercial_sales.sale_attribution import direct_sale_order_id_for_payment
 from app.commissions.ledger import audit_earning, post_earning_for_allocation
 from app.extensions import db_session
 from app.models.base import utcnow
@@ -64,6 +65,25 @@ def allocate_payment(
         # cross-tenant-data bug, not merely a permissions gap.
         if payment.customer_id != invoice.customer_id:
             raise CommercialSalesError("PAYMENT_CUSTOMER_MISMATCH")
+        # Step 0 fix round 4 -- a payment recorded FOR a sale goes to that
+        # sale's invoice and no other. The commission ledger credits the
+        # TARGET invoice's creator, so allocating a sale's payment to a
+        # different invoice of the same customer handed the commission to
+        # someone who did not make the sale. Measured on 69608e4b
+        # (tests/test_payment_allocation_ownership.py): a one-screen sale's
+        # payment allocated to another seller's invoice credited that seller
+        # 10.00 and left the real sale unable to finish. Same shape for a
+        # quote-pipeline payment that names its invoice -- and there it was
+        # also a two-person side door: the confirmer is checked against the
+        # NAMED invoice's seller (sale_attribution), so the creator of
+        # another invoice could confirm the payment and then allocate it to
+        # their own invoice. A payment linked to neither (a customer
+        # payment covering several invoices) still goes wherever it belongs.
+        sale_order_id = direct_sale_order_id_for_payment(payment.id)
+        if sale_order_id is not None and invoice.sales_order_id != sale_order_id:
+            raise CommercialSalesError("PAYMENT_BELONGS_TO_ANOTHER_SALE")
+        if payment.commercial_invoice_id is not None and payment.commercial_invoice_id != invoice.id:
+            raise CommercialSalesError("PAYMENT_BELONGS_TO_ANOTHER_INVOICE")
 
         # Row-level lock on the invoice for the duration of this allocation --
         # two concurrent allocation attempts against the same invoice must
