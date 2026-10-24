@@ -180,6 +180,7 @@ from database.schema import (
     load_sync_freshness,
     record_sync_freshness,
     record_offline_override,
+    record_paused_seen,
     record_or_refresh_stock_exception,
     rebind_company_id_after_activation,
 )
@@ -1267,8 +1268,11 @@ def _build_windows_sync_services(relay_base_url):
     # and whose apply loop never reaches the branch that would call it
     # anyway, since `inventory_movement` is not in
     # `REGISTRY_SYNC_ENTITY_TYPES`.
+    # `record_paused_seen` (schema v58, KEEP-SELLING C3): persists the licence-pause clock so the 72h
+    # offline stop does not count a lapse after renewal -- see SyncService._note_paused.
     _retail_sync_freshness_store = SyncFreshnessStore(
-        load=load_sync_freshness, record=record_sync_freshness, record_override=record_offline_override)
+        load=load_sync_freshness, record=record_sync_freshness, record_override=record_offline_override,
+        record_paused_seen=record_paused_seen)
     # `local_schema_version_provider` ARMS THE SCHEMA-SKEW GUARD, which is
     # inert without it. Until 2026-09-22 nothing anywhere checked a schema
     # version before applying a pulled row, so a v38 till and a v39 till
@@ -1432,7 +1436,8 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # `stock_exceptions` (schema v20) exactly like the Windows instance
     # does, and gets the same collaborator.
     _android_sync_freshness_store = SyncFreshnessStore(
-        load=load_sync_freshness, record=record_sync_freshness, record_override=record_offline_override)
+        load=load_sync_freshness, record=record_sync_freshness, record_override=record_offline_override,
+        record_paused_seen=record_paused_seen)
     # Same schema-skew arming as the Windows branch above, and it matters
     # MORE here: a handset is the device most likely to be running a build
     # older than the till's, because a phone updates on its owner's whim

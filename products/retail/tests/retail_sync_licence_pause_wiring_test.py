@@ -84,6 +84,47 @@ def test_lapsed_subscription_pauses_both_streams_and_renewal_resumes_without_res
     assert _app_module._sync_service.get_health()["paused_by_licence"] is False
 
 
+def test_the_real_apps_store_persists_the_pause_clock_so_a_renewed_shop_is_not_counted_offline():
+    """KEEP-SELLING C3 wiring: app.py must hand the retail service a freshness store that carries
+    `record_paused_seen`. Without it the clock lives in memory only and a restart after the lapse
+    would put the 72h stop back (the live-proven 403). Reads the REAL retail.db column."""
+    from datetime import datetime, timedelta, timezone
+    svc = _app_module._sync_service
+    assert svc._local_freshness_store.record_paused_seen is not None, "app.py did not wire the hook"
+
+    def column():
+        conn = _app_module.get_retail_conn()
+        try:
+            return conn.execute("SELECT last_paused_seen_at FROM sync_freshness WHERE id=1").fetchone()[0]
+        finally:
+            conn.close()
+
+    # An earlier test in this file already lapsed the licence and so stamped the column; start clean
+    # so the assertion below proves THIS observation wrote it.
+    conn = _app_module.get_retail_conn()
+    try:
+        conn.execute("UPDATE sync_freshness SET last_paused_seen_at=NULL WHERE id=1")
+        conn.commit()
+    finally:
+        conn.close()
+    _set_state("ACTIVE_ONLINE")
+    svc._pause_clock_written_at = None  # the throttle must not hide this write from the test
+    assert column() is None
+    _set_state("SUBSCRIPTION_LAPSED")
+    svc.get_health()
+    stamped = column()
+    assert stamped is not None, "a lapsed service observed the pause but the real store wrote nothing"
+    # Pretend the last real sync was 100 h ago, then renew: the lapse must not count.
+    old = (datetime.now(timezone.utc) - timedelta(hours=100)).isoformat()
+    svc._health["push"]["last_success_at"] = old
+    svc._health["pull"]["last_success_at"] = old
+    _set_state("ACTIVE_ONLINE")
+    health = svc.get_health()
+    assert health["paused_by_licence"] is False
+    assert health["seconds_since_last_success"] > 99 * 3600
+    assert health["seconds_behind_excluding_pause"] < 5 * 60
+
+
 def test_other_non_active_states_do_not_pause_sync():
     """Only the unpaid lapse pauses sync; RESTRICTED etc. keep today's (ungated) behaviour."""
     for state in ("RESTRICTED", "EXPIRED", "GRACE_PERIOD", "SUSPENDED"):

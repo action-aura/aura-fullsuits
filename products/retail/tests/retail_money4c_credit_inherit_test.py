@@ -364,7 +364,7 @@ def test_migration_converts_none_to_inherit_and_leaves_the_other_modes():
     assert (_mode(lim), _stored(lim)['credit_limit']) == ('limited', 9.0)
     assert _mode(unl) == 'unlimited'
     assert _mode(blank) is None                       # the resolver treats NULL as inherit already
-    assert _rows("PRAGMA user_version")[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 57  # v56 UPDATE: head moved 54 -> 56 (SYNC-BOOT Phase 2; v55 is MONEY-5's and is not on this line of history); v56's own shape is pinned by retail_site_stream_cursors_migration_test. Same exact-number pin as before.  # v54 UPDATE: head moved 53 -> 54 (UI-3a); v54's own shape is pinned by retail_ui3a_sync_migration_test.  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.
+    assert _rows("PRAGMA user_version")[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 58  # v56 UPDATE: head moved 54 -> 56 (SYNC-BOOT Phase 2; v55 is MONEY-5's and is not on this line of history); v56's own shape is pinned by retail_site_stream_cursors_migration_test. Same exact-number pin as before.  # v54 UPDATE: head moved 53 -> 54 (UI-3a); v54's own shape is pinned by retail_ui3a_sync_migration_test.  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.  # v58 UPDATE: head moved 57 -> 58 (KEEP-SELLING C3 pause clock, ROADMAP v58 claim); same exact pin, not loosened.
 
 
 def test_migration_does_not_reconvert_a_none_chosen_after_the_upgrade():
@@ -375,7 +375,7 @@ def test_migration_does_not_reconvert_a_none_chosen_after_the_upgrade():
     admin.patch(f'{API}/customers/{cust}', json={'credit_mode': 'none'})        # a deliberate choice, at v53
     conn = H.get_retail_conn()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 57  # v56 UPDATE: head moved 54 -> 56 (SYNC-BOOT Phase 2; v55 is MONEY-5's and is not on this line of history); v56's own shape is pinned by retail_site_stream_cursors_migration_test. Same exact-number pin as before.  # v54 UPDATE: head moved 53 -> 54 (UI-3a); v54's own shape is pinned by retail_ui3a_sync_migration_test.  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 58  # v56 UPDATE: head moved 54 -> 56 (SYNC-BOOT Phase 2; v55 is MONEY-5's and is not on this line of history); v56's own shape is pinned by retail_site_stream_cursors_migration_test. Same exact-number pin as before.  # v54 UPDATE: head moved 53 -> 54 (UI-3a); v54's own shape is pinned by retail_ui3a_sync_migration_test.  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.  # v58 UPDATE: head moved 57 -> 58 (KEEP-SELLING C3 pause clock, ROADMAP v58 claim); same exact pin, not loosened.
         sch._migrate_credit_mode_inherit(conn)
         sch._migrate_credit_mode_inherit(conn)
         conn.commit()

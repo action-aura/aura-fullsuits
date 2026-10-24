@@ -5179,6 +5179,28 @@ def get_purchase_order(po_id):
     conn.close()
     return jsonify({'status': 'success', 'data': {'po': dict(po), 'items': [dict(i) for i in items]}})
 
+def _sync_seconds_behind_for_guards(health):
+    """The elapsed-offline figure the two REFUSING guards compare (the 72h sales stop and the
+    30-minute behind-on-sync guard on PO receipt): seconds since the later of the last successful
+    sync and the last time the licence pause was seen (SyncService `seconds_behind_excluding_pause`,
+    retail schema v58 -- KEEP-SELLING C3).
+
+    Why not `seconds_since_last_success`: after a renewal that figure still counts the whole unpaid
+    lapse, so the 72h stop refused a sale on a renewed shop (HTTP 403 "offline for about 100.0
+    hours", measured on a real server) even though sync was paused on purpose, not broken. The 72h
+    stop still bites when sync STAYS broken after renewal, because the pause clock stops advancing
+    the moment the pause lifts.
+
+    Falls back to `seconds_since_last_success` when the key is ABSENT (a health dict from a service
+    or fake that predates the key). A key that is present with None (never synced) stays None --
+    both callers have already returned for `never_synced`, so None here means "not behind".
+    The refusal message and the UI keep reading the real `seconds_since_last_success`: the person
+    at the till is told the true time behind, only the decision uses the pause-aware figure."""
+    if 'seconds_behind_excluding_pause' in health:
+        return health['seconds_behind_excluding_pause']
+    return health.get('seconds_since_last_success')
+
+
 def _is_device_behind_on_sync():
     """True only when sync is CONFIGURED for this device AND this device is
     behind `_SYNC_STALE_THRESHOLD_SECONDS`. Launch-readiness Phase 7 stage
@@ -5216,7 +5238,7 @@ def _is_device_behind_on_sync():
     # (The flag is absent/False on every other install, so nothing else changes.)
     if health.get('paused_by_licence'):
         return False
-    secs = health.get('seconds_since_last_success')
+    secs = _sync_seconds_behind_for_guards(health)
     return isinstance(secs, (int, float)) and secs > _SYNC_STALE_THRESHOLD_SECONDS
 
 
@@ -5282,7 +5304,7 @@ def _evaluate_offline_sales_stop():
     # same-health-without-the-flag case still blocks exactly as before.
     if health.get('paused_by_licence'):
         return False, health
-    secs = health.get('seconds_since_last_success')
+    secs = _sync_seconds_behind_for_guards(health)
     if not (isinstance(secs, (int, float)) and secs > _SYNC_SALES_STOP_THRESHOLD_SECONDS):
         return False, health
     if health.get('offline_override_valid'):

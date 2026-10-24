@@ -79,8 +79,8 @@ def _cols(conn, table):
 def test_a_fresh_install_has_both_columns_and_is_stamped_55(get_conn):
     conn = get_conn()
     try:
-        assert schema.RETAIL_SCHEMA_VERSION == 57  # v56 UPDATE: head moved 55 -> 56 (SYNC-BOOT Phase 2); v56's own shape is pinned by retail_site_stream_cursors_migration_test.  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 57  # v56 UPDATE: same exact pin.  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.
+        assert schema.RETAIL_SCHEMA_VERSION == 58  # v56 UPDATE: head moved 55 -> 56 (SYNC-BOOT Phase 2); v56's own shape is pinned by retail_site_stream_cursors_migration_test.  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.  # v58 UPDATE: head moved 57 -> 58 (KEEP-SELLING C3 pause clock, ROADMAP v58 claim); same exact pin, not loosened.
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 58  # v56 UPDATE: same exact pin.  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.  # v58 UPDATE: head moved 57 -> 58 (KEEP-SELLING C3 pause clock, ROADMAP v58 claim); same exact pin, not loosened.
         for table, col in NEW_COLS:
             assert col in _cols(conn, table), (table, col)
     finally:

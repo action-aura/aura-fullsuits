@@ -1143,6 +1143,20 @@ def local_company_id_from_registry() -> Optional[str]:
         conn.close()
 
 
+#: KEEP-SELLING C3: how often (at most) a paused SyncService persists "the pause was seen now".
+#: The persisted value is therefore at most this many seconds older than the last observation, and
+#: that is the whole error bound on the pause clock across a restart (in-process the in-memory value
+#: is updated on every observation). 60 s against a 72 h stop is noise; the throttle exists so a busy
+#: health poll (the UI polls it) does not turn into one SQLite write per request for the whole lapse.
+#: A transition INTO the pause is always written regardless of this interval.
+PAUSE_CLOCK_WRITE_INTERVAL_SECONDS = 60.0
+
+
+def _monotonic() -> float:
+    """Indirection so tests can drive the pause-clock throttle without sleeping or patching `time`."""
+    return time.monotonic()
+
+
 class SyncFreshnessStore(NamedTuple):
     """Optional `SyncService` collaborator (launch-readiness Phase 7 stage
     7a, docs/launch-readiness/phase7-offline-ux.md "FINDING 1"): persists
@@ -1184,10 +1198,22 @@ class SyncFreshnessStore(NamedTuple):
     already returns `override_at` alongside `push`/`pull` instead of a
     separate lookup: the validity rule compares the override timestamp
     against the most recent success timestamp, and both live in the ONE
-    `sync_freshness` row a single connection reads and writes."""
+    `sync_freshness` row a single connection reads and writes.
+
+    `record_paused_seen` (KEEP-SELLING C3, retail schema v58) -- persists the
+    last instant this device SAW the licence pausing sync, so the 72-hour
+    sales stop can measure from max(last success, last pause) instead of
+    counting a deliberate pause as "offline" after renewal (see
+    `SyncService._note_paused` and `get_health()['seconds_behind_excluding_
+    pause']`). OPTIONAL (default None) unlike the other three: every
+    pre-existing construction site and test passes a three-callable store,
+    and a store without the hook simply keeps the pause clock in memory --
+    exactly today's behaviour for them. `load` returns the stored value
+    under the key `paused_seen_at` (absent = None)."""
     load: Callable[[sqlite3.Connection], dict]
     record: Callable[[sqlite3.Connection, str, str], None]
     record_override: Callable[[sqlite3.Connection, str], None]
+    record_paused_seen: Optional[Callable[[sqlite3.Connection, str], None]] = None
 
 
 #: SYNC-BOOT: streams currently refused with RESYNC_REQUIRED, keyed by the
@@ -1469,6 +1495,10 @@ class SyncService:
         # See _ensure_freshness_loaded's own docstring for why this is a
         # lazy, first-use flag rather than work done inline below.
         self._freshness_loaded = False
+        # KEEP-SELLING C3: monotonic stamp of the last SUCCESSFUL persist of the pause clock (None =
+        # never), and a once-only flag for the "could not persist" warning. See _note_paused.
+        self._pause_clock_written_at: Optional[float] = None
+        self._pause_clock_error_logged = False
         self._handled_entity_types = (
             frozenset(handled_entity_types) if handled_entity_types is not None
             else RETAIL_SYNC_ENTITY_TYPES
@@ -1510,6 +1540,9 @@ class SyncService:
             # (the registry construction site), matching that site's
             # existing "last_success_at stays None forever" behaviour.
             "offline_override_at": None,
+            # KEEP-SELLING C3: the last instant the licence pause was observed (ISO-8601 UTC), or
+            # None = never. Same device-level, sibling-of-push/pull shape as the override above.
+            "last_paused_seen_at": None,
         }
 
     def _licence_paused(self) -> bool:
@@ -1544,7 +1577,55 @@ class SyncService:
                 "queuing and will be pushed after renewal.")
         elif not paused and previous is True:
             logger.info("Sync RESUMED: the licence no longer pauses sync; catching up the queued rows.")
+        if paused:
+            self._note_paused(entered=previous is not True)
         return paused
+
+    def _note_paused(self, entered: bool) -> None:
+        """KEEP-SELLING C3: remember that the pause was seen NOW.
+
+        Why: the 72-hour sales stop measures time since the last successful sync, and a pause is
+        time the shop was not ALLOWED to sync. Once the subscription is renewed the pause flag goes
+        away and, without this clock, the whole lapse would count as offline and the next sale
+        would be refused (measured live: HTTP 403 after a 100 h lapse). `get_health()` therefore
+        also reports `seconds_behind_excluding_pause`, measured from max(last success, this).
+
+        The in-memory value is refreshed on EVERY observation (exact within a process). The
+        database write is throttled to once per `PAUSE_CLOCK_WRITE_INTERVAL_SECONDS` -- so after a
+        restart the persisted value is at most that much older than the last observation, which is
+        the entire error bound -- except that a transition INTO the pause is always written.
+
+        Never raises: a failure to persist must not turn "sync is paused on purpose" into an
+        exception inside push_once/pull_once/get_health (which would stop a shop selling for a
+        bookkeeping reason). It is logged once, and the persist is retried on the next observation
+        because the throttle stamp only advances on success."""
+        try:
+            self._ensure_freshness_loaded()
+            now = datetime.now(timezone.utc).isoformat()
+            now_mono = _monotonic()
+            with self._health_lock:
+                self._health["last_paused_seen_at"] = now
+                store = self._local_freshness_store
+                hook = getattr(store, "record_paused_seen", None) if store is not None else None
+                if hook is None:
+                    return
+                written = self._pause_clock_written_at
+                if not entered and written is not None \
+                        and now_mono - written < PAUSE_CLOCK_WRITE_INTERVAL_SECONDS:
+                    return
+                conn = self._get_conn()
+                try:
+                    hook(conn, now)
+                    conn.commit()
+                finally:
+                    conn.close()
+                self._pause_clock_written_at = now_mono
+        except Exception:  # noqa: BLE001 -- bookkeeping must never stop a till selling
+            if not self._pause_clock_error_logged:
+                self._pause_clock_error_logged = True
+                logger.warning(
+                    "SyncService: could not persist the licence pause clock; the 72h offline stop "
+                    "may count the lapse after a restart. Selling is unaffected.", exc_info=True)
 
     def push_once(self) -> None:
         """Drains sync_outbox to Owner in sequential chunks of at most
@@ -9016,6 +9097,11 @@ class SyncService:
                 # own docstring for why `load` returns all three from one
                 # query rather than a second lookup.
                 self._health["offline_override_at"] = persisted.get("override_at")
+                # KEEP-SELLING C3: keep the LATER of what this process already observed and what
+                # was persisted (both ISO-8601 UTC, so string order is time order). A pause seen
+                # before the first load must never be rolled back to an older stored value.
+                seen = [v for v in (self._health.get("last_paused_seen_at"), persisted.get("paused_seen_at")) if v]
+                self._health["last_paused_seen_at"] = max(seen) if seen else None
                 self._freshness_loaded = True
 
     def _record_sync_success(self, half: str) -> None:
@@ -9143,11 +9229,15 @@ class SyncService:
             conn.close()
 
     def get_health(self) -> dict:
+        # Evaluated FIRST (still exactly one read of the pause callable per call): observing the
+        # pause stamps the pause clock, and the figures below must include that stamp.
+        paused = self._licence_paused()
         self._ensure_freshness_loaded()
         with self._health_lock:
             push = dict(self._health["push"])
             pull = dict(self._health["pull"])
             offline_override_at = self._health["offline_override_at"]
+            last_paused_seen_at = self._health["last_paused_seen_at"]
         never_synced, seconds_since_last_success = self._elapsed_since_last_success(push, pull)
         return {
             "configured": True,
@@ -9207,7 +9297,13 @@ class SyncService:
             # sync on purpose. Always present. The 72h offline stop and the UI
             # read it so "behind" caused by OUR pause is never shown/enforced
             # as if the device were broken.
-            "paused_by_licence": self._licence_paused(),
+            "paused_by_licence": paused,
+            # KEEP-SELLING C3 (schema v58): the raw pause clock, and the figure the 72h sales stop
+            # and the behind-on-sync guard actually compare -- time since the later of the last
+            # success and the last pause seen. None exactly when seconds_since_last_success is None.
+            # `seconds_since_last_success` stays the REAL time behind (the UI shows that one).
+            "last_paused_seen_at": last_paused_seen_at,
+            "seconds_behind_excluding_pause": self._elapsed_excluding_pause(push, pull, last_paused_seen_at),
             "push": push,
             "pull": pull,
         }
@@ -9245,6 +9341,27 @@ class SyncService:
             return True
         most_recent = max(datetime.fromisoformat(ts) for ts in timestamps)
         return datetime.fromisoformat(override_at) > most_recent
+
+    @staticmethod
+    def _elapsed_excluding_pause(push: dict, pull: dict, last_paused_seen_at) -> Optional[float]:
+        """Seconds since max(most recent success, last pause seen); None when neither half has
+        ever succeeded (the same `never_synced` semantics as `_elapsed_since_last_success`, so a
+        recorded pause can never turn a fresh install into a number). A later pause WINS (max, not
+        min): it is the instant sync stopped being the shop's to run. An unparseable stored value is
+        ignored rather than raised -- a bookkeeping column must not break `/sync/health`."""
+        timestamps = [
+            ts for ts in (push["last_success_at"], pull["last_success_at"])
+            if ts is not None
+        ]
+        if not timestamps:
+            return None
+        instants = [datetime.fromisoformat(ts) for ts in timestamps]
+        if last_paused_seen_at:
+            try:
+                instants.append(datetime.fromisoformat(last_paused_seen_at))
+            except ValueError:
+                logger.warning("SyncService: ignoring unparseable last_paused_seen_at %r", last_paused_seen_at)
+        return (datetime.now(timezone.utc) - max(instants)).total_seconds()
 
     @staticmethod
     def _elapsed_since_last_success(push: dict, pull: dict) -> tuple:

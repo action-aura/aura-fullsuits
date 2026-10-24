@@ -139,7 +139,7 @@ def _reset_sync_freshness():
     try:
         conn.execute(
             'UPDATE sync_freshness SET last_push_success_at=NULL, '
-            'last_pull_success_at=NULL, offline_override_at=NULL WHERE id=1')
+            'last_pull_success_at=NULL, offline_override_at=NULL, last_paused_seen_at=NULL WHERE id=1')
         conn.commit()
     finally:
         conn.close()
@@ -753,3 +753,134 @@ def test_the_pause_flag_is_independently_load_bearing_for_the_72h_stop_and_the_p
                         lambda: dict(behind, paused_by_licence=False))
     assert retail_api._evaluate_offline_sales_stop()[0] is True
     assert retail_api._is_device_behind_on_sync() is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. KEEP-SELLING C3 (schema v58): paused time must not count toward the 72h stop AFTER renewal.
+#    Measured live: a real server 100h behind, licence switched SUBSCRIPTION_LAPSED -> ACTIVE_ONLINE
+#    with the relay unreachable, answered the next sale with HTTP 403 ("offline for about 100.0
+#    hours"): the exemption above only held WHILE paused, and after renewal `seconds_since_last_
+#    success` still counted the whole lapse. SyncService now stamps `sync_freshness.last_paused_seen_
+#    at` whenever it sees the pause, and the two predicates measure from max(last success, last
+#    pause seen). The 72h stop must still bite when sync STAYS broken after renewal (the deny half).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _pause_clock_store():
+    return SyncFreshnessStore(
+        load=sch.load_sync_freshness, record=sch.record_sync_freshness,
+        record_override=sch.record_offline_override, record_paused_seen=sch.record_paused_seen)
+
+
+def _pause_clock_service(paused):
+    return SyncService(None, sch.get_retail_conn, None, local_freshness_store=_pause_clock_store(),
+                       sync_paused=lambda: paused)
+
+
+def _set_paused_seen(hours_ago):
+    """Writes `last_paused_seen_at` through the SAME schema function SyncService's store uses."""
+    ts = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
+    conn = sch.get_retail_conn()
+    try:
+        sch.record_paused_seen(conn, ts)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _paused_seen_column():
+    conn = sch.get_retail_conn()
+    try:
+        return conn.execute('SELECT last_paused_seen_at FROM sync_freshness WHERE id=1').fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_a_renewed_device_whose_lapse_ended_a_minute_ago_can_sell_and_receive_stock():
+    """THE live-proven defect. 100h since the last success, but the pause was last seen 1 minute ago
+    and the licence is renewed (not paused): the lapse is not "offline", so the 72h stop stays out."""
+    admin, cid, pid = _new_shop()
+    _mark_behind(100)
+    _set_paused_seen(1 / 60)
+    service = _pause_clock_service(False)
+    register_active_service(service)
+    health = service.get_health()
+    assert health['paused_by_licence'] is False, 'this is the RENEWED half: the early exemption must not be what passes'
+    assert health['seconds_since_last_success'] > SYNC_SALES_STOP_THRESHOLD_SECONDS, \
+        'fixture must be genuinely past the 72h stop or this proves nothing'
+    assert health['seconds_behind_excluding_pause'] < 5 * 60
+    assert health['offline_override_valid'] is False, 'no override may be what lets the sale through'
+    before = _sales_count(cid)
+    r = _sell(admin, pid)
+    assert r.status_code == 200, r.get_json()
+    assert _sales_count(cid) == before + 1, 'a 200 with no sale row would pass a status-only check'
+    assert retail_api._is_device_behind_on_sync() is False, 'the PO-receive guard reads the same clock'
+
+
+def test_a_renewed_device_still_blocks_when_sync_stays_broken_73h_after_BOTH_clocks():
+    """Deny half: 73h since the last success AND 73h since the pause was last seen. Renewal did not
+    bring sync back, so the 72h stop must still bite -- the fix moves the clock, it does not remove it."""
+    admin, cid, pid = _new_shop()
+    _mark_behind(73)
+    _set_paused_seen(73)
+    register_active_service(_pause_clock_service(False))
+    before = _sales_count(cid)
+    r = _sell(admin, pid)
+    assert r.status_code == 403, r.get_json()
+    assert _sales_count(cid) == before, 'a blocked sale must write nothing'
+    assert retail_api._is_device_behind_on_sync() is True
+
+
+def test_a_device_that_was_never_paused_still_blocks_at_73h():
+    """Today's behaviour, through the NEW store: NULL pause clock changes nothing."""
+    admin, cid, pid = _new_shop()
+    _mark_behind(73)
+    assert _paused_seen_column() is None
+    register_active_service(_pause_clock_service(False))
+    r = _sell(admin, pid)
+    assert r.status_code == 403, r.get_json()
+
+
+def test_the_pause_clock_survives_a_restart_and_the_renewed_shop_sells():
+    """A paused service stamps the column; a SECOND service over the same database (a restart)
+    loads it back and, now renewed, lets the sale through. Without persistence the second service
+    would see 100h behind and refuse."""
+    admin, cid, pid = _new_shop()
+    _mark_behind(100)
+    assert _paused_seen_column() is None
+    first = _pause_clock_service(True)
+    first.get_health()  # one observation of the pause is all it takes
+    stamped = _paused_seen_column()
+    assert stamped is not None, 'the paused observation must have written the column'
+    assert (datetime.now(timezone.utc) - datetime.fromisoformat(stamped)).total_seconds() < 60
+    second = _pause_clock_service(False)  # "restart" + renewal: fresh in-memory state, same database
+    register_active_service(second)
+    health = second.get_health()
+    assert health['last_paused_seen_at'] == stamped
+    r = _sell(admin, pid)
+    assert r.status_code == 200, r.get_json()
+
+
+def test_the_predicates_read_the_pause_aware_key_and_fall_back_when_it_is_absent(monkeypatch):
+    """Hand-built health isolating the key. Present -> it decides (even with a huge old key);
+    absent -> the old key decides (several fakes in the suite only know the old key)."""
+    base = {'configured': True, 'never_synced': False, 'offline_override_valid': False,
+            'pending_count': 0, 'paused_by_licence': False}
+    # present and small, old key huge -> NOT blocked
+    monkeypatch.setattr(retail_api, '_sync_get_active_health', lambda: dict(
+        base, seconds_since_last_success=100 * 3600, seconds_behind_excluding_pause=60))
+    assert retail_api._evaluate_offline_sales_stop()[0] is False
+    assert retail_api._is_device_behind_on_sync() is False
+    # present and huge -> blocked (the new key is not a free pass)
+    monkeypatch.setattr(retail_api, '_sync_get_active_health', lambda: dict(
+        base, seconds_since_last_success=100 * 3600, seconds_behind_excluding_pause=100 * 3600))
+    assert retail_api._evaluate_offline_sales_stop()[0] is True
+    assert retail_api._is_device_behind_on_sync() is True
+    # absent -> the old key decides, in both directions
+    monkeypatch.setattr(retail_api, '_sync_get_active_health',
+                        lambda: dict(base, seconds_since_last_success=100 * 3600))
+    assert retail_api._evaluate_offline_sales_stop()[0] is True
+    assert retail_api._is_device_behind_on_sync() is True
+    monkeypatch.setattr(retail_api, '_sync_get_active_health',
+                        lambda: dict(base, seconds_since_last_success=60))
+    assert retail_api._evaluate_offline_sales_stop()[0] is False
+    assert retail_api._is_device_behind_on_sync() is False
