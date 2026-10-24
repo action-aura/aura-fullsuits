@@ -561,19 +561,51 @@ class LicenseCheckInScheduler:
         import json
 
         envelope = json.loads(record.assertion_envelope_json)
-        try:
-            verified = verify_assertion(
+
+        def _verify_at(trusted_now: datetime):
+            return verify_assertion(
                 envelope,
                 trust_store=self._trust_store,
                 expected_product_code=self._product_code,
                 expected_platform=self._platform,
                 expected_installation_id=record.owner_installation_id,
                 expected_device_key_fingerprint=self._device_fingerprint,
-                trusted_now=datetime.now(timezone.utc),
+                trusted_now=trusted_now,
             )
-        except AssertionVerificationError:
-            self._events.record("LOCAL_STATE_CORRUPT")
-            return LicenseState.LOCAL_STATE_CORRUPT
+
+        try:
+            verified = _verify_at(datetime.now(timezone.utc))
+        except AssertionVerificationError as exc:
+            verified = None
+            if exc.reason_code == "ASSERTION_EXPIRED":
+                # An assertion that has merely OUTLIVED its own validity window
+                # is not corrupt, it is old. Owner's assertion TTL defaults to
+                # 24h while the signed offline policy grants days of grace
+                # (14 by default, WARN_ONLY on some plans), so every shop that
+                # is offline for more than a day lands here -- and treating it
+                # as LOCAL_STATE_CORRUPT blocked selling after one day offline,
+                # the opposite of what policy_evaluator.evaluate() intends ("an
+                # expired assertion and 'we haven't checked in' are the same
+                # practical situation"). How long the shop may stay offline is
+                # decided by the signed grace arithmetic in evaluate_policy(),
+                # NOT by the assertion's TTL.
+                #
+                # So re-verify the SAME envelope as of the moment it was still
+                # valid: trusted_now = its own signed expires_at. That second
+                # pass still checks the signature over the whole payload
+                # (expires_at included, so it cannot be edited to look
+                # fresher), the signing key, product, platform, installation
+                # and device fingerprint -- only the wall-clock window check is
+                # neutralised. ONLY ASSERTION_EXPIRED gets this; a bad
+                # signature, mismatch, not-yet-valid or malformed assertion
+                # still falls through to LOCAL_STATE_CORRUPT below.
+                try:
+                    verified = _verify_at(datetime.fromisoformat(envelope["payload"]["expires_at"]))
+                except (AssertionVerificationError, KeyError, TypeError, ValueError):
+                    verified = None
+            if verified is None:
+                self._events.record("LOCAL_STATE_CORRUPT")
+                return LicenseState.LOCAL_STATE_CORRUPT
 
         anchor = self._resolve_anchor(record)
         last_checkin = (

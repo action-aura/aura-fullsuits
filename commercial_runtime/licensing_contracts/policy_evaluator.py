@@ -121,7 +121,18 @@ def evaluate(
         and now < policy.emergency_extension_until
     )
     if not emergency_extension_effective:
-        if evidence.subscription_status in ("EXPIRED", "CANCELLED"):
+        # Owner decision 2026-10-24 (Aura Growth Plan): a shop whose
+        # subscription lapses UNPAID keeps selling. Only an EXPIRED
+        # subscription, or PAST_DUE past its signed commercial grace, is an
+        # unpaid lapse -> SUBSCRIPTION_LAPSED (sells; multi-device sync, online
+        # extras and updates pause). Before this, both returned RESTRICTED and
+        # a till that had not paid stopped taking money.
+        # CANCELLED (deliberate end) and SUSPENDED (a full refund in Owner)
+        # are NOT unpaid lapses and the owner has not said they keep selling,
+        # so they deliberately stay RESTRICTED until that is decided.
+        if evidence.subscription_status == "EXPIRED":
+            return LicenseState.SUBSCRIPTION_LAPSED
+        if evidence.subscription_status == "CANCELLED":
             return LicenseState.RESTRICTED
         if evidence.subscription_status == "SUSPENDED":
             return LicenseState.RESTRICTED
@@ -130,7 +141,7 @@ def evaluate(
             and evidence.commercial_grace_end is not None
             and now > evidence.commercial_grace_end
         ):
-            return LicenseState.RESTRICTED
+            return LicenseState.SUBSCRIPTION_LAPSED
 
     if now < evidence.not_before or now > evidence.expires_at:
         # Assertion is not currently valid by its own signed dates -- fall

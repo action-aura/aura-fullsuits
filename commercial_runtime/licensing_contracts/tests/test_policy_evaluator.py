@@ -250,7 +250,14 @@ def test_license_suspended_not_overridden_by_emergency_extension():
 def test_subscription_expired_restricts_even_though_license_stays_active():
     # The core Phase 8V-P6 gap: license_status can legitimately stay ACTIVE
     # (history preserved) while Subscription.status goes EXPIRED. This must
-    # now restrict locally, independent of hard_expiry_behavior.
+    # still be noticed locally, independent of hard_expiry_behavior.
+    #
+    # CHANGED 2026-10-24 (owner decision, Aura Growth Plan: a lapsed shop keeps
+    # selling). Old expectation: LicenseState.RESTRICTED (mutations blocked).
+    # New: SUBSCRIPTION_LAPSED (still sells; only sync/updates pause). What this
+    # can no longer catch: "EXPIRED blocks selling" -- that is no longer wanted.
+    # It still catches "EXPIRED is ignored" (would give ACTIVE_ONLINE). The
+    # CANCELLED/SUSPENDED siblings below still pin RESTRICTED.
     anchor = new_anchor(NOW)
     warn_only_policy = OfflinePolicy(
         check_in_interval_seconds=86400, retry_interval_seconds=3600, offline_grace_seconds=14 * 86400,
@@ -264,7 +271,7 @@ def test_subscription_expired_restricts_even_though_license_stays_active():
         last_successful_checkin_at=NOW,
         last_checkin_attempt_ok=True,
     )
-    assert result == LicenseState.RESTRICTED
+    assert result == LicenseState.SUBSCRIPTION_LAPSED
 
 
 def test_subscription_cancelled_restricts():
@@ -277,6 +284,42 @@ def test_subscription_cancelled_restricts():
         last_checkin_attempt_ok=True,
     )
     assert result == LicenseState.RESTRICTED
+
+
+def test_subscription_past_due_inside_grace_is_not_lapsed():
+    # Sibling for the lapse change: inside the signed grace the shop is simply
+    # healthy -- it must NOT be marked lapsed early (that would pause sync early).
+    anchor = new_anchor(NOW)
+    result = evaluate(
+        evidence=_evidence(subscription_status="PAST_DUE", commercial_grace_end=NOW + timedelta(hours=1)),
+        anchor=anchor,
+        local_wall_clock_now=NOW,
+        last_successful_checkin_at=NOW,
+        last_checkin_attempt_ok=True,
+    )
+    assert result != LicenseState.SUBSCRIPTION_LAPSED
+    assert result != LicenseState.RESTRICTED
+
+
+def test_signed_license_and_installation_decisions_not_softened_by_lapse_rule():
+    # The lapse rule applies to the *subscription* only. A signed licence
+    # EXPIRED/REVOKED or installation SUSPENDED/REVOKED is a deliberate act and
+    # must keep its own hard state even when the subscription is also EXPIRED.
+    anchor = new_anchor(NOW)
+    for kwargs, want in (
+        ({"license_status": "EXPIRED"}, LicenseState.EXPIRED),
+        ({"license_status": "REVOKED"}, LicenseState.EXPIRED),
+        ({"installation_status": "SUSPENDED"}, LicenseState.SUSPENDED),
+        ({"installation_status": "REVOKED"}, LicenseState.REVOKED),
+    ):
+        result = evaluate(
+            evidence=_evidence(subscription_status="EXPIRED", **kwargs),
+            anchor=anchor,
+            local_wall_clock_now=NOW,
+            last_successful_checkin_at=NOW,
+            last_checkin_attempt_ok=True,
+        )
+        assert result == want, kwargs
 
 
 def test_subscription_suspended_restricts():
@@ -306,6 +349,11 @@ def test_subscription_past_due_within_signed_grace_stays_operational():
 
 
 def test_subscription_past_due_after_signed_grace_restricts():
+    # CHANGED 2026-10-24 (owner decision: unpaid lapse keeps selling). Old
+    # expectation: RESTRICTED. New: SUBSCRIPTION_LAPSED. Cannot catch any more:
+    # "past grace blocks selling" (deliberately gone). Still catches "past grace
+    # is ignored" (would be ACTIVE_ONLINE); the within-grace sibling above pins
+    # the not-yet-lapsed side.
     anchor = new_anchor(NOW)
     result = evaluate(
         evidence=_evidence(subscription_status="PAST_DUE", commercial_grace_end=NOW - timedelta(hours=1)),
@@ -314,7 +362,7 @@ def test_subscription_past_due_after_signed_grace_restricts():
         last_successful_checkin_at=NOW,
         last_checkin_attempt_ok=True,
     )
-    assert result == LicenseState.RESTRICTED
+    assert result == LicenseState.SUBSCRIPTION_LAPSED
 
 
 def test_subscription_past_due_with_no_commercial_grace_end_does_not_restrict():
@@ -348,7 +396,8 @@ def test_emergency_extension_overrides_subscription_expired():
 
 def test_emergency_extension_stops_applying_after_its_own_expiry():
     # Same subscription-EXPIRED case, but "now" has passed the extension's
-    # own signed until -- must revert to RESTRICTED, no manual action needed.
+    # own signed until -- must revert to the lapse state, no manual action
+    # needed. (2026-10-24: was RESTRICTED; EXPIRED now means SUBSCRIPTION_LAPSED.)
     anchor = new_anchor(NOW)
     ext_policy = _extension_policy(NOW - timedelta(minutes=1))
     result = evaluate(
@@ -358,7 +407,7 @@ def test_emergency_extension_stops_applying_after_its_own_expiry():
         last_successful_checkin_at=NOW,
         last_checkin_attempt_ok=True,
     )
-    assert result == LicenseState.RESTRICTED
+    assert result == LicenseState.SUBSCRIPTION_LAPSED
 
 
 def test_subscription_active_unaffected_by_new_commercial_checks():

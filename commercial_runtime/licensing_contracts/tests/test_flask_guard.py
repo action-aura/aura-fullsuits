@@ -316,3 +316,32 @@ def test_unrecognized_state_logs_warning_naming_offending_value(flask_app, app_d
         flask_app.test_client().post("/patients")
     messages = [record.getMessage() for record in caplog.records]
     assert any("'ACTIVE'" in message and "LOCAL_STATE_CORRUPT" in message for message in messages)
+
+
+def test_subscription_lapsed_allows_mutation_restricted_does_not(flask_app, app_data_dir):
+    # Owner decision 2026-10-24: an unpaid lapse keeps selling. POST /patients is
+    # NOT in ALLOWLIST (only clinic.records.read is), so the only thing that can
+    # let it through under LAPSED is the state itself. The RESTRICTED half in the
+    # same test proves the route really is gated -- without it a route that was
+    # never guarded would also "pass" the LAPSED half.
+    client = flask_app.test_client()
+    _set_state(app_data_dir, "SUBSCRIPTION_LAPSED")
+    assert client.post("/patients").status_code == 200
+    assert client.get("/patients").status_code == 200
+
+    _set_state(app_data_dir, "RESTRICTED")
+    denied = client.post("/patients")
+    assert denied.status_code == 403
+    assert denied.get_json()["reason_code"] == "LICENSE_INACTIVE"
+
+
+def test_subscription_lapsed_keeps_entitlement_gate_on_the_route(flask_app, app_data_dir):
+    # Online extras stay off for a lapsed shop: the route-level entitlement
+    # gate still runs under LAPSED, and opens when the entitlement is held.
+    client = flask_app.test_client()
+    _set_state(app_data_dir, "SUBSCRIPTION_LAPSED", {})
+    resp = client.post("/settings")
+    assert resp.status_code == 403
+    assert resp.get_json()["reason_code"] == "CAPABILITY_NOT_ENTITLED"
+    _set_state(app_data_dir, "SUBSCRIPTION_LAPSED", {"digital_receipts_enabled": True})
+    assert client.post("/settings").status_code == 200

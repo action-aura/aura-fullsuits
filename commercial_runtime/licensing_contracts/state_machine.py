@@ -25,6 +25,15 @@ class LicenseState(str, Enum):
     SUSPENDED = "SUSPENDED"
     REVOKED = "REVOKED"
     EXPIRED = "EXPIRED"
+    # Aura Growth Plan (owner decision 2026-10-24): a subscription that ran
+    # out UNPAID (signed subscription_status EXPIRED, or PAST_DUE past its
+    # signed commercial_grace_end). The shop KEEPS SELLING -- every local
+    # commercial capability stays on -- and only loses multi-device sync,
+    # online extras and feature updates until it renews. Deliberately NOT
+    # RESTRICTED: RESTRICTED still means "commercial mutation is blocked"
+    # (refund/cancel/offline hard-expiry), and folding the unpaid case into
+    # it is exactly what used to stop an unpaid shop's till.
+    SUBSCRIPTION_LAPSED = "SUBSCRIPTION_LAPSED"
     DEVICE_DEACTIVATED = "DEVICE_DEACTIVATED"
     DEVICE_REPLACED = "DEVICE_REPLACED"
     CLOCK_REVIEW_REQUIRED = "CLOCK_REVIEW_REQUIRED"
@@ -64,11 +73,41 @@ DATA_PRESERVED_FAMILY = ACTIVE_FAMILY | frozenset(
         LicenseState.SUSPENDED,
         LicenseState.REVOKED,
         LicenseState.EXPIRED,
+        LicenseState.SUBSCRIPTION_LAPSED,
         LicenseState.DEVICE_DEACTIVATED,
         LicenseState.CLOCK_REVIEW_REQUIRED,
         LicenseState.LOCAL_STATE_CORRUPT,
     }
 )
+
+# States in which every local commercial capability is allowed (subject only
+# to the entitlement gate) -- what capability_guard.py consults first. It is
+# ACTIVE_FAMILY plus SUBSCRIPTION_LAPSED and nothing else. SUBSCRIPTION_LAPSED
+# is kept OUT of ACTIVE_FAMILY on purpose: ACTIVE_FAMILY also answers "is
+# this install currently paid up" for the hub/sync decisions, and an unpaid
+# shop must keep selling without getting the paid extras back.
+SELLING_FAMILY = ACTIVE_FAMILY | frozenset({LicenseState.SUBSCRIPTION_LAPSED})
+
+# States in which multi-device sync (cloud relay AND the in-shop LAN hub) is
+# paused for commercial reasons. Only the unpaid lapse -- every other state
+# keeps exactly the sync behaviour it had before this set existed (sync was
+# never licence-gated), so an install with licensing switched off
+# (NOT_CONFIGURED) is untouched. The outbox keeps filling while paused and
+# drains on the first sync after renewal; nothing is dropped.
+SYNC_PAUSED_STATES = frozenset({LicenseState.SUBSCRIPTION_LAPSED})
+
+
+def licence_pauses_sync(state: object) -> bool:
+    """True only for a state whose commercial status pauses sync. Accepts a
+    LicenseState, its raw stored string, or None; anything unrecognized is
+    NOT a pause -- sync was never licence-gated before, so an unreadable
+    state keeps today's behaviour rather than silently cutting a paying
+    shop off (selling is already handled by the capability guard's own
+    fail-closed LOCAL_STATE_CORRUPT path)."""
+    try:
+        return LicenseState(state) in SYNC_PAUSED_STATES
+    except ValueError:
+        return False
 
 TERMINAL_UNTIL_REACTIVATION = frozenset({LicenseState.REVOKED, LicenseState.DEVICE_DEACTIVATED})
 

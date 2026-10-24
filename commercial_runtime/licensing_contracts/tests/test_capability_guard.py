@@ -143,3 +143,59 @@ def test_entitlement_gate_not_checked_when_restricted_already_denies():
     )
     assert decision.allowed is False
     assert decision.denial_reason == DENIAL_REASON_LICENSE_INACTIVE
+
+
+# -- Owner decision 2026-10-24 (Aura Growth Plan): an unpaid lapse keeps selling --
+
+def test_subscription_lapsed_allows_mutation_with_empty_allowlist():
+    # An EMPTY allowlist is the point: the capability is a mutation that no
+    # restricted-mode list would ever admit, so the only way it can be allowed
+    # is the state itself being a "selling" state. (Asserting a read-allowlisted
+    # capability would pass even if LAPSED were wrongly treated as RESTRICTED.)
+    decision = evaluate_capability(
+        capability_code="retail.sale.create",
+        current_state=LicenseState.SUBSCRIPTION_LAPSED,
+        restricted_mode_allowlist=frozenset(),
+    )
+    assert decision.allowed is True
+    assert decision.denial_reason is None
+
+
+def test_subscription_lapsed_still_runs_the_entitlement_gate():
+    # The state gate opens but the entitlement gate must still run -- this is
+    # how online extras (e.g. digital receipts) stay OFF for a lapsed shop.
+    missing = evaluate_capability(
+        capability_code="retail.settings.update",
+        current_state=LicenseState.SUBSCRIPTION_LAPSED,
+        restricted_mode_allowlist=frozenset(),
+        required_entitlement="digital_receipts_enabled",
+        entitlements={},
+    )
+    assert missing.allowed is False
+    assert missing.denial_reason == DENIAL_REASON_NOT_ENTITLED
+    # ...and the allow half: the same capability with the entitlement present.
+    held = evaluate_capability(
+        capability_code="retail.settings.update",
+        current_state=LicenseState.SUBSCRIPTION_LAPSED,
+        restricted_mode_allowlist=frozenset(),
+        required_entitlement="digital_receipts_enabled",
+        entitlements={"digital_receipts_enabled": True},
+    )
+    assert held.allowed is True
+
+
+def test_hard_stop_states_still_deny_mutation_with_empty_allowlist():
+    # Guards against the lapse change leaking: every other non-selling state
+    # keeps denying a mutation that is not allowlisted.
+    for state in (
+        LicenseState.RESTRICTED, LicenseState.SUSPENDED, LicenseState.EXPIRED,
+        LicenseState.REVOKED, LicenseState.LOCAL_STATE_CORRUPT,
+        LicenseState.NOT_CONFIGURED, LicenseState.ACTIVATION_REQUIRED, LicenseState.ACTIVATING,
+    ):
+        decision = evaluate_capability(
+            capability_code="retail.sale.create",
+            current_state=state,
+            restricted_mode_allowlist=frozenset(),
+        )
+        assert decision.allowed is False, state
+        assert decision.denial_reason == DENIAL_REASON_LICENSE_INACTIVE, state
