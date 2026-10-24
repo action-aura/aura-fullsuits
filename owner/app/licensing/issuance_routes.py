@@ -3,8 +3,9 @@
 acts"). A new, thin route module beside app/licensing/routes.py -- calls
 only app.licensing.issuance.issue_license_direct, which itself calls only
 existing canonical services. See that module's docstring for the
-"orchestrate, never insert" contract and its one named gap (no whole-action
-idempotency ledger beyond issue_license_key's own).
+"orchestrate, never insert" contract and for how one idempotency key now
+maps to exactly one issuance (a double submit gets the original licence
+back as "already issued", never a second set of rows -- Step 0 fix).
 
 Permission: licenses.issue, the SAME permission licensing.routes::issue
 already gates on -- reused deliberately rather than inventing a new one.

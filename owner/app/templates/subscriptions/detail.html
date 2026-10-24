@@ -63,8 +63,11 @@
     <label for="subscriptions-detail-payment-date">{{ _("Payment date") }}</label><input id="subscriptions-detail-payment-date" name="payment_date" type="date" required>
     <label for="subscriptions-detail-reference">{{ _("Reference") }}</label><input id="subscriptions-detail-reference" name="reference">
     <label for="subscriptions-detail-status">{{ _("Status") }}</label>
+    {# No CONFIRMED here: recording is never confirming -- record_payment
+       refuses it (two-person rule); a different staff member confirms via
+       the Correct control below. #}
     <select id="subscriptions-detail-status" name="status">
-      {% for s in ["PENDING","CONFIRMED","FAILED","REFUNDED","VOIDED"] %}<option value="{{ s }}">{{ payment_status_label(s) }}</option>{% endfor %}
+      {% for s in ["PENDING","FAILED","REFUNDED","VOIDED"] %}<option value="{{ s }}">{{ payment_status_label(s) }}</option>{% endfor %}
     </select>
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Record payment") }}</button></div>
   </form>

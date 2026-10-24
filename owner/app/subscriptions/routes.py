@@ -18,6 +18,7 @@ from app.subscriptions import list_queries
 from app.subscriptions.services import (
     VALID_TRANSITIONS,
     InvalidTransitionError,
+    PaymentSelfVerificationError,
     correct_payment,
     create_subscription,
     record_payment,
@@ -162,19 +163,26 @@ def renew(subscription_id):
 @require_permission("payments.create")
 def create_payment():
     actor = load_current_staff()
-    payment = record_payment(
-        {
-            "customer_id": request.form.get("customer_id"),
-            "subscription_id": request.form.get("subscription_id") or None,
-            "amount": Decimal(request.form.get("amount", "0")),
-            "currency": request.form.get("currency", "USD"),
-            "method": request.form.get("method") or None,
-            "payment_date": date.fromisoformat(request.form.get("payment_date")),
-            "reference": request.form.get("reference") or None,
-            "status": request.form.get("status", "PENDING"),
-        },
-        actor.id,
-    )
+    # `status` still comes from the form (FAILED/REFUNDED/VOIDED records of
+    # past events are legitimate), but record_payment now refuses CONFIRMED:
+    # this route's gate is payments.create, which SALES holds, and it used to
+    # let a salesperson record money as confirmed with no checker at all.
+    try:
+        payment = record_payment(
+            {
+                "customer_id": request.form.get("customer_id"),
+                "subscription_id": request.form.get("subscription_id") or None,
+                "amount": Decimal(request.form.get("amount", "0")),
+                "currency": request.form.get("currency", "USD"),
+                "method": request.form.get("method") or None,
+                "payment_date": date.fromisoformat(request.form.get("payment_date")),
+                "reference": request.form.get("reference") or None,
+                "status": request.form.get("status", "PENDING"),
+            },
+            actor.id,
+        )
+    except ValueError as exc:  # includes PaymentSelfVerificationError
+        return jsonify({"error": str(exc)}), 400
     return redirect(url_for("subscriptions.detail", subscription_id=payment.subscription_id) if payment.subscription_id else url_for("dashboard.index"))
 
 
@@ -185,5 +193,21 @@ def correct_payment_route(payment_id):
     payment = db_session.get(PaymentRecord, payment_id)
     if payment is None:
         return jsonify({"error": "not_found"}), 404
-    correct_payment(payment, request.form.get("status"), request.form.get("note", ""), actor.id)
+    new_status = request.form.get("status")
+    # Confirming is its own authority (payments.confirm, the one
+    # commercial_sales' confirm routes gate on), not a kind of correcting.
+    # Without this, any role given payments.correct alone would have a side
+    # door around payments.confirm. FINANCE holds both today, so this changes
+    # nothing for a seeded role -- it closes the shape, not a live grant.
+    if new_status == "CONFIRMED" and "payments.confirm" not in get_staff_permission_codes(actor):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        correct_payment(payment, new_status, request.form.get("note", ""), actor.id)
+    except PaymentSelfVerificationError as exc:
+        # The recorder trying to confirm their own payment: refused, same
+        # rule (and same 403 shape) as commercial_sales' confirm route.
+        return jsonify({"error": "self_verification_forbidden", "message": str(exc)}), 403
+    except ValueError as exc:
+        # An unknown status used to escape as an unhandled ValueError (500).
+        return jsonify({"error": str(exc)}), 400
     return redirect(url_for("subscriptions.detail", subscription_id=payment.subscription_id) if payment.subscription_id else url_for("dashboard.index"))

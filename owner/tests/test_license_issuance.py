@@ -477,3 +477,305 @@ def test_reload_after_issuance_never_reveals_key_again(app, client, seeded):
     reload_page = client.get("/licenses/issuance/new")
     reload_body = reload_page.get_data(as_text=True)
     assert "AURA-" not in reload_body
+
+
+# -- Step 0, issuance bug 1: one idempotency key = one issuance -------------
+#
+# issue_license_direct runs five separately-committed service calls
+# (create_customer for an inline new customer, create_subscription,
+# transition_subscription -> ACTIVE, create_license, issue_license_key), and
+# the ONLY idempotency it had was issue_license_key's own
+# LicenseKeyIssuanceEvent lookup -- consulted last, after the first four had
+# already committed new rows. Measured before the fix:
+#   - same key replayed after success -> a second ACTIVE Subscription and a
+#     second DRAFT License (and, on the inline path, a second Customer); the
+#     replay returned the ORPHAN licence id;
+#   - same key, concurrent -> every caller passed the event check, every
+#     caller committed its own Subscription/License, and all but one then
+#     crashed on the event's unique idempotency_key;
+#   - an inline new customer was created BEFORE the package/device checks,
+#     so a rejected form left a Customer behind and the corrected resubmit
+#     (same key -- the re-rendered form keeps it) made a second one;
+#   - a failure part-way left rows a retry never found again.
+# Every test below counts ROWS, not just status codes: the bug never showed
+# as a wrong status, only as extra rows.
+
+def _issuance_row_counts(app, *, customer_id=None, legal_name=None):
+    from app.extensions import db_session
+    from app.models.customers import Customer
+    from app.models.licensing import License, LicenseKeyIssuanceEvent
+    from app.models.subscriptions import Subscription
+
+    with app.app_context():
+        db_session.expire_all()
+        if legal_name is not None:
+            customer_ids = [c.id for c in db_session.query(Customer).filter_by(legal_name=legal_name).all()]
+        else:
+            customer_ids = [customer_id]
+        licence_ids = [row.id for row in db_session.query(License).filter(License.customer_id.in_(customer_ids)).all()]
+        events = 0
+        if licence_ids:
+            events = db_session.query(LicenseKeyIssuanceEvent).filter(
+                LicenseKeyIssuanceEvent.license_id.in_(licence_ids)
+            ).count()
+        return {
+            "customers": len(customer_ids),
+            "subscriptions": db_session.query(Subscription).filter(Subscription.customer_id.in_(customer_ids)).count(),
+            "licenses": len(licence_ids),
+            "issuance_events": events,
+        }
+
+
+ONE_OF_EACH = {"customers": 1, "subscriptions": 1, "licenses": 1, "issuance_events": 1}
+
+
+def test_replaying_the_same_key_creates_no_second_subscription_or_license(app, seeded):
+    staff_id = make_staff(app, "idem1@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "IDEM_SEQ_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    customer_id = _seed_customer(app, staff_id)
+    key = str(uuid.uuid4())
+    with app.app_context():
+        from app.licensing.issuance import issue_license_direct
+
+        first = issue_license_direct(
+            customer_id=customer_id, plan_id=plan_id, extra_devices=1, idempotency_key=key,
+            actor_staff_user_id=staff_id, license_pepper="test-pepper",
+        )
+        second = issue_license_direct(
+            customer_id=customer_id, plan_id=plan_id, extra_devices=1, idempotency_key=key,
+            actor_staff_user_id=staff_id, license_pepper="test-pepper",
+        )
+
+    assert _issuance_row_counts(app, customer_id=customer_id) == ONE_OF_EACH
+    assert first["full_key"] is not None and first.get("replayed") is False
+    # The replay points at the ORIGINAL rows, and never re-reveals the key.
+    assert second.get("replayed") is True
+    assert second["full_key"] is None and second["whatsapp_message"] is None
+    assert (second["customer_id"], second["subscription_id"], second["license_id"]) == (
+        first["customer_id"], first["subscription_id"], first["license_id"]
+    )
+
+
+def test_replaying_the_same_key_with_an_inline_new_customer_creates_one_customer(app, seeded):
+    staff_id = make_staff(app, "idem2@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "IDEM_INLINE_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    key = str(uuid.uuid4())
+    with app.app_context():
+        from app.licensing.issuance import issue_license_direct
+
+        for _ in range(2):
+            issue_license_direct(
+                new_customer_legal_name="Double Click Trading Co", plan_id=plan_id, idempotency_key=key,
+                actor_staff_user_id=staff_id, license_pepper="test-pepper",
+            )
+
+    assert _issuance_row_counts(app, legal_name="Double Click Trading Co") == ONE_OF_EACH
+
+
+def test_http_double_submit_same_key_shows_already_issued_not_a_second_licence(app, client, seeded):
+    plan_id = _seed_package(app, "IDEM_HTTP_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    make_staff(app, "idem3@example.com", super_admin=True, mfa=True)
+    login_and_verify_mfa(client, "idem3@example.com")
+    page = client.get("/licenses/issuance/new")
+    csrf = get_csrf(page.get_data(as_text=True))
+    form = {
+        "csrf_token": csrf, "idempotency_key": str(uuid.uuid4()),
+        "new_customer_legal_name": "Network Retry Shop Co", "plan_id": str(plan_id), "extra_devices": "0",
+    }
+    first = client.post("/licenses/issuance", data=form)
+    second = client.post("/licenses/issuance", data=form)
+
+    assert first.status_code == 200 and "AURA-" in first.get_data(as_text=True)
+    assert second.status_code == 200
+    second_body = second.get_data(as_text=True)
+    assert "AURA-" not in second_body
+    assert "already used" in second_body
+    assert _issuance_row_counts(app, legal_name="Network Retry Shop Co") == ONE_OF_EACH
+
+
+def test_concurrent_submits_of_the_same_key_issue_exactly_one_licence(app, seeded, monkeypatch):
+    """Two tabs / a double click racing: five callers, same key, all pushed
+    into the window between "no event exists yet" and the inserts by a
+    0.75s sleep in create_subscription (the technique
+    test_phase9_5d_fulfillment.py::test_item3_concurrent_... uses, for the
+    same reason: without it the race depends on scheduler luck). Exactly one
+    licence; the other four are clean replays of it, not crashes."""
+    import threading
+    import time
+
+    staff_id = make_staff(app, "idem4@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "IDEM_RACE_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    customer_id = _seed_customer(app, staff_id)
+    key = str(uuid.uuid4())
+
+    # Patched in the issuance MODULE's namespace -- that is the name
+    # issue_license_direct actually calls.
+    import app.licensing.issuance as issuance_module
+
+    real_create_subscription = issuance_module.create_subscription
+
+    def _slow_create_subscription(*args, **kwargs):
+        time.sleep(0.75)
+        return real_create_subscription(*args, **kwargs)
+
+    monkeypatch.setattr(issuance_module, "create_subscription", _slow_create_subscription)
+
+    results, errors = [], []
+    lock = threading.Lock()
+
+    def worker():
+        try:
+            with app.app_context():
+                from app.licensing.issuance import issue_license_direct
+
+                r = issue_license_direct(
+                    customer_id=customer_id, plan_id=plan_id, idempotency_key=key,
+                    actor_staff_user_id=staff_id, license_pepper="test-pepper",
+                )
+                with lock:
+                    results.append(r)
+        except Exception as exc:  # noqa: BLE001
+            with lock:
+                errors.append(exc)
+        finally:
+            from app.extensions import db_session as scoped_db_session
+
+            scoped_db_session.remove()
+
+    threads = [threading.Thread(target=worker) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+
+    assert _issuance_row_counts(app, customer_id=customer_id) == ONE_OF_EACH
+    assert errors == [], "expected no crashes, got " + "; ".join(f"{type(e).__name__}: {e}" for e in errors)
+    assert len(results) == 5
+    # Exactly one caller revealed a key; the other four were answered BY THE
+    # REPLAY CHECK (replayed=True, same licence id) -- not by an
+    # IntegrityError or a lock timeout that merely happened to leave one row.
+    revealed = [r for r in results if r["full_key"] is not None]
+    assert len(revealed) == 1
+    assert sum(1 for r in results if r.get("replayed")) == 4
+    assert {r["license_id"] for r in results} == {revealed[0]["license_id"]}
+
+
+def test_rejected_form_then_corrected_resubmit_creates_one_customer(app, seeded):
+    """The inline customer used to be created BEFORE the package/device
+    checks. A rejected attempt left it behind, and the corrected resubmit --
+    same key, because the re-rendered form keeps it -- made a second one."""
+    staff_id = make_staff(app, "idem5@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "IDEM_FIX_PLAN", billing_model="MONTHLY", billing_interval_months=1,
+                             included_device_count=2, max_device_count=3)
+    key = str(uuid.uuid4())
+    with app.app_context():
+        from app.licensing.issuance import LicenseIssuanceError, issue_license_direct
+
+        with pytest.raises(LicenseIssuanceError):
+            issue_license_direct(
+                new_customer_legal_name="Typo Then Fix Co", plan_id=plan_id, extra_devices=5,
+                idempotency_key=key, actor_staff_user_id=staff_id, license_pepper="test-pepper",
+            )
+    # Nothing at all was written by the rejected attempt.
+    assert _issuance_row_counts(app, legal_name="Typo Then Fix Co")["customers"] == 0
+
+    with app.app_context():
+        from app.licensing.issuance import issue_license_direct
+
+        result = issue_license_direct(
+            new_customer_legal_name="Typo Then Fix Co", plan_id=plan_id, extra_devices=1,
+            idempotency_key=key, actor_staff_user_id=staff_id, license_pepper="test-pepper",
+        )
+    assert result["full_key"] is not None
+    assert _issuance_row_counts(app, legal_name="Typo Then Fix Co") == ONE_OF_EACH
+
+
+def test_retry_after_a_failure_part_way_reuses_what_was_already_created(app, seeded, monkeypatch):
+    """A crash after the Customer and Subscription committed but before the
+    License existed. The retry with the same key must pick those rows up,
+    not leave them orphaned beside a second set."""
+    staff_id = make_staff(app, "idem6@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "IDEM_CRASH_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    key = str(uuid.uuid4())
+
+    import app.licensing.issuance as issuance_module
+
+    real_create_license = issuance_module.create_license
+    calls = {"n": 0}
+
+    def _create_license_fails_once(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("simulated crash between subscription and licence")
+        return real_create_license(*args, **kwargs)
+
+    monkeypatch.setattr(issuance_module, "create_license", _create_license_fails_once)
+
+    with app.app_context():
+        from app.extensions import db_session
+        from app.licensing.issuance import issue_license_direct
+
+        with pytest.raises(RuntimeError):
+            issue_license_direct(
+                new_customer_legal_name="Crash Midway Co", plan_id=plan_id, idempotency_key=key,
+                actor_staff_user_id=staff_id, license_pepper="test-pepper",
+            )
+        db_session.rollback()
+    partial = _issuance_row_counts(app, legal_name="Crash Midway Co")
+    assert (partial["customers"], partial["subscriptions"], partial["licenses"]) == (1, 1, 0)
+
+    with app.app_context():
+        from app.licensing.issuance import issue_license_direct
+
+        result = issue_license_direct(
+            new_customer_legal_name="Crash Midway Co", plan_id=plan_id, idempotency_key=key,
+            actor_staff_user_id=staff_id, license_pepper="test-pepper",
+        )
+    assert result["full_key"] is not None
+    assert _issuance_row_counts(app, legal_name="Crash Midway Co") == ONE_OF_EACH
+
+
+def test_same_key_with_a_different_package_is_refused_not_merged(app, seeded):
+    """A key already used for one issuance, replayed with a different
+    payload, is not a retry -- refused outright, never silently resolved to
+    either issuance (fulfill_order's IDEMPOTENCY_CONFLICT rule)."""
+    staff_id = make_staff(app, "idem7@example.com", super_admin=True, mfa=True)
+    plan_a = _seed_package(app, "IDEM_CONFLICT_A", billing_model="MONTHLY", billing_interval_months=1)
+    plan_b = _seed_package(app, "IDEM_CONFLICT_B", billing_model="MONTHLY", billing_interval_months=1)
+    customer_id = _seed_customer(app, staff_id)
+    key = str(uuid.uuid4())
+    with app.app_context():
+        from app.licensing.issuance import LicenseIssuanceError, issue_license_direct
+
+        issue_license_direct(
+            customer_id=customer_id, plan_id=plan_a, idempotency_key=key,
+            actor_staff_user_id=staff_id, license_pepper="test-pepper",
+        )
+        with pytest.raises(LicenseIssuanceError):
+            issue_license_direct(
+                customer_id=customer_id, plan_id=plan_b, idempotency_key=key,
+                actor_staff_user_id=staff_id, license_pepper="test-pepper",
+            )
+    assert _issuance_row_counts(app, customer_id=customer_id) == ONE_OF_EACH
+
+
+def test_two_different_keys_are_still_two_real_issuances(app, seeded):
+    """Allow half: the fix must not collapse two genuinely separate sales to
+    the same customer and package into one."""
+    staff_id = make_staff(app, "idem8@example.com", super_admin=True, mfa=True)
+    plan_id = _seed_package(app, "IDEM_TWO_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    customer_id = _seed_customer(app, staff_id)
+    with app.app_context():
+        from app.licensing.issuance import issue_license_direct
+
+        first = issue_license_direct(
+            customer_id=customer_id, plan_id=plan_id, idempotency_key=str(uuid.uuid4()),
+            actor_staff_user_id=staff_id, license_pepper="test-pepper",
+        )
+        second = issue_license_direct(
+            customer_id=customer_id, plan_id=plan_id, idempotency_key=str(uuid.uuid4()),
+            actor_staff_user_id=staff_id, license_pepper="test-pepper",
+        )
+    assert first["full_key"] and second["full_key"] and first["full_key"] != second["full_key"]
+    counts = _issuance_row_counts(app, customer_id=customer_id)
+    assert (counts["subscriptions"], counts["licenses"], counts["issuance_events"]) == (2, 2, 2)

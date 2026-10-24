@@ -46,6 +46,26 @@ class InvalidTransitionError(ValueError):
     pass
 
 
+class PaymentSelfVerificationError(ValueError):
+    """A payment would reach CONFIRMED without a second person.
+
+    commercial_sales/payments.py::confirm_payment enforced the two-person
+    rule (SELF_CONFIRMATION_FORBIDDEN), but record_payment and
+    correct_payment below are the only two functions that ever write
+    PaymentRecord.status, and the older subscriptions routes call them
+    directly -- so the rule had to live HERE to bind every caller. Before
+    this (Step 0, 2026-10-24, tests/test_payment_two_person_rule.py):
+    POST /subscriptions/payments with status=CONFIRMED let a SALES user
+    (payments.create) record money as confirmed from birth; and
+    POST /subscriptions/payments/<id>/correct let the recorder confirm their
+    own payment, or overwrite the real checker's verified_by with their own
+    id. CONFIRMED is what cash closing, dashboards, reports and invoice
+    allocation count as real money.
+
+    A ValueError subclass so existing `except ValueError` callers still
+    treat it as a refused write, never as a crash."""
+
+
 def transition_subscription(subscription: Subscription, to_status: str, actor_staff_user_id, reason: str | None = None) -> None:
     allowed = VALID_TRANSITIONS.get(subscription.status, set())
     if to_status not in allowed:
@@ -126,6 +146,15 @@ def record_renewal(
 def record_payment(fields: dict, actor_staff_user_id) -> PaymentRecord:
     if fields.get("status") not in PAYMENT_STATUSES:
         raise ValueError(f"Invalid payment status: {fields.get('status')}")
+    # Recording is never confirming (Non-Negotiable Rule 4). A payment born
+    # CONFIRMED has had no checker at all -- not even the recorder in a
+    # second step -- and verified_by stays NULL, so nothing downstream could
+    # tell. It starts PENDING and a different person confirms it.
+    if fields.get("status") == "CONFIRMED":
+        raise PaymentSelfVerificationError(
+            "A payment cannot be recorded as already confirmed. Record it as PENDING; "
+            "a different staff member must confirm it."
+        )
     payment = PaymentRecord(recorded_by_staff_user_id=actor_staff_user_id, **fields)
     db_session.add(payment)
     db_session.commit()
@@ -143,6 +172,19 @@ def record_payment(fields: dict, actor_staff_user_id) -> PaymentRecord:
 def correct_payment(payment: PaymentRecord, new_status: str, note: str, actor_staff_user_id) -> None:
     if new_status not in PAYMENT_STATUSES:
         raise ValueError(f"Invalid payment status: {new_status}")
+    # The two-person rule, for every caller (confirm_payment checks it too,
+    # before calling here; the legacy correct route did not check it at
+    # all). Keyed on the RESULT being CONFIRMED, not on the transition into
+    # it: a recorder re-saving an already-confirmed payment (e.g. to edit
+    # its note) would otherwise overwrite the real checker's
+    # verified_by_staff_user_id with their own id below. Moving their own
+    # payment to any other status (VOIDED for a duplicate entry, FAILED for
+    # a bounced cheque) never turns a claim into counted money, so it stays
+    # allowed. Same comparison confirm_payment makes.
+    if new_status == "CONFIRMED" and payment.recorded_by_staff_user_id == actor_staff_user_id:
+        raise PaymentSelfVerificationError(
+            "The staff member who recorded a payment cannot also confirm it; a different staff member must."
+        )
     before = payment.status
     before_note = payment.internal_note
     payment.status = new_status

@@ -115,6 +115,13 @@ def test_correct_payment_writes_correction_history_row(app, seeded):
     # not just overwrite the live row -- see docs/owner/phase8/
     # phase8-scope-and-baseline.md's Milestone 1 gap note.
     staff_id = make_staff(app, "x6@example.com")
+    # A DIFFERENT staff member makes the confirming correction: the recorder
+    # confirming their own payment is now refused (two-person rule, see
+    # tests/test_payment_two_person_rule.py). This only makes the assertions
+    # below sharper -- verified_by/corrected_by must now equal the
+    # CORRECTING actor, which a same-person fixture could not tell apart
+    # from "copied from recorded_by".
+    checker_id = make_staff(app, "x6-checker@example.com")
     with app.app_context():
         from decimal import Decimal
         from datetime import date
@@ -131,11 +138,11 @@ def test_correct_payment_writes_correction_history_row(app, seeded):
             staff_id,
         )
 
-        correct_payment(payment, "CONFIRMED", "bank confirmed transfer", staff_id)
+        correct_payment(payment, "CONFIRMED", "bank confirmed transfer", checker_id)
 
         assert payment.status == "CONFIRMED"
         assert payment.internal_note == "bank confirmed transfer"
-        assert payment.verified_by_staff_user_id == staff_id
+        assert payment.verified_by_staff_user_id == checker_id
 
         assert len(payment.correction_history) == 1
         entry = payment.correction_history[0]
@@ -143,11 +150,12 @@ def test_correct_payment_writes_correction_history_row(app, seeded):
         assert entry.new_status == "CONFIRMED"
         assert entry.previous_internal_note == "awaiting bank confirmation"
         assert entry.correction_note == "bank confirmed transfer"
-        assert entry.corrected_by_staff_user_id == staff_id
+        assert entry.corrected_by_staff_user_id == checker_id
 
 
 def test_correct_payment_twice_preserves_full_history_not_just_latest(app, seeded):
     staff_id = make_staff(app, "x7@example.com")
+    checker_id = make_staff(app, "x7-checker@example.com")  # see the x6 test: no self-confirmation
     with app.app_context():
         from decimal import Decimal
         from datetime import date
@@ -163,8 +171,8 @@ def test_correct_payment_twice_preserves_full_history_not_just_latest(app, seede
             staff_id,
         )
 
-        correct_payment(payment, "CONFIRMED", "first correction", staff_id)
-        correct_payment(payment, "REFUNDED", "customer requested refund", staff_id)
+        correct_payment(payment, "CONFIRMED", "first correction", checker_id)
+        correct_payment(payment, "REFUNDED", "customer requested refund", checker_id)
 
         assert payment.status == "REFUNDED"
         assert len(payment.correction_history) == 2
