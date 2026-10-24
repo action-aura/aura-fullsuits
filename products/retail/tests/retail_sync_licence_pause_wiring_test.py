@@ -2,10 +2,11 @@
 subscription and resume the moment the licence is renewed, with no restart.
 
 commercial_runtime/sync/tests/test_sync_licence_pause.py proves SyncService honours a
-`sync_paused` callable. This file proves app.py actually HANDS one to every sync service it builds
-(retail stream, registry stream, and the hub forwarder), that it reads the licence FRESH each call
-(renewal needs no restart), and that an unreadable/unknown licence means "not paused" (sync was
-never licence-gated before this rule).
+`sync_paused` callable. This file proves app.py actually HANDS one to the two SyncService streams it
+builds (retail stream, registry stream), that it reads the licence FRESH each call (renewal needs no
+restart), and that an unreadable/unknown licence means "not paused" (sync was never licence-gated
+before this rule). It does NOT cover the hub pieces (the two ForwarderLoop constructions and
+start_site_relay): those are proven in retail_sync_licence_pause_hub_wiring_test.py.
 
 Own module (sets AURA_SYNC_RELAY_URL, boots the real app) -- run one file per process:
     pytest products/retail/tests/retail_sync_licence_pause_wiring_test.py -v
