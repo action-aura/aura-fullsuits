@@ -1081,6 +1081,50 @@ def _registry_bootstrap_hooks():
         include_own_done=lambda: _bootstrap_include_own_done('registry'))
 
 
+_licence_pause_read_error_logged = False
+
+
+def _read_licence_pauses_sync(state_repository):
+    """Keep-selling rule: True iff this install's CURRENT licence state pauses
+    multi-device sync (an UNPAID subscription -- state_machine.
+    licence_pauses_sync). This is the one callable every sync path hands to
+    `sync_paused=` (cloud SyncService, registry SyncService, and the LAN hub's
+    per-request gate), so they can never disagree about what "paused" means.
+
+    Reads the repository FRESH on every call -- nothing cached -- because a
+    renewal arrives through the licence check-in while the process is running
+    and must resume sync on the very next tick with no restart.
+
+    Any read error (locked/corrupt/unreadable licensing.db, unknown state
+    string) returns False = NOT paused, logged once. Sync was never gated by
+    the licence before this rule, so an unreadable licence must fail toward
+    today's behaviour: a shop must never lose sync because licensing.db hiccuped.
+    (licence_pauses_sync itself already maps an unknown state to False.)"""
+    global _licence_pause_read_error_logged
+    from commercial_runtime.licensing_contracts.state_machine import licence_pauses_sync
+    try:
+        record = state_repository.load()
+        return licence_pauses_sync(record.current_state) if record is not None else False
+    except Exception:  # noqa: BLE001 -- see docstring: fail toward "sync runs"
+        if not _licence_pause_read_error_logged:
+            _licence_pause_read_error_logged = True
+            logging.getLogger(__name__).exception(
+                'Sync: could not read the licence state to decide whether sync is paused; '
+                'treating sync as NOT paused. Logged once.')
+        return False
+
+
+def _licence_pauses_sync_now():
+    """`_read_licence_pauses_sync` against this install's own licensing.db, for
+    the callers (the hub forwarder, the hub's per-request gate) that do not
+    already hold a repository. A fresh repository per call is deliberate: the
+    value must reflect a renewal that landed a moment ago (flask_guard builds
+    one per request for the same reason)."""
+    from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+    return _read_licence_pauses_sync(
+        LicenseStateRepository(Path(DATABASE_DIR) / 'subsystems' / 'licensing.db'))
+
+
 def _build_windows_sync_services(relay_base_url):
     """Constructs the Windows sync-service pair -- everything the `if
     _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':` block
@@ -1248,7 +1292,11 @@ def _build_windows_sync_services(relay_base_url):
                                 local_freshness_store=_retail_sync_freshness_store,
                                 local_schema_version_provider=lambda: RETAIL_SCHEMA_VERSION,
                                 stock_exception_recorder=record_or_refresh_stock_exception,
-                                stream_label='retail')  # SYNC-BOOT: Owner keeps one cursor per stream
+                                stream_label='retail',  # SYNC-BOOT: Owner keeps one cursor per stream
+                                # Keep-selling rule: an UNPAID subscription pauses sync
+                                # (cloud AND hub self-sync -- both ride this selector) but
+                                # never selling. Read fresh every call; see the helper.
+                                sync_paused=lambda: _read_licence_pauses_sync(_sync_state_repository))
     # F3b: a payment voided on this till BEFORE its journal arrived is only
     # completed by a sweep that runs after every pull. sync_service.py has no
     # post-apply hook, so the sweep is wrapped onto this instance. The
@@ -1311,7 +1359,10 @@ def _build_windows_sync_services(relay_base_url):
         # Late-bound: this runs at IMPORT time (the `if _SYNC_RELAY_URL_IS_USABLE`
         # block below), long before `_announce_heartbeat_device` is defined.
         on_tick=lambda: _announce_heartbeat_device(),
-        stream_label='registry')  # SYNC-BOOT: Owner keeps one cursor per stream
+        stream_label='registry',  # SYNC-BOOT: Owner keeps one cursor per stream
+        # Keep-selling rule: same pause as the retail stream above (a lapsed
+        # shop's user/registry events queue and catch up after renewal too).
+        sync_paused=lambda: _read_licence_pauses_sync(_sync_state_repository))
 
     # SYNC-BOOT Phase 2: the bootstrap seams (see `_retail_bootstrap_hooks`).
     _sync_service.set_bootstrap_hooks(_retail_bootstrap_hooks())
@@ -1705,6 +1756,7 @@ def _enter_hub_self_sync(*, start_timers: bool = True) -> None:
                     get_conn=get_retail_conn,
                     cloud_client_factory=_forwarder_cloud_client,
                     interval_seconds=SITE_FORWARDER_INTERVAL_SECONDS,
+                    sync_paused=_licence_pauses_sync_now,
                 )
                 _site_forwarder_loop.start()
             # REHEARSAL-1007 B1 (d): from here on this till's own books talk
@@ -2069,6 +2121,7 @@ def _leave_hub_self_sync_under_kill_switch() -> None:
         cloud_client_factory=_forwarder_cloud_client,
         interval_seconds=SITE_FORWARDER_INTERVAL_SECONDS,
         pull_down=False,
+        sync_paused=_licence_pauses_sync_now,
     )
     _site_forwarder_loop.start()
     _install_upstream_health_overlay(_sync_service, _site_forwarder_loop)
@@ -2856,6 +2909,10 @@ def _start_site_relay_if_enabled():
                 bootstrap_provider=_hub_bootstrap_provider,
                 bootstrap_board=_hub_bootstrap_board,
                 on_bootstrap_requested=_hub_on_bootstrap_requested,
+                # Keep-selling rule: this host's own unpaid subscription makes the hub refuse
+                # to SERVE sync data (push/pull/bootstrap) after authentication. Read fresh per
+                # request so renewal needs no restart. See routes.py `sync_paused`.
+                sync_paused=_licence_pauses_sync_now,
                 host=SITE_RELAY_BIND_HOST,
                 port=SITE_RELAY_PORT,
                 identity_dir=Path(DATABASE_DIR).parent / 'site-relay',

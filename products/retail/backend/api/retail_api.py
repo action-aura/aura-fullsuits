@@ -5209,6 +5209,13 @@ def _is_device_behind_on_sync():
         return False
     if health.get('never_synced'):
         return False
+    # Keep-selling rule: when the licence has PAUSED sync (an unpaid
+    # subscription) this device is "behind" because WE stopped syncing it on
+    # purpose, not because it is broken. The owner rule says a lapsed shop keeps
+    # selling AND keeps receiving stock, so a paused device is never "behind".
+    # (The flag is absent/False on every other install, so nothing else changes.)
+    if health.get('paused_by_licence'):
+        return False
     secs = health.get('seconds_since_last_success')
     return isinstance(secs, (int, float)) and secs > _SYNC_STALE_THRESHOLD_SECONDS
 
@@ -5264,6 +5271,16 @@ def _evaluate_offline_sales_stop():
     if not health.get('configured'):
         return False, health
     if health.get('never_synced'):
+        return False, health
+    # Keep-selling rule (owner decision 2026-10-24): an UNPAID subscription
+    # pauses sync on purpose (SyncService reports paused_by_licence). The
+    # elapsed time then grows because WE paused it, not because the device is
+    # broken or cut off -- and the owner rule is that a lapsed shop KEEPS
+    # SELLING. So the 72-hour stop must never fire on a licence-paused device,
+    # whatever the elapsed time and with no manager override needed. Placed
+    # after the two silence rules above and before the threshold so a
+    # same-health-without-the-flag case still blocks exactly as before.
+    if health.get('paused_by_licence'):
         return False, health
     secs = health.get('seconds_since_last_success')
     if not (isinstance(secs, (int, float)) and secs > _SYNC_SALES_STOP_THRESHOLD_SECONDS):

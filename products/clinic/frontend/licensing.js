@@ -36,6 +36,8 @@
     SUSPENDED: { text: 'Suspended', cls: 'state-restricted' },
     REVOKED: { text: 'Revoked', cls: 'state-restricted' },
     EXPIRED: { text: 'Expired', cls: 'state-restricted' },
+    // Keep-selling rule: unpaid subscription. Work continues; only sync/updates pause.
+    SUBSCRIPTION_LAPSED: { text: 'Subscription unpaid', cls: 'state-warning' },
     DEVICE_DEACTIVATED: { text: 'Device deactivated', cls: 'state-neutral' },
     CLOCK_REVIEW_REQUIRED: { text: 'Clock review required', cls: 'state-warning' },
     LOCAL_STATE_CORRUPT: { text: 'Local state needs reset', cls: 'state-restricted' },
@@ -216,6 +218,11 @@
     if (state === 'RESTRICTED' || state === 'GRACE_PERIOD' || state === 'WARNING') {
       content.appendChild(el('p', {
         text: 'Some features are limited in this state. Existing records remain fully viewable, and backup/restore/export remain available.',
+      }));
+    }
+    if (state === 'SUBSCRIPTION_LAPSED') {
+      content.appendChild(el('p', {
+        text: 'Subscription unpaid — you can keep working. Sync and updates are paused until you renew.',
       }));
     }
     if (state === 'SUSPENDED' || state === 'REVOKED' || state === 'EXPIRED') {

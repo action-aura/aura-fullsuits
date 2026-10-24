@@ -108,7 +108,20 @@ function blockedStatesFromStateMachine() {
     "Could not find DATA_PRESERVED_FAMILY = ACTIVE_FAMILY | frozenset({...}) in state_machine.py -- "
     + 'this parser needs re-anchoring to the current source shape.'
   );
-  const states = [...m[1].matchAll(/LicenseState\.([A-Z_]+)/g)].map((mm) => mm[1]);
+  let states = [...m[1].matchAll(/LicenseState\.([A-Z_]+)/g)].map((mm) => mm[1]);
+  // CHANGED 2026-10-24 (keep-selling rule, owner decision): this used to be exactly
+  // "DATA_PRESERVED_FAMILY minus ACTIVE_FAMILY". SUBSCRIPTION_LAPSED is in DATA_PRESERVED_FAMILY
+  // but is no longer a state where selling is blocked: a shop whose subscription lapsed unpaid
+  // KEEPS SELLING (state_machine.py SELLING_FAMILY = ACTIVE_FAMILY | {SUBSCRIPTION_LAPSED}). So
+  // the blocked list is now DATA_PRESERVED_FAMILY minus SELLING_FAMILY, parsed from the same file
+  // (the extras of SELLING_FAMILY are subtracted, never hand-typed). What this can no longer
+  // catch by itself: a state wrongly added to SELLING_FAMILY would silently drop its banner --
+  // testLapsedStateIsNotBlockedAndGetsItsOwnBanner below pins the one state that moved, and
+  // state_machine/capability tests own the family itself.
+  const sm = /SELLING_FAMILY\s*=\s*ACTIVE_FAMILY\s*\|\s*frozenset\(\s*\{([\s\S]*?)\}\s*\)/.exec(src);
+  assert.ok(sm, 'Could not find SELLING_FAMILY = ACTIVE_FAMILY | frozenset({...}) in state_machine.py -- re-anchor.');
+  const selling = new Set([...sm[1].matchAll(/LicenseState\.([A-Z_]+)/g)].map((mm) => mm[1]));
+  states = states.filter((s) => !selling.has(s));
   assert.ok(
     states.length >= 5,
     `Only parsed ${states.length} state(s) out of DATA_PRESERVED_FAMILY's extra set -- the parse is probably broken.`
@@ -511,8 +524,82 @@ async function testBannerFollowsTheGuideCard() {
   console.log('PASS: ' + msg2);
 }
 
+/* ═══ KEEP-SELLING RULE: an UNPAID subscription never blocks selling ═══════
+ * SUBSCRIPTION_LAPSED must (1) NOT be a blocked state, (2) get its OWN distinct warning
+ * banner that says selling continues, (3) never say a sale is blocked, (4) offer a way to the
+ * licensing screen. RESTRICTED stays exactly as before (the "cannot ring sales" banner). */
+const LAPSED_SYNC_DATA = {
+  push: { consecutive_failures: 0, last_success_at: null },
+  pull: { consecutive_failures: 0, last_success_at: null },
+  never_synced: false, seconds_since_last_success: 100 * 3600, pending_count: 4,
+  configured: true, paused_by_licence: true,
+};
+
+function testLapsedStateIsNotBlockedAndGetsItsOwnBanner() {
+  const { app } = bootShell();
+  assert.ok(!app.LICENSE_BANNER_BLOCKED_STATES.includes('SUBSCRIPTION_LAPSED'),
+    'SUBSCRIPTION_LAPSED is in LICENSE_BANNER_BLOCKED_STATES -- an unpaid shop would be told it cannot sell');
+  app._renderLicenseBanner('SUBSCRIPTION_LAPSED');
+  assert.ok(app._licenseBannerEl, 'SUBSCRIPTION_LAPSED rendered no banner -- the shop is never told sync/updates are paused');
+  const html = app._licenseBannerEl.innerHTML;
+  assert.ok(/Subscription unpaid/.test(html) && /keep selling/.test(html), 'lapsed banner does not say the shop can keep selling');
+  assert.ok(/Sync and updates are paused until you renew/.test(html), 'lapsed banner does not say what is paused');
+  assert.ok(!/not licensed to ring new sales/.test(html), 'lapsed banner uses the BLOCKED wording');
+  assert.ok(!/blocked|cannot sell|can\'t sell/i.test(html), 'lapsed banner says a sale is blocked');
+  assert.ok(/openLicensing\(\)/.test(html), 'lapsed banner has no way to the licensing screen');
+  // The OTHER direction: RESTRICTED still gets the blocked wording, unchanged.
+  app._licenseBannerEl = null;
+  app._renderLicenseBanner('RESTRICTED');
+  assert.ok(/not licensed to ring new sales/.test(app._licenseBannerEl.innerHTML), 'RESTRICTED lost its blocked banner');
+  // And leaving the lapse clears the banner (renewal).
+  app._renderLicenseBanner('ACTIVE_ONLINE');
+  assert.strictEqual(app._licenseBannerEl, null, 'the lapsed banner stayed after renewal (ACTIVE_ONLINE)');
+  console.log('PASS: SUBSCRIPTION_LAPSED is not blocked, shows its own "you can keep selling" banner, RESTRICTED unchanged, renewal clears it');
+}
+
+function testPausedSyncShowsPausedWordingNotBehindOrOffline() {
+  const { app, sandbox } = bootShell();
+  // Make the "behind" thresholds real so a paused-but-100h-old device WOULD read as behind without the flag.
+  sandbox.RetailSystem = { SYNC_STALE_THRESHOLD_SECONDS: 1800, SYNC_STALE_WARNING_THRESHOLD_SECONDS: 86400,
+    _formatClockTime: () => '14:20' };
+  app._renderSyncBanner(LAPSED_SYNC_DATA);
+  const paused = app._syncBannerEl.innerHTML;
+  assert.ok(/Sync paused/.test(paused) && /subscription unpaid/.test(paused), 'paused sync does not say "Sync paused — subscription unpaid"');
+  assert.ok(!/Offline since|Still offline|unsynced|Not syncing/.test(paused), 'paused sync used broken/behind wording');
+  app._renderSyncBanner(Object.assign({}, LAPSED_SYNC_DATA, { paused_by_licence: false }));
+  const behind = app._syncBannerEl.innerHTML;
+  assert.ok(/offline/i.test(behind) && !/Sync paused/.test(behind), 'without the flag the same health must still render the behind wording');
+  console.log('PASS: paused_by_licence shows "Sync paused — subscription unpaid"; the same health without the flag still reads as behind');
+}
+
+async function testKeepSellingMutationsAreCaught() {
+  const msgs = [];
+  const asBlocked = mutate(SHELL_SRC, [[`'CLOCK_REVIEW_REQUIRED', 'LOCAL_STATE_CORRUPT',
+  ],`, `'CLOCK_REVIEW_REQUIRED', 'LOCAL_STATE_CORRUPT', 'SUBSCRIPTION_LAPSED',
+  ],`]]);
+  msgs.push(await provesMutation('lapsed-is-not-blocked survived a mutant that adds SUBSCRIPTION_LAPSED to the blocked list',
+    async () => { const { app } = bootShell(asBlocked);
+      assert.ok(!app.LICENSE_BANNER_BLOCKED_STATES.includes('SUBSCRIPTION_LAPSED'), 'lapsed is blocked'); }));
+  const noLapsedBranch = mutate(SHELL_SRC, [[`    if (!blocked && !lapsed) {`, `    if (!blocked) {`]]);
+  msgs.push(await provesMutation('lapsed-banner-renders survived a mutant that removes the lapsed branch',
+    async () => { const { app } = bootShell(noLapsedBranch);
+      app._renderLicenseBanner('SUBSCRIPTION_LAPSED');
+      assert.ok(app._licenseBannerEl, 'no lapsed banner'); }));
+  const noPausedTier = mutate(SHELL_SRC, [[`    if (data.paused_by_licence) tier = 'paused';
+    else if (pushBad || pullBad) tier = 'alarm';`, `    if (pushBad || pullBad) tier = 'alarm';`]]);
+  msgs.push(await provesMutation('paused-sync-wording survived a mutant that drops the paused tier',
+    async () => { const { app, sandbox } = bootShell(noPausedTier);
+      sandbox.RetailSystem = { SYNC_STALE_THRESHOLD_SECONDS: 1800, SYNC_STALE_WARNING_THRESHOLD_SECONDS: 86400, _formatClockTime: () => '14:20' };
+      app._renderSyncBanner(LAPSED_SYNC_DATA);
+      assert.ok(/Sync paused/.test(app._syncBannerEl.innerHTML), 'no paused wording'); }));
+  for (const m of msgs) console.log('PASS: ' + m);
+}
+
 (async () => {
   const tests = [
+    testLapsedStateIsNotBlockedAndGetsItsOwnBanner,
+    testPausedSyncShowsPausedWordingNotBehindOrOffline,
+    testKeepSellingMutationsAreCaught,
     testSetupGuideOwnsFirstRunForOwnersOnly,
     testSetupGuideGuardMutationsAreCaught,
     testBannerFollowsTheGuideCard,

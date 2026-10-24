@@ -1239,8 +1239,25 @@ class SyncService:
         on_tick: Optional[Callable[[], None]] = None,
         authority_env_provider: Optional[Callable[[], "_authority.AuthorityEnv"]] = None,
         stream_label: Optional[str] = None,
+        sync_paused: Optional[Callable[[], bool]] = None,
     ):
-        """`stream_label` (SYNC-BOOT Phase 1): 'retail' or 'registry' -- which of
+        """`sync_paused` (keep-selling rule): zero-argument callable, read FRESH
+        on every tick / push / pull / nudge (never cached, so a renewal takes
+        effect without a restart), that says whether THIS device's licence
+        currently pauses sync (commercial_runtime.licensing_contracts.
+        state_machine.licence_pauses_sync -- an UNPAID subscription). While it
+        returns True the service contacts no relay at all (the client factory is
+        not even called), leaves the outbox and cursor untouched (rows keep
+        accumulating -- enqueueing is not gated -- so the first tick after
+        renewal pushes everything made during the lapse), and records neither a
+        success nor a failure (so the UI can say "paused", not "failing" or
+        "synced"). `None` (the default: every pre-existing caller, and Clinic)
+        means never paused -- byte-for-byte today's behaviour. A callable that
+        RAISES is treated as NOT paused and logged once: sync was never gated
+        before, so an unreadable licence fails toward today's behaviour rather
+        than silently stopping a shop's sync.
+
+        `stream_label` (SYNC-BOOT Phase 1): 'retail' or 'registry' -- which of
         the two client streams this instance is. pull_once sends it inside the
         signed pull body so Owner keeps one cursor per (installation, stream)
         instead of one per installation, but ONLY to a client that advertises
@@ -1432,6 +1449,12 @@ class SyncService:
         self._on_tick = on_tick
         self._authority_env_provider = authority_env_provider
         self._stream_label = stream_label
+        self._sync_paused = sync_paused
+        # Dedup state for the pause/resume log lines and the raising-callable
+        # log line (see _licence_paused). None = never evaluated yet.
+        self._pause_state: Optional[bool] = None
+        self._pause_error_logged = False
+        self._pause_log_lock = threading.Lock()
         # SYNC-BOOT: set when Owner answers RESYNC_REQUIRED for this stream.
         # {"pruned_through": int|None, "relay_url": str|None}. While set, the
         # stream stops pulling (push is untouched) and health says so.
@@ -1489,6 +1512,40 @@ class SyncService:
             "offline_override_at": None,
         }
 
+    def _licence_paused(self) -> bool:
+        """True while the licence pauses sync (see `sync_paused` in __init__).
+
+        Evaluated fresh on every call. Logs ONE info line when it flips into
+        the pause and ONE when it flips out, deduped across ticks (a per-tick
+        line would drown the log for the whole lapse). The first evaluation
+        only logs if it lands paused: starting unpaused is the normal case and
+        is not a "resume". A raising callable means NOT paused (sync was never
+        gated; fail toward today's behaviour) and is logged once."""
+        fn = self._sync_paused
+        if fn is None:
+            return False
+        try:
+            paused = bool(fn())
+        except Exception:  # noqa: BLE001 -- an unreadable licence must not stop sync
+            with self._pause_log_lock:
+                first = not self._pause_error_logged
+                self._pause_error_logged = True
+            if first:
+                logger.warning(
+                    "SyncService: sync_paused callable raised; treating sync as NOT paused "
+                    "(sync was never gated by the licence before).", exc_info=True)
+            return False
+        with self._pause_log_lock:
+            previous = self._pause_state
+            self._pause_state = paused
+        if paused and previous is not True:
+            logger.info(
+                "Sync PAUSED: the subscription is unpaid. Selling continues; outbox rows keep "
+                "queuing and will be pushed after renewal.")
+        elif not paused and previous is True:
+            logger.info("Sync RESUMED: the licence no longer pauses sync; catching up the queued rows.")
+        return paused
+
     def push_once(self) -> None:
         """Drains sync_outbox to Owner in sequential chunks of at most
         _PUSH_CHUNK_SIZE events (see that constant's comment: Owner rejects
@@ -1501,7 +1558,12 @@ class SyncService:
         order, for the next attempt. Chunks Owner already accepted stay
         acked (re-pushing them would only duplicate work); nothing new that
         arrived concurrently is at risk, since only the specific ids just
-        pushed are ever deleted."""
+        pushed are ever deleted.
+
+        Keep-selling rule: returns at once, touching nothing and building no
+        client, while the licence pauses sync (`_licence_paused`)."""
+        if self._licence_paused():
+            return
         with self._lock:
             conn = self._get_conn()
             try:
@@ -1547,7 +1609,14 @@ class SyncService:
         transaction, ahead of the read, so a reset and the pull's own apply
         either both land in the one `conn.commit()` below or neither does --
         never a reset that commits alone while the pull that follows it
-        fails, which would leave the cursor at 0 with nothing applied."""
+        fails, which would leave the cursor at 0 with nothing applied.
+
+        Keep-selling rule: returns at once, before the client is built and
+        before the cursor is read, while the licence pauses sync -- the cursor
+        stays exactly where it was so the first pull after renewal resumes from
+        it with no gap."""
+        if self._licence_paused():
+            return
         with self._lock:
             conn = self._get_conn()
             try:
@@ -8852,7 +8921,16 @@ class SyncService:
         (e.g. a malformed event a human has to go fix) -- would silently
         skip pull() forever until that one row is resolved. This device
         should keep receiving OTHER devices' updates regardless of whether
-        its own outbox is currently able to drain."""
+        its own outbox is currently able to drain.
+
+        Keep-selling rule: while the licence pauses sync (an unpaid
+        subscription) the tick does nothing -- and, crucially, records NEITHER
+        a success (push_once() returns normally when paused, so without this
+        early return `_record_sync_success` would stamp a false "synced just
+        now") NOR a failure (which would raise a false "sync failing" alarm).
+        The pause is reported through get_health()['paused_by_licence']."""
+        if self._licence_paused():
+            return
         try:
             self.push_once()
             # An empty outbox returns early without contacting the relay --
@@ -9125,6 +9203,11 @@ class SyncService:
             "stream": self._stream_label,
             "resync_required": self._resync_required is not None,
             "resync_pruned_through": (self._resync_required or {}).get("pruned_through"),
+            # Keep-selling rule: True while an UNPAID subscription has paused
+            # sync on purpose. Always present. The 72h offline stop and the UI
+            # read it so "behind" caused by OUR pause is never shown/enforced
+            # as if the device were broken.
+            "paused_by_licence": self._licence_paused(),
             "push": push,
             "pull": pull,
         }
@@ -9324,6 +9407,10 @@ def nudge() -> None:
         return
 
     def _push():
+        # Keep-selling rule: a route-triggered push honours the licence pause
+        # exactly like the timer tick (and must not stamp a false success).
+        if service._licence_paused():
+            return
         try:
             service.push_once()
             service._record_sync_success("push")

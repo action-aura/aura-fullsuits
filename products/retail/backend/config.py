@@ -14,7 +14,7 @@ import logging
 import os
 import sys
 
-from commercial_runtime.licensing_contracts.state_machine import ACTIVE_FAMILY
+from commercial_runtime.licensing_contracts.state_machine import ACTIVE_FAMILY, SELLING_FAMILY
 
 if os.environ.get('AURA_BUNDLE_DIR'):
     BASE_DIR = os.environ['AURA_BUNDLE_DIR']
@@ -747,7 +747,16 @@ def site_relay_should_start(override, license_state, platform):
     # block exists to prevent, and it already happened once.
     if str(platform).upper() != 'WINDOWS':
         return False
-    return license_state in ACTIVE_FAMILY
+    # Keep-selling rule (owner decision 2026-10-24): SELLING_FAMILY, not
+    # ACTIVE_FAMILY. A shop whose subscription lapsed UNPAID
+    # (SUBSCRIPTION_LAPSED) keeps selling, and its till must ALREADY be the
+    # running hub when renewal lands -- otherwise the shop's other tills would
+    # sit without a hub until the next restart. A lapsed hub does not serve
+    # sync data (the per-request gate in the hub app, fed by app.py's fresh
+    # licence read), so starting the listener grants the lapsed shop nothing.
+    # States that are blocked from selling (RESTRICTED, EXPIRED, ...) still do
+    # not start a hub, exactly as before.
+    return license_state in SELLING_FAMILY
 
 
 # A SEPARATE port from the UI listener, deliberately. The existing loopback

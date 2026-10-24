@@ -693,3 +693,63 @@ def test_the_override_is_audited_with_the_elapsed_time_and_unsent_count():
     assert 99.0 < float(hours_match.group(1)) < 101.0, details
     assert int(pending_match.group(1)) == expected_pending, details
     assert f'approved_by={mgr_uid}' in details, details
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. KEEP-SELLING RULE (owner decision 2026-10-24): an UNPAID subscription pauses sync on purpose
+#    (SyncService reports `paused_by_licence`). The 72-hour stop and the 30-minute behind-on-sync
+#    guard must NOT treat that deliberate pause as "this device is broken": a lapsed shop keeps
+#    selling and keeps receiving stock. The flag changes ONLY that; the same elapsed time
+#    WITHOUT the flag still blocks (test_a_device_behind_more_than_72_hours_cannot_ring_a_new_sale
+#    above is the untouched sibling that keeps covering the original behaviour).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _paused_real_sync_service(paused):
+    store = SyncFreshnessStore(
+        load=sch.load_sync_freshness, record=sch.record_sync_freshness,
+        record_override=sch.record_offline_override)
+    return SyncService(None, sch.get_retail_conn, None, local_freshness_store=store,
+                       sync_paused=lambda: paused)
+
+
+def test_a_licence_paused_device_100_hours_behind_can_still_sell():
+    admin, cid, pid = _new_shop()
+    _mark_behind(100)
+    service = _paused_real_sync_service(True)
+    register_active_service(service)
+    health = service.get_health()
+    assert health['paused_by_licence'] is True
+    assert health['seconds_since_last_success'] > SYNC_SALES_STOP_THRESHOLD_SECONDS, \
+        'fixture must be genuinely past the 72h stop or this proves nothing'
+    assert health['offline_override_valid'] is False, 'no override may be what lets the sale through'
+
+    r = _sell(admin, pid)
+    assert r.status_code == 200, r.get_json()
+
+
+def test_the_same_100_hours_behind_without_the_pause_still_blocks_the_sale():
+    """The other direction: identical elapsed time and no override, flag False -> still 403."""
+    admin, cid, pid = _new_shop()
+    _mark_behind(100)
+    register_active_service(_paused_real_sync_service(False))
+    r = _sell(admin, pid)
+    assert r.status_code == 403, r.get_json()
+
+
+def test_the_pause_flag_is_independently_load_bearing_for_the_72h_stop_and_the_po_guard(monkeypatch):
+    """Hand-built health isolating the flag: identical dicts, only `paused_by_licence` differs."""
+    behind = {
+        'configured': True, 'never_synced': False,
+        'seconds_since_last_success': 100 * 3600, 'offline_override_valid': False, 'pending_count': 3,
+    }
+    monkeypatch.setattr(retail_api, '_sync_get_active_health',
+                        lambda: dict(behind, paused_by_licence=True))
+    assert retail_api._evaluate_offline_sales_stop()[0] is False
+    assert retail_api._is_device_behind_on_sync() is False  # PO receive / the other behind-guards
+    monkeypatch.setattr(retail_api, '_sync_get_active_health', lambda: dict(behind))
+    assert retail_api._evaluate_offline_sales_stop()[0] is True
+    assert retail_api._is_device_behind_on_sync() is True
+    monkeypatch.setattr(retail_api, '_sync_get_active_health',
+                        lambda: dict(behind, paused_by_licence=False))
+    assert retail_api._evaluate_offline_sales_stop()[0] is True
+    assert retail_api._is_device_behind_on_sync() is True

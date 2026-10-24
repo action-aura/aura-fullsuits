@@ -5845,6 +5845,13 @@ const SubsystemApp = {
     'CLOCK_REVIEW_REQUIRED', 'LOCAL_STATE_CORRUPT',
   ],
 
+  // Keep-selling rule (owner decision 2026-10-24): a subscription that lapsed UNPAID is
+  // deliberately NOT in LICENSE_BANNER_BLOCKED_STATES -- the shop keeps selling, so the
+  // "cannot ring sales" banner above must never show for it. It gets its own distinct, calmer
+  // warning instead (same element, different content). Mirrors state_machine.py's
+  // SUBSCRIPTION_LAPSED; retail_license_banner_test.js pins both directions.
+  LICENSE_BANNER_LAPSED_STATES: ['SUBSCRIPTION_LAPSED'],
+
   // Persistent, full-width, top-of-shell banner -- never a modal: the shop
   // must still reach every read-only screen (viewing, backups, exports,
   // returns, customer payments) while a sale is blocked. Same create-once/
@@ -6036,7 +6043,8 @@ const SubsystemApp = {
     this._watchGuideCard(state);
     const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state)
       && !this._setupGuideOwnsFirstRun(state);
-    if (!blocked) {
+    const lapsed = this.LICENSE_BANNER_LAPSED_STATES.includes(state);
+    if (!blocked && !lapsed) {
       // Explicitly null, not merely "leave whatever it was" -- the very
       // first call this shell ever makes (a healthy ACTIVATE_ONLINE install,
       // no prior blocked state to have created an element) must leave
@@ -6058,6 +6066,29 @@ const SubsystemApp = {
       this._licenseBannerEl = el;
     }
     const el = this._licenseBannerEl;
+    if (lapsed) {
+      // Unpaid subscription: say plainly that selling continues and what is paused. Never says a
+      // sale is blocked -- it is not. Warning triad (action needed, nothing broken).
+      el.style.cssText = 'position:sticky;top:0;inset-inline:0;background:var(--state-warning-surface);'
+        + 'border-bottom:2px solid var(--state-warning-border);color:var(--state-warning-text);'
+        + 'padding:9px 18px;font-size:13px;line-height:1.45;text-align:center;z-index:99998;'
+        + 'display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px;'
+        + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
+      el.innerHTML =
+        '<span style="display:inline-flex;align-items:center;gap:6px;font-weight:700;color:var(--state-warning-text);">'
+        + (window.AuraIcons ? AuraIcons.render('cloud-off', 15) : '')
+        + t('Subscription unpaid — you can keep selling.') + '</span>'
+        + '<span style="opacity:.85;">'
+        + t('Sync and updates are paused until you renew.')
+        + '</span>'
+        + '<button type="button" onclick="SubsystemApp.openLicensing()" '
+        + 'style="min-inline-size:var(--touch-target-min);min-block-size:var(--touch-target-min);'
+        + 'padding:6px 16px;border-radius:8px;border:1px solid var(--state-warning-border);'
+        + 'background:transparent;color:var(--state-warning-text);font-weight:700;cursor:pointer;">'
+        + t('Renew subscription') + '</button>';
+      this._reflowTopBanners();
+      return;
+    }
     // WARNING triad, not danger: nothing is lost and no data is at risk (Part
     // P keeps read/backup/export/returns/customer-payment access) -- only a
     // NEW sale is refused, so this reads as "action needed", not "something
@@ -6207,14 +6238,19 @@ const SubsystemApp = {
     // same-tier repaint from the next poll tick -- see icons.js's MOTION
     // comment: state icons animate on change, not on an idle interval.
     let tier;
-    if (pushBad || pullBad) tier = 'alarm';
+    // Keep-selling rule: sync was paused ON PURPOSE for an unpaid subscription (the backend
+    // records no failure while paused). Say that, instead of "behind"/"offline" wording that
+    // would read as a broken device. Checked first: nothing else applies while paused.
+    if (data.paused_by_licence) tier = 'paused';
+    else if (pushBad || pullBad) tier = 'alarm';
     else if (!data.never_synced && this._isSyncBehindWarningThreshold(data)) tier = 'behind-warning';
     else if (!data.never_synced && this._isSyncBehindThreshold(data)) tier = 'behind';
     else tier = 'calm';
     const changed = tier !== this._syncBannerTier;
     this._syncBannerTier = tier;
 
-    if (tier === 'alarm') this._renderSyncAlarmState(data, pushBad, pullBad, changed);
+    if (tier === 'paused') this._renderSyncPausedState(changed);
+    else if (tier === 'alarm') this._renderSyncAlarmState(data, pushBad, pullBad, changed);
     else if (tier === 'behind-warning') this._renderSyncBehindWarningState(data, changed);
     else if (tier === 'behind') this._renderSyncBehindState(data, changed);
     else this._renderSyncCalmState(data, changed);
@@ -6400,6 +6436,21 @@ const SubsystemApp = {
       '<span style="color:var(--state-warning-text);font-weight:700;display:inline-flex;align-items:center;gap:6px;">'
       + this._syncIcon('triangle-alert', changed) + headline + '</span>'
       + '<span style="opacity:.8;margin-inline-start:10px;">' + detail + '</span>';
+  },
+
+  // Keep-selling rule: sync is paused because the subscription is unpaid. A small bottom pill (the
+  // same place the calm pill lives, so it never covers the till) in the warning triad: informs,
+  // never blocks, never says "offline"/"behind".
+  _renderSyncPausedState(changed) {
+    const el = this._syncBannerEl;
+    el.style.cssText = 'position:fixed;bottom:14px;inset-inline-end:14px;display:inline-flex;'
+      + 'align-items:center;gap:7px;padding:6px 12px;border-radius:20px;'
+      + 'background:var(--state-warning-surface);border:1px solid var(--state-warning-border);'
+      + 'color:var(--state-warning-text);font-size:12px;font-weight:500;letter-spacing:.2px;'
+      + 'z-index:99997;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none;';
+    el.title = '';
+    el.innerHTML = this._syncIcon('cloud-off', changed)
+      + '<span>' + t('Sync paused — subscription unpaid') + '</span>';
   },
 
   // New calm state: a small, unobtrusive bottom-right pill -- ambient

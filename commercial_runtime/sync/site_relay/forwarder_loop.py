@@ -200,7 +200,17 @@ class ForwarderLoop:
                  interval_seconds: float = FORWARD_INTERVAL_SECONDS,
                  max_pages_per_tick: int = MAX_PAGES_PER_TICK,
                  monotonic=time.monotonic,
-                 pull_down: bool = True):
+                 pull_down: bool = True,
+                 sync_paused: Optional[Callable[[], bool]] = None):
+        # Keep-selling rule: `sync_paused` is the same fresh-read licence
+        # callable SyncService takes (see its __init__). The forwarder is the
+        # hub's OTHER door to Owner's cloud (it does not go through
+        # SyncService), so a lapsed hub must stop dialling out here too. While
+        # it says True a tick contacts nothing (the cloud client factory is not
+        # even called), leaves the forward cursor and site log alone, and
+        # records neither success nor failure -- the unforwarded rows simply
+        # wait and go up on the first tick after renewal. None = never paused.
+        self._sync_paused = sync_paused
         self._get_conn = get_conn
         self._cloud_client_factory = cloud_client_factory
         self._interval_seconds = interval_seconds
@@ -241,6 +251,21 @@ class ForwarderLoop:
     @property
     def pull_down_enabled(self) -> bool:
         return self._pull_down
+
+    def _licence_paused(self) -> bool:
+        """True while the licence pauses sync. A callable that raises means
+        NOT paused (sync was never gated before; fail toward today's
+        behaviour), logged once."""
+        if self._sync_paused is None:
+            return False
+        try:
+            return bool(self._sync_paused())
+        except Exception:  # noqa: BLE001 -- an unreadable licence must not stop the forwarder
+            if not getattr(self, "_pause_error_logged", False):
+                self._pause_error_logged = True
+                _log.warning("Site relay forwarder: sync_paused callable raised; treating as NOT paused.",
+                             exc_info=True)
+            return False
 
     def _record_outcome(self, result: dict) -> None:
         if _is_failure(result):
@@ -294,6 +319,14 @@ class ForwarderLoop:
             "push_error": None, "pull_error": None, "error": None,
             "cloud_host": None,
         }
+        if self._licence_paused():
+            # Deliberately NOT _record_outcome(): a pause is neither a failure
+            # (no false "sync failing") nor a success (no false "synced").
+            result["state"] = "PAUSED_BY_LICENCE"
+            self._last_result = result
+            self._log_result(result)
+            return result
+
         try:
             cloud_client = self._cloud_client_factory()
         except Exception as exc:  # noqa: BLE001 -- never raises past this method

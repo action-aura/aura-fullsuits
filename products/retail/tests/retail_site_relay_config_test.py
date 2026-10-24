@@ -73,7 +73,7 @@ for _var in ("AURA_SITE_RELAY_ENABLED", "AURA_SITE_RELAY_PORT", "AURA_SITE_RELAY
 
 import config  # noqa: E402
 from commercial_runtime.licensing_contracts.state_machine import (  # noqa: E402
-    ACTIVE_FAMILY, LicenseState)
+    ACTIVE_FAMILY, SELLING_FAMILY, LicenseState)
 
 
 def teardown_module(module):
@@ -138,12 +138,35 @@ def test_every_license_state_is_classified_by_active_family_membership():
     -- CLAUDE.md calls this exact mistake out by name ("never a hand-typed
     list of active states"). A state added to the enum in the future is
     exercised here automatically instead of silently slipping past."""
+    # CHANGED 2026-10-24 (keep-selling rule, owner decision): this loop used to
+    # compare against ACTIVE_FAMILY. A shop whose subscription lapsed UNPAID
+    # (SUBSCRIPTION_LAPSED) keeps selling, so its till must already be running
+    # as the shop's hub when renewal lands -- the hub then refuses to SERVE
+    # sync data per request while the lapse lasts (see
+    # commercial_runtime/sync/tests/test_site_relay_licence_pause.py). The
+    # comparison is now SELLING_FAMILY (= ACTIVE_FAMILY + SUBSCRIPTION_LAPSED).
+    # What this loop can no longer catch by itself: SUBSCRIPTION_LAPSED
+    # silently dropping out of the start set -- the explicit hand-written
+    # sibling test below pins that, and pins that every NON-selling state
+    # (RESTRICTED, EXPIRED, ...) still does not start the hub.
     for state in LicenseState:
-        expected = state in ACTIVE_FAMILY
+        expected = state in SELLING_FAMILY
         assert config.site_relay_should_start(None, state, 'WINDOWS') is expected, (
             f"{state} should {'start' if expected else 'not start'} the "
             f"relay under automatic (unset) mode"
         )
+
+
+def test_a_lapsed_subscription_still_starts_the_hub_but_non_selling_states_do_not():
+    """Hand-written (not derived from the family constants) so it cannot move
+    together with them: the unpaid-lapse till is already a hub when renewal
+    lands; a till that is blocked from selling is not."""
+    assert config.site_relay_should_start(None, LicenseState.SUBSCRIPTION_LAPSED, 'WINDOWS') is True
+    for state in (LicenseState.RESTRICTED, LicenseState.EXPIRED, LicenseState.SUSPENDED,
+                  LicenseState.REVOKED, LicenseState.NOT_CONFIGURED, LicenseState.LOCAL_STATE_CORRUPT):
+        assert config.site_relay_should_start(None, state, 'WINDOWS') is False, state
+    # A handset still never self-elects, lapsed or not.
+    assert config.site_relay_should_start(None, LicenseState.SUBSCRIPTION_LAPSED, 'ANDROID') is False
 
 
 def test_near_miss_values_fall_back_to_automatic_not_to_a_guess():

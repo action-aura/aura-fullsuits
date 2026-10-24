@@ -111,6 +111,7 @@ def make_site_relay_blueprint(
     bootstrap_provider=None,
     bootstrap_board: "BootstrapBoard | None" = None,
     on_bootstrap_requested=None,
+    sync_paused=None,
 ) -> Blueprint:
     """`blueprint_name`/`url_prefix` default to exactly Owner's own route
     prefix (`/api/sync/v1`) so `SyncRelayClient`'s hardcoded `/api/sync/v1/
@@ -162,6 +163,33 @@ def make_site_relay_blueprint(
     real behaviour to anything probing it.
     """
     bp = Blueprint(blueprint_name, __name__, url_prefix=url_prefix)
+
+    # Keep-selling rule: `sync_paused` is a zero-argument callable, read FRESH
+    # on every request (a renewal must take effect with no restart), saying
+    # whether THIS hub host's own licence pauses sync (an UNPAID subscription).
+    # While it does, the three routes that MOVE shop data (/push, /pull,
+    # /bootstrap) refuse with SUBSCRIPTION_LAPSED and store/serve nothing. It
+    # is checked only AFTER authenticate() succeeds -- never before -- so an
+    # unauthenticated caller still gets the auth error and cannot use this hub
+    # as an oracle for "has this shop paid" (same ordering discipline as
+    # auth.py's revoke check). /pair, /join and /identity move no shop data and
+    # are deliberately not gated. None (every existing caller) = never paused;
+    # a callable that raises = NOT paused (sync was never licence-gated, so an
+    # unreadable licence fails toward serving), logged once.
+    pause_error_logged = []
+
+    def _lapsed() -> bool:
+        if sync_paused is None:
+            return False
+        try:
+            return bool(sync_paused())
+        except Exception:  # noqa: BLE001 -- see comment above
+            if not pause_error_logged:
+                pause_error_logged.append(True)
+                logger.warning("Site relay: sync_paused callable raised; serving as NOT paused.",
+                               exc_info=True)
+            return False
+
     # SYNC-BOOT Phase 2. `bootstrap_provider(requester_installation_id,
     # requester_schema_version) -> BootstrapOffer` builds a scrubbed copy of THIS
     # hub's database (None = this hub cannot bootstrap anyone: `/bootstrap`
@@ -194,6 +222,9 @@ def make_site_relay_blueprint(
                 )
             except site_auth.SiteAuthError as exc:
                 return _error(exc.reason_code, 400)
+
+            if _lapsed():
+                return _error("SUBSCRIPTION_LAPSED", 400)
 
             events = body.get("events") if isinstance(body, dict) else None
             if events is None or not isinstance(events, list) or len(events) > store.MAX_PUSH_BATCH:
@@ -266,6 +297,10 @@ def make_site_relay_blueprint(
                 )
             except site_auth.SiteAuthError as exc:
                 return _error(exc.reason_code, 400)
+
+            # Before anything is read, served, or any cursor row is advanced.
+            if _lapsed():
+                return _error("SUBSCRIPTION_LAPSED", 400)
 
             # `since` lives INSIDE the signed body -- deliberately never a
             # `?since=` query parameter, which `request.args` is never even
@@ -404,6 +439,8 @@ def make_site_relay_blueprint(
                 )
             except site_auth.SiteAuthError as exc:
                 return _error(exc.reason_code, 400)
+            if _lapsed():
+                return _error("SUBSCRIPTION_LAPSED", 400)
             schema_version = body.get("schema_version")
             if schema_version is not None and (
                     not isinstance(schema_version, int) or isinstance(schema_version, bool)):
