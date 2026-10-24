@@ -21,6 +21,7 @@ import com.actionaura.retail.sync.mostRecentSuccessMillis
 import com.actionaura.retail.ui.components.SectionHeader
 import com.actionaura.retail.ui.components.TillCard
 import com.actionaura.retail.ui.i18n.tr
+import com.actionaura.retail.ui.theme.Warning
 import kotlinx.coroutines.delay
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -97,6 +98,12 @@ private fun SyncHeadlineCard(tier: SyncTier, health: SyncHealth, now: Long) {
             title = tr("Sync is not set up")
             body = tr("This build has no relay address, so this device never sends or receives. Other devices will not see its sales.")
             titleColor = MaterialTheme.colorScheme.onSurfaceVariant
+        }
+        SyncTier.PAUSED -> {
+            // Keep-selling rule: not a failure. Selling continues; only sync (and updates) wait for renewal.
+            title = tr("Sync paused — subscription unpaid")
+            body = tr("You can keep selling. Sales are saved on this device and will sync after you renew.")
+            titleColor = Warning
         }
         SyncTier.NEVER_SYNCED -> {
             title = tr("Waiting for first sync")

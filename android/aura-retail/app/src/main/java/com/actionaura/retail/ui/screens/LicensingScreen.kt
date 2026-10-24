@@ -87,6 +87,8 @@ private fun stateLabel(state: String): Pair<String, Color> = when (state) {
     "ACTIVE_OFFLINE" -> "Active (offline)" to Success
     "WARNING" -> "Check-in needed soon" to Warning
     "GRACE_PERIOD" -> "Offline grace period" to Warning
+    // Keep-selling rule: an unpaid subscription never stops selling; it pauses sync and updates.
+    "SUBSCRIPTION_LAPSED" -> "Subscription unpaid" to Warning
     "RESTRICTED" -> "Restricted" to Danger
     "SUSPENDED" -> "Suspended" to Danger
     "REVOKED" -> "Revoked" to Danger
@@ -497,6 +499,12 @@ fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated
             if (state in setOf("RESTRICTED", "GRACE_PERIOD", "WARNING")) {
                 Text(
                     tr("Some features are limited in this state. Existing records remain fully viewable, and backup/restore/export remain available."),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (state == "SUBSCRIPTION_LAPSED") {
+                Text(
+                    tr("Subscription unpaid — you can keep selling. Sync and updates are paused until you renew."),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
