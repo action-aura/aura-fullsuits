@@ -44,12 +44,12 @@
     <tr>
       <td dir="ltr">{{ sale.order.order_number }}</td>
       <td>{{ sale.customer.legal_name if sale.customer else "" }}</td>
-      <td>{{ sale.plan.name if sale.plan else "" }}{% if sale.extra_devices %} + {{ sale.extra_devices }} {{ _("extra devices") }}{% endif %}</td>
+      <td>{{ sale.plan.name if sale.plan else "" }}{% if sale.extra_devices == 1 %} {{ _("+ 1 extra device") }}{% elif sale.extra_devices %} {{ _("+ %(count)d extra devices", count=sale.extra_devices) }}{% endif %}</td>
       <td>{{ sale.seller.full_name if sale.seller else "" }}</td>
       <td>
         {% if sale.payment %}
         <span dir="ltr">{{ sale.payment.amount }} {{ sale.payment.currency }}</span> &middot; {{ _("ref.") }} <span dir="ltr">{{ sale.payment.reference }}</span>
-        &middot; {{ sale.payment.payment_date }} &middot; {{ sale.payment.status }}
+        &middot; {{ sale.payment.payment_date }} &middot; {{ payment_status_label(sale.payment.status) }}
         {% else %}
         {{ _("Not recorded -- the seller must submit the same form again.") }}
         {% endif %}

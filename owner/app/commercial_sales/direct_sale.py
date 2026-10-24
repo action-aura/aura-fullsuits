@@ -101,7 +101,7 @@ from app.models.customers import Customer
 from app.models.employees import EmployeeProfile
 from app.models.licensing import License
 from app.models.subscriptions import PaymentRecord, Subscription
-from app.subscriptions.services import record_payment
+from app.subscriptions.services import lock_payment_for_update, record_payment
 
 # Sellers never take cash: the customer pays the company by CliQ or bank
 # transfer (owner, 2026-10-24). CliQ is a bank transfer in Jordan and the
@@ -124,12 +124,91 @@ _ROW_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "urn:aura-owner:commercial_sa
 
 _MAX_REFERENCE_LENGTH = 128  # PaymentRecord.reference is String(128)
 
+# Step 0 fix round 3 -- sizes checked BEFORE any write. Measured on
+# 580cd65a (verifier probe P3): extra_devices=10**9 on a package with no
+# maximum reached the database as "numeric field overflow" -- a 500 -- with
+# the inline customer already committed. A one-screen sale is a counter
+# sale: this cap is a typo guard, far above any real device count (bigger
+# deals go through a quote). The total cap is the money columns' own
+# capacity (Numeric(12, 2): below 10^10), so no line, order, invoice or
+# payment of a sale that passed this check can overflow later.
+MAX_EXTRA_DEVICES_PER_SALE = 1000
+MAX_SALE_TOTAL = Decimal("9999999999.99")
+
+# English, request-context-free, keyed by a stable code -- the
+# CommercialSalesError pattern (commercial_ops/errors.py StableCodeError):
+# str(exc) is this English text; the screens show
+# i18n_labels.localize_direct_sale_error(exc.code, **exc.params), which holds
+# the same sentences as translatable literals. Keep the two tables in step
+# (tests/test_issuance_sale_hardening.py::test_every_direct_sale_message_is_translated).
+DIRECT_SALE_MESSAGES = {
+    "AMOUNT_NOT_A_NUMBER": "The amount paid must be a number, like 250.00.",
+    "AMOUNT_NOT_POSITIVE": "The amount paid must be a number greater than zero.",
+    "OWN_PROFILE_REQUIRED": "Recording a sale needs your own employee profile. Ask a manager to add one.",
+    "SELLER_MUST_BE_SELF": "You can only record a sale as its seller yourself.",
+    "SELLER_REQUIRED": "Pick the seller (sales owner) of this sale.",
+    "SELLER_NOT_FOUND": "The selected seller was not found.",
+    "SELLER_NOT_ACTIVE": "The seller must be an active employee.",
+    "CUSTOMER_NOT_FOUND": "Selected customer was not found.",
+    "CUSTOMER_ARCHIVED": "Selected customer is archived.",
+    "CUSTOMER_REQUIRED": "Pick an existing customer or type the legal name of a new one.",
+    "PACKAGE_NOT_FOUND": "Selected package was not found.",
+    "PACKAGE_NOT_SELLABLE": "Selected package is not currently sellable (check its effective date and price).",
+    "PACKAGE_NO_PLATFORMS": "Selected package has no supported platforms configured.",
+    "EXTRA_DEVICES_NEGATIVE": "Extra devices must not be negative.",
+    "EXTRA_DEVICES_TOO_MANY": "One sale can add at most %(max)s extra devices. Check the number you typed.",
+    "DEVICE_COUNT_OVER_PACKAGE_MAX": "Requested device count (%(requested)s) exceeds this package's maximum (%(max)s).",
+    "EXTRA_DEVICES_NOT_ON_SALE": (
+        "Extra devices are not on sale for this package yet: the Extra Device add-on needs a price "
+        "and must be Available in the catalog."
+    ),
+    "EXTRA_DEVICE_CURRENCY_MISMATCH": "The Extra Device add-on is priced in a different currency than this package.",
+    "TOTAL_TOO_LARGE": "This sale's total is too large to record (at most %(max)s). Check the number of extra devices.",
+    "ZERO_PRICE": "This package costs nothing, so there is no payment to record. Use a no-charge licence instead.",
+    "METHOD_NOT_ALLOWED": "The customer pays the company by CliQ or bank transfer; sellers never take cash.",
+    "REFERENCE_REQUIRED": "Type the CliQ or transfer reference number.",
+    "REFERENCE_TOO_LONG": "The reference is too long (at most %(max)s characters).",
+    "PAYMENT_DATE_REQUIRED": "Type the date the money arrived.",
+    "PAYMENT_DATE_IN_FUTURE": "The payment date cannot be in the future.",
+    "AMOUNT_NOT_FULL_PRICE": "The amount paid must be the full price of this sale: %(total)s %(currency)s.",
+    "KEY_REQUIRED": "An idempotency key is required to record a sale.",
+    "KEY_USED_FOR_DIFFERENT_SALE": (
+        "This sale form was already used to record a different sale. Open a fresh form to record another one."
+    ),
+    "RECORD_IN_PROGRESS": "This sale is still being recorded from an earlier click. Wait a moment, then check the sales list.",
+    "CONFIRM_IN_PROGRESS": "This sale is already being confirmed by someone else. Wait a moment, then reload the list.",
+    "REJECT_IN_PROGRESS": "This sale is being confirmed by someone else right now. Reload the list.",
+    "SALE_NOT_FOUND": "Sale not found.",
+    "NOT_A_ONE_SCREEN_SALE": "This order was not recorded from the one-screen sale form.",
+    "PAYMENT_NEVER_RECORDED": (
+        "This sale's payment was never recorded (the form was interrupted). The seller should submit the same form again."
+    ),
+    "ORDER_NOT_CONFIRMABLE": "This sale is %(order_status)s; it cannot be confirmed.",
+    "PAYMENT_NOT_CONFIRMABLE": "This sale's payment is %(payment_status)s; it cannot be confirmed.",
+    "PAYMENT_DOES_NOT_MATCH_TOTAL": "This sale's payment does not match its total; it cannot be confirmed.",
+    "PACKAGE_NO_LONGER_SELLABLE": "This sale's package is no longer sellable; it cannot be confirmed as it stands.",
+    "REJECT_PAYMENT_CONFIRMED": (
+        "This sale's payment is already confirmed; it can no longer be rejected (use a refund instead)."
+    ),
+    "ORDER_NOT_REJECTABLE": "This sale is %(order_status)s; it cannot be rejected.",
+    "REJECT_MONEY_ALLOCATED": "This sale's payment was already allocated to an invoice; it can no longer be rejected here.",
+    "REJECT_INVOICE_EXISTS": (
+        "An invoice was already made for this sale; it can no longer be rejected here. Void the invoice first."
+    ),
+}
+
 
 class DirectSaleError(ValueError):
-    """Plain operator-facing message, the same shape as
-    licensing.issuance.LicenseIssuanceError -- this flow lives on that
-    screen. Errors raised by the reused commercial_sales services keep their
-    own CommercialSalesError stable codes."""
+    """An operator-facing refusal of the one-screen sale, with a stable
+    code (DIRECT_SALE_MESSAGES) so the screens can show it in the reader's
+    language. str(exc) is the English sentence. Errors raised by the reused
+    commercial_sales services keep their own CommercialSalesError codes."""
+
+    def __init__(self, code: str, **params):
+        self.code = code
+        self.params = params
+        template = DIRECT_SALE_MESSAGES[code]
+        super().__init__(template % params if params else template)
 
 
 def _advisory_key(namespace: str, value: str) -> int:
@@ -138,7 +217,7 @@ def _advisory_key(namespace: str, value: str) -> int:
 
 
 @contextmanager
-def _hold_advisory_lock(namespace: str, value: str, busy_message: str):
+def _hold_advisory_lock(namespace: str, value: str, busy_code: str):
     """fulfillment.py::_hold_fulfillment_lock's mechanism, not a new one
     (read its docstring): a transaction-scoped advisory lock on a dedicated
     connection survives db_session's commits and is released when this
@@ -151,7 +230,7 @@ def _hold_advisory_lock(namespace: str, value: str, busy_message: str):
         except OperationalError as exc:
             txn.rollback()
             if getattr(getattr(exc, "orig", None), "sqlstate", None) == "55P03":  # lock_timeout
-                raise DirectSaleError(busy_message) from exc
+                raise DirectSaleError(busy_code) from exc
             raise
         try:
             yield
@@ -185,9 +264,9 @@ def parse_amount(raw) -> Decimal:
     try:
         amount = Decimal(str(raw).strip())
     except (InvalidOperation, ValueError) as exc:
-        raise DirectSaleError("The amount paid must be a number, like 250.00.") from exc
+        raise DirectSaleError("AMOUNT_NOT_A_NUMBER") from exc
     if not amount.is_finite() or amount <= 0:
-        raise DirectSaleError("The amount paid must be a number greater than zero.")
+        raise DirectSaleError("AMOUNT_NOT_POSITIVE")
     return amount
 
 
@@ -200,21 +279,21 @@ def _resolve_seller(sales_owner_employee_profile_id, *, actor_staff_user_id, act
         # A seller can only sell as themselves: crediting another employee,
         # or being credited for someone else's sale, is a manager's call.
         if own is None:
-            raise DirectSaleError("Recording a sale needs your own employee profile. Ask a manager to add one.")
+            raise DirectSaleError("OWN_PROFILE_REQUIRED")
         if sales_owner_employee_profile_id and str(sales_owner_employee_profile_id) != str(own.id):
-            raise DirectSaleError("You can only record a sale as its seller yourself.")
+            raise DirectSaleError("SELLER_MUST_BE_SELF")
         seller = own
     else:
         if not sales_owner_employee_profile_id:
-            raise DirectSaleError("Pick the seller (sales owner) of this sale.")
+            raise DirectSaleError("SELLER_REQUIRED")
         try:
             seller = db_session.get(EmployeeProfile, uuid.UUID(str(sales_owner_employee_profile_id)))
         except ValueError:
             seller = None
         if seller is None:
-            raise DirectSaleError("The selected seller was not found.")
+            raise DirectSaleError("SELLER_NOT_FOUND")
     if seller.employment_status != "ACTIVE" or seller.archived_at is not None:
-        raise DirectSaleError("The seller must be an active employee.")
+        raise DirectSaleError("SELLER_NOT_ACTIVE")
     return seller
 
 
@@ -228,13 +307,13 @@ def _resolve_customer(customer_id, new_customer_legal_name, *, actor_staff_user_
         # exists. Visibility is the shared CRM ownership rule, so a seller
         # cannot hang a sale -- and its commission -- on someone else's customer.
         if customer is None or not customer_visible_to_actor(customer, actor_staff_user_id, actor_permission_codes):
-            raise DirectSaleError("Selected customer was not found.")
+            raise DirectSaleError("CUSTOMER_NOT_FOUND")
         if customer.archived_at is not None:
-            raise DirectSaleError("Selected customer is archived.")
+            raise DirectSaleError("CUSTOMER_ARCHIVED")
         return customer, ""
     legal_name = (new_customer_legal_name or "").strip()
     if not legal_name:
-        raise DirectSaleError("Pick an existing customer or type the legal name of a new one.")
+        raise DirectSaleError("CUSTOMER_REQUIRED")
     return None, legal_name
 
 
@@ -248,57 +327,56 @@ def _price_sale(plan: Plan, extra_devices: int) -> tuple[dict, dict | None, list
     the packages item's decision."""
     plan_item = describe_plan_for_sale(plan.id)
     if plan_item is None:
-        raise DirectSaleError("Selected package is not currently sellable (check its effective date and price).")
+        raise DirectSaleError("PACKAGE_NOT_SELLABLE")
     if not plan_item["supported_platform_codes"]:
-        raise DirectSaleError("Selected package has no supported platforms configured.")
+        raise DirectSaleError("PACKAGE_NO_PLATFORMS")
     if extra_devices < 0:
-        raise DirectSaleError("Extra devices must not be negative.")
+        raise DirectSaleError("EXTRA_DEVICES_NEGATIVE")
+    if extra_devices > MAX_EXTRA_DEVICES_PER_SALE:
+        raise DirectSaleError("EXTRA_DEVICES_TOO_MANY", max=MAX_EXTRA_DEVICES_PER_SALE)
     device_limit = plan.included_device_count + extra_devices
     if plan.max_device_count is not None and device_limit > plan.max_device_count:
-        raise DirectSaleError(
-            f"Requested device count ({device_limit}) exceeds this package's maximum ({plan.max_device_count})."
-        )
+        raise DirectSaleError("DEVICE_COUNT_OVER_PACKAGE_MAX", requested=device_limit, max=plan.max_device_count)
 
     lines = [(plan_item, 1, None)]
     addon_item = None
     if extra_devices > 0:
         addon_item = extra_device_offer(plan.product_id)
         if addon_item is None:
-            raise DirectSaleError(
-                "Extra devices are not on sale for this package yet: the Extra Device add-on needs a price "
-                "and must be Available in the catalog."
-            )
+            raise DirectSaleError("EXTRA_DEVICES_NOT_ON_SALE")
         if addon_item["currency"] != plan_item["currency"]:
-            raise DirectSaleError("The Extra Device add-on is priced in a different currency than this package.")
+            raise DirectSaleError("EXTRA_DEVICE_CURRENCY_MISMATCH")
         lines.append((addon_item, extra_devices, uuid.UUID(addon_item["addon_id"])))
 
     document = calculate_document(
         [LineInput(quantity=qty, unit_price=item["unit_price"], sort_order=i) for i, (item, qty, _addon) in enumerate(lines)]
     )
     if document.total <= 0:
-        raise DirectSaleError(
-            "This package costs nothing, so there is no payment to record. Use a no-charge licence instead."
-        )
+        raise DirectSaleError("ZERO_PRICE")
+    if document.total > MAX_SALE_TOTAL:
+        # Every line is at most the total, so this one check covers the
+        # order, its lines, the invoice and the payment columns alike.
+        raise DirectSaleError("TOTAL_TOO_LARGE", max=MAX_SALE_TOTAL)
     return plan_item, addon_item, lines, document.total, plan_item["currency"]
 
 
 def _validate_payment(*, amount: Decimal, currency: str, total: Decimal, method: str, reference: str, payment_date, as_of: date):
     if method not in DIRECT_SALE_PAYMENT_METHODS:
-        raise DirectSaleError("The customer pays the company by CliQ or bank transfer; sellers never take cash.")
+        raise DirectSaleError("METHOD_NOT_ALLOWED")
     if not reference:
-        raise DirectSaleError("Type the CliQ or transfer reference number.")
+        raise DirectSaleError("REFERENCE_REQUIRED")
     if len(reference) > _MAX_REFERENCE_LENGTH:
-        raise DirectSaleError(f"The reference is too long (at most {_MAX_REFERENCE_LENGTH} characters).")
+        raise DirectSaleError("REFERENCE_TOO_LONG", max=_MAX_REFERENCE_LENGTH)
     if payment_date is None:
-        raise DirectSaleError("Type the date the money arrived.")
+        raise DirectSaleError("PAYMENT_DATE_REQUIRED")
     if payment_date > as_of:
-        raise DirectSaleError("The payment date cannot be in the future.")
+        raise DirectSaleError("PAYMENT_DATE_IN_FUTURE")
     if amount != total:
         # A one-screen sale is paid in full. A part payment would leave the
         # invoice PARTIALLY_PAID, which fulfillment rightly refuses (full
         # payment required) -- the operator would be told "recorded" and the
         # licence would never come. Refused here instead, with the real total.
-        raise DirectSaleError(f"The amount paid must be the full price of this sale: {total} {currency}.")
+        raise DirectSaleError("AMOUNT_NOT_FULL_PRICE", total=total, currency=currency)
 
 
 def _extra_devices_on(order: SalesOrder) -> int:
@@ -314,11 +392,6 @@ def _plan_id_on(order: SalesOrder):
     return db_session.execute(
         select(SalesOrderLine.plan_id).where(SalesOrderLine.sales_order_id == order.id, SalesOrderLine.plan_id.is_not(None))
     ).scalars().first()
-
-
-_KEY_USED_FOR_DIFFERENT_SALE = (
-    "This sale form was already used to record a different sale. Open a fresh form to record another one."
-)
 
 
 def _check_same_sale(order: SalesOrder, *, idempotency_key, customer, legal_name, plan_id, extra_devices, seller) -> None:
@@ -337,12 +410,12 @@ def _check_same_sale(order: SalesOrder, *, idempotency_key, customer, legal_name
         and order.created_by_employee_profile_id == seller.id
     )
     if not same:
-        raise DirectSaleError(_KEY_USED_FOR_DIFFERENT_SALE)
+        raise DirectSaleError("KEY_USED_FOR_DIFFERENT_SALE")
 
 
 def _check_same_payment(payment: PaymentRecord, *, amount, method, reference, payment_date) -> None:
     if (Decimal(payment.amount), payment.method, payment.reference, payment.payment_date) != (amount, method, reference, payment_date):
-        raise DirectSaleError(_KEY_USED_FOR_DIFFERENT_SALE)
+        raise DirectSaleError("KEY_USED_FOR_DIFFERENT_SALE")
 
 
 def _result(order: SalesOrder, payment_id, *, replayed: bool) -> dict:
@@ -379,14 +452,13 @@ def record_direct_sale(
     replayed=True means this key's sale was already recorded and these are
     its original rows."""
     if not idempotency_key:
-        raise DirectSaleError("An idempotency key is required to record a sale.")
+        raise DirectSaleError("KEY_REQUIRED")
     as_of = as_of or utcnow().date()
     reference = (reference or "").strip()
     method = (method or "").strip()
 
     with _hold_advisory_lock(
-        _RECORD_LOCK_NAMESPACE, idempotency_key,
-        "This sale is still being recorded from an earlier click. Wait a moment, then check the sales list.",
+        _RECORD_LOCK_NAMESPACE, idempotency_key, "RECORD_IN_PROGRESS",
     ):
         # -- read-only until every check has passed --
         seller = _resolve_seller(
@@ -427,7 +499,7 @@ def record_direct_sale(
         except ValueError:
             plan = None
         if plan is None:
-            raise DirectSaleError("Selected package was not found.")
+            raise DirectSaleError("PACKAGE_NOT_FOUND")
         plan_item, _addon_item, lines, total, currency = _price_sale(plan, extra_devices)
         _validate_payment(
             amount=amount, currency=currency, total=total, method=method,
@@ -441,11 +513,17 @@ def record_direct_sale(
         derived_customer = db_session.get(Customer, _row_id_for(idempotency_key, "customer"))
         if derived_customer is not None:
             if customer is None and derived_customer.legal_name != legal_name:
-                raise DirectSaleError(_KEY_USED_FOR_DIFFERENT_SALE)
+                raise DirectSaleError("KEY_USED_FOR_DIFFERENT_SALE")
             if customer is not None and customer.id != derived_customer.id:
-                raise DirectSaleError(_KEY_USED_FOR_DIFFERENT_SALE)
+                raise DirectSaleError("KEY_USED_FOR_DIFFERENT_SALE")
 
-        # -- writes start here --
+        # -- writes start here -- only after EVERY check above, sizes
+        # included (_price_sale): the inline customer commits on its own
+        # (create_customer), so a check that ran after it would leave a
+        # customer behind for a refused form -- measured on 580cd65a with
+        # extra_devices=10**9 (probe P3). Past this line only the database
+        # itself can refuse, and a retry with the same key reuses the
+        # key-derived customer it left.
         if customer is None:
             customer = derived_customer or create_customer(
                 {
@@ -588,20 +666,26 @@ def _guard_confirmer(order: SalesOrder, payment: PaymentRecord, actor_staff_user
 
 
 def _load_sale(order_id) -> tuple[SalesOrder, PaymentRecord]:
+    """The sale's order (re-read) and its payment, re-read UNDER A ROW LOCK
+    (lock_payment_for_update) held until this transaction's next commit --
+    so the status checks below and the payment's own confirm/reject decide
+    on one and the same current row. The per-order advisory lock already
+    serializes this screen's confirm and reject; this row lock is what
+    makes the payments screen's confirm/reject (which take no advisory
+    lock) wait instead of slipping in between check and write (580cd65a,
+    verifier probe P2). Lock order: advisory lock, then payment row --
+    see lock_payment_for_update."""
     order = db_session.get(SalesOrder, order_id)
     if order is None:
-        raise DirectSaleError("Sale not found.")
+        raise DirectSaleError("SALE_NOT_FOUND")
     db_session.refresh(order)
     payment_id = direct_sale_payment_id_for_order(order.id)
     if payment_id is None:
-        raise DirectSaleError("This order was not recorded from the one-screen sale form.")
+        raise DirectSaleError("NOT_A_ONE_SCREEN_SALE")
     payment = db_session.get(PaymentRecord, payment_id)
     if payment is None:
-        raise DirectSaleError(
-            "This sale's payment was never recorded (the form was interrupted). The seller should submit the same form again."
-        )
-    db_session.refresh(payment)
-    return order, payment
+        raise DirectSaleError("PAYMENT_NEVER_RECORDED")
+    return order, lock_payment_for_update(payment)
 
 
 def _licence_for(order: SalesOrder) -> License | None:
@@ -616,79 +700,102 @@ def confirm_direct_sale(order_id, *, actor_staff_user_id: uuid.UUID, license_pep
     Returns {order_id, license_id, full_key, whatsapp_message, replayed}.
     replayed=True: the sale was already finished; its key was shown once,
     then, and is never re-derivable (ADR-9) -- full_key is None."""
-    with _hold_advisory_lock(
-        _CONFIRM_LOCK_NAMESPACE, str(order_id),
-        "This sale is already being confirmed by someone else. Wait a moment, then reload the list.",
-    ):
-        order, payment = _load_sale(order_id)
+    with _hold_advisory_lock(_CONFIRM_LOCK_NAMESPACE, str(order_id), "CONFIRM_IN_PROGRESS"):
+        try:
+            return _confirm_locked(order_id, actor_staff_user_id=actor_staff_user_id, license_pepper=license_pepper)
+        except BaseException:
+            # Releases the payment row lock at once on any refusal or crash.
+            db_session.rollback()
+            raise
 
-        if order.status == "FULFILLED":
-            licence = _licence_for(order)
-            return {"order_id": order.id, "license_id": licence.id if licence else None,
-                    "full_key": None, "whatsapp_message": None, "replayed": True}
-        if order.status not in ("DRAFT", "CONFIRMED"):
-            raise DirectSaleError(f"This sale is {order.status}; it cannot be confirmed.")
-        if payment.status not in ("PENDING", "CONFIRMED"):
-            raise DirectSaleError(f"This sale's payment is {payment.status}; it cannot be confirmed.")
-        _guard_confirmer(order, payment, actor_staff_user_id)
-        if Decimal(payment.amount) != order.total or payment.currency != order.currency:
-            # Unreachable through record_direct_sale (it refuses a mismatch);
-            # refused rather than allocated if the rows were ever edited.
-            raise DirectSaleError("This sale's payment does not match its total; it cannot be confirmed.")
-        # What fulfillment would refuse, refused BEFORE the money is
-        # confirmed -- so a package retired since the sale stops here, not
-        # after the payment is confirmed and the commission posted.
-        plan = db_session.get(Plan, _plan_id_on(order))
-        plan_item = describe_plan_for_sale(plan.id) if plan is not None else None
-        if plan_item is None or not plan_item["supported_platform_codes"]:
-            raise DirectSaleError("This sale's package is no longer sellable; it cannot be confirmed as it stands.")
 
-        # -- writes: each step reuses what an interrupted earlier attempt did --
-        if payment.status == "PENDING":
-            confirm_payment(payment, actor_staff_user_id=actor_staff_user_id, note="Confirmed with the one-screen sale.")
-        if order.status == "DRAFT":
-            confirm_order(order, actor_staff_user_id=actor_staff_user_id)
+def _confirm_locked(order_id, *, actor_staff_user_id, license_pepper) -> dict:
+    order, payment = _load_sale(order_id)
 
-        invoice = db_session.execute(
-            select(CommercialInvoice).where(CommercialInvoice.sales_order_id == order.id, CommercialInvoice.status != "VOID")
-        ).scalars().first()
-        if invoice is None:
-            invoice = create_invoice_from_order(
-                order,
-                # The SELLER, not the confirming manager: this column is what
-                # the commission ledger credits.
-                actor_employee_profile_id=order.created_by_employee_profile_id,
-                actor_staff_user_id=actor_staff_user_id,
-                idempotency_key=f"direct-sale-invoice-{order.id}",
-            )
-        if invoice.status == "DRAFT":
-            issue_invoice(invoice, actor_staff_user_id=actor_staff_user_id)
-
-        allocated = db_session.execute(
-            select(PaymentAllocation).where(
-                PaymentAllocation.payment_record_id == payment.id,
-                PaymentAllocation.commercial_invoice_id == invoice.id,
-                PaymentAllocation.reversed_at.is_(None),
-            )
-        ).scalars().first()
-        if allocated is None:
-            # The commission trigger (allocation.py -> ledger.py), dated today:
-            # the payment-confirmed date the owner counts commission by.
-            allocate_payment(payment=payment, invoice=invoice, amount=Decimal(payment.amount), actor_staff_user_id=actor_staff_user_id)
-
-        fulfilled = fulfill_order(
-            order, actor_staff_user_id=actor_staff_user_id, license_pepper=license_pepper,
-            idempotency_key=f"direct-sale-fulfill-{order.id}",
-        )
-        full_key = fulfilled.get("license_key")
+    if order.status == "FULFILLED":
         licence = _licence_for(order)
+        replay = {"order_id": order.id, "license_id": licence.id if licence else None,
+                  "full_key": None, "whatsapp_message": None, "replayed": True}
+        db_session.rollback()  # nothing to write; release the payment row lock
+        return replay
+    if order.status not in ("DRAFT", "CONFIRMED"):
+        raise DirectSaleError("ORDER_NOT_CONFIRMABLE", order_status=order.status)
+    if payment.status not in ("PENDING", "CONFIRMED"):
+        raise DirectSaleError("PAYMENT_NOT_CONFIRMABLE", payment_status=payment.status)
+    _guard_confirmer(order, payment, actor_staff_user_id)
+    if Decimal(payment.amount) != order.total or payment.currency != order.currency:
+        # Unreachable through record_direct_sale (it refuses a mismatch);
+        # refused rather than allocated if the rows were ever edited.
+        raise DirectSaleError("PAYMENT_DOES_NOT_MATCH_TOTAL")
+    # What fulfillment would refuse, refused BEFORE the money is
+    # confirmed -- so a package retired since the sale stops here, not
+    # after the payment is confirmed and the commission posted.
+    plan = db_session.get(Plan, _plan_id_on(order))
+    plan_item = describe_plan_for_sale(plan.id) if plan is not None else None
+    if plan_item is None or not plan_item["supported_platform_codes"]:
+        raise DirectSaleError("PACKAGE_NO_LONGER_SELLABLE")
 
-        audit_record(
-            actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="DIRECT_SALE_CONFIRMED",
-            entity_type="sales_order", entity_public_id=str(order.id),
-            after_state={"payment_record_id": str(payment.id), "invoice_id": str(invoice.id),
-                         "license_id": str(licence.id) if licence else None},
+    # -- writes: each step reuses what an interrupted earlier attempt did --
+    if payment.status == "PENDING":
+        # Decided under the row lock _load_sale took (re-taking it inside
+        # is a no-op); its commit releases it.
+        confirm_payment(payment, actor_staff_user_id=actor_staff_user_id, note="Confirmed with the one-screen sale.")
+    else:
+        # Already CONFIRMED (from the payments screen, or by an interrupted
+        # earlier attempt): nothing is decided about the payment here, so
+        # its row lock is released now, before the later steps take their
+        # own locks -- never held into fulfill_order's advisory lock (lock
+        # order: subscriptions/services.py::lock_payment_for_update).
+        # allocate_payment re-checks the status under its own lock.
+        db_session.commit()
+    if order.status == "DRAFT":
+        confirm_order(order, actor_staff_user_id=actor_staff_user_id)
+
+    invoice = db_session.execute(
+        select(CommercialInvoice).where(CommercialInvoice.sales_order_id == order.id, CommercialInvoice.status != "VOID")
+    ).scalars().first()
+    if invoice is None:
+        invoice = create_invoice_from_order(
+            order,
+            # The SELLER, not the confirming manager: this column is what
+            # the commission ledger credits.
+            actor_employee_profile_id=order.created_by_employee_profile_id,
+            actor_staff_user_id=actor_staff_user_id,
+            idempotency_key=f"direct-sale-invoice-{order.id}",
         )
+    if invoice.status == "DRAFT":
+        issue_invoice(invoice, actor_staff_user_id=actor_staff_user_id)
+
+    allocated = db_session.execute(
+        select(PaymentAllocation).where(
+            PaymentAllocation.payment_record_id == payment.id,
+            PaymentAllocation.commercial_invoice_id == invoice.id,
+            PaymentAllocation.reversed_at.is_(None),
+        )
+    ).scalars().first()
+    if allocated is None:
+        # The commission trigger (allocation.py -> ledger.py), dated today:
+        # the payment-confirmed date the owner counts commission by.
+        # "An allocation exists" really does mean "its commission was
+        # posted" (or the seller has no commission plan): allocate_payment
+        # writes the two in ONE transaction since fix round 3. Before,
+        # a crash between its two commits left an allocation with no
+        # commission and this resume skipped it for good (580cd65a, P1).
+        allocate_payment(payment=payment, invoice=invoice, amount=Decimal(payment.amount), actor_staff_user_id=actor_staff_user_id)
+
+    fulfilled = fulfill_order(
+        order, actor_staff_user_id=actor_staff_user_id, license_pepper=license_pepper,
+        idempotency_key=f"direct-sale-fulfill-{order.id}",
+    )
+    full_key = fulfilled.get("license_key")
+    licence = _licence_for(order)
+
+    audit_record(
+        actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="DIRECT_SALE_CONFIRMED",
+        entity_type="sales_order", entity_public_id=str(order.id),
+        after_state={"payment_record_id": str(payment.id), "invoice_id": str(invoice.id),
+                     "license_id": str(licence.id) if licence else None},
+    )
 
     whatsapp_message = None
     if full_key is not None:
@@ -704,22 +811,44 @@ def reject_direct_sale(order_id, *, reason: str, actor_staff_user_id: uuid.UUID)
     """The money did not arrive (or was wrong): payment FAILED, order
     CANCELLED, no licence. Allowed to anyone holding the manager permissions,
     including the recorder -- turning a claim into "not paid" never counts
-    money (correct_payment's own reasoning)."""
+    money (correct_payment's own reasoning).
+
+    Allowed while nothing downstream exists -- also when the order itself
+    was already confirmed on the order page (fix round 3: on 580cd65a such
+    a sale could never be rejected, "This sale is CONFIRMED; it cannot be
+    rejected", and sat on the waiting list for good while its payment
+    stayed PENDING). Refused once money moved or a document was made from
+    it: a confirmed payment (refund instead), a live allocation of this
+    payment, or an invoice for this order -- each would be left pointing at
+    a cancelled sale."""
     reason = (reason or "").strip()
     if not reason:
         raise CommercialSalesError("REASON_REQUIRED")
-    with _hold_advisory_lock(
-        _CONFIRM_LOCK_NAMESPACE, str(order_id),
-        "This sale is being confirmed by someone else right now. Reload the list.",
-    ):
-        order, payment = _load_sale(order_id)
-        if payment.status == "CONFIRMED":
-            raise DirectSaleError(
-                "This sale's payment is already confirmed; it can no longer be rejected (use a refund instead)."
-            )
-        if order.status != "DRAFT":
-            raise DirectSaleError(f"This sale is {order.status}; it cannot be rejected.")
-        if payment.status == "PENDING":
-            reject_payment(payment, reason=reason, actor_staff_user_id=actor_staff_user_id)
-        cancel_order(order, reason=reason, actor_staff_user_id=actor_staff_user_id)
+    with _hold_advisory_lock(_CONFIRM_LOCK_NAMESPACE, str(order_id), "REJECT_IN_PROGRESS"):
+        try:
+            order, payment = _load_sale(order_id)
+            if payment.status == "CONFIRMED":
+                raise DirectSaleError("REJECT_PAYMENT_CONFIRMED")
+            if order.status not in ("DRAFT", "CONFIRMED"):
+                raise DirectSaleError("ORDER_NOT_REJECTABLE", order_status=order.status)
+            live_allocation = db_session.execute(
+                select(PaymentAllocation.id).where(
+                    PaymentAllocation.payment_record_id == payment.id, PaymentAllocation.reversed_at.is_(None)
+                )
+            ).first()
+            if live_allocation is not None:
+                raise DirectSaleError("REJECT_MONEY_ALLOCATED")
+            invoice = db_session.execute(
+                select(CommercialInvoice.id).where(
+                    CommercialInvoice.sales_order_id == order.id, CommercialInvoice.status != "VOID"
+                )
+            ).first()
+            if invoice is not None:
+                raise DirectSaleError("REJECT_INVOICE_EXISTS")
+            if payment.status == "PENDING":
+                reject_payment(payment, reason=reason, actor_staff_user_id=actor_staff_user_id)
+            cancel_order(order, reason=reason, actor_staff_user_id=actor_staff_user_id)
+        except BaseException:
+            db_session.rollback()  # releases the payment row lock at once
+            raise
     return order

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import date
 
+from sqlalchemy import select
+
 from app.audit.services import record as audit_record
 from app.commercial_sales.sale_attribution import sale_owner_staff_user_id_for_payment
 from app.extensions import db_session
@@ -170,9 +172,54 @@ def record_payment(fields: dict, actor_staff_user_id) -> PaymentRecord:
     return payment
 
 
+def lock_payment_for_update(payment: PaymentRecord) -> PaymentRecord:
+    """Row-lock the payment for the rest of the caller's transaction and
+    re-read it from the database into the SAME object (populate_existing).
+
+    Step 0 fix round 3 (2026-10-24). Every status decision used to read
+    payment.status off the caller's in-memory row -- loaded when the page
+    was opened, or earlier in a long confirmation -- with no lock. Measured
+    on 580cd65a (tests/test_issuance_sale_hardening.py): a payments-screen
+    Reject reported success (FAILED) while the one-screen sale, holding a
+    stale PENDING row, confirmed it anyway and issued the licence; two
+    managers pressing Confirm both "succeeded"; allocation allocated a
+    payment that had been set FAILED after it was loaded -- a licence and a
+    commission against money the company did not get. Every decision that
+    depends on the current status takes this lock and decides on the fresh
+    row: confirm_payment, reject_payment, correct_payment (the one writer),
+    allocate_payment and the one-screen sale's confirm/reject.
+
+    Lock order (no cycles): a caller's advisory locks (the one-screen
+    sale's per-order lock, fulfillment's per-order lock -- each on its own
+    dedicated connection) come first; then this payment row; then the
+    invoice row (allocate_payment); then the order/licence rows
+    (fulfillment). Nothing that holds an invoice, order or licence row lock
+    ever asks for a payment row lock, and nothing waits for an advisory lock
+    while holding this one (fulfill_order runs after the payment's lock was
+    released by its own commit). Re-taking it in the same transaction is a
+    no-op, so confirm_payment -> correct_payment is safe."""
+    return db_session.execute(
+        select(PaymentRecord)
+        .where(PaymentRecord.id == payment.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalars().one()
+
+
+def release_lock_and_raise(exc: Exception):
+    # Release the row lock now, not when the request's session is torn
+    # down: a refused decision must not keep a second manager waiting.
+    db_session.rollback()
+    raise exc
+
+
 def correct_payment(payment: PaymentRecord, new_status: str, note: str, actor_staff_user_id) -> None:
     if new_status not in PAYMENT_STATUSES:
         raise ValueError(f"Invalid payment status: {new_status}")
+    # Decide on the current row, under a lock (lock_payment_for_update): the
+    # checks below and the "before" written to the history row must not
+    # come from a row that changed since the caller loaded it.
+    payment = lock_payment_for_update(payment)
     # The two-person rule, for every caller (confirm_payment checks it too,
     # before calling here; the legacy correct route did not check it at
     # all). Keyed on the RESULT being CONFIRMED, not on the transition into
@@ -183,9 +230,9 @@ def correct_payment(payment: PaymentRecord, new_status: str, note: str, actor_st
     # a bounced cheque) never turns a claim into counted money, so it stays
     # allowed. Same comparison confirm_payment makes.
     if new_status == "CONFIRMED" and payment.recorded_by_staff_user_id == actor_staff_user_id:
-        raise PaymentSelfVerificationError(
+        release_lock_and_raise(PaymentSelfVerificationError(
             "The staff member who recorded a payment cannot also confirm it; a different staff member must."
-        )
+        ))
     # Step 0, the owner's rule "nobody confirms their own sale" (2026-10-24):
     # the SELLER is a second person who must not be the checker either. A
     # manager may record a sale on a seller's behalf, so "not the recorder"
@@ -196,9 +243,9 @@ def correct_payment(payment: PaymentRecord, new_status: str, note: str, actor_st
     # confirmation and the legacy correct route alike.
     if new_status == "CONFIRMED" and actor_staff_user_id is not None:
         if sale_owner_staff_user_id_for_payment(payment) == actor_staff_user_id:
-            raise PaymentSelfVerificationError(
+            release_lock_and_raise(PaymentSelfVerificationError(
                 "The seller of a sale cannot confirm its payment; a different staff member must."
-            )
+            ))
     before = payment.status
     before_note = payment.internal_note
     payment.status = new_status

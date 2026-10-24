@@ -8567,3 +8567,167 @@ msgstr "سُجّلت عملية بيع من نموذج البيع"
 #: app/i18n_labels.py
 msgid "Sale confirmed and licence issued"
 msgstr "تأكدت عملية البيع وصدر الترخيص"
+
+#: app/i18n_labels.py
+msgid "The amount paid must be a number, like 250.00."
+msgstr "يجب أن يكون المبلغ المدفوع رقمًا، مثل 250.00."
+
+#: app/i18n_labels.py
+msgid "The amount paid must be a number greater than zero."
+msgstr "يجب أن يكون المبلغ المدفوع رقمًا أكبر من صفر."
+
+#: app/i18n_labels.py
+msgid "You can only record a sale as its seller yourself."
+msgstr "لا يمكنك تسجيل عملية بيع إلا وأنت بائعها."
+
+#: app/i18n_labels.py
+msgid "Pick the seller (sales owner) of this sale."
+msgstr "اختر البائع (مسؤول البيع) لهذه العملية."
+
+#: app/i18n_labels.py
+msgid "The selected seller was not found."
+msgstr "لم يتم العثور على البائع المحدد."
+
+#: app/i18n_labels.py
+msgid "The seller must be an active employee."
+msgstr "يجب أن يكون البائع موظفًا على رأس عمله."
+
+#: app/i18n_labels.py
+msgid "Selected customer was not found."
+msgstr "لم يتم العثور على العميل المحدد."
+
+#: app/i18n_labels.py
+msgid "Selected customer is archived."
+msgstr "العميل المحدد مؤرشف."
+
+#: app/i18n_labels.py
+msgid "Pick an existing customer or type the legal name of a new one."
+msgstr "اختر عميلًا موجودًا أو اكتب الاسم القانوني لعميل جديد."
+
+#: app/i18n_labels.py
+msgid "Selected package was not found."
+msgstr "لم يتم العثور على الباقة المحددة."
+
+#: app/i18n_labels.py
+msgid "Selected package is not currently sellable (check its effective date and price)."
+msgstr "الباقة المحددة غير متاحة للبيع حاليًا (تحقق من تاريخ سريانها وسعرها)."
+
+#: app/i18n_labels.py
+msgid "Selected package has no supported platforms configured."
+msgstr "لم تُحدَّد أي منصات مدعومة للباقة المحددة."
+
+#: app/i18n_labels.py
+msgid "Extra devices must not be negative."
+msgstr "لا يجوز أن يكون عدد الأجهزة الإضافية سالبًا."
+
+#: app/i18n_labels.py
+msgid "One sale can add at most %(max)s extra devices. Check the number you typed."
+msgstr "يمكن لعملية بيع واحدة أن تضيف %(max)s جهازًا إضافيًا كحد أقصى. تحقق من الرقم الذي كتبته."
+
+#: app/i18n_labels.py
+msgid "Requested device count (%(requested)s) exceeds this package's maximum (%(max)s)."
+msgstr "عدد الأجهزة المطلوب (%(requested)s) يتجاوز الحد الأقصى لهذه الباقة (%(max)s)."
+
+#: app/i18n_labels.py
+msgid "Extra devices are not on sale for this package yet: the Extra Device add-on needs a price and must be Available in the catalog."
+msgstr "الأجهزة الإضافية غير معروضة للبيع لهذه الباقة بعد: تحتاج إضافة الجهاز الإضافي إلى سعر ويجب أن تكون متاحة في الكتالوج."
+
+#: app/i18n_labels.py
+msgid "The Extra Device add-on is priced in a different currency than this package."
+msgstr "إضافة الجهاز الإضافي مسعّرة بعملة مختلفة عن عملة هذه الباقة."
+
+#: app/i18n_labels.py
+msgid "This sale's total is too large to record (at most %(max)s). Check the number of extra devices."
+msgstr "إجمالي هذه العملية أكبر من أن يُسجَّل (الحد الأقصى %(max)s). تحقق من عدد الأجهزة الإضافية."
+
+#: app/i18n_labels.py
+msgid "This package costs nothing, so there is no payment to record. Use a no-charge licence instead."
+msgstr "هذه الباقة بلا تكلفة، فلا توجد دفعة لتسجيلها. استخدم ترخيصًا بدون مقابل بدلًا من ذلك."
+
+#: app/i18n_labels.py
+msgid "The customer pays the company by CliQ or bank transfer; sellers never take cash."
+msgstr "يدفع العميل للشركة عبر CliQ أو حوالة بنكية؛ البائعون لا يستلمون نقدًا أبدًا."
+
+#: app/i18n_labels.py
+msgid "Type the CliQ or transfer reference number."
+msgstr "اكتب الرقم المرجعي لـ CliQ أو الحوالة."
+
+#: app/i18n_labels.py
+msgid "The reference is too long (at most %(max)s characters)."
+msgstr "الرقم المرجعي طويل جدًا (%(max)s حرفًا كحد أقصى)."
+
+#: app/i18n_labels.py
+msgid "The payment date cannot be in the future."
+msgstr "لا يمكن أن يكون تاريخ الدفع في المستقبل."
+
+#: app/i18n_labels.py
+msgid "The amount paid must be the full price of this sale: %(total)s %(currency)s."
+msgstr "يجب أن يكون المبلغ المدفوع السعر الكامل لهذه العملية: %(total)s %(currency)s."
+
+#: app/i18n_labels.py
+msgid "This sale form was already used to record a different sale. Open a fresh form to record another one."
+msgstr "استُخدم نموذج البيع هذا لتسجيل عملية بيع مختلفة. افتح نموذجًا جديدًا لتسجيل عملية أخرى."
+
+#: app/i18n_labels.py
+msgid "This sale is still being recorded from an earlier click. Wait a moment, then check the sales list."
+msgstr "ما زالت هذه العملية قيد التسجيل من نقرة سابقة. انتظر لحظة ثم راجع قائمة المبيعات."
+
+#: app/i18n_labels.py
+msgid "This sale is already being confirmed by someone else. Wait a moment, then reload the list."
+msgstr "يقوم شخص آخر بتأكيد هذه العملية الآن. انتظر لحظة ثم أعد تحميل القائمة."
+
+#: app/i18n_labels.py
+msgid "This sale is being confirmed by someone else right now. Reload the list."
+msgstr "يقوم شخص آخر بتأكيد هذه العملية في هذه اللحظة. أعد تحميل القائمة."
+
+#: app/i18n_labels.py
+msgid "Sale not found."
+msgstr "لم يتم العثور على عملية البيع."
+
+#: app/i18n_labels.py
+msgid "This order was not recorded from the one-screen sale form."
+msgstr "لم يُسجَّل هذا الطلب من نموذج البيع."
+
+#: app/i18n_labels.py
+msgid "This sale's payment was never recorded (the form was interrupted). The seller should submit the same form again."
+msgstr "لم تُسجَّل دفعة هذه العملية (انقطع النموذج). على البائع إرسال النموذج نفسه مرة أخرى."
+
+#: app/i18n_labels.py
+msgid "This sale is %(order_status)s; it cannot be confirmed."
+msgstr "حالة هذه العملية: %(order_status)s؛ لا يمكن تأكيدها."
+
+#: app/i18n_labels.py
+msgid "This sale's payment is %(payment_status)s; it cannot be confirmed."
+msgstr "حالة دفعة هذه العملية: %(payment_status)s؛ لا يمكن تأكيدها."
+
+#: app/i18n_labels.py
+msgid "This sale's payment does not match its total; it cannot be confirmed."
+msgstr "دفعة هذه العملية لا تطابق إجماليها؛ لا يمكن تأكيدها."
+
+#: app/i18n_labels.py
+msgid "This sale's package is no longer sellable; it cannot be confirmed as it stands."
+msgstr "باقة هذه العملية لم تعد متاحة للبيع؛ لا يمكن تأكيدها بوضعها الحالي."
+
+#: app/i18n_labels.py
+msgid "This sale's payment is already confirmed; it can no longer be rejected (use a refund instead)."
+msgstr "دفعة هذه العملية مؤكدة مسبقًا؛ لم يعد بالإمكان رفضها (استخدم الاسترداد بدلًا من ذلك)."
+
+#: app/i18n_labels.py
+msgid "This sale is %(order_status)s; it cannot be rejected."
+msgstr "حالة هذه العملية: %(order_status)s؛ لا يمكن رفضها."
+
+#: app/i18n_labels.py
+msgid "This sale's payment was already allocated to an invoice; it can no longer be rejected here."
+msgstr "خُصصت دفعة هذه العملية لفاتورة مسبقًا؛ لم يعد بالإمكان رفضها من هنا."
+
+#: app/i18n_labels.py
+msgid "An invoice was already made for this sale; it can no longer be rejected here. Void the invoice first."
+msgstr "صدرت فاتورة لهذه العملية مسبقًا؛ لم يعد بالإمكان رفضها من هنا. ألغِ الفاتورة أولًا."
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ 1 extra device"
+msgstr "+ جهاز إضافي واحد"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ %(count)d extra devices"
+msgstr "+ %(count)d أجهزة إضافية"

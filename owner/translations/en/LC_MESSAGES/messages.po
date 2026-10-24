@@ -8608,3 +8608,167 @@ msgstr "Sale recorded from the sale form"
 #: app/i18n_labels.py
 msgid "Sale confirmed and licence issued"
 msgstr "Sale confirmed and licence issued"
+
+#: app/i18n_labels.py
+msgid "The amount paid must be a number, like 250.00."
+msgstr "The amount paid must be a number, like 250.00."
+
+#: app/i18n_labels.py
+msgid "The amount paid must be a number greater than zero."
+msgstr "The amount paid must be a number greater than zero."
+
+#: app/i18n_labels.py
+msgid "You can only record a sale as its seller yourself."
+msgstr "You can only record a sale as its seller yourself."
+
+#: app/i18n_labels.py
+msgid "Pick the seller (sales owner) of this sale."
+msgstr "Pick the seller (sales owner) of this sale."
+
+#: app/i18n_labels.py
+msgid "The selected seller was not found."
+msgstr "The selected seller was not found."
+
+#: app/i18n_labels.py
+msgid "The seller must be an active employee."
+msgstr "The seller must be an active employee."
+
+#: app/i18n_labels.py
+msgid "Selected customer was not found."
+msgstr "Selected customer was not found."
+
+#: app/i18n_labels.py
+msgid "Selected customer is archived."
+msgstr "Selected customer is archived."
+
+#: app/i18n_labels.py
+msgid "Pick an existing customer or type the legal name of a new one."
+msgstr "Pick an existing customer or type the legal name of a new one."
+
+#: app/i18n_labels.py
+msgid "Selected package was not found."
+msgstr "Selected package was not found."
+
+#: app/i18n_labels.py
+msgid "Selected package is not currently sellable (check its effective date and price)."
+msgstr "Selected package is not currently sellable (check its effective date and price)."
+
+#: app/i18n_labels.py
+msgid "Selected package has no supported platforms configured."
+msgstr "Selected package has no supported platforms configured."
+
+#: app/i18n_labels.py
+msgid "Extra devices must not be negative."
+msgstr "Extra devices must not be negative."
+
+#: app/i18n_labels.py
+msgid "One sale can add at most %(max)s extra devices. Check the number you typed."
+msgstr "One sale can add at most %(max)s extra devices. Check the number you typed."
+
+#: app/i18n_labels.py
+msgid "Requested device count (%(requested)s) exceeds this package's maximum (%(max)s)."
+msgstr "Requested device count (%(requested)s) exceeds this package's maximum (%(max)s)."
+
+#: app/i18n_labels.py
+msgid "Extra devices are not on sale for this package yet: the Extra Device add-on needs a price and must be Available in the catalog."
+msgstr "Extra devices are not on sale for this package yet: the Extra Device add-on needs a price and must be Available in the catalog."
+
+#: app/i18n_labels.py
+msgid "The Extra Device add-on is priced in a different currency than this package."
+msgstr "The Extra Device add-on is priced in a different currency than this package."
+
+#: app/i18n_labels.py
+msgid "This sale's total is too large to record (at most %(max)s). Check the number of extra devices."
+msgstr "This sale's total is too large to record (at most %(max)s). Check the number of extra devices."
+
+#: app/i18n_labels.py
+msgid "This package costs nothing, so there is no payment to record. Use a no-charge licence instead."
+msgstr "This package costs nothing, so there is no payment to record. Use a no-charge licence instead."
+
+#: app/i18n_labels.py
+msgid "The customer pays the company by CliQ or bank transfer; sellers never take cash."
+msgstr "The customer pays the company by CliQ or bank transfer; sellers never take cash."
+
+#: app/i18n_labels.py
+msgid "Type the CliQ or transfer reference number."
+msgstr "Type the CliQ or transfer reference number."
+
+#: app/i18n_labels.py
+msgid "The reference is too long (at most %(max)s characters)."
+msgstr "The reference is too long (at most %(max)s characters)."
+
+#: app/i18n_labels.py
+msgid "The payment date cannot be in the future."
+msgstr "The payment date cannot be in the future."
+
+#: app/i18n_labels.py
+msgid "The amount paid must be the full price of this sale: %(total)s %(currency)s."
+msgstr "The amount paid must be the full price of this sale: %(total)s %(currency)s."
+
+#: app/i18n_labels.py
+msgid "This sale form was already used to record a different sale. Open a fresh form to record another one."
+msgstr "This sale form was already used to record a different sale. Open a fresh form to record another one."
+
+#: app/i18n_labels.py
+msgid "This sale is still being recorded from an earlier click. Wait a moment, then check the sales list."
+msgstr "This sale is still being recorded from an earlier click. Wait a moment, then check the sales list."
+
+#: app/i18n_labels.py
+msgid "This sale is already being confirmed by someone else. Wait a moment, then reload the list."
+msgstr "This sale is already being confirmed by someone else. Wait a moment, then reload the list."
+
+#: app/i18n_labels.py
+msgid "This sale is being confirmed by someone else right now. Reload the list."
+msgstr "This sale is being confirmed by someone else right now. Reload the list."
+
+#: app/i18n_labels.py
+msgid "Sale not found."
+msgstr "Sale not found."
+
+#: app/i18n_labels.py
+msgid "This order was not recorded from the one-screen sale form."
+msgstr "This order was not recorded from the one-screen sale form."
+
+#: app/i18n_labels.py
+msgid "This sale's payment was never recorded (the form was interrupted). The seller should submit the same form again."
+msgstr "This sale's payment was never recorded (the form was interrupted). The seller should submit the same form again."
+
+#: app/i18n_labels.py
+msgid "This sale is %(order_status)s; it cannot be confirmed."
+msgstr "This sale is %(order_status)s; it cannot be confirmed."
+
+#: app/i18n_labels.py
+msgid "This sale's payment is %(payment_status)s; it cannot be confirmed."
+msgstr "This sale's payment is %(payment_status)s; it cannot be confirmed."
+
+#: app/i18n_labels.py
+msgid "This sale's payment does not match its total; it cannot be confirmed."
+msgstr "This sale's payment does not match its total; it cannot be confirmed."
+
+#: app/i18n_labels.py
+msgid "This sale's package is no longer sellable; it cannot be confirmed as it stands."
+msgstr "This sale's package is no longer sellable; it cannot be confirmed as it stands."
+
+#: app/i18n_labels.py
+msgid "This sale's payment is already confirmed; it can no longer be rejected (use a refund instead)."
+msgstr "This sale's payment is already confirmed; it can no longer be rejected (use a refund instead)."
+
+#: app/i18n_labels.py
+msgid "This sale is %(order_status)s; it cannot be rejected."
+msgstr "This sale is %(order_status)s; it cannot be rejected."
+
+#: app/i18n_labels.py
+msgid "This sale's payment was already allocated to an invoice; it can no longer be rejected here."
+msgstr "This sale's payment was already allocated to an invoice; it can no longer be rejected here."
+
+#: app/i18n_labels.py
+msgid "An invoice was already made for this sale; it can no longer be rejected here. Void the invoice first."
+msgstr "An invoice was already made for this sale; it can no longer be rejected here. Void the invoice first."
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ 1 extra device"
+msgstr "+ 1 extra device"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ %(count)d extra devices"
+msgstr "+ %(count)d extra devices"

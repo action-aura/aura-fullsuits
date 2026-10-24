@@ -48,14 +48,25 @@ def _tax_excluded_base(invoice: CommercialInvoice, allocated_amount: Decimal) ->
     return (allocated_amount * taxable_fraction).quantize(Decimal("0.01"))
 
 
-def post_earning_for_allocation(allocation: PaymentAllocation, *, actor_staff_user_id: uuid.UUID) -> CommissionLedgerEntry | None:
+def post_earning_for_allocation(
+    allocation: PaymentAllocation, *, actor_staff_user_id: uuid.UUID, commit: bool = True
+) -> CommissionLedgerEntry | None:
     """The real earning trigger -- called from allocation.py::allocate_payment()
     immediately after a real, confirmed allocation is created (never
     from Quote/Order/Invoice creation or from payment confirmation
     alone, which has no allocation-specific amount to earn against yet).
     Returns None (not an error) when the crediting employee has no
     active commission plan/rule assignment -- nothing to earn, a normal
-    condition, not a failure."""
+    condition, not a failure.
+
+    commit=False (Step 0 fix round 3) only flushes the entry and leaves the
+    commit -- and the COMMISSION_EARNED audit row, audit_earning() -- to the
+    caller, so allocate_payment can write the allocation and its commission
+    in ONE transaction. Before, the allocation committed first and this
+    committed second: a crash in between left an allocation with no
+    commission, and nothing ever posted it (measured on 580cd65a: the retry
+    saw the allocation, skipped the commission, and issued the licence --
+    the seller was never paid for the sale)."""
     invoice = db_session.get(CommercialInvoice, allocation.commercial_invoice_id)
     employee_profile_id = invoice.created_by_employee_profile_id
 
@@ -91,17 +102,25 @@ def post_earning_for_allocation(allocation: PaymentAllocation, *, actor_staff_us
         # pass a naive pre-check before either commits).
         db_session.rollback()
         raise CommissionError("COMMISSION_ALREADY_EARNED_FOR_ALLOCATION") from exc
+    if not commit:
+        return entry
     db_session.commit()
+    audit_earning(entry, actor_staff_user_id=actor_staff_user_id)
+    return entry
 
+
+def audit_earning(entry: CommissionLedgerEntry, *, actor_staff_user_id: uuid.UUID) -> None:
+    """The COMMISSION_EARNED audit row for an entry that is already
+    committed (audit_record commits on its own, so it must never run
+    inside the allocation's transaction -- it would commit it half-done)."""
     audit_record(
         actor_staff_user_id=actor_staff_user_id,
         actor_role_snapshot=None,
         action_code="COMMISSION_EARNED",
         entity_type="commission_ledger_entry",
         entity_public_id=str(entry.id),
-        after_state={"employee_profile_id": str(employee_profile_id), "commission_amount": str(commission_amount)},
+        after_state={"employee_profile_id": str(entry.employee_profile_id), "commission_amount": str(entry.commission_amount)},
     )
-    return entry
 
 
 def _resolve_staff_user_id(employee_profile_id: uuid.UUID) -> uuid.UUID | None:

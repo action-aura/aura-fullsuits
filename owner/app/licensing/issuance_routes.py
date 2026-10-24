@@ -52,7 +52,7 @@ from app.commercial_sales.direct_sale import (
 from app.commercial_sales.errors import CommercialSalesError
 from app.employees.queries import find_own_profile
 from app.extensions import db_session
-from app.i18n_labels import localize_commercial_sales_error
+from app.i18n_labels import localize_commercial_sales_error, localize_direct_sale_error
 from app.licensing.issuance import LicenseIssuanceError, issue_no_charge_license
 from app.models.catalog import Plan
 from app.models.customers import Customer
@@ -188,7 +188,7 @@ def record_sale():
             actor_permission_codes=get_staff_permission_codes(actor),
         )
     except DirectSaleError as exc:
-        return _sale_error(str(exc), idempotency_key)
+        return _sale_error(localize_direct_sale_error(exc.code, **exc.params), idempotency_key)
     except CommercialSalesError as exc:
         return _sale_error(localize_commercial_sales_error(exc.code, **exc.params), idempotency_key)
     return _render_sale_form(error=None, idempotency_key=str(uuid.uuid4()), recorded=result)
@@ -224,7 +224,7 @@ def confirm_sale(order_id):
             order_id, actor_staff_user_id=actor.id, license_pepper=current_app.config["LICENSE_PEPPER"]
         )
     except DirectSaleError as exc:
-        return _render_sales_list(error=str(exc), status=400)
+        return _render_sales_list(error=localize_direct_sale_error(exc.code, **exc.params), status=400)
     except CommercialSalesError as exc:
         return _render_sales_list(error=localize_commercial_sales_error(exc.code, **exc.params), status=400)
     # Rendered inline, never redirected: a redirect would lose the
@@ -241,7 +241,7 @@ def reject_sale(order_id):
     try:
         reject_direct_sale(order_id, reason=request.form.get("reason", ""), actor_staff_user_id=actor.id)
     except DirectSaleError as exc:
-        return _render_sales_list(error=str(exc), status=400)
+        return _render_sales_list(error=localize_direct_sale_error(exc.code, **exc.params), status=400)
     except CommercialSalesError as exc:
         return _render_sales_list(error=localize_commercial_sales_error(exc.code, **exc.params), status=400)
     return redirect(url_for("license_issuance.sales_awaiting_confirmation"))

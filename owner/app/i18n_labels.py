@@ -946,6 +946,79 @@ def localize_commercial_sales_error(code: str, **params) -> str:
     return template % params if params else template
 
 
+def localize_direct_sale_error(code: str, **params) -> str:
+    """Step 0 fix round 3 -- app.commercial_sales.direct_sale.DirectSaleError
+    by code, the localize_commercial_sales_error pattern: the service's own
+    str(exc) stays English and request-free (direct_sale.DIRECT_SALE_MESSAGES
+    holds the same sentences); the sale screens show this. Before, they
+    showed str(exc) -- English on the Arabic screen. A status passed as
+    order_status / payment_status is shown by its label, not its code."""
+    params = dict(params)
+    if "order_status" in params:
+        params["order_status"] = sales_order_status_label(params["order_status"])
+    if "payment_status" in params:
+        params["payment_status"] = payment_status_label(params["payment_status"])
+    messages = {
+        "AMOUNT_NOT_A_NUMBER": _("The amount paid must be a number, like 250.00."),
+        "AMOUNT_NOT_POSITIVE": _("The amount paid must be a number greater than zero."),
+        "OWN_PROFILE_REQUIRED": _("Recording a sale needs your own employee profile. Ask a manager to add one."),
+        "SELLER_MUST_BE_SELF": _("You can only record a sale as its seller yourself."),
+        "SELLER_REQUIRED": _("Pick the seller (sales owner) of this sale."),
+        "SELLER_NOT_FOUND": _("The selected seller was not found."),
+        "SELLER_NOT_ACTIVE": _("The seller must be an active employee."),
+        "CUSTOMER_NOT_FOUND": _("Selected customer was not found."),
+        "CUSTOMER_ARCHIVED": _("Selected customer is archived."),
+        "CUSTOMER_REQUIRED": _("Pick an existing customer or type the legal name of a new one."),
+        "PACKAGE_NOT_FOUND": _("Selected package was not found."),
+        "PACKAGE_NOT_SELLABLE": _("Selected package is not currently sellable (check its effective date and price)."),
+        "PACKAGE_NO_PLATFORMS": _("Selected package has no supported platforms configured."),
+        "EXTRA_DEVICES_NEGATIVE": _("Extra devices must not be negative."),
+        "EXTRA_DEVICES_TOO_MANY": _("One sale can add at most %(max)s extra devices. Check the number you typed."),
+        "DEVICE_COUNT_OVER_PACKAGE_MAX": _("Requested device count (%(requested)s) exceeds this package's maximum (%(max)s)."),
+        "EXTRA_DEVICES_NOT_ON_SALE": _(
+            "Extra devices are not on sale for this package yet: the Extra Device add-on needs a price "
+            "and must be Available in the catalog."
+        ),
+        "EXTRA_DEVICE_CURRENCY_MISMATCH": _("The Extra Device add-on is priced in a different currency than this package."),
+        "TOTAL_TOO_LARGE": _("This sale's total is too large to record (at most %(max)s). Check the number of extra devices."),
+        "ZERO_PRICE": _("This package costs nothing, so there is no payment to record. Use a no-charge licence instead."),
+        "METHOD_NOT_ALLOWED": _("The customer pays the company by CliQ or bank transfer; sellers never take cash."),
+        "REFERENCE_REQUIRED": _("Type the CliQ or transfer reference number."),
+        "REFERENCE_TOO_LONG": _("The reference is too long (at most %(max)s characters)."),
+        "PAYMENT_DATE_REQUIRED": _("Type the date the money arrived."),
+        "PAYMENT_DATE_IN_FUTURE": _("The payment date cannot be in the future."),
+        "AMOUNT_NOT_FULL_PRICE": _("The amount paid must be the full price of this sale: %(total)s %(currency)s."),
+        "KEY_REQUIRED": _("An idempotency key is required to record a sale."),
+        "KEY_USED_FOR_DIFFERENT_SALE": _(
+            "This sale form was already used to record a different sale. Open a fresh form to record another one."
+        ),
+        "RECORD_IN_PROGRESS": _("This sale is still being recorded from an earlier click. Wait a moment, then check the sales list."),
+        "CONFIRM_IN_PROGRESS": _("This sale is already being confirmed by someone else. Wait a moment, then reload the list."),
+        "REJECT_IN_PROGRESS": _("This sale is being confirmed by someone else right now. Reload the list."),
+        "SALE_NOT_FOUND": _("Sale not found."),
+        "NOT_A_ONE_SCREEN_SALE": _("This order was not recorded from the one-screen sale form."),
+        "PAYMENT_NEVER_RECORDED": _(
+            "This sale's payment was never recorded (the form was interrupted). The seller should submit the same form again."
+        ),
+        "ORDER_NOT_CONFIRMABLE": _("This sale is %(order_status)s; it cannot be confirmed."),
+        "PAYMENT_NOT_CONFIRMABLE": _("This sale's payment is %(payment_status)s; it cannot be confirmed."),
+        "PAYMENT_DOES_NOT_MATCH_TOTAL": _("This sale's payment does not match its total; it cannot be confirmed."),
+        "PACKAGE_NO_LONGER_SELLABLE": _("This sale's package is no longer sellable; it cannot be confirmed as it stands."),
+        "REJECT_PAYMENT_CONFIRMED": _(
+            "This sale's payment is already confirmed; it can no longer be rejected (use a refund instead)."
+        ),
+        "ORDER_NOT_REJECTABLE": _("This sale is %(order_status)s; it cannot be rejected."),
+        "REJECT_MONEY_ALLOCATED": _("This sale's payment was already allocated to an invoice; it can no longer be rejected here."),
+        "REJECT_INVOICE_EXISTS": _(
+            "An invoice was already made for this sale; it can no longer be rejected here. Void the invoice first."
+        ),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
 def localize_commission_error(code: str, **params) -> str:
     """Phase 9.5D -- presentation-boundary localization for
     app.commissions.errors.CommissionError, matching

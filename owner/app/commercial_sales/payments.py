@@ -21,7 +21,7 @@ from app.commercial_sales.calculator import validate_currency
 from app.commercial_sales.sale_attribution import sale_owner_staff_user_id_for_payment
 from app.extensions import db_session
 from app.models.subscriptions import PaymentRecord
-from app.subscriptions.services import correct_payment, record_payment
+from app.subscriptions.services import correct_payment, lock_payment_for_update, record_payment, release_lock_and_raise
 
 PAYMENT_METHODS = ("CASH", "BANK_TRANSFER", "CARD_OFFLINE", "CHEQUE", "OTHER")
 
@@ -73,11 +73,20 @@ def confirm_payment(
 
     Idempotent by natural consequence of the status check: replaying a
     confirm on an already-CONFIRMED payment is rejected, not silently
-    re-applied (PAYMENT_ALREADY_CONFIRMED)."""
+    re-applied (PAYMENT_ALREADY_CONFIRMED).
+
+    Step 0 fix round 3: the check runs on the row re-read UNDER A LOCK
+    (lock_payment_for_update), held until correct_payment commits. Before,
+    it ran on the caller's in-memory row: two managers who opened the same
+    PENDING payment both confirmed it (two history rows, the first
+    checker's verified_by overwritten), and a confirmation could overwrite
+    a reject that had already been told it succeeded. Now the second
+    decision waits for the first and is refused on the status it left."""
+    payment = lock_payment_for_update(payment)
     if payment.status == "CONFIRMED":
-        raise CommercialSalesError("PAYMENT_ALREADY_CONFIRMED")
+        release_lock_and_raise(CommercialSalesError("PAYMENT_ALREADY_CONFIRMED"))
     if payment.status != "PENDING":
-        raise CommercialSalesError("PAYMENT_NOT_CONFIRMED")
+        release_lock_and_raise(CommercialSalesError("PAYMENT_NOT_CONFIRMED"))
 
     # Maker-checker: the employee who submitted a payment cannot also be
     # the one who confirms it -- Non-Negotiable Rule 4's real teeth,
@@ -85,12 +94,12 @@ def confirm_payment(
     # permission grant alone would have allowed it (UI hiding is not
     # authorization, same principle as the approval self-approval block).
     if payment.recorded_by_staff_user_id == actor_staff_user_id:
-        raise CommercialSalesError("SELF_CONFIRMATION_FORBIDDEN")
+        release_lock_and_raise(CommercialSalesError("SELF_CONFIRMATION_FORBIDDEN"))
     # Step 0 (owner rule 2026-10-24): nor may the seller -- a manager can
     # record a sale on a seller's behalf. correct_payment re-checks this in
     # the storage layer; checked here first for the stable, localized code.
     if sale_owner_staff_user_id_for_payment(payment) == actor_staff_user_id:
-        raise CommercialSalesError("SELLER_CONFIRMATION_FORBIDDEN")
+        release_lock_and_raise(CommercialSalesError("SELLER_CONFIRMATION_FORBIDDEN"))
 
     correct_payment(payment, "CONFIRMED", note, actor_staff_user_id)
 
@@ -112,10 +121,16 @@ def confirm_payment(
 
 
 def reject_payment(payment: PaymentRecord, *, reason: str, actor_staff_user_id: uuid.UUID) -> PaymentRecord:
+    # Decided on the locked, re-read row (see confirm_payment): a Reject
+    # pressed on a page opened while the payment was PENDING must not turn
+    # a payment someone has since confirmed -- and allocated, and issued a
+    # licence for -- into FAILED. Measured on 580cd65a: exactly that, with
+    # the licence and the seller's commission left standing.
+    payment = lock_payment_for_update(payment)
     if payment.status != "PENDING":
-        raise CommercialSalesError("PAYMENT_NOT_CONFIRMED")
+        release_lock_and_raise(CommercialSalesError("PAYMENT_NOT_CONFIRMED"))
     if not reason or not reason.strip():
-        raise CommercialSalesError("REASON_REQUIRED")
+        release_lock_and_raise(CommercialSalesError("REASON_REQUIRED"))
 
     correct_payment(payment, "FAILED", reason, actor_staff_user_id)
 

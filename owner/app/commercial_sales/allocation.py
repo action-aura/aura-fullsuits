@@ -16,11 +16,12 @@ from app.audit.services import record as audit_record
 from app.commercial_sales.calculator import resolve_invoice_status, validate_allocation_amount
 from app.commercial_sales.errors import CommercialSalesError
 from app.commercial_sales.invoices import confirmed_allocated_amount
-from app.commissions.ledger import post_earning_for_allocation
+from app.commissions.ledger import audit_earning, post_earning_for_allocation
 from app.extensions import db_session
 from app.models.base import utcnow
 from app.models.commercial_sales import CommercialInvoice, PaymentAllocation
 from app.models.subscriptions import PaymentRecord
+from app.subscriptions.services import lock_payment_for_update
 
 
 def unallocated_payment_balance(payment: PaymentRecord) -> Decimal:
@@ -39,49 +40,82 @@ def allocate_payment(
     amount: Decimal,
     actor_staff_user_id: uuid.UUID,
 ) -> PaymentAllocation:
-    if payment.status != "CONFIRMED":
-        raise CommercialSalesError("PAYMENT_NOT_CONFIRMED")
-    if payment.currency != invoice.currency:
-        raise CommercialSalesError("CURRENCY_MISMATCH", given=payment.currency, expected=invoice.currency)
-    # Milestone 23 (IDOR/tampering pass) -- real gap found: nothing
-    # previously verified the payment and invoice belong to the same
-    # customer. Without this check, a Finance actor (or a tampered
-    # request supplying an arbitrary payment_record_id) could allocate
-    # Customer A's confirmed payment against Customer B's invoice,
-    # crediting the wrong account -- a real financial-integrity and
-    # cross-tenant-data bug, not merely a permissions gap.
-    if payment.customer_id != invoice.customer_id:
-        raise CommercialSalesError("PAYMENT_CUSTOMER_MISMATCH")
+    # Step 0 fix round 3 -- decided on the payment row as it is NOW, locked
+    # until this allocation commits (subscriptions/services.py::
+    # lock_payment_for_update, which documents the lock order: payment row,
+    # then the invoice row below). The status used to be read once off the
+    # caller's in-memory row: measured on 580cd65a, a payment set FAILED
+    # after the one-screen sale loaded it was still allocated, its
+    # commission posted and its licence issued. Locked, a status change
+    # either lands before this check (refused here) or waits until the
+    # allocation is committed (and is then refused by its own re-read).
+    payment = lock_payment_for_update(payment)
+    try:
+        if payment.status != "CONFIRMED":
+            raise CommercialSalesError("PAYMENT_NOT_CONFIRMED")
+        if payment.currency != invoice.currency:
+            raise CommercialSalesError("CURRENCY_MISMATCH", given=payment.currency, expected=invoice.currency)
+        # Milestone 23 (IDOR/tampering pass) -- real gap found: nothing
+        # previously verified the payment and invoice belong to the same
+        # customer. Without this check, a Finance actor (or a tampered
+        # request supplying an arbitrary payment_record_id) could allocate
+        # Customer A's confirmed payment against Customer B's invoice,
+        # crediting the wrong account -- a real financial-integrity and
+        # cross-tenant-data bug, not merely a permissions gap.
+        if payment.customer_id != invoice.customer_id:
+            raise CommercialSalesError("PAYMENT_CUSTOMER_MISMATCH")
 
-    # Row-level lock on the invoice for the duration of this allocation --
-    # two concurrent allocation attempts against the same invoice must
-    # serialize so neither can push the allocated sum past the invoice
-    # total based on a stale outstanding-balance read.
-    db_session.execute(select(CommercialInvoice).where(CommercialInvoice.id == invoice.id).with_for_update())
+        # Row-level lock on the invoice for the duration of this allocation --
+        # two concurrent allocation attempts against the same invoice must
+        # serialize so neither can push the allocated sum past the invoice
+        # total based on a stale outstanding-balance read. populate_existing:
+        # the status/total decided on below are the locked row's, not the
+        # caller's copy.
+        db_session.execute(
+            select(CommercialInvoice).where(CommercialInvoice.id == invoice.id).with_for_update()
+            .execution_options(populate_existing=True)
+        )
 
-    unallocated = unallocated_payment_balance(payment)
-    outstanding = invoice.total - confirmed_allocated_amount(invoice)
-    amount = validate_allocation_amount(amount, unallocated_payment_balance=unallocated, invoice_outstanding_balance=outstanding)
+        unallocated = unallocated_payment_balance(payment)
+        outstanding = invoice.total - confirmed_allocated_amount(invoice)
+        amount = validate_allocation_amount(amount, unallocated_payment_balance=unallocated, invoice_outstanding_balance=outstanding)
 
-    allocation = PaymentAllocation(
-        payment_record_id=payment.id,
-        commercial_invoice_id=invoice.id,
-        allocated_amount=amount,
-        currency=invoice.currency,
-        allocated_by_staff_user_id=actor_staff_user_id,
-        allocated_at=utcnow(),
-        version=1,
-    )
-    db_session.add(allocation)
-    db_session.flush()
+        allocation = PaymentAllocation(
+            payment_record_id=payment.id,
+            commercial_invoice_id=invoice.id,
+            allocated_amount=amount,
+            currency=invoice.currency,
+            allocated_by_staff_user_id=actor_staff_user_id,
+            allocated_at=utcnow(),
+            version=1,
+        )
+        db_session.add(allocation)
+        db_session.flush()
 
-    new_status = resolve_invoice_status(
-        current_status=invoice.status, invoice_total=invoice.total, allocated_payment_sum=confirmed_allocated_amount(invoice)
-    )
-    before_status = invoice.status
-    invoice.status = new_status
-    invoice.version += 1
-    db_session.commit()
+        new_status = resolve_invoice_status(
+            current_status=invoice.status, invoice_total=invoice.total, allocated_payment_sum=confirmed_allocated_amount(invoice)
+        )
+        before_status = invoice.status
+        invoice.status = new_status
+        invoice.version += 1
+
+        # Non-Negotiable: commission basis is confirmed Payment Allocation --
+        # this is the real earning trigger, not Quote/Order/Invoice creation
+        # or bare payment confirmation.
+        #
+        # Step 0 fix round 3: posted IN THE SAME TRANSACTION as the
+        # allocation (commit=False), so the two exist together or not at
+        # all. They used to be two commits; a crash between them left an
+        # allocation without its commission, and every resume (the
+        # one-screen sale, a second Allocate press) reads "an allocation
+        # exists" as "done" -- the seller's commission was lost for good
+        # (580cd65a, verifier probe P1). Exactly once is still the ledger's
+        # partial unique index on source_payment_allocation_id.
+        entry = post_earning_for_allocation(allocation, actor_staff_user_id=actor_staff_user_id, commit=False)
+        db_session.commit()
+    except BaseException:
+        db_session.rollback()
+        raise
 
     audit_record(
         actor_staff_user_id=actor_staff_user_id,
@@ -95,10 +129,8 @@ def allocate_payment(
         },
     )
 
-    # Non-Negotiable: commission basis is confirmed Payment Allocation --
-    # this is the real earning trigger, not Quote/Order/Invoice creation
-    # or bare payment confirmation.
-    post_earning_for_allocation(allocation, actor_staff_user_id=actor_staff_user_id)
+    if entry is not None:
+        audit_earning(entry, actor_staff_user_id=actor_staff_user_id)
 
     return allocation
 
