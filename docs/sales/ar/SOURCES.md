@@ -2,7 +2,7 @@
 
 Where every number and rule in `seller-guide.md` and `cheat-sheet.md` came from.
 
-Priority used: (1) Claude Doc "Aura Growth Plan" (https://claude.ai/artifact/FGQcWdVcDV2EPGgEbyqhtx), read-only, rev 77, read 2026-10-24; its "Your answers" section wins over older sections. (2) Step brief given by the owner's orchestrator (same decisions). (3) `website/js/content.js` (Arabic strings) for product and feature names only.
+Priority used: (1) Claude Doc "Aura Growth Plan" (https://claude.ai/artifact/FGQcWdVcDV2EPGgEbyqhtx), read-only, rev 77, read 2026-10-24; its "Your answers" section wins over older sections. (2) Step brief given by the owner's orchestrator (same decisions). (3) `website/js/content.js` (Arabic strings; a retired copy of the site, not online) for product and feature names only. (4) Owner answers of 2026-10-24 on renewal, commission scope and refunds (also recorded in the doc, rev 78).
 
 ## Prices and packages
 
@@ -33,6 +33,9 @@ Priority used: (1) Claude Doc "Aura Growth Plan" (https://claude.ai/artifact/FGQ
 | Monthly package counts after ~100 JOD (P2 3rd payment = 105; P3 5th payment = 100), counted in month that payment is confirmed; never if customer stops; switch to P1 counts at 250 | Doc "Decided on the last four" |
 | New contract at end earns the 10 JOD renewal | Doc "Decided on the last four" |
 | Commission only; sellers are registered employees | Doc "Your answers" (Sellers) |
+| Yearly 100 JOD renewal does not grow with extra devices (100/yr per branch) | Owner answer 2026-10-24 |
+| Commission only on a new sale or a branch addition; none on extra devices added later; a new branch counts as a sale on the ladder | Owner answer 2026-10-24 |
+| Refund within the 30-day hold: that sale does not count for commission | Owner answer 2026-10-24 |
 
 ## Rules
 
@@ -57,7 +60,7 @@ Minimum wage / base salary; employment contract wording; privacy and opt-out ("n
 
 ## Conflicts between sources
 
-1. **Website pricing page vs doc.** The website (`pricing_page`, `pricing_teaser`, `footer.note1`, `meta`) says a one-time payment, 2 devices, no renewal, extra branch 250 JOD. The doc wins: 250 first year then 100/year, 1 desktop + 1 phone, each branch pays its own price. The guide tells sellers not to use the website pricing page. The website needs a separate fix.
+1. **Website prices (resolved, corrected 2026-10-24).** An earlier version of this guide told sellers the website showed old prices. That was wrong: it came from a retired copy of the site (`website/js/content.js`, `website/pricing.html` on the repo branch) that is not online. The live site https://actionaura.me shows no prices and says "Pricing depends on your shop. Ask us." The guide now says sellers give prices themselves from the guide and that the website deliberately shows no prices. The retired copy's one-time/no-renewal wording is not a source for anything in the guide.
 2. **Extra device.** Doc "Your answers" says "An extra desktop or phone costs 50 JOD"; the later "Decided on the last four" says 50 JOD once per extra pair of desktop + phone. The later one is used.
 3. **Original ask vs ladder.** The WhatsApp ask "350 JOD for every 5 licences" is superseded by the monthly ladder.
 4. **Commission timing.** The doc's older proposal says a licence counts when switched on at the customer and pays "30 days after switch-on"; "Your answers" says only "paid after 30 days". The guide says 30-day hold without naming its start. Not confirmed.
@@ -67,8 +70,7 @@ Minimum wage / base salary; employment contract wording; privacy and opt-out ("n
 
 ## Could not confirm
 
-- Whether the yearly 100 JOD renewal grows with extra devices: the guide's example 1 (year 2 = 100) infers it from "extra device 50 once".
-- Whether commission applies to extra devices or branches added later; whether commission is taken back on refund within 30 days (doc proposal only). Both are told to the seller as "not decided".
+- (Closed 2026-10-24.) The renewal-with-extra-devices, commission-scope and refund questions were answered by the owner; see the Commission table. Example 1 year 2 = 100 is now decided, not inferred.
 - The real Owner screen names and flow (they change this month). Every step describing Owner carries the update marker.
 - Company phone number: not in the website data (`phone` is empty), so only the email is given.
 - Printer and Android printing support: not verified, so the guide says to ask the manager.
