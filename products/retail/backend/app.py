@@ -1468,6 +1468,8 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
         state_repository=_sync_state_repository,
         shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
         bootstrap=_android_bootstrap_seam,
+        # Keep-selling: Kotlin asks before every tick; same callable as Windows.
+        sync_paused=lambda: _read_licence_pauses_sync(_sync_state_repository),
     ))
 
     # Sync backend follow-up (Android registry stream): the ANDROID mirror of
@@ -1528,6 +1530,7 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
         shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
         blueprint_name="registry_sync_internal",
         url_prefix="/api/registry-sync",
+        sync_paused=lambda: _read_licence_pauses_sync(_sync_state_repository),
     ))
 
 

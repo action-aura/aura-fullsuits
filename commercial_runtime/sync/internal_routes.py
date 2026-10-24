@@ -46,6 +46,8 @@ from __future__ import annotations
 
 import base64
 import hmac
+import logging
+from typing import Callable, Optional
 
 from flask import Blueprint, jsonify, request
 
@@ -116,6 +118,7 @@ def make_sync_internal_blueprint(
     blueprint_name: str = "sync_internal",
     url_prefix: str = "/api/sync",
     bootstrap=None,
+    sync_paused: Optional[Callable[[], bool]] = None,
 ) -> Blueprint:
     """`blueprint_name`/`url_prefix` default to the ONLY values this
     function has ever used, so the existing (retail-stream) call site in
@@ -140,6 +143,27 @@ def make_sync_internal_blueprint(
     # stage_file(path: str, relay_url: str) -> dict (raises BootstrapError),
     # include_own_pending() -> bool, include_own_done(), reapply_outbox(sync_service, conn). None (the registry stream, every older caller)
     # registers none of the routes below and leaves /_internal/cursor byte-for-byte what it was.
+
+    # Keep-selling rule: an UNPAID subscription pauses multi-device sync but never
+    # selling. On Android the Kotlin SyncCoordinator does all the network sync, and
+    # only Python can read the licence state, so Kotlin asks `/_internal/pause-status`
+    # before every tick. `sync_paused` is the same callable Windows' SyncService gets
+    # (app.py `_read_licence_pauses_sync`). None = never paused (every older caller).
+    pause_error_logged = False
+
+    def _paused_by_licence() -> bool:
+        nonlocal pause_error_logged
+        if sync_paused is None:
+            return False
+        try:
+            return bool(sync_paused())
+        except Exception:  # noqa: BLE001 -- fail toward today's behaviour: sync runs
+            if not pause_error_logged:
+                pause_error_logged = True
+                logging.getLogger(__name__).exception(
+                    "Sync: could not read the licence pause state; treating sync as NOT "
+                    "paused. Logged once.")
+            return False
 
     def _authorized() -> bool:
         provided = request.headers.get("X-Aura-Internal-Secret", "")
@@ -168,6 +192,15 @@ def make_sync_internal_blueprint(
         if value <= 0:
             return _OUTBOX_DEFAULT_PAGE_LIMIT
         return min(value, _OUTBOX_MAX_PAGE_LIMIT)
+
+    @bp.route("/_internal/pause-status", methods=["GET"])
+    def internal_pause_status():
+        """Read fresh on every request (a renewal arrives while the app runs and
+        must resume sync on the very next tick). Existing routes' bodies are
+        deliberately untouched; this is a separate route."""
+        if not _authorized():
+            return _forbidden()
+        return jsonify({"paused_by_licence": _paused_by_licence()}), 200
 
     @bp.route("/_internal/outbox", methods=["GET"])
     def internal_outbox():
