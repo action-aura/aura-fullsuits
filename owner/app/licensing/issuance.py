@@ -2,6 +2,13 @@
 (docs/owner/packages-and-issuance-design.md section B.4 -- "Issue licence:
 three acts").
 
+Step 0 (2026-10-24): a licence that is SOLD no longer comes from here. The
+one screen now records a sale -- payment and seller -- and the licence is
+issued by fulfillment once a manager confirms the money
+(app/commercial_sales/direct_sale.py). This immediate path is reachable
+only through issue_no_charge_license below: Super Admin, a written reason,
+an audit row -- a demo, a replacement key, an internal install.
+
 Collapses the existing 6-step direct path (create customer -> create
 subscription -> create license (DRAFT) -> issue -> copy key -> [approve
 activation]) into a single guarded action: pick/create the customer, pick
@@ -68,15 +75,18 @@ from datetime import date
 from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
 
+from app.audit.services import record as audit_record
 from app.commercial_ops.renewal_dates import add_interval
 from app.commercial_sales.catalog_for_sales import describe_plan_for_sale
 from app.customers.services import create_customer
 from app.extensions import db_session, get_engine
 from app.licensing.services import create_license, issue_license_key
+from app.models.audit import AuditLog
 from app.models.base import utcnow
 from app.models.catalog import Plan
 from app.models.customers import Customer
 from app.models.licensing import License, LicenseKeyIssuanceEvent
+from app.models.staff import StaffUser
 from app.models.subscriptions import Subscription
 from app.subscriptions.services import create_subscription, transition_subscription
 
@@ -341,6 +351,56 @@ def _resumable_rows(
     return derived_customer, subscription, license_row
 
 
+NO_CHARGE_AUDIT_ACTION = "LICENSE_ISSUED_NO_CHARGE"
+NO_CHARGE_MIN_REASON_LENGTH = 10
+
+
+def _record_no_charge_reason(license_id, reason: str, actor_staff_user_id, *, plan_id, device_limit: int) -> None:
+    """Once per licence: the audit row saying who issued it without a
+    payment, and why. Called under the per-key issuance lock, so the
+    exists-check cannot race a second caller with the same key."""
+    already = db_session.execute(
+        select(AuditLog.id).where(
+            AuditLog.action_code == NO_CHARGE_AUDIT_ACTION, AuditLog.entity_public_id == str(license_id)
+        )
+    ).first()
+    if already is not None:
+        return
+    audit_record(
+        actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code=NO_CHARGE_AUDIT_ACTION,
+        entity_type="license", entity_public_id=str(license_id), reason=reason,
+        after_state={"plan_id": str(plan_id), "device_limit": device_limit},
+    )
+
+
+def issue_no_charge_license(*, reason: str | None, actor_staff_user_id, **issuance_kwargs) -> dict:
+    """The ONLY way the immediate, no-payment issuance is reachable now
+    (Step 0, 2026-10-24). Every licence that is sold goes through the
+    one-screen sale instead (commercial_sales/direct_sale.py): payment
+    recorded, seller credited, licence issued only after a manager confirms
+    the money. What stays here is a licence nobody pays for -- a demo, a
+    replacement for a lost key, an internal install -- and it is:
+      - SUPER_ADMIN only, checked on the account itself: licenses.issue is
+        a grantable permission, and a custom role holding it must not
+        become a way to hand out paid licences for free;
+      - never silent: a written reason is required and lands in the audit
+        log (LICENSE_ISSUED_NO_CHARGE) together with the package and devices;
+      - never credited: it has no seller and no commission.
+    All of issue_license_direct's double-submit guarantees are unchanged;
+    this only adds the checks in front and the reason behind."""
+    staff = db_session.get(StaffUser, actor_staff_user_id)
+    if staff is None or not staff.is_super_admin:
+        raise LicenseIssuanceError("Only a Super Admin can issue a licence without a payment.")
+    reason = (reason or "").strip()
+    if len(reason) < NO_CHARGE_MIN_REASON_LENGTH:
+        raise LicenseIssuanceError(
+            "Write why this licence is issued without a payment (a demo, a replacement key, ...) "
+            f"-- at least {NO_CHARGE_MIN_REASON_LENGTH} characters. A licence that is sold must be "
+            "recorded as a sale instead."
+        )
+    return issue_license_direct(actor_staff_user_id=actor_staff_user_id, no_charge_reason=reason, **issuance_kwargs)
+
+
 def issue_license_direct(
     *,
     customer_id=None,
@@ -351,6 +411,7 @@ def issue_license_direct(
     actor_staff_user_id,
     license_pepper: str,
     as_of: date | None = None,
+    no_charge_reason: str | None = None,
 ) -> dict:
     """The three-act path's single guarded action. Returns a dict:
     {customer_id, subscription_id, license_id, full_key, whatsapp_message,
@@ -389,6 +450,12 @@ def issue_license_direct(
             idempotency_key, customer=customer, legal_name=legal_name, plan=plan, extra_devices=extra_devices
         )
         if replay is not None:
+            if no_charge_reason is not None:
+                # A crash between the issuance commit and the reason's audit
+                # row would otherwise lose the reason for good: the retry
+                # lands here. _record_no_charge_reason writes it only once.
+                _record_no_charge_reason(replay["license_id"], no_charge_reason, actor_staff_user_id,
+                                         plan_id=plan.id, device_limit=plan.included_device_count + extra_devices)
             return replay
 
         if plan is None:
@@ -488,6 +555,9 @@ def issue_license_direct(
         # keyed on this same idempotency_key, is what the replay check above
         # reads on every later call.
         license_row, full_key = issue_license_key(license_row, license_pepper, idempotency_key, actor_staff_user_id)
+        if no_charge_reason is not None:
+            _record_no_charge_reason(license_row.id, no_charge_reason, actor_staff_user_id,
+                                     plan_id=plan.id, device_limit=device_limit)
 
     whatsapp_message = None
     if full_key is not None:

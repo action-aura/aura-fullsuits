@@ -1,0 +1,82 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Sales waiting for confirmation") }}{% endblock %}
+{% block content %}
+{% if confirmed %}
+<div class="card card--critical">
+  {% if confirmed.full_key %}
+  <h2>{{ _("License key -- shown once") }}</h2>
+  <p><strong>{{ _("Copy this now. It will never be displayed again.") }}</strong></p>
+  <p>
+    <code class="masked" dir="ltr" id="issuance-revealed-key">{{ confirmed.full_key }}</code>
+    <button type="button" class="secondary" data-copy-target="issuance-revealed-key"
+            data-copy-label="{{ _('Copy key') }}" data-copy-success-label="{{ _('Copied') }}"
+            data-copy-fallback-label="{{ _('Selected -- press Ctrl+C') }}">{{ _("Copy key") }}</button>
+  </p>
+  <label for="issuance-whatsapp-message">{{ _("Pre-composed WhatsApp message (English + Arabic)") }}</label>
+  <textarea id="issuance-whatsapp-message" rows="10" readonly style="width:100%;">{{ confirmed.whatsapp_message }}</textarea>
+  <p>
+    <button type="button" class="secondary" data-copy-target="issuance-whatsapp-message"
+            data-copy-label="{{ _('Copy message') }}" data-copy-success-label="{{ _('Copied') }}"
+            data-copy-fallback-label="{{ _('Selected -- press Ctrl+C') }}">{{ _("Copy message") }}</button>
+  </p>
+  {% else %}
+  <h2>{{ _("Already confirmed") }}</h2>
+  <p>{{ _("This sale was already confirmed and its licence key was shown once, then. It cannot be shown again.") }}</p>
+  {% endif %}
+  {% if confirmed.license_id %}<p><a href="{{ url_for('licensing.detail', license_id=confirmed.license_id) }}">{{ _("View license record") }}</a></p>{% endif %}
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>{{ _("Sales waiting for confirmation") }}</h2>
+  <p>{{ _("Check that the money really reached the company account, then confirm. Confirming issues the licence and counts the seller's commission from today. You cannot confirm a sale you recorded or sold yourself.") }}</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  {% if not sales %}
+  <p class="empty">{{ _("No sales are waiting.") }}</p>
+  {% else %}
+  <table>
+    <thead><tr>
+      <th>{{ _("Order") }}</th><th>{{ _("Customer") }}</th><th>{{ _("Package") }}</th><th>{{ _("Seller") }}</th>
+      <th>{{ _("Payment") }}</th><th>{{ _("Actions") }}</th>
+    </tr></thead>
+    <tbody>
+    {% for sale in sales %}
+    <tr>
+      <td dir="ltr">{{ sale.order.order_number }}</td>
+      <td>{{ sale.customer.legal_name if sale.customer else "" }}</td>
+      <td>{{ sale.plan.name if sale.plan else "" }}{% if sale.extra_devices %} + {{ sale.extra_devices }} {{ _("extra devices") }}{% endif %}</td>
+      <td>{{ sale.seller.full_name if sale.seller else "" }}</td>
+      <td>
+        {% if sale.payment %}
+        <span dir="ltr">{{ sale.payment.amount }} {{ sale.payment.currency }}</span> &middot; {{ _("ref.") }} <span dir="ltr">{{ sale.payment.reference }}</span>
+        &middot; {{ sale.payment.payment_date }} &middot; {{ sale.payment.status }}
+        {% else %}
+        {{ _("Not recorded -- the seller must submit the same form again.") }}
+        {% endif %}
+      </td>
+      <td>
+        {% if sale.payment %}
+        {% if recent_auth_ok %}
+        <form method="post" action="{{ url_for('license_issuance.confirm_sale', order_id=sale.order.id) }}" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn--primary-action">{{ _("Money received -- confirm and issue the licence") }}</button>
+        </form>
+        {% else %}
+        <a href="{{ url_for('auth.reauth_form', next=url_for('license_issuance.sales_awaiting_confirmation')) }}">{{ _("Confirm (requires recent authentication)") }}</a>
+        {% endif %}
+        {% if sale.payment.status == "PENDING" %}
+        <form method="post" action="{{ url_for('license_issuance.reject_sale', order_id=sale.order.id) }}" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input name="reason" required placeholder="{{ _("Why the money did not arrive") }}">
+          <button type="submit" class="secondary">{{ _("Reject") }}</button>
+        </form>
+        {% endif %}
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

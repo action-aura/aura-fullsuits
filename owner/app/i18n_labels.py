@@ -664,6 +664,10 @@ def generic_audit_action_label(code: str) -> str:
         "PAYMENT_RECORDED": _("Payment recorded"),
         "PAYMENT_CORRECTED": _("Payment corrected"),
         "LICENSE_ISSUED": _("License issued"),
+        # Step 0 (2026-10-24): the one-screen sale and the no-charge licence.
+        "LICENSE_ISSUED_NO_CHARGE": _("Licence issued without a payment"),
+        "DIRECT_SALE_RECORDED": _("Sale recorded from the sale form"),
+        "DIRECT_SALE_CONFIRMED": _("Sale confirmed and licence issued"),
         "LICENSE_STATUS_CHANGED": _("License status changed"),
         "LICENSE_REPLACED": _("License replaced"),
         "LICENSE_CREATED": _("License created"),
@@ -930,6 +934,7 @@ def localize_commercial_sales_error(code: str, **params) -> str:
         "PAYMENT_NOT_CONFIRMED": _("The payment must be confirmed before it can be allocated."),
         "PAYMENT_ALREADY_CONFIRMED": _("This payment has already been confirmed."),
         "SELF_CONFIRMATION_FORBIDDEN": _("You cannot confirm a payment you submitted yourself."),
+        "SELLER_CONFIRMATION_FORBIDDEN": _("You cannot confirm the payment for a sale you made yourself."),
         "FULFILLMENT_NOT_ELIGIBLE": _("This order is not eligible for fulfillment yet: %(reason)s."),
         "FULFILLMENT_ALREADY_COMPLETE": _("This order line has already been fulfilled."),
         "FULFILLMENT_IN_PROGRESS": _("Another fulfillment of this order is still running; retry once it finishes."),

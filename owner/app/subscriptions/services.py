@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date
 
 from app.audit.services import record as audit_record
+from app.commercial_sales.sale_attribution import sale_owner_staff_user_id_for_payment
 from app.extensions import db_session
 from app.models.commercial_ops import PaymentCorrectionHistory
 from app.models.subscriptions import PaymentRecord, RenewalRecord, Subscription, SubscriptionStatusHistory
@@ -185,6 +186,19 @@ def correct_payment(payment: PaymentRecord, new_status: str, note: str, actor_st
         raise PaymentSelfVerificationError(
             "The staff member who recorded a payment cannot also confirm it; a different staff member must."
         )
+    # Step 0, the owner's rule "nobody confirms their own sale" (2026-10-24):
+    # the SELLER is a second person who must not be the checker either. A
+    # manager may record a sale on a seller's behalf, so "not the recorder"
+    # alone would let that seller -- if they also hold payments.confirm --
+    # confirm the money their own commission is counted from. Checked here,
+    # in the one writer of PaymentRecord.status, for the same reason as the
+    # recorder check above: it binds confirm_payment, the one-screen sale
+    # confirmation and the legacy correct route alike.
+    if new_status == "CONFIRMED" and actor_staff_user_id is not None:
+        if sale_owner_staff_user_id_for_payment(payment) == actor_staff_user_id:
+            raise PaymentSelfVerificationError(
+                "The seller of a sale cannot confirm its payment; a different staff member must."
+            )
     before = payment.status
     before_note = payment.internal_note
     payment.status = new_status

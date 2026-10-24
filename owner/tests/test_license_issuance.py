@@ -20,6 +20,15 @@ import pytest
 from tests.conftest import force_login, get_csrf, login_and_verify_mfa, make_staff
 
 
+# Step 0 (2026-10-24): POST /licenses/issuance is now the Super Admin's
+# no-charge licence and refuses without a written reason
+# (licensing/issuance.py::issue_no_charge_license; the refusal itself is
+# tested in tests/test_issuance_sale.py). The HTTP tests below post one so
+# they keep exercising exactly what they did before -- nothing they assert
+# was removed or loosened.
+NO_CHARGE_REASON = "Test no-charge issuance"
+
+
 def _seed_package(app, plan_code, *, billing_model, billing_interval_months=None,
                    included_device_count=2, max_device_count=None, price=Decimal("180.00")):
     """Mirrors tests/test_phase9_5d_fulfillment.py::_seed_plan's exact pattern
@@ -266,7 +275,7 @@ def test_issuance_route_requires_permission_and_recent_auth(app, client, seeded)
     resp = client.post(
         "/licenses/issuance",
         data={
-            "csrf_token": "x", "idempotency_key": "abc",
+            "csrf_token": "x", "no_charge_reason": NO_CHARGE_REASON, "idempotency_key": "abc",
             "customer_id": str(customer_id), "plan_id": str(plan_id), "extra_devices": "0",
         },
     )
@@ -294,7 +303,7 @@ def test_issuance_route_redirects_to_reauth_without_recent_mfa(app, client, seed
     resp = client.post(
         "/licenses/issuance",
         data={
-            "csrf_token": csrf, "idempotency_key": "xyz",
+            "csrf_token": csrf, "no_charge_reason": NO_CHARGE_REASON, "idempotency_key": "xyz",
             "customer_id": str(customer_id), "plan_id": str(plan_id), "extra_devices": "0",
         },
     )
@@ -312,7 +321,7 @@ def test_issuance_route_end_to_end_reveals_key_in_response(app, client, seeded):
     resp = client.post(
         "/licenses/issuance",
         data={
-            "csrf_token": csrf, "idempotency_key": str(uuid.uuid4()),
+            "csrf_token": csrf, "no_charge_reason": NO_CHARGE_REASON, "idempotency_key": str(uuid.uuid4()),
             "customer_id": str(customer_id), "plan_id": str(plan_id), "extra_devices": "0",
         },
     )
@@ -366,7 +375,7 @@ def test_issuance_key_reveal_carries_copy_control(app, client, seeded):
     resp = client.post(
         "/licenses/issuance",
         data={
-            "csrf_token": csrf, "idempotency_key": str(uuid.uuid4()),
+            "csrf_token": csrf, "no_charge_reason": NO_CHARGE_REASON, "idempotency_key": str(uuid.uuid4()),
             "customer_id": str(customer_id), "plan_id": str(plan_id), "extra_devices": "0",
         },
     )
@@ -389,7 +398,7 @@ def test_issuance_whatsapp_message_carries_copy_control(app, client, seeded):
     resp = client.post(
         "/licenses/issuance",
         data={
-            "csrf_token": csrf, "idempotency_key": str(uuid.uuid4()),
+            "csrf_token": csrf, "no_charge_reason": NO_CHARGE_REASON, "idempotency_key": str(uuid.uuid4()),
             "customer_id": str(customer_id), "plan_id": str(plan_id), "extra_devices": "0",
         },
     )
@@ -411,7 +420,7 @@ def test_invalid_extra_devices_rerenders_form_with_message_not_json(app, client,
     resp = client.post(
         "/licenses/issuance",
         data={
-            "csrf_token": csrf, "idempotency_key": str(uuid.uuid4()),
+            "csrf_token": csrf, "no_charge_reason": NO_CHARGE_REASON, "idempotency_key": str(uuid.uuid4()),
             "customer_id": str(customer_id), "plan_id": str(plan_id), "extra_devices": "not-a-number",
         },
     )
@@ -439,7 +448,7 @@ def test_business_rule_failure_rerenders_form_preserving_typed_values(app, clien
     resp = client.post(
         "/licenses/issuance",
         data={
-            "csrf_token": csrf, "idempotency_key": str(uuid.uuid4()),
+            "csrf_token": csrf, "no_charge_reason": NO_CHARGE_REASON, "idempotency_key": str(uuid.uuid4()),
             "customer_id": str(customer_id), "plan_id": str(plan_id), "extra_devices": "5",  # 2 + 5 = 7 > max 3
         },
     )
@@ -467,7 +476,7 @@ def test_reload_after_issuance_never_reveals_key_again(app, client, seeded):
     resp = client.post(
         "/licenses/issuance",
         data={
-            "csrf_token": csrf, "idempotency_key": str(uuid.uuid4()),
+            "csrf_token": csrf, "no_charge_reason": NO_CHARGE_REASON, "idempotency_key": str(uuid.uuid4()),
             "customer_id": str(customer_id), "plan_id": str(plan_id), "extra_devices": "0",
         },
     )
@@ -477,6 +486,11 @@ def test_reload_after_issuance_never_reveals_key_again(app, client, seeded):
     reload_page = client.get("/licenses/issuance/new")
     reload_body = reload_page.get_data(as_text=True)
     assert "AURA-" not in reload_body
+    # Step 0: /new is now the sale form; the page this key was issued from
+    # is /no-charge -- returning to it must not re-reveal the key either.
+    reload_no_charge = client.get("/licenses/issuance/no-charge")
+    assert reload_no_charge.status_code == 200
+    assert "AURA-" not in reload_no_charge.get_data(as_text=True)
 
 
 # -- Step 0, issuance bug 1: one idempotency key = one issuance -------------
@@ -579,7 +593,7 @@ def test_http_double_submit_same_key_shows_already_issued_not_a_second_licence(a
     page = client.get("/licenses/issuance/new")
     csrf = get_csrf(page.get_data(as_text=True))
     form = {
-        "csrf_token": csrf, "idempotency_key": str(uuid.uuid4()),
+        "csrf_token": csrf, "no_charge_reason": NO_CHARGE_REASON, "idempotency_key": str(uuid.uuid4()),
         "new_customer_legal_name": "Network Retry Shop Co", "plan_id": str(plan_id), "extra_devices": "0",
     }
     first = client.post("/licenses/issuance", data=form)

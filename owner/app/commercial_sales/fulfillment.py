@@ -26,12 +26,14 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
 
 from app.audit.services import record as audit_record
-from app.commercial_sales.catalog_for_sales import describe_plan_for_sale
+from app.commercial_sales.catalog_for_sales import EXTRA_DEVICE_ADDON_CODE, describe_plan_for_sale
 from app.commercial_sales.errors import CommercialSalesError
 from app.extensions import db_session, get_engine
+from app.licensing.issuance import resolve_license_term
 from app.licensing.services import create_license, issue_license_key
 from app.models.base import utcnow
-from app.models.catalog import Plan
+from app.models.catalog import Addon, Plan
+from app.models.employees import EmployeeProfile
 from app.models.commercial_sales import (
     CommercialInvoice,
     CommercialOperationsIdempotencyKey,
@@ -87,6 +89,28 @@ def _check_eligibility(order: SalesOrder) -> tuple[CommercialInvoice, SalesOrder
         raise CommercialSalesError("FULFILLMENT_NOT_ELIGIBLE", reason="no plan line found; add-on-only fulfillment not implemented this phase")
 
     return invoice, subscription_line
+
+
+def _extra_device_count(order: SalesOrder) -> int:
+    """Devices this order bought beyond the plan's included count: the
+    quantity on its EXTRA_DEVICE add-on lines (Step 0, 2026-10-24). Before,
+    fulfillment gave every licence plan.included_device_count and silently
+    dropped any extra devices the customer had paid for."""
+    quantities = db_session.execute(
+        select(SalesOrderLine.quantity)
+        .join(Addon, Addon.id == SalesOrderLine.addon_id)
+        .where(SalesOrderLine.sales_order_id == order.id, Addon.addon_code == EXTRA_DEVICE_ADDON_CODE)
+    ).scalars().all()
+    return sum(quantities)
+
+
+def _sales_owner_staff_user_id(order: SalesOrder) -> uuid.UUID | None:
+    """The seller's staff account -- the order's creator, the same employee
+    the commission ledger credits through the invoice. Step 0 fix: this used
+    to be the fulfilling actor, i.e. the manager who confirmed the order,
+    so every fulfilled subscription named the checker as its sales owner."""
+    profile = db_session.get(EmployeeProfile, order.created_by_employee_profile_id)
+    return profile.staff_user_id if profile is not None else None
 
 
 _FULFILLMENT_LOCK_NAMESPACE = "commercial_sales.fulfill_order"
@@ -230,6 +254,18 @@ def fulfill_order(
         if not allowed_platforms:
             raise CommercialSalesError("FULFILLMENT_NOT_ELIGIBLE", reason="plan has no supported platforms configured")
 
+        device_limit = plan.included_device_count + _extra_device_count(order)
+        if plan.max_device_count is not None and device_limit > plan.max_device_count:
+            raise CommercialSalesError(
+                "FULFILLMENT_NOT_ELIGIBLE",
+                reason=f"{device_limit} devices exceed the package maximum of {plan.max_device_count}",
+            )
+        # Same term rule as the direct issuance screen (issuance.py::
+        # resolve_license_term -- read its docstring: ONE_TIME is perpetual
+        # on purpose). Step 0: this path used to set no term at all, so a
+        # MONTHLY/ANNUAL licence sold through the pipeline never expired.
+        start, end = resolve_license_term(plan)
+
         audit_record(
             actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="FULFILLMENT_STARTED",
             entity_type="sales_order", entity_public_id=str(order.id), after_state={"invoice_id": str(invoice.id)},
@@ -257,8 +293,11 @@ def fulfill_order(
                         "product_id": plan.product_id,
                         "plan_id": plan.id,
                         "sales_order_id": order.id,
-                        "device_allowance": plan.included_device_count,
-                        "sales_owner_staff_user_id": actor_staff_user_id,
+                        "billing_cycle": plan.billing_model,
+                        "start_date": start,
+                        "end_date": end,
+                        "device_allowance": device_limit,
+                        "sales_owner_staff_user_id": _sales_owner_staff_user_id(order),
                     },
                     actor_staff_user_id,
                 )
@@ -289,7 +328,9 @@ def fulfill_order(
                         "product_id": plan.product_id,
                         "plan_id": plan.id,
                         "allowed_platforms": allowed_platforms,
-                        "device_limit": plan.included_device_count,
+                        "device_limit": device_limit,
+                        "valid_from": start,
+                        "valid_until": end,
                     },
                     actor_staff_user_id,
                 )

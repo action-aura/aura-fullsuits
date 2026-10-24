@@ -8371,3 +8371,199 @@ msgstr "أدخل عددًا صحيحًا من الأشهر بين %(min)s و%(ma
 #: app/system/routes.py
 msgid "Website demo request retention saved."
 msgstr "تم حفظ مدة الاحتفاظ بطلبات العرض التجريبي."
+
+#: app/i18n_labels.py
+msgid "You cannot confirm the payment for a sale you made yourself."
+msgstr "لا يمكنك تأكيد دفعة عملية بيع قمت بها بنفسك."
+
+#: app/leads/routes.py
+msgid "That idempotency key is reserved."
+msgstr "مفتاح منع التكرار هذا محجوز."
+
+#: app/licensing/issuance_routes.py
+msgid "An idempotency key is required to record a sale."
+msgstr "يلزم مفتاح منع التكرار لتسجيل عملية البيع."
+
+#: app/licensing/issuance_routes.py
+msgid "Type the date the money arrived."
+msgstr "اكتب تاريخ وصول المبلغ."
+
+#: app/templates/layout/_nav_model.html
+msgid "Sell a licence"
+msgstr "بيع ترخيص"
+
+#: app/templates/layout/_nav_model.html
+msgid "Sales to confirm"
+msgstr "مبيعات بانتظار التأكيد"
+
+#: app/templates/licensing/issuance.html
+msgid "No-charge licence"
+msgstr "ترخيص بدون مقابل"
+
+#: app/templates/licensing/issuance.html
+msgid "No payment"
+msgstr "بدون دفعة"
+
+#: app/templates/licensing/issuance.html
+msgid "This licence was issued without a payment and earns no commission. The reason you wrote is kept in the audit log. A licence that is sold must be recorded as a sale instead."
+msgstr "صدر هذا الترخيص بدون دفعة ولا يُحتسب عليه أي عمولة. السبب الذي كتبته محفوظ في سجل التدقيق. أما الترخيص الذي يُباع فيجب تسجيله كعملية بيع."
+
+#: app/templates/licensing/issuance.html
+msgid "Issue another no-charge licence"
+msgstr "إصدار ترخيص آخر بدون مقابل"
+
+#: app/templates/licensing/issuance.html
+msgid "Only for a licence nobody pays for: a demo, a replacement for a lost key, an internal install. It is issued at once, with no payment and no seller, and your reason is written to the audit log. To sell a licence, use the sale form instead."
+msgstr "فقط لترخيص لا يدفع أحد ثمنه: عرض تجريبي، أو بديل لمفتاح مفقود، أو تثبيت داخلي. يصدر فورًا بدون دفعة وبدون بائع، ويُكتب السبب في سجل التدقيق. لبيع ترخيص استخدم نموذج البيع."
+
+#: app/templates/licensing/issuance.html
+msgid "3. Why no payment"
+msgstr "3. لماذا بدون دفعة"
+
+#: app/templates/licensing/issuance.html
+msgid "Reason (required, at least 10 characters)"
+msgstr "السبب (مطلوب، 10 أحرف على الأقل)"
+
+#: app/templates/licensing/issuance.html
+msgid "4. Issue"
+msgstr "4. الإصدار"
+
+#: app/templates/licensing/list.html
+msgid "Sales waiting for confirmation"
+msgstr "مبيعات بانتظار التأكيد"
+
+#: app/templates/licensing/sale.html
+msgid "Sale recorded"
+msgstr "تم تسجيل عملية البيع"
+
+#: app/templates/licensing/sale.html
+msgid "This form was already submitted -- nothing new was recorded. This is the sale it recorded:"
+msgstr "تم إرسال هذا النموذج من قبل -- لم يُسجَّل شيء جديد. هذه هي عملية البيع التي سجّلها:"
+
+#: app/templates/licensing/sale.html
+msgid "Order"
+msgstr "الطلب"
+
+#: app/templates/licensing/sale.html
+msgid "The payment now waits for a manager to confirm it. The licence key is made when the payment is confirmed -- not before."
+msgstr "الدفعة الآن بانتظار أن يؤكدها مدير. يُنشأ مفتاح الترخيص عند تأكيد الدفعة -- وليس قبل ذلك."
+
+#: app/templates/licensing/sale.html
+msgid "Record another sale"
+msgstr "تسجيل عملية بيع أخرى"
+
+#: app/templates/licensing/sale.html
+msgid "Record the sale and the customer's payment. A manager confirms the payment; the licence key is made then, and the seller's commission counts from that day. Sellers never take cash: the customer pays the company by CliQ or bank transfer."
+msgstr "سجّل عملية البيع ودفعة العميل. يؤكد المدير الدفعة؛ عندها يُنشأ مفتاح الترخيص وتُحتسب عمولة البائع من ذلك اليوم. البائعون لا يستلمون نقدًا أبدًا: يدفع العميل للشركة عبر CliQ أو حوالة بنكية."
+
+#: app/templates/licensing/sale.html
+msgid "extra device"
+msgstr "جهاز إضافي"
+
+#: app/templates/licensing/sale.html
+msgid "3. Seller"
+msgstr "3. البائع"
+
+#: app/templates/licensing/sale.html
+msgid "Seller (sales owner) -- the employee whose commission this sale counts for"
+msgstr "البائع (مسؤول البيع) -- الموظف الذي تُحتسب له عمولة هذه البيعة"
+
+#: app/templates/licensing/sale.html
+msgid "-- Pick the seller --"
+msgstr "-- اختر البائع --"
+
+#: app/templates/licensing/sale.html
+msgid "You are the seller of this sale:"
+msgstr "أنت بائع هذه العملية:"
+
+#: app/templates/licensing/sale.html
+msgid "Recording a sale needs your own employee profile. Ask a manager to add one."
+msgstr "تسجيل عملية بيع يتطلب ملف موظف خاص بك. اطلب من المدير إضافته."
+
+#: app/templates/licensing/sale.html
+msgid "4. Payment"
+msgstr "4. الدفعة"
+
+#: app/templates/licensing/sale.html
+msgid "Amount paid (the full price)"
+msgstr "المبلغ المدفوع (السعر كاملًا)"
+
+#: app/templates/licensing/sale.html
+msgid "How the customer paid"
+msgstr "طريقة دفع العميل"
+
+#: app/templates/licensing/sale.html
+msgid "CliQ / bank transfer"
+msgstr "CliQ / حوالة بنكية"
+
+#: app/templates/licensing/sale.html
+msgid "CliQ or transfer reference number"
+msgstr "الرقم المرجعي لـ CliQ أو الحوالة"
+
+#: app/templates/licensing/sale.html
+msgid "Date the money arrived"
+msgstr "تاريخ وصول المبلغ"
+
+#: app/templates/licensing/sale.html
+msgid "Record the sale"
+msgstr "تسجيل عملية البيع"
+
+#: app/templates/licensing/sale.html
+msgid "No-charge licence (demo, replacement, internal) -- Super Admin only"
+msgstr "ترخيص بدون مقابل (عرض تجريبي، بديل، داخلي) -- للمدير العام فقط"
+
+#: app/templates/licensing/sales_pending.html
+msgid "Already confirmed"
+msgstr "تم التأكيد مسبقًا"
+
+#: app/templates/licensing/sales_pending.html
+msgid "This sale was already confirmed and its licence key was shown once, then. It cannot be shown again."
+msgstr "تم تأكيد هذه العملية من قبل وعُرض مفتاح ترخيصها مرة واحدة حينها. لا يمكن عرضه مرة أخرى."
+
+#: app/templates/licensing/sales_pending.html
+msgid "Check that the money really reached the company account, then confirm. Confirming issues the licence and counts the seller's commission from today. You cannot confirm a sale you recorded or sold yourself."
+msgstr "تحقّق من أن المبلغ وصل فعلًا إلى حساب الشركة، ثم أكّد. التأكيد يُصدر الترخيص ويحتسب عمولة البائع من اليوم. لا يمكنك تأكيد عملية بيع سجّلتها أو بعتها بنفسك."
+
+#: app/templates/licensing/sales_pending.html
+msgid "No sales are waiting."
+msgstr "لا توجد مبيعات بانتظار التأكيد."
+
+#: app/templates/licensing/sales_pending.html
+msgid "Seller"
+msgstr "البائع"
+
+#: app/templates/licensing/sales_pending.html
+msgid "extra devices"
+msgstr "أجهزة إضافية"
+
+#: app/templates/licensing/sales_pending.html
+msgid "ref."
+msgstr "المرجع"
+
+#: app/templates/licensing/sales_pending.html
+msgid "Not recorded -- the seller must submit the same form again."
+msgstr "لم تُسجَّل -- يجب على البائع إرسال النموذج نفسه مرة أخرى."
+
+#: app/templates/licensing/sales_pending.html
+msgid "Money received -- confirm and issue the licence"
+msgstr "تم استلام المبلغ -- أكّد وأصدر الترخيص"
+
+#: app/templates/licensing/sales_pending.html
+msgid "Confirm (requires recent authentication)"
+msgstr "تأكيد (يتطلب مصادقة حديثة)"
+
+#: app/templates/licensing/sales_pending.html
+msgid "Why the money did not arrive"
+msgstr "لماذا لم يصل المبلغ"
+
+#: app/i18n_labels.py
+msgid "Licence issued without a payment"
+msgstr "صدر ترخيص بدون دفعة"
+
+#: app/i18n_labels.py
+msgid "Sale recorded from the sale form"
+msgstr "سُجّلت عملية بيع من نموذج البيع"
+
+#: app/i18n_labels.py
+msgid "Sale confirmed and licence issued"
+msgstr "تأكدت عملية البيع وصدر الترخيص"

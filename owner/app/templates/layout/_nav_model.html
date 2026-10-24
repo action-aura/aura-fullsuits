@@ -71,6 +71,14 @@
 
 {# ---------- SALES ---------- #}
 {% set sales_links = [] %}
+{# Step 0: the one-screen sale (sale form needs orders.create + payments.create)
+   and the managers' confirmation list (payments.confirm). #}
+{% if has_permission('orders.create') and has_permission('payments.create') %}
+  {% set _unused = sales_links.append({'endpoint': 'license_issuance.new_form', 'label': _('Sell a licence')}) %}
+{% endif %}
+{% if has_permission('payments.confirm') %}
+  {% set _unused = sales_links.append({'endpoint': 'license_issuance.sales_awaiting_confirmation', 'label': _('Sales to confirm')}) %}
+{% endif %}
 {% if has_any_permission('quotes.create', 'quotes.approve') %}
   {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.list_quotes', 'label': _('Quotes')}) %}
 {% endif %}

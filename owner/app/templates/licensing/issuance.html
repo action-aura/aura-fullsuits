@@ -1,5 +1,5 @@
 {% extends "layout/base.html" %}
-{% block title %}{{ _("Issue license") }}{% endblock %}
+{% block title %}{{ _("No-charge licence") }}{% endblock %}
 {% block content %}
 {% if result %}
 <div class="card card--critical">
@@ -25,19 +25,20 @@
 </div>
 
 <div class="card--action">
-  <h3>{{ _("Record a payment") }}</h3>
-  <p>{{ _("Payment can be recorded now or later -- issuance is never blocked on it.") }}</p>
-  <p><a href="{{ url_for('subscriptions.detail', subscription_id=result.subscription_id) }}">{{ _("Go to subscription to record payment") }}</a></p>
+  <h3>{{ _("No payment") }}</h3>
+  <p>{{ _("This licence was issued without a payment and earns no commission. The reason you wrote is kept in the audit log. A licence that is sold must be recorded as a sale instead.") }}</p>
 </div>
 
 <p>
   <a href="{{ url_for('licensing.detail', license_id=result.license_id) }}">{{ _("View license record") }}</a>
-  &middot; <a href="{{ url_for('license_issuance.new_form') }}">{{ _("Issue another license") }}</a>
+  &middot; <a href="{{ url_for('license_issuance.no_charge_form') }}">{{ _("Issue another no-charge licence") }}</a>
+  &middot; <a href="{{ url_for('license_issuance.new_form') }}">{{ _("Sell a licence") }}</a>
 </p>
 {% else %}
 <div class="card" style="max-width:640px;">
-  <h2>{{ _("Issue license") }}</h2>
-  <p>{{ _("Three acts: pick or create the customer, pick the package and any extra devices, then press Issue. The key is revealed once, with a ready-to-send WhatsApp message.") }}</p>
+  <h2>{{ _("No-charge licence") }}</h2>
+  <p>{{ _("Only for a licence nobody pays for: a demo, a replacement for a lost key, an internal install. It is issued at once, with no payment and no seller, and your reason is written to the audit log. To sell a licence, use the sale form instead.") }}
+    <a href="{{ url_for('license_issuance.new_form') }}">{{ _("Sell a licence") }}</a></p>
 
   {% set fv = form_values or {} %}
   {% if error %}
@@ -73,11 +74,15 @@
     <label for="issuance-extra-devices">{{ _("Extra devices beyond the package's included count") }}</label>
     <input id="issuance-extra-devices" name="extra_devices" type="number" value="{{ fv.get("extra_devices", "0") }}" min="0">
 
-    <h3>{{ _("3. Issue") }}</h3>
+    <h3>{{ _("3. Why no payment") }}</h3>
+    <label for="issuance-no-charge-reason">{{ _("Reason (required, at least 10 characters)") }}</label>
+    <textarea id="issuance-no-charge-reason" name="no_charge_reason" rows="3" required minlength="10" style="width:100%;">{{ fv.get("no_charge_reason", "") }}</textarea>
+
+    <h3>{{ _("4. Issue") }}</h3>
     <div style="margin-top:0.5rem;"><button type="submit" class="btn--primary-action">{{ _("Issue license key (requires recent authentication)") }}</button></div>
   </form>
   {% else %}
-  <p><a href="{{ url_for('auth.reauth_form', next=url_for('license_issuance.new_form')) }}">{{ _("Issue license key (requires recent authentication)") }}</a></p>
+  <p><a href="{{ url_for('auth.reauth_form', next=url_for('license_issuance.no_charge_form')) }}">{{ _("Issue license key (requires recent authentication)") }}</a></p>
   {% endif %}
 </div>
 {% endif %}

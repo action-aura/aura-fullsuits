@@ -99,6 +99,7 @@ class CommercialSalesError(StableCodeError):
         "PAYMENT_NOT_CONFIRMED": "The payment must be confirmed before it can be allocated.",
         "PAYMENT_ALREADY_CONFIRMED": "This payment has already been confirmed.",
         "SELF_CONFIRMATION_FORBIDDEN": "You cannot confirm a payment you submitted yourself.",
+        "SELLER_CONFIRMATION_FORBIDDEN": "You cannot confirm the payment for a sale you made yourself.",
         # Fulfillment
         "FULFILLMENT_NOT_ELIGIBLE": "This order is not eligible for fulfillment yet: {reason}.",
         "FULFILLMENT_ALREADY_COMPLETE": "This order line has already been fulfilled.",

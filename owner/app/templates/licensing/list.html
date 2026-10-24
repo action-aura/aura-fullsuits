@@ -14,7 +14,16 @@
      licence. It is gated on `licenses.create` and the fast path on
      `licenses.issue`, matching each route's own decorator, so a holder of
      either permission still sees the action they are entitled to. #}
-  {{ table.toolbar(_("Licenses"), url_for('license_issuance.new_form'), _("Issue license"), new_permission="licenses.issue") }}
+  {# Step 0 (2026-10-24): the primary action SELLS a licence -- payment and
+     seller recorded, key issued once a manager confirms the money. It needs
+     orders.create + payments.create (the sale form's own decorators); the
+     toolbar takes one permission, so the second is checked on the page. The
+     old immediate path survives only as the Super Admin no-charge licence,
+     linked from the sale form. #}
+  {{ table.toolbar(_("Licenses"), url_for('license_issuance.new_form') if has_permission("payments.create") else None, _("Sell a licence"), new_permission="orders.create") }}
+  {% if has_permission("payments.confirm") %}
+  <p><a href="{{ url_for('license_issuance.sales_awaiting_confirmation') }}">{{ _("Sales waiting for confirmation") }}</a></p>
+  {% endif %}
   {% if has_permission("licenses.create") %}
   <p><a href="{{ url_for('licensing.new_form') }}">{{ _("Create a draft license instead (advanced)") }}</a></p>
   {% endif %}

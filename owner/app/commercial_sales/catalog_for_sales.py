@@ -39,6 +39,12 @@ from app.models.base import utcnow
 # assumed solved.
 DEFAULT_MAX_DISCOUNT_PERCENTAGE_WITHOUT_APPROVAL = Decimal("10")
 
+# The seeded add-on (app/catalog/services.py::_CANONICAL_ADDONS) whose
+# quantity on an order line is a number of devices beyond the plan's
+# included count. Read by fulfillment (licence device limit) and by the
+# one-screen sale (its price). Matched by code, not by a new column.
+EXTRA_DEVICE_ADDON_CODE = "EXTRA_DEVICE"
+
 
 def _entitlement_summary(rows: list[tuple[EntitlementDefinition, dict]]) -> dict:
     return {ed.entitlement_code: value for ed, value in rows}

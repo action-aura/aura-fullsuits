@@ -18,6 +18,7 @@ from decimal import Decimal
 from app.audit.services import record as audit_record
 from app.commercial_sales.errors import CommercialSalesError
 from app.commercial_sales.calculator import validate_currency
+from app.commercial_sales.sale_attribution import sale_owner_staff_user_id_for_payment
 from app.extensions import db_session
 from app.models.subscriptions import PaymentRecord
 from app.subscriptions.services import correct_payment, record_payment
@@ -85,6 +86,11 @@ def confirm_payment(
     # authorization, same principle as the approval self-approval block).
     if payment.recorded_by_staff_user_id == actor_staff_user_id:
         raise CommercialSalesError("SELF_CONFIRMATION_FORBIDDEN")
+    # Step 0 (owner rule 2026-10-24): nor may the seller -- a manager can
+    # record a sale on a seller's behalf. correct_payment re-checks this in
+    # the storage layer; checked here first for the stable, localized code.
+    if sale_owner_staff_user_id_for_payment(payment) == actor_staff_user_id:
+        raise CommercialSalesError("SELLER_CONFIRMATION_FORBIDDEN")
 
     correct_payment(payment, "CONFIRMED", note, actor_staff_user_id)
 

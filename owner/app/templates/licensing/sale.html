@@ -1,0 +1,87 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Sell a licence") }}{% endblock %}
+{% block content %}
+{% if recorded %}
+<div class="card card--action" style="max-width:640px;">
+  <h2>{{ _("Sale recorded") }}</h2>
+  {% if recorded.replayed %}
+  <p>{{ _("This form was already submitted -- nothing new was recorded. This is the sale it recorded:") }}</p>
+  {% endif %}
+  <p>{{ _("Order") }} <strong dir="ltr">{{ recorded.order_number }}</strong> &middot; {{ recorded.total }} {{ recorded.currency }}</p>
+  <p>{{ _("The payment now waits for a manager to confirm it. The licence key is made when the payment is confirmed -- not before.") }}</p>
+  <p>
+    <a href="{{ url_for('license_issuance.new_form') }}">{{ _("Record another sale") }}</a>
+    {% if can_confirm %}&middot; <a href="{{ url_for('license_issuance.sales_awaiting_confirmation') }}">{{ _("Sales waiting for confirmation") }}</a>{% endif %}
+  </p>
+</div>
+{% else %}
+<div class="card" style="max-width:640px;">
+  <h2>{{ _("Sell a licence") }}</h2>
+  <p>{{ _("Record the sale and the customer's payment. A manager confirms the payment; the licence key is made then, and the seller's commission counts from that day. Sellers never take cash: the customer pays the company by CliQ or bank transfer.") }}</p>
+
+  {% set fv = form_values or {} %}
+  {% if error %}
+  <p class="error" role="alert">{{ error }}</p>
+  {% endif %}
+
+  <form method="post" action="{{ url_for('license_issuance.record_sale') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="idempotency_key" value="{{ sale_idempotency_key }}">
+
+    <h3>{{ _("1. Customer") }}</h3>
+    <label for="sale-customer-id">{{ _("Existing customer") }}</label>
+    <select id="sale-customer-id" name="customer_id">
+      <option value="">{{ _("-- New customer --") }}</option>
+      {% for c in customers %}<option value="{{ c.id }}" {% if fv.get("customer_id") == c.id|string %}selected{% endif %}>{{ c.legal_name }}</option>{% endfor %}
+    </select>
+    <label for="sale-new-customer-name">{{ _("Or: legal name of a new customer") }}</label>
+    <input id="sale-new-customer-name" name="new_customer_legal_name" value="{{ fv.get("new_customer_legal_name", "") }}" placeholder="{{ _("Only used when no existing customer is selected above") }}">
+
+    <h3>{{ _("2. Package") }}</h3>
+    <label for="sale-plan-id">{{ _("Package") }}</label>
+    <select id="sale-plan-id" name="plan_id" required>
+      {% for pkg in packages %}
+      <option value="{{ pkg.plan_id }}" {% if fv.get("plan_id") == pkg.plan_id|string %}selected{% endif %}>{{ pkg.name }} -- {{ pkg.unit_price }} {{ pkg.currency }} ({{ pkg.included_device_count }} {{ _("devices included") }}{% if pkg.extra_device_price is not none %}; {{ _("extra device") }} {{ pkg.extra_device_price }} {{ pkg.currency }}{% endif %})</option>
+      {% else %}
+      <option value="" disabled>{{ _("No sellable packages yet -- set an effective date and current price on a plan first.") }}</option>
+      {% endfor %}
+    </select>
+    <label for="sale-extra-devices">{{ _("Extra devices beyond the package's included count") }}</label>
+    <input id="sale-extra-devices" name="extra_devices" type="number" value="{{ fv.get("extra_devices", "0") }}" min="0">
+
+    <h3>{{ _("3. Seller") }}</h3>
+    {% if may_choose_seller %}
+    <label for="sale-seller">{{ _("Seller (sales owner) -- the employee whose commission this sale counts for") }}</label>
+    <select id="sale-seller" name="sales_owner_employee_profile_id" required>
+      <option value="">{{ _("-- Pick the seller --") }}</option>
+      {% for s in sellers %}<option value="{{ s.id }}" {% if fv.get("sales_owner_employee_profile_id") == s.id|string %}selected{% endif %}>{{ s.full_name }} ({{ s.employee_number }})</option>{% endfor %}
+    </select>
+    {% elif own_profile %}
+    <p>{{ _("You are the seller of this sale:") }} <strong>{{ own_profile.full_name }}</strong></p>
+    {% else %}
+    <p class="error">{{ _("Recording a sale needs your own employee profile. Ask a manager to add one.") }}</p>
+    {% endif %}
+
+    <h3>{{ _("4. Payment") }}</h3>
+    <label for="sale-amount">{{ _("Amount paid (the full price)") }}</label>
+    <input id="sale-amount" name="amount" inputmode="decimal" value="{{ fv.get("amount", "") }}" required dir="ltr">
+    <label for="sale-method">{{ _("How the customer paid") }}</label>
+    <select id="sale-method" name="method">
+      {% for m in payment_methods %}<option value="{{ m }}" {% if fv.get("method") == m %}selected{% endif %}>{% if m == "BANK_TRANSFER" %}{{ _("CliQ / bank transfer") }}{% else %}{{ m }}{% endif %}</option>{% endfor %}
+    </select>
+    <label for="sale-reference">{{ _("CliQ or transfer reference number") }}</label>
+    <input id="sale-reference" name="reference" value="{{ fv.get("reference", "") }}" required maxlength="128" dir="ltr">
+    <label for="sale-payment-date">{{ _("Date the money arrived") }}</label>
+    <input id="sale-payment-date" name="payment_date" type="date" value="{{ fv.get("payment_date", today) }}" max="{{ today }}" required>
+
+    <div style="margin-top:0.75rem;"><button type="submit" class="btn--primary-action">{{ _("Record the sale") }}</button></div>
+  </form>
+</div>
+{% if can_issue_no_charge %}
+<p style="max-width:640px;"><a href="{{ url_for('license_issuance.no_charge_form') }}">{{ _("No-charge licence (demo, replacement, internal) -- Super Admin only") }}</a></p>
+{% endif %}
+{% if can_confirm %}
+<p><a href="{{ url_for('license_issuance.sales_awaiting_confirmation') }}">{{ _("Sales waiting for confirmation") }}</a></p>
+{% endif %}
+{% endif %}
+{% endblock %}
