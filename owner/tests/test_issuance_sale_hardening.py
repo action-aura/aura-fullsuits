@@ -553,19 +553,21 @@ def test_absurd_extra_device_count_is_refused_before_any_write(app, seeded):
     -- "numeric field overflow" (a 500) -- with the inline customer already
     committed. Now refused before any write, with nothing left behind."""
     w = _world(app)
-    from app.commercial_sales.direct_sale import MAX_EXTRA_DEVICES_PER_SALE, DirectSaleError
+    # Step 0 packages: the screen sells pairs, so the cap is in pairs.
+    from app.commercial_sales.direct_sale import MAX_EXTRA_DEVICE_PAIRS_PER_SALE as MAX_PAIRS
+    from app.commercial_sales.direct_sale import DirectSaleError
 
     n = 10**9
     with pytest.raises(DirectSaleError, match="at most"):
-        _record(app, w, extra_devices=n, amount=Decimal("100.00") + Decimal("50.00") * n)
+        _record(app, w, extra_device_pairs=n, amount=Decimal("100.00") + Decimal("50.00") * n)
     with pytest.raises(DirectSaleError, match="at most"):
-        _record(app, w, extra_devices=MAX_EXTRA_DEVICES_PER_SALE + 1,
-                amount=Decimal("100.00") + Decimal("50.00") * (MAX_EXTRA_DEVICES_PER_SALE + 1))
+        _record(app, w, extra_device_pairs=MAX_PAIRS + 1,
+                amount=Decimal("100.00") + Decimal("50.00") * (MAX_PAIRS + 1))
     assert _counts(app) == NOTHING
     # the allow half: the maximum itself is a sale
-    result, _ = _record(app, w, extra_devices=MAX_EXTRA_DEVICES_PER_SALE,
-                        amount=Decimal("100.00") + Decimal("50.00") * MAX_EXTRA_DEVICES_PER_SALE)
-    assert result["total"] == Decimal("100.00") + Decimal("50.00") * MAX_EXTRA_DEVICES_PER_SALE
+    result, _ = _record(app, w, extra_device_pairs=MAX_PAIRS,
+                        amount=Decimal("100.00") + Decimal("50.00") * MAX_PAIRS)
+    assert result["total"] == Decimal("100.00") + Decimal("50.00") * MAX_PAIRS
     assert _counts(app) == RECORDED
 
 
@@ -577,7 +579,7 @@ def test_a_total_too_large_to_store_is_refused_before_any_write(app, seeded):
     from app.commercial_sales.direct_sale import DirectSaleError
 
     with pytest.raises(DirectSaleError, match="too large"):
-        _record(app, w, extra_devices=1, amount=Decimal("10000000049.00"))
+        _record(app, w, extra_device_pairs=1, amount=Decimal("10000000049.00"))
     assert _counts(app) == NOTHING
 
 
@@ -761,7 +763,7 @@ def test_sale_form_error_is_shown_in_arabic(app, client, seeded):
     page = client.get("/licenses/issuance/new")
     resp = client.post("/licenses/issuance/sale", data={
         "csrf_token": get_csrf(page.get_data(as_text=True)), "idempotency_key": str(uuid.uuid4()),
-        "new_customer_legal_name": "Corner Shop LLC", "plan_id": str(w["plan"]), "extra_devices": "0",
+        "new_customer_legal_name": "Corner Shop LLC", "plan_id": str(w["plan"]), "extra_device_pairs": "0",
         "amount": "99.99", "method": "BANK_TRANSFER", "reference": "CLIQ-1", "payment_date": date.today().isoformat(),
     })
     assert resp.status_code == 400
@@ -773,13 +775,14 @@ def test_sale_form_error_is_shown_in_arabic(app, client, seeded):
 
 def test_waiting_list_shows_a_status_label_and_a_correct_device_count(app, client, seeded):
     """RED on 580cd65a: the list printed the raw status code (PENDING) and
-    "1 extra devices"."""
+    "1 extra devices". Step 0 packages: the sale screen sells pairs, so the
+    count is now of pairs ("+ 1 extra pair", "+ 2 extra pairs")."""
     w = _world(app)
-    _record(app, w, extra_devices=1, amount=Decimal("150.00"))
-    _record(app, w, extra_devices=2, amount=Decimal("200.00"), new_customer_legal_name="Second Shop")
+    _record(app, w, extra_device_pairs=1, amount=Decimal("150.00"))
+    _record(app, w, extra_device_pairs=2, amount=Decimal("200.00"), new_customer_legal_name="Second Shop")
     force_login(client, app, w["manager"])
     body = client.get("/licenses/issuance/sales").get_data(as_text=True)
-    assert "1 extra devices" not in body
-    assert "1 extra device" in body and "2 extra devices" in body
+    assert "1 extra pairs" not in body
+    assert "+ 1 extra pair" in body and "+ 2 extra pairs" in body
     assert "&middot; PENDING" not in body
     assert "&middot; Pending" in body

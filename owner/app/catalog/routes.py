@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal, InvalidOperation
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
@@ -60,7 +61,8 @@ def plan_detail(plan_id):
     plan = db_session.get(Plan, plan_id)
     if plan is None:
         return jsonify({"error": "not_found"}), 404
-    return render_template("catalog/plan_detail.html", plan=plan)
+    current_price = next((p for p in plan.prices if p.effective_until is None), None)
+    return render_template("catalog/plan_detail.html", plan=plan, current_price=current_price)
 
 
 @bp.route("/plans/<uuid:plan_id>/prices", methods=["POST"])
@@ -70,12 +72,27 @@ def add_price(plan_id):
     plan = db_session.get(Plan, plan_id)
     if plan is None:
         return jsonify({"error": "not_found"}), 404
+    # Step 0 packages: the form now carries the setup fee (pre-filled with
+    # the current one). Before, every new price row was written with
+    # setup_fee 0, so a price change from this screen silently dropped
+    # Package 1's 150 first-time fee. A form without the field keeps the
+    # current fee (add_plan_price's own default) rather than zeroing it.
+    raw_setup_fee = (request.form.get("setup_fee") or "").strip()
+    setup_fee = None
+    if raw_setup_fee:
+        try:
+            setup_fee = Decimal(raw_setup_fee)
+        except InvalidOperation:
+            setup_fee = Decimal("NaN")
+        if not setup_fee.is_finite() or setup_fee < 0:
+            return jsonify({"error": "invalid_setup_fee"}), 400
     add_plan_price(
         plan,
         request.form.get("base_price"),
         request.form.get("currency", plan.currency),
         date.fromisoformat(request.form.get("effective_from")),
         actor.id,
+        setup_fee=setup_fee,
     )
     return redirect(url_for("catalog.plan_detail", plan_id=plan_id))
 

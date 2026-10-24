@@ -62,6 +62,11 @@ _CANONICAL_ADDONS = [
     ("RETAIL_OWNER_DASHBOARD", "AURA_RETAIL", "Customer Owner Dashboard", "DRAFT"),
     ("CLOUD_BACKUP", "AURA_RETAIL", "Cloud Backup", "DRAFT"),
     ("EXTRA_DEVICE", "AURA_RETAIL", "Extra Device", "PLANNED"),
+    # The owner's rule (2026-10-24): extra devices are sold only as a pair,
+    # 1 desktop + 1 phone, 50 JOD once. One unit = one pair = 2 devices on
+    # the licence (commercial_sales/catalog_for_sales.py). PLANNED here like
+    # every other add-on; `flask seed-packages` prices it and puts it on sale.
+    ("EXTRA_DEVICE_PAIR", "AURA_RETAIL", "Extra device pair (1 desktop + 1 phone)", "PLANNED"),
     ("PRIORITY_SUPPORT", "AURA_RETAIL", "Priority Support", "PLANNED"),
     # The business owner's price list, 2026-09-05: a new branch is a paid
     # add-on (250 JOD). Seeded PLANNED like everything else here -- nothing
@@ -325,15 +330,26 @@ def import_release_manifest(manifest: dict, actor_staff_user_id: uuid.UUID | Non
     return {"created": created, "skipped_duplicates": skipped_duplicates, "rejected": rejected}
 
 
-def add_plan_price(plan: Plan, base_price, currency: str, effective_from: date, actor_staff_user_id) -> PlanPrice:
+def add_plan_price(plan: Plan, base_price, currency: str, effective_from: date, actor_staff_user_id, *, setup_fee=None) -> PlanPrice:
     """Never overwrites a historical price -- closes the previous current row's
-    effective_until and inserts a new one (Part J)."""
+    effective_until and inserts a new one (Part J).
+
+    setup_fee: the one-time fee a NEW sale adds to the first period (the
+    owner's Package 1: 100 a year + 150 first time). None keeps the current
+    row's setup fee. Measured on 7571c3df: this function -- the catalog
+    screen's only price writer -- wrote setup_fee=0 on every new row, so
+    changing Package 1's yearly price from the screen would have silently
+    dropped its 150 first-time fee and sold the first year for 100."""
     current = db_session.execute(
         select(PlanPrice).where(PlanPrice.plan_id == plan.id, PlanPrice.effective_until.is_(None))
     ).scalars().first()
+    if setup_fee is None:
+        setup_fee = current.setup_fee if current is not None else Decimal("0")
     if current is not None:
         current.effective_until = effective_from
-    new_price = PlanPrice(plan_id=plan.id, base_price=base_price, currency=currency, effective_from=effective_from)
+    new_price = PlanPrice(
+        plan_id=plan.id, base_price=base_price, setup_fee=setup_fee, currency=currency, effective_from=effective_from
+    )
     db_session.add(new_price)
     db_session.commit()
     audit_record(
@@ -342,7 +358,10 @@ def add_plan_price(plan: Plan, base_price, currency: str, effective_from: date, 
         action_code="PLAN_PRICE_ADDED",
         entity_type="plan",
         entity_public_id=str(plan.id),
-        after_state={"base_price": str(base_price), "currency": currency, "effective_from": str(effective_from)},
+        after_state={
+            "base_price": str(base_price), "setup_fee": str(setup_fee), "currency": currency,
+            "effective_from": str(effective_from),
+        },
     )
     return new_price
 

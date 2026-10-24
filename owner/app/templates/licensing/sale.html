@@ -41,13 +41,15 @@
     <label for="sale-plan-id">{{ _("Package") }}</label>
     <select id="sale-plan-id" name="plan_id" required>
       {% for pkg in packages %}
-      <option value="{{ pkg.plan_id }}" {% if fv.get("plan_id") == pkg.plan_id|string %}selected{% endif %}>{{ pkg.name }} -- {{ pkg.unit_price }} {{ pkg.currency }} ({{ pkg.included_device_count }} {{ _("devices included") }}{% if pkg.extra_device_price is not none %}; {{ _("extra device") }} {{ pkg.extra_device_price }} {{ pkg.currency }}{% endif %})</option>
+      {# Step 0 packages: what the customer pays now (the first period + any
+         first-time fee), what each later period costs, and the contract. #}
+      <option value="{{ pkg.plan_id }}" {% if fv.get("plan_id") == pkg.plan_id|string %}selected{% endif %}>{{ pkg.name }} -- {{ _("first payment") }} {{ pkg.first_sale_unit_price }} {{ pkg.currency }}, {{ _("then") }} {{ pkg.renewal_unit_price }} {{ pkg.currency }} {% if pkg.billing_model == "MONTHLY" %}{{ _("a month") }}{% elif pkg.billing_model == "ANNUAL" %}{{ _("a year") }}{% else %}{{ billing_model_label(pkg.billing_model) }}{% endif %}{% if pkg.contract_term_months %}; {{ _("%(months)s-month contract", months=pkg.contract_term_months) }}{% endif %} ({{ pkg.included_device_count }} {{ _("devices included") }}{% if pkg.extra_pair_price is not none %}; {{ _("extra pair (1 desktop + 1 phone)") }} {{ pkg.extra_pair_price }} {{ pkg.currency }}{% endif %})</option>
       {% else %}
       <option value="" disabled>{{ _("No sellable packages yet -- set an effective date and current price on a plan first.") }}</option>
       {% endfor %}
     </select>
-    <label for="sale-extra-devices">{{ _("Extra devices beyond the package's included count") }}</label>
-    <input id="sale-extra-devices" name="extra_devices" type="number" value="{{ fv.get("extra_devices", "0") }}" min="0">
+    <label for="sale-extra-device-pairs">{{ _("Extra device pairs (each pair is 1 desktop + 1 phone, paid once, not on the renewal)") }}</label>
+    <input id="sale-extra-device-pairs" name="extra_device_pairs" type="number" value="{{ fv.get("extra_device_pairs", "0") }}" min="0" step="1">
 
     <h3>{{ _("3. Seller") }}</h3>
     {% if may_choose_seller %}
@@ -63,7 +65,7 @@
     {% endif %}
 
     <h3>{{ _("4. Payment") }}</h3>
-    <label for="sale-amount">{{ _("Amount paid (the full price)") }}</label>
+    <label for="sale-amount">{{ _("Amount paid (the full first payment, extra pairs included)") }}</label>
     <input id="sale-amount" name="amount" inputmode="decimal" value="{{ fv.get("amount", "") }}" required dir="ltr">
     <label for="sale-method">{{ _("How the customer paid") }}</label>
     <select id="sale-method" name="method">

@@ -50,6 +50,33 @@ def register_cli(app: Flask) -> None:
             raise click.ClickException(str(exc))
         click.echo(json.dumps(result))
 
+    @app.cli.command("seed-packages")
+    @click.option("--retire-other-retail-plans", is_flag=True, default=False,
+                  help="Retire every other sellable Aura Retail plan (a plan an open sale still needs is kept).")
+    def seed_packages_cmd(retire_other_retail_plans: bool):
+        """Put the owner's three Aura Retail packages (2026-10-24) and the
+        50 JOD extra device pair into the price list (idempotent). Creates
+        what is missing, never changes what exists: a package or price that
+        differs is REPORTED under "differs". See app/catalog/package_seed.py."""
+        from app.catalog.package_seed import seed_packages
+
+        try:
+            result = seed_packages(retire_other_retail_plans=retire_other_retail_plans)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
+        click.echo(json.dumps(result, indent=2))
+        if result["differs"]:
+            click.echo("WARNING: some packages or prices differ from the owner's list and were left as they are.")
+        if result["other_sellable_retail_plans"]:
+            click.echo("NOTE: other Aura Retail plans are still on the sale screen: "
+                       + ", ".join(result["other_sellable_retail_plans"])
+                       + " (run again with --retire-other-retail-plans to retire them).")
+        if result["kept_for_open_sales"]:
+            click.echo("NOTE: kept on sale because an open sale needs them: " + ", ".join(result["kept_for_open_sales"]))
+        if result["single_extra_device_on_sale"]:
+            click.echo("NOTE: the single EXTRA_DEVICE add-on is on sale; the quote screen can still sell one device "
+                       "at a time. Retire it on the catalog screen if no open quote uses it.")
+
     @app.cli.command("create-superadmin")
     @click.option("--email", prompt=True)
     @click.option("--display-name", prompt="Display name")

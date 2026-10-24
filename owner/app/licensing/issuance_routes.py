@@ -43,7 +43,7 @@ from app.commercial_sales.direct_sale import (
     DIRECT_SALE_PAYMENT_METHODS,
     DirectSaleError,
     confirm_direct_sale,
-    extra_device_offer,
+    extra_device_pair_offer,
     list_sales_awaiting_confirmation,
     parse_amount,
     record_direct_sale,
@@ -121,8 +121,8 @@ def _render_sale_form(*, error: str | None, idempotency_key: str, form_values=No
     may_choose_seller = CHOOSE_SELLER_PERMISSION in codes
     packages = _sellable_packages()
     for package in packages:
-        offer = extra_device_offer(uuid.UUID(package["product_id"]))
-        package["extra_device_price"] = offer["unit_price"] if offer and offer["currency"] == package["currency"] else None
+        offer = extra_device_pair_offer(uuid.UUID(package["product_id"]))
+        package["extra_pair_price"] = offer["unit_price"] if offer and offer["currency"] == package["currency"] else None
     return render_template(
         "licensing/sale.html",
         customers=_customers_visible_to(actor, codes),
@@ -163,10 +163,13 @@ def record_sale():
     idempotency_key = form.get("idempotency_key")
     if not idempotency_key:
         return _sale_error(_("An idempotency key is required to record a sale."), str(uuid.uuid4()))
+    # Step 0 packages: extra devices are sold only as PAIRS (1 desktop + 1
+    # phone). The old single-device field is no longer read: a form posting
+    # it sells no device.
     try:
-        extra_devices = int(form.get("extra_devices") or "0")
+        extra_device_pairs = int(form.get("extra_device_pairs") or "0")
     except ValueError:
-        return _sale_error(_("Extra devices must be a whole number."), idempotency_key)
+        return _sale_error(localize_direct_sale_error("EXTRA_PAIRS_NOT_A_NUMBER"), idempotency_key)
     try:
         payment_date = date.fromisoformat(form.get("payment_date") or "")
     except ValueError:
@@ -177,7 +180,7 @@ def record_sale():
             customer_id=form.get("customer_id") or None,
             new_customer_legal_name=form.get("new_customer_legal_name") or None,
             plan_id=form.get("plan_id") or None,
-            extra_devices=extra_devices,
+            extra_device_pairs=extra_device_pairs,
             sales_owner_employee_profile_id=form.get("sales_owner_employee_profile_id") or None,
             amount=amount,
             method=form.get("method") or "",

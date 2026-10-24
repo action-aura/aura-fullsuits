@@ -45,6 +45,23 @@ DEFAULT_MAX_DISCOUNT_PERCENTAGE_WITHOUT_APPROVAL = Decimal("10")
 # one-screen sale (its price). Matched by code, not by a new column.
 EXTRA_DEVICE_ADDON_CODE = "EXTRA_DEVICE"
 
+# The owner's rule (Aura Growth Plan, 2026-10-24): extra devices are sold
+# ONLY as a pair -- 1 desktop + 1 phone, 50 JOD once, the same on every
+# package, never on the renewal. One unit of this add-on is one PAIR, so an
+# order line's quantity is the number of pairs. Seeded PLANNED by
+# seed_canonical_catalog (inert), priced and put on sale by `flask
+# seed-packages`. The one-screen sale sells only this; the single
+# EXTRA_DEVICE above stays for orders made before (and for the quote
+# screen), never as a stand-in for a pair.
+EXTRA_DEVICE_PAIR_ADDON_CODE = "EXTRA_DEVICE_PAIR"
+
+# Devices one unit of each device add-on adds to a licence. A licence
+# counts devices as ONE total (License.device_limit; licensing_service/
+# activation.py refuses a new device once the active count reaches it) --
+# desktop vs phone is not enforced separately, so a pair is simply +2.
+# Matched by code, like EXTRA_DEVICE_ADDON_CODE, not by a new column.
+DEVICES_PER_UNIT_BY_ADDON_CODE = {EXTRA_DEVICE_ADDON_CODE: 1, EXTRA_DEVICE_PAIR_ADDON_CODE: 2}
+
 
 def _entitlement_summary(rows: list[tuple[EntitlementDefinition, dict]]) -> dict:
     return {ed.entitlement_code: value for ed, value in rows}
@@ -96,6 +113,18 @@ def describe_plan_for_sale(plan_id: uuid.UUID, *, as_of: date | None = None) -> 
         "price_version_id": str(current_price.id),
         "unit_price": current_price.base_price,
         "setup_fee": current_price.setup_fee,
+        # Step 0 (2026-10-24): what a NEW sale of this package costs -- the
+        # first period plus the one-time setup fee (the owner's Package 1:
+        # 100 a year + 150 first time = 250). Before, setup_fee was stored
+        # and charged nowhere: the one-screen sale and the quote pipeline
+        # both priced base_price only (P1 sold for 100). Both now price a
+        # new sale from this one key, so one package never has two prices.
+        "first_sale_unit_price": Decimal(current_price.base_price) + Decimal(current_price.setup_fee or 0),
+        # What each later period costs: base_price alone -- no setup fee,
+        # and never the extra pairs (the owner: the 100 JOD renewal stays
+        # 100 however many pairs the shop bought). packages.renewal_price.
+        "renewal_unit_price": Decimal(current_price.base_price),
+        "contract_term_months": plan.contract_term_months,
         "currency": current_price.currency,
         "effective_start": plan.effective_date.isoformat() if plan.effective_date else None,
         "effective_end": plan.retirement_date.isoformat() if plan.retirement_date else None,

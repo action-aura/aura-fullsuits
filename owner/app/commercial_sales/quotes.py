@@ -47,6 +47,15 @@ def _resolve_catalog_line(*, plan_id: uuid.UUID | None, addon_id: uuid.UUID | No
     catalog_item = describe_plan_for_sale(plan_id) if plan_id else describe_addon_for_sale(addon_id)
     if catalog_item is None:
         raise CommercialSalesError("CATALOG_ITEM_INACTIVE")
+    if plan_id:
+        # Step 0 packages (2026-10-24): a quoted package is a NEW sale, so its
+        # catalog price is the first-sale price -- base_price + setup_fee,
+        # the same key the one-screen sale prices from (Package 1: 250, not
+        # 100). Measured on 7571c3df: a quote line for Package 1 was 100.00
+        # while the sale screen now charges 250 -- one package, two prices.
+        # Overrides, discounts and their approval threshold all compare
+        # against this price, as they always compared against the catalog's.
+        catalog_item = {**catalog_item, "unit_price": catalog_item["first_sale_unit_price"]}
     return catalog_item
 
 

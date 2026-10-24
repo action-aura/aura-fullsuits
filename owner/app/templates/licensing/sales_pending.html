@@ -44,7 +44,7 @@
     <tr>
       <td dir="ltr">{{ sale.order.order_number }}</td>
       <td>{{ sale.customer.legal_name if sale.customer else "" }}</td>
-      <td>{{ sale.plan.name if sale.plan else "" }}{% if sale.extra_devices == 1 %} {{ _("+ 1 extra device") }}{% elif sale.extra_devices %} {{ _("+ %(count)d extra devices", count=sale.extra_devices) }}{% endif %}</td>
+      <td>{{ sale.plan.name if sale.plan else "" }}{% if sale.extra_device_pairs == 1 %} {{ _("+ 1 extra pair") }}{% elif sale.extra_device_pairs %} {{ _("+ %(count)d extra pairs", count=sale.extra_device_pairs) }}{% endif %}{% if sale.extra_devices == 1 %} {{ _("+ 1 extra device") }}{% elif sale.extra_devices %} {{ _("+ %(count)d extra devices", count=sale.extra_devices) }}{% endif %}</td>
       <td>{{ sale.seller.full_name if sale.seller else "" }}</td>
       <td>
         {% if sale.payment %}

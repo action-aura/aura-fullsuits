@@ -8784,3 +8784,87 @@ msgstr "This payment was recorded for a different invoice; it can only be alloca
 #: app/i18n_labels.py
 msgid "This payment is confirmed and allocated to an invoice. Reverse the allocation on the invoice page first, then correct the payment."
 msgstr "This payment is confirmed and allocated to an invoice. Reverse the allocation on the invoice page first, then correct the payment."
+
+#: app/i18n_labels.py
+msgid "Packages put in the price list"
+msgstr "Packages put in the price list"
+
+#: app/i18n_labels.py
+msgid "Extra device pairs must be a whole number."
+msgstr "Extra device pairs must be a whole number."
+
+#: app/i18n_labels.py
+msgid "Extra device pairs must not be negative."
+msgstr "Extra device pairs must not be negative."
+
+#: app/i18n_labels.py
+msgid "One sale can add at most %(max)s extra device pairs. Check the number you typed."
+msgstr "One sale can add at most %(max)s extra device pairs. Check the number you typed."
+
+#: app/i18n_labels.py
+msgid "Extra device pairs are not on sale for this package yet: the Extra Device Pair add-on needs a price and must be Available in the catalog."
+msgstr "Extra device pairs are not on sale for this package yet: the Extra Device Pair add-on needs a price and must be Available in the catalog."
+
+#: app/i18n_labels.py
+msgid "The Extra Device Pair add-on is priced in a different currency than this package."
+msgstr "The Extra Device Pair add-on is priced in a different currency than this package."
+
+#: app/i18n_labels.py
+msgid "This sale's total is too large to record (at most %(max)s). Check the number of extra device pairs."
+msgstr "This sale's total is too large to record (at most %(max)s). Check the number of extra device pairs."
+
+#: app/templates/catalog/plan_detail.html
+msgid "Contract"
+msgstr "Contract"
+
+#: app/templates/catalog/plan_detail.html
+msgid "%(months)s months"
+msgstr "%(months)s months"
+
+#: app/templates/catalog/plan_detail.html
+msgid "No contract"
+msgstr "No contract"
+
+#: app/templates/catalog/plan_detail.html
+msgid "Setup fee (first sale only)"
+msgstr "Setup fee (first sale only)"
+
+#: app/templates/licensing/sale.html
+msgid "first payment"
+msgstr "first payment"
+
+#: app/templates/licensing/sale.html
+msgid "then"
+msgstr "then"
+
+#: app/templates/licensing/sale.html
+msgid "a month"
+msgstr "a month"
+
+#: app/templates/licensing/sale.html
+msgid "a year"
+msgstr "a year"
+
+#: app/templates/licensing/sale.html
+msgid "%(months)s-month contract"
+msgstr "%(months)s-month contract"
+
+#: app/templates/licensing/sale.html
+msgid "extra pair (1 desktop + 1 phone)"
+msgstr "extra pair (1 desktop + 1 phone)"
+
+#: app/templates/licensing/sale.html
+msgid "Extra device pairs (each pair is 1 desktop + 1 phone, paid once, not on the renewal)"
+msgstr "Extra device pairs (each pair is 1 desktop + 1 phone, paid once, not on the renewal)"
+
+#: app/templates/licensing/sale.html
+msgid "Amount paid (the full first payment, extra pairs included)"
+msgstr "Amount paid (the full first payment, extra pairs included)"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ 1 extra pair"
+msgstr "+ 1 extra pair"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ %(count)d extra pairs"
+msgstr "+ %(count)d extra pairs"

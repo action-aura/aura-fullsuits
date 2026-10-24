@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -107,6 +107,9 @@ class ProductVersion(Base, UUIDPKMixin, TimestampMixin):
 
 class Plan(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_plans"
+    __table_args__ = (
+        CheckConstraint("contract_term_months IS NULL OR contract_term_months > 0", name="ck_owner_plans_contract_term_positive"),
+    )
 
     plan_code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_products.id"), nullable=False)
@@ -115,6 +118,14 @@ class Plan(Base, UUIDPKMixin, TimestampMixin):
     lifecycle_status: Mapped[str] = mapped_column(String(32), default="DRAFT", nullable=False)
     billing_model: Mapped[str] = mapped_column(String(32), nullable=False)  # ONE_TIME/MONTHLY/ANNUAL/PILOT/CUSTOM
     billing_interval_months: Mapped[int | None] = mapped_column()
+    # Step 0 (2026-10-24, revision 1dfa1f6108b2): how many months the
+    # customer commits to -- the owner's Package 2 is 35 JOD a month on a
+    # 12-month contract, Package 3 20 JOD a month on 24. Distinct from
+    # billing_interval_months (how often money is due, which is also the
+    # licence term: a monthly package's licence runs through the paid month).
+    # NULL = no contract (Package 1: pay a year, renew a year). Copied onto
+    # the Subscription at fulfilment (contract_term_months/contract_ends_on).
+    contract_term_months: Mapped[int | None] = mapped_column()
     currency: Mapped[str] = mapped_column(String(8), default="USD", nullable=False)
     included_device_count: Mapped[int] = mapped_column(default=1, nullable=False)
     max_device_count: Mapped[int | None] = mapped_column()

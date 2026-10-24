@@ -8743,3 +8743,87 @@ msgstr "سُجلت هذه الدفعة لفاتورة أخرى؛ لا يمكن �
 #: app/i18n_labels.py
 msgid "This payment is confirmed and allocated to an invoice. Reverse the allocation on the invoice page first, then correct the payment."
 msgstr "هذه الدفعة مؤكدة ومخصصة لفاتورة. ألغِ التخصيص من صفحة الفاتورة أولًا، ثم صحّح الدفعة."
+
+#: app/i18n_labels.py
+msgid "Packages put in the price list"
+msgstr "وُضعت الباقات في قائمة الأسعار"
+
+#: app/i18n_labels.py
+msgid "Extra device pairs must be a whole number."
+msgstr "يجب أن يكون عدد أزواج الأجهزة الإضافية عددًا صحيحًا."
+
+#: app/i18n_labels.py
+msgid "Extra device pairs must not be negative."
+msgstr "لا يمكن أن يكون عدد أزواج الأجهزة الإضافية سالبًا."
+
+#: app/i18n_labels.py
+msgid "One sale can add at most %(max)s extra device pairs. Check the number you typed."
+msgstr "يمكن لعملية بيع واحدة أن تضيف %(max)s زوج أجهزة إضافيًا على الأكثر. تحقق من الرقم الذي كتبته."
+
+#: app/i18n_labels.py
+msgid "Extra device pairs are not on sale for this package yet: the Extra Device Pair add-on needs a price and must be Available in the catalog."
+msgstr "أزواج الأجهزة الإضافية غير معروضة للبيع لهذه الباقة بعد: إضافة زوج الأجهزة الإضافي تحتاج إلى سعر ويجب أن تكون متاحة في الكتالوج."
+
+#: app/i18n_labels.py
+msgid "The Extra Device Pair add-on is priced in a different currency than this package."
+msgstr "إضافة زوج الأجهزة الإضافي مسعّرة بعملة مختلفة عن عملة هذه الباقة."
+
+#: app/i18n_labels.py
+msgid "This sale's total is too large to record (at most %(max)s). Check the number of extra device pairs."
+msgstr "مجموع عملية البيع هذه أكبر من أن يُسجَّل (الحد الأقصى %(max)s). تحقق من عدد أزواج الأجهزة الإضافية."
+
+#: app/templates/catalog/plan_detail.html
+msgid "Contract"
+msgstr "العقد"
+
+#: app/templates/catalog/plan_detail.html
+msgid "%(months)s months"
+msgstr "%(months)s شهرًا"
+
+#: app/templates/catalog/plan_detail.html
+msgid "No contract"
+msgstr "بدون عقد"
+
+#: app/templates/catalog/plan_detail.html
+msgid "Setup fee (first sale only)"
+msgstr "رسوم التأسيس (عند البيع الأول فقط)"
+
+#: app/templates/licensing/sale.html
+msgid "first payment"
+msgstr "الدفعة الأولى"
+
+#: app/templates/licensing/sale.html
+msgid "then"
+msgstr "ثم"
+
+#: app/templates/licensing/sale.html
+msgid "a month"
+msgstr "شهريًا"
+
+#: app/templates/licensing/sale.html
+msgid "a year"
+msgstr "سنويًا"
+
+#: app/templates/licensing/sale.html
+msgid "%(months)s-month contract"
+msgstr "عقد لمدة %(months)s شهرًا"
+
+#: app/templates/licensing/sale.html
+msgid "extra pair (1 desktop + 1 phone)"
+msgstr "زوج إضافي (جهاز مكتبي + هاتف)"
+
+#: app/templates/licensing/sale.html
+msgid "Extra device pairs (each pair is 1 desktop + 1 phone, paid once, not on the renewal)"
+msgstr "أزواج الأجهزة الإضافية (كل زوج جهاز مكتبي + هاتف، يُدفع مرة واحدة، ولا يدخل في التجديد)"
+
+#: app/templates/licensing/sale.html
+msgid "Amount paid (the full first payment, extra pairs included)"
+msgstr "المبلغ المدفوع (الدفعة الأولى كاملة، شاملة الأزواج الإضافية)"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ 1 extra pair"
+msgstr "+ زوج أجهزة إضافي واحد"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ %(count)d extra pairs"
+msgstr "+ %(count)d أزواج أجهزة إضافية"

@@ -74,7 +74,9 @@ from app.audit.services import record as audit_record
 from app.commercial_sales.allocation import allocate_payment
 from app.commercial_sales.calculator import LineInput, calculate_document, calculate_line
 from app.commercial_sales.catalog_for_sales import (
+    DEVICES_PER_UNIT_BY_ADDON_CODE,
     EXTRA_DEVICE_ADDON_CODE,
+    EXTRA_DEVICE_PAIR_ADDON_CODE,
     describe_addon_for_sale,
     describe_plan_for_sale,
 )
@@ -124,6 +126,8 @@ _ROW_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "urn:aura-owner:commercial_sa
 
 _MAX_REFERENCE_LENGTH = 128  # PaymentRecord.reference is String(128)
 
+DEVICES_PER_PAIR = DEVICES_PER_UNIT_BY_ADDON_CODE[EXTRA_DEVICE_PAIR_ADDON_CODE]
+
 # Step 0 fix round 3 -- sizes checked BEFORE any write. Measured on
 # 580cd65a (verifier probe P3): extra_devices=10**9 on a package with no
 # maximum reached the database as "numeric field overflow" -- a 500 -- with
@@ -132,7 +136,9 @@ _MAX_REFERENCE_LENGTH = 128  # PaymentRecord.reference is String(128)
 # deals go through a quote). The total cap is the money columns' own
 # capacity (Numeric(12, 2): below 10^10), so no line, order, invoice or
 # payment of a sale that passed this check can overflow later.
-MAX_EXTRA_DEVICES_PER_SALE = 1000
+# Step 0 packages: the screen sells PAIRS (2 devices each), so the cap is
+# half the old 1000 single devices -- the same device ceiling.
+MAX_EXTRA_DEVICE_PAIRS_PER_SALE = 500
 MAX_SALE_TOTAL = Decimal("9999999999.99")
 
 # English, request-context-free, keyed by a stable code -- the
@@ -155,15 +161,16 @@ DIRECT_SALE_MESSAGES = {
     "PACKAGE_NOT_FOUND": "Selected package was not found.",
     "PACKAGE_NOT_SELLABLE": "Selected package is not currently sellable (check its effective date and price).",
     "PACKAGE_NO_PLATFORMS": "Selected package has no supported platforms configured.",
-    "EXTRA_DEVICES_NEGATIVE": "Extra devices must not be negative.",
-    "EXTRA_DEVICES_TOO_MANY": "One sale can add at most %(max)s extra devices. Check the number you typed.",
+    "EXTRA_PAIRS_NOT_A_NUMBER": "Extra device pairs must be a whole number.",
+    "EXTRA_PAIRS_NEGATIVE": "Extra device pairs must not be negative.",
+    "EXTRA_PAIRS_TOO_MANY": "One sale can add at most %(max)s extra device pairs. Check the number you typed.",
     "DEVICE_COUNT_OVER_PACKAGE_MAX": "Requested device count (%(requested)s) exceeds this package's maximum (%(max)s).",
-    "EXTRA_DEVICES_NOT_ON_SALE": (
-        "Extra devices are not on sale for this package yet: the Extra Device add-on needs a price "
+    "EXTRA_PAIRS_NOT_ON_SALE": (
+        "Extra device pairs are not on sale for this package yet: the Extra Device Pair add-on needs a price "
         "and must be Available in the catalog."
     ),
-    "EXTRA_DEVICE_CURRENCY_MISMATCH": "The Extra Device add-on is priced in a different currency than this package.",
-    "TOTAL_TOO_LARGE": "This sale's total is too large to record (at most %(max)s). Check the number of extra devices.",
+    "EXTRA_PAIR_CURRENCY_MISMATCH": "The Extra Device Pair add-on is priced in a different currency than this package.",
+    "TOTAL_TOO_LARGE": "This sale's total is too large to record (at most %(max)s). Check the number of extra device pairs.",
     "ZERO_PRICE": "This package costs nothing, so there is no payment to record. Use a no-charge licence instead.",
     "METHOD_NOT_ALLOWED": "The customer pays the company by CliQ or bank transfer; sellers never take cash.",
     "REFERENCE_REQUIRED": "Type the CliQ or transfer reference number.",
@@ -244,13 +251,17 @@ def _row_id_for(idempotency_key: str, kind: str) -> uuid.UUID:
     return uuid.uuid5(_ROW_ID_NAMESPACE, f"{kind}|{idempotency_key}")
 
 
-def extra_device_offer(product_id) -> dict | None:
-    """The sellable EXTRA_DEVICE add-on for this product, or None. Its price
-    is the only price an extra device ever gets on this screen -- never a
-    typed one. addon_code is unique catalog-wide, so only the one product
-    that add-on belongs to can sell extra devices (named limitation)."""
+def extra_device_pair_offer(product_id) -> dict | None:
+    """The sellable EXTRA_DEVICE_PAIR add-on for this product, or None. Its
+    price is the only price an extra pair ever gets on this screen -- never a
+    typed one. The owner sells extra devices ONLY as a pair (1 desktop + 1
+    phone, 50 JOD once), so this screen never falls back to the single
+    EXTRA_DEVICE add-on, even when that one is on sale (before the packages
+    it sold single devices at that add-on's price). addon_code is unique
+    catalog-wide, so only the product that add-on belongs to (Aura Retail)
+    can sell extra pairs (named limitation)."""
     addon = db_session.execute(
-        select(Addon).where(Addon.addon_code == EXTRA_DEVICE_ADDON_CODE, Addon.product_id == product_id)
+        select(Addon).where(Addon.addon_code == EXTRA_DEVICE_PAIR_ADDON_CODE, Addon.product_id == product_id)
     ).scalars().first()
     if addon is None:
         return None
@@ -317,39 +328,64 @@ def _resolve_customer(customer_id, new_customer_legal_name, *, actor_staff_user_
     return None, legal_name
 
 
-def _price_sale(plan: Plan, extra_devices: int) -> tuple[dict, dict | None, list[tuple[dict, int, object]], Decimal, str]:
+def _package_line_description(plan_item: dict) -> str:
+    if plan_item["setup_fee"]:
+        return f"{plan_item['name']} -- first period + {plan_item['setup_fee']} {plan_item['currency']} setup fee"
+    return plan_item["name"]
+
+
+def _price_sale(plan: Plan, extra_device_pairs: int) -> tuple[dict, dict | None, list[dict], Decimal, str]:
     """Catalog price of the sale, through the one shared calculator
-    (calculator.py) -- the plan's current base price plus extra_devices x the
-    EXTRA_DEVICE add-on's price. Returns (plan item, add-on item, lines,
-    total, currency). setup_fee is NOT added: the quote pipeline never adds
-    it either (quotes.py prices base_price only), and the two paths must not
-    price the same package differently; how a first-time fee is charged is
-    the packages item's decision."""
+    (calculator.py). Returns (plan item, add-on item, lines, total,
+    currency); each line is {unit_price, quantity, addon_id,
+    price_version_id, description}.
+
+    Step 0 packages (2026-10-24). The package line is the package's
+    FIRST-SALE price -- base_price + setup_fee (catalog_for_sales:
+    first_sale_unit_price): the owner's Package 1 is 250 the first year =
+    100 a year + 150 first time. Measured on 7571c3df: this priced
+    base_price alone, refused 250 with "The amount paid must be the full
+    price of this sale: 100.00 JOD." and sold Package 1 for 100. The setup
+    fee stays ON the package line (its description says so), not a line of
+    its own: one plan line per order is one package sold, which is what the
+    commission ladder will count.
+
+    Extra devices are sold only as PAIRS (EXTRA_DEVICE_PAIR, quantity =
+    pairs); each pair is 2 devices against the package maximum. On 7571c3df
+    a posted pair count was ignored: P1 at 100 with 2 pairs was recorded as
+    one 100.00 package line and the licence had the included 2 devices."""
     plan_item = describe_plan_for_sale(plan.id)
     if plan_item is None:
         raise DirectSaleError("PACKAGE_NOT_SELLABLE")
     if not plan_item["supported_platform_codes"]:
         raise DirectSaleError("PACKAGE_NO_PLATFORMS")
-    if extra_devices < 0:
-        raise DirectSaleError("EXTRA_DEVICES_NEGATIVE")
-    if extra_devices > MAX_EXTRA_DEVICES_PER_SALE:
-        raise DirectSaleError("EXTRA_DEVICES_TOO_MANY", max=MAX_EXTRA_DEVICES_PER_SALE)
-    device_limit = plan.included_device_count + extra_devices
+    if extra_device_pairs < 0:
+        raise DirectSaleError("EXTRA_PAIRS_NEGATIVE")
+    if extra_device_pairs > MAX_EXTRA_DEVICE_PAIRS_PER_SALE:
+        raise DirectSaleError("EXTRA_PAIRS_TOO_MANY", max=MAX_EXTRA_DEVICE_PAIRS_PER_SALE)
+    device_limit = plan.included_device_count + extra_device_pairs * DEVICES_PER_PAIR
     if plan.max_device_count is not None and device_limit > plan.max_device_count:
         raise DirectSaleError("DEVICE_COUNT_OVER_PACKAGE_MAX", requested=device_limit, max=plan.max_device_count)
 
-    lines = [(plan_item, 1, None)]
+    lines = [{
+        "unit_price": plan_item["first_sale_unit_price"], "quantity": 1, "addon_id": None,
+        "price_version_id": plan_item["price_version_id"], "description": _package_line_description(plan_item),
+    }]
     addon_item = None
-    if extra_devices > 0:
-        addon_item = extra_device_offer(plan.product_id)
+    if extra_device_pairs > 0:
+        addon_item = extra_device_pair_offer(plan.product_id)
         if addon_item is None:
-            raise DirectSaleError("EXTRA_DEVICES_NOT_ON_SALE")
+            raise DirectSaleError("EXTRA_PAIRS_NOT_ON_SALE")
         if addon_item["currency"] != plan_item["currency"]:
-            raise DirectSaleError("EXTRA_DEVICE_CURRENCY_MISMATCH")
-        lines.append((addon_item, extra_devices, uuid.UUID(addon_item["addon_id"])))
+            raise DirectSaleError("EXTRA_PAIR_CURRENCY_MISMATCH")
+        lines.append({
+            "unit_price": addon_item["unit_price"], "quantity": extra_device_pairs,
+            "addon_id": uuid.UUID(addon_item["addon_id"]), "price_version_id": addon_item["price_version_id"],
+            "description": addon_item["name"],
+        })
 
     document = calculate_document(
-        [LineInput(quantity=qty, unit_price=item["unit_price"], sort_order=i) for i, (item, qty, _addon) in enumerate(lines)]
+        [LineInput(quantity=line["quantity"], unit_price=line["unit_price"], sort_order=i) for i, line in enumerate(lines)]
     )
     if document.total <= 0:
         raise DirectSaleError("ZERO_PRICE")
@@ -379,13 +415,17 @@ def _validate_payment(*, amount: Decimal, currency: str, total: Decimal, method:
         raise DirectSaleError("AMOUNT_NOT_FULL_PRICE", total=total, currency=currency)
 
 
-def _extra_devices_on(order: SalesOrder) -> int:
+def _addon_quantity_on(order: SalesOrder, addon_code: str) -> int:
     rows = db_session.execute(
         select(SalesOrderLine.quantity)
         .join(Addon, Addon.id == SalesOrderLine.addon_id)
-        .where(SalesOrderLine.sales_order_id == order.id, Addon.addon_code == EXTRA_DEVICE_ADDON_CODE)
+        .where(SalesOrderLine.sales_order_id == order.id, Addon.addon_code == addon_code)
     ).scalars().all()
     return sum(rows)
+
+
+def _extra_pairs_on(order: SalesOrder) -> int:
+    return _addon_quantity_on(order, EXTRA_DEVICE_PAIR_ADDON_CODE)
 
 
 def _plan_id_on(order: SalesOrder):
@@ -394,8 +434,8 @@ def _plan_id_on(order: SalesOrder):
     ).scalars().first()
 
 
-def _check_same_sale(order: SalesOrder, *, idempotency_key, customer, legal_name, plan_id, extra_devices, seller) -> None:
-    """A key names one sale: the same customer choice, package, devices and
+def _check_same_sale(order: SalesOrder, *, idempotency_key, customer, legal_name, plan_id, extra_device_pairs, seller) -> None:
+    """A key names one sale: the same customer choice, package, pairs and
     seller every time (issuance.py's replay rule). Refused otherwise."""
     if customer is not None:
         same_customer = order.customer_id == customer.id
@@ -406,7 +446,10 @@ def _check_same_sale(order: SalesOrder, *, idempotency_key, customer, legal_name
     same = (
         same_customer
         and str(_plan_id_on(order)) == str(plan_id)
-        and _extra_devices_on(order) == extra_devices
+        and _extra_pairs_on(order) == extra_device_pairs
+        # A sale recorded before the pairs (single EXTRA_DEVICE lines) is
+        # never the same sale as a form that sells pairs.
+        and _addon_quantity_on(order, EXTRA_DEVICE_ADDON_CODE) == 0
         and order.created_by_employee_profile_id == seller.id
     )
     if not same:
@@ -435,7 +478,7 @@ def record_direct_sale(
     customer_id=None,
     new_customer_legal_name: str | None = None,
     plan_id,
-    extra_devices: int = 0,
+    extra_device_pairs: int = 0,
     sales_owner_employee_profile_id=None,
     amount: Decimal,
     method: str,
@@ -479,7 +522,7 @@ def record_direct_sale(
             # replayable even if its package has since stopped being sellable.
             _check_same_sale(
                 order, idempotency_key=idempotency_key, customer=customer, legal_name=legal_name,
-                plan_id=plan_id, extra_devices=extra_devices, seller=seller,
+                plan_id=plan_id, extra_device_pairs=extra_device_pairs, seller=seller,
             )
             payment = db_session.get(PaymentRecord, payment_id)
             if payment is not None:
@@ -500,7 +543,7 @@ def record_direct_sale(
             plan = None
         if plan is None:
             raise DirectSaleError("PACKAGE_NOT_FOUND")
-        plan_item, _addon_item, lines, total, currency = _price_sale(plan, extra_devices)
+        plan_item, _addon_item, lines, total, currency = _price_sale(plan, extra_device_pairs)
         _validate_payment(
             amount=amount, currency=currency, total=total, method=method,
             reference=reference, payment_date=payment_date, as_of=as_of,
@@ -550,16 +593,16 @@ def record_direct_sale(
         )
         db_session.add(order)
         db_session.flush()
-        for sort_order, (item, quantity, addon_id) in enumerate(lines):
-            line = calculate_line(LineInput(quantity=quantity, unit_price=item["unit_price"], sort_order=sort_order))
+        for sort_order, item in enumerate(lines):
+            line = calculate_line(LineInput(quantity=item["quantity"], unit_price=item["unit_price"], sort_order=sort_order))
             db_session.add(
                 SalesOrderLine(
                     sales_order_id=order.id,
-                    plan_id=plan.id if addon_id is None else None,
-                    addon_id=addon_id,
+                    plan_id=plan.id if item["addon_id"] is None else None,
+                    addon_id=item["addon_id"],
                     price_version_id=uuid.UUID(item["price_version_id"]),
-                    description=item["name"],
-                    quantity=quantity,
+                    description=item["description"],
+                    quantity=item["quantity"],
                     unit_price=item["unit_price"],
                     discount_amount=Decimal("0"),
                     line_total=line.line_net,
@@ -583,7 +626,7 @@ def record_direct_sale(
             after_state={
                 "order_number": order.order_number, "customer_id": str(customer.id), "source": "DIRECT_SALE",
                 "seller_employee_profile_id": str(seller.id), "plan_id": str(plan.id),
-                "extra_devices": extra_devices, "total": str(total), "currency": currency,
+                "extra_device_pairs": extra_device_pairs, "total": str(total), "currency": currency,
             },
         )
         _record_sale_payment(order, payment_id, amount=amount, method=method, reference=reference,
@@ -646,7 +689,9 @@ def list_sales_awaiting_confirmation(limit: int = 200) -> list[dict]:
             "customer": db_session.get(Customer, order.customer_id),
             "seller": seller,
             "plan": db_session.get(Plan, _plan_id_on(order)),
-            "extra_devices": _extra_devices_on(order),
+            "extra_device_pairs": _extra_pairs_on(order),
+            # Single extra devices on a sale recorded before the pairs.
+            "extra_devices": _addon_quantity_on(order, EXTRA_DEVICE_ADDON_CODE),
         })
     return sales
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,6 +13,12 @@ from app.models.base import Base, TimestampMixin, UUIDPKMixin
 
 class Subscription(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_subscriptions"
+    __table_args__ = (
+        CheckConstraint(
+            "contract_term_months IS NULL OR contract_term_months > 0",
+            name="ck_owner_subscriptions_contract_term_positive",
+        ),
+    )
 
     customer_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False
@@ -48,6 +54,14 @@ class Subscription(Base, UUIDPKMixin, TimestampMixin):
     # change any existing subscription-issuance condition -- see
     # docs/owner/phase9_5a/payment-and-fulfillment-contract.md.
     sales_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_sales_orders.id"))
+    # Step 0 (2026-10-24, revision 1dfa1f6108b2): the contract this
+    # subscription was sold on (Plan.contract_term_months at fulfilment) and
+    # the day it ends. Stored, not derived from start_date: start_date and
+    # end_date are the LICENCE term -- the paid period -- and renewals move
+    # them; the contract is fixed at the sale. Later monthly payments and the
+    # commission ladder read these. NULL = no contract.
+    contract_term_months: Mapped[int | None] = mapped_column()
+    contract_ends_on: Mapped[date | None] = mapped_column(Date)
 
     customer: Mapped["Customer"] = relationship()  # noqa: F821
     product: Mapped["Product"] = relationship()  # noqa: F821

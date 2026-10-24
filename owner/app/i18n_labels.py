@@ -668,6 +668,7 @@ def generic_audit_action_label(code: str) -> str:
         "LICENSE_ISSUED_NO_CHARGE": _("Licence issued without a payment"),
         "DIRECT_SALE_RECORDED": _("Sale recorded from the sale form"),
         "DIRECT_SALE_CONFIRMED": _("Sale confirmed and licence issued"),
+        "PACKAGES_SEEDED": _("Packages put in the price list"),
         "LICENSE_STATUS_CHANGED": _("License status changed"),
         "LICENSE_REPLACED": _("License replaced"),
         "LICENSE_CREATED": _("License created"),
@@ -984,15 +985,17 @@ def localize_direct_sale_error(code: str, **params) -> str:
         "PACKAGE_NOT_FOUND": _("Selected package was not found."),
         "PACKAGE_NOT_SELLABLE": _("Selected package is not currently sellable (check its effective date and price)."),
         "PACKAGE_NO_PLATFORMS": _("Selected package has no supported platforms configured."),
-        "EXTRA_DEVICES_NEGATIVE": _("Extra devices must not be negative."),
-        "EXTRA_DEVICES_TOO_MANY": _("One sale can add at most %(max)s extra devices. Check the number you typed."),
+        # Step 0 packages: the sale screen sells extra devices only as pairs.
+        "EXTRA_PAIRS_NOT_A_NUMBER": _("Extra device pairs must be a whole number."),
+        "EXTRA_PAIRS_NEGATIVE": _("Extra device pairs must not be negative."),
+        "EXTRA_PAIRS_TOO_MANY": _("One sale can add at most %(max)s extra device pairs. Check the number you typed."),
         "DEVICE_COUNT_OVER_PACKAGE_MAX": _("Requested device count (%(requested)s) exceeds this package's maximum (%(max)s)."),
-        "EXTRA_DEVICES_NOT_ON_SALE": _(
-            "Extra devices are not on sale for this package yet: the Extra Device add-on needs a price "
+        "EXTRA_PAIRS_NOT_ON_SALE": _(
+            "Extra device pairs are not on sale for this package yet: the Extra Device Pair add-on needs a price "
             "and must be Available in the catalog."
         ),
-        "EXTRA_DEVICE_CURRENCY_MISMATCH": _("The Extra Device add-on is priced in a different currency than this package."),
-        "TOTAL_TOO_LARGE": _("This sale's total is too large to record (at most %(max)s). Check the number of extra devices."),
+        "EXTRA_PAIR_CURRENCY_MISMATCH": _("The Extra Device Pair add-on is priced in a different currency than this package."),
+        "TOTAL_TOO_LARGE": _("This sale's total is too large to record (at most %(max)s). Check the number of extra device pairs."),
         "ZERO_PRICE": _("This package costs nothing, so there is no payment to record. Use a no-charge licence instead."),
         "METHOD_NOT_ALLOWED": _("The customer pays the company by CliQ or bank transfer; sellers never take cash."),
         "REFERENCE_REQUIRED": _("Type the CliQ or transfer reference number."),

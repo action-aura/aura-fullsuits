@@ -26,7 +26,8 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
 
 from app.audit.services import record as audit_record
-from app.commercial_sales.catalog_for_sales import EXTRA_DEVICE_ADDON_CODE, describe_plan_for_sale
+from app.commercial_sales.catalog_for_sales import DEVICES_PER_UNIT_BY_ADDON_CODE, describe_plan_for_sale
+from app.commercial_sales.packages import contract_terms
 from app.commercial_sales.errors import CommercialSalesError
 from app.extensions import db_session, get_engine
 from app.licensing.issuance import resolve_license_term
@@ -92,16 +93,22 @@ def _check_eligibility(order: SalesOrder) -> tuple[CommercialInvoice, SalesOrder
 
 
 def _extra_device_count(order: SalesOrder) -> int:
-    """Devices this order bought beyond the plan's included count: the
-    quantity on its EXTRA_DEVICE add-on lines (Step 0, 2026-10-24). Before,
-    fulfillment gave every licence plan.included_device_count and silently
-    dropped any extra devices the customer had paid for."""
-    quantities = db_session.execute(
-        select(SalesOrderLine.quantity)
+    """Devices this order bought beyond the plan's included count (Step 0,
+    2026-10-24). Before, fulfillment gave every licence
+    plan.included_device_count and silently dropped any extra devices the
+    customer had paid for.
+
+    Each device add-on line counts quantity x its devices per unit
+    (catalog_for_sales.DEVICES_PER_UNIT_BY_ADDON_CODE): a single
+    EXTRA_DEVICE is 1, an EXTRA_DEVICE_PAIR (the owner's 1 desktop + 1
+    phone, the only way extra devices are sold from the packages on) is 2.
+    The licence counts devices as one total, so a pair is +2."""
+    rows = db_session.execute(
+        select(Addon.addon_code, SalesOrderLine.quantity)
         .join(Addon, Addon.id == SalesOrderLine.addon_id)
-        .where(SalesOrderLine.sales_order_id == order.id, Addon.addon_code == EXTRA_DEVICE_ADDON_CODE)
-    ).scalars().all()
-    return sum(quantities)
+        .where(SalesOrderLine.sales_order_id == order.id, Addon.addon_code.in_(tuple(DEVICES_PER_UNIT_BY_ADDON_CODE)))
+    ).all()
+    return sum(DEVICES_PER_UNIT_BY_ADDON_CODE[code] * quantity for code, quantity in rows)
 
 
 def _sales_owner_staff_user_id(order: SalesOrder) -> uuid.UUID | None:
@@ -298,6 +305,13 @@ def fulfill_order(
                         "end_date": end,
                         "device_allowance": device_limit,
                         "sales_owner_staff_user_id": _sales_owner_staff_user_id(order),
+                        # Step 0 packages: the contract the package is sold
+                        # on (Package 2: 12 months, Package 3: 24), fixed
+                        # at the sale. The licence term above is the PAID
+                        # period (one month for a monthly package); the
+                        # contract is what the later months and the
+                        # commission ladder read (packages.contract_terms).
+                        **contract_terms(plan, start),
                     },
                     actor_staff_user_id,
                 )
