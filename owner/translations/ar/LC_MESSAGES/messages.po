@@ -8941,3 +8941,106 @@ msgstr "أُزيلت أجهزة بعد الاسترداد"
 #: app/i18n_labels.py
 msgid "Refunds are not possible once 30 days have passed since the payment was confirmed."
 msgstr "لا يمكن الاسترداد بعد مرور 30 يومًا على تأكيد الدفعة."
+
+#: app/templates
+msgid "Refund: licence stop threshold"
+msgstr "حد إيقاف الترخيص عند الاسترداد"
+
+#: app/templates
+#, python-format
+msgid "Currently %(percent)s percent of the package money paid."
+msgstr "حاليًا %(percent)s بالمئة من مبلغ الباقة المدفوع."
+
+#: app/templates
+msgid "Default percentage"
+msgstr "النسبة الافتراضية"
+
+#: app/templates
+msgid "A refund stops the shop's licence (2 days later) only when the package money given back is above this percentage of the package money paid. At or below it the licence keeps working and the seller keeps the commission. A customer can have its own percentage, set on its page."
+msgstr "يوقف الاسترداد ترخيص المتجر (بعد يومين) فقط عندما يكون مبلغ الباقة المُعاد أكبر من هذه النسبة من مبلغ الباقة المدفوع. عند هذه النسبة أو أقل يبقى الترخيص يعمل ويحتفظ البائع بالعمولة. يمكن أن تكون للعميل نسبته الخاصة، تُضبط من صفحته."
+
+#: app/templates
+#, python-format
+msgid "This customer: %(percent)s percent (its own)."
+msgstr "هذا العميل: %(percent)s بالمئة (نسبته الخاصة)."
+
+#: app/templates
+#, python-format
+msgid "This customer: %(percent)s percent (the system default)."
+msgstr "هذا العميل: %(percent)s بالمئة (الافتراضي في النظام)."
+
+#: app/templates
+msgid "Percentage for this customer (empty = the system default)"
+msgstr "النسبة لهذا العميل (فارغ = الافتراضي في النظام)"
+
+#: app/templates
+msgid "A refund stops this customer's licence (2 days later) only when the package money given back is above this percentage of the package money paid."
+msgstr "يوقف الاسترداد ترخيص هذا العميل (بعد يومين) فقط عندما يكون مبلغ الباقة المُعاد أكبر من هذه النسبة من مبلغ الباقة المدفوع."
+
+#: app/templates
+msgid "The 30 days for refunds are over. Only a Super Admin can allow this refund, with a written reason; it is recorded in the audit log."
+msgstr "انتهت مدة الثلاثين يومًا للاسترداد. فقط المدير العام يمكنه السماح بهذا الاسترداد مع سبب مكتوب، ويُسجَّل ذلك في سجل التدقيق."
+
+#: app/templates
+msgid "Allow this refund after the 30 days (Super Admin)"
+msgstr "السماح بالاسترداد بعد مرور 30 يومًا (المدير العام)"
+
+#: app/templates
+msgid "Why it is allowed (at least 10 characters)"
+msgstr "سبب السماح (10 أحرف على الأقل)"
+
+#: app/templates
+msgid "Allowed after the 30 days"
+msgstr "مسموح به بعد مرور 30 يومًا"
+
+#: app/templates
+#, python-format
+msgid "By %(name)s on %(date)s: %(reason)s"
+msgstr "من %(name)s في %(date)s: %(reason)s"
+
+#: app/templates
+msgid "Refund threshold"
+msgstr "حد الاسترداد"
+
+#: app/templates
+#, python-format
+msgid "Above %(percent)s percent of the package money paid: the licence stops 2 days later and the sale does not count."
+msgstr "أكثر من %(percent)s بالمئة من مبلغ الباقة المدفوع: يتوقف الترخيص بعد يومين ولا تُحتسب البيعة."
+
+#: app/templates
+#, python-format
+msgid "Not above %(percent)s percent of the package money paid: the licence keeps working and the sale still counts."
+msgstr "ليس أكثر من %(percent)s بالمئة من مبلغ الباقة المدفوع: يبقى الترخيص يعمل وتبقى البيعة محتسبة."
+
+#: app/system/routes.py
+#, python-format
+msgid "Enter a whole number from %(min)s to %(max)s."
+msgstr "أدخل رقمًا صحيحًا بين %(min)s و%(max)s."
+
+#: app/system/routes.py
+msgid "Refund threshold saved."
+msgstr "تم حفظ حد الاسترداد."
+
+#: app/i18n_labels.py
+msgid "Only a Super Admin can allow a refund after the 30 days."
+msgstr "فقط المدير العام يمكنه السماح بالاسترداد بعد مرور 30 يومًا."
+
+#: app/i18n_labels.py
+msgid "Write why this refund is allowed after the 30 days -- at least 10 characters."
+msgstr "اكتب سبب السماح بهذا الاسترداد بعد مرور 30 يومًا -- 10 أحرف على الأقل."
+
+#: app/i18n_labels.py
+msgid "This commission was taken back (a refund or a correction) and nothing is left to pay."
+msgstr "تم استرجاع هذه العمولة (استرداد أو تصحيح) ولم يتبقَّ منها شيء للدفع."
+
+#: app/i18n_labels.py
+msgid "Refund allowed after the 30 days"
+msgstr "سُمح بالاسترداد بعد مرور 30 يومًا"
+
+#: app/i18n_labels.py
+msgid "Refund threshold changed (system default)"
+msgstr "تغيّر حد الاسترداد (الافتراضي في النظام)"
+
+#: app/i18n_labels.py
+msgid "Refund threshold changed for a customer"
+msgstr "تغيّر حد الاسترداد لعميل"

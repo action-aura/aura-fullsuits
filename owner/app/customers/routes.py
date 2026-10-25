@@ -1,9 +1,12 @@
 """Customer organization routes (Part K)."""
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from flask_babel import gettext as _
 
+from app.audit.services import record as audit_record
 from app.auth.session import load_current_staff
+from app.commercial_sales import refund_policy
 from app.customers import customer_360
 from app.customers.services import (
     add_contact,
@@ -27,7 +30,7 @@ from app.models.base import utcnow
 from app.models.customers import Customer
 from app.models.leads import CustomerAssignment, CustomerFollowup, CustomerInteraction, CustomerLocation
 from app.models.staff import StaffUser
-from app.security.rbac import get_staff_permission_codes, require_any_permission, require_permission
+from app.security.rbac import get_staff_permission_codes, require_any_permission, require_permission, require_recent_auth
 
 bp = Blueprint("customers", __name__, url_prefix="/customers")
 
@@ -164,6 +167,15 @@ def detail(customer_id):
     open_followups = [f for f in followups if followup_status(f) == "OPEN"]
     next_followup = min(open_followups, key=lambda f: f.due_at) if open_followups else None
     open_quote = next((q for q in quotes if q.status in ("DRAFT", "SENT")), None) if quotes else None
+    # Step 0 (2026-10-25): the refund threshold card -- the Super Admin only.
+    refund_threshold = None
+    if actor.is_super_admin:
+        refund_threshold = {
+            "own": customer.refund_licence_stop_threshold_percent,
+            "effective": refund_policy.threshold_percent_for_customer(customer.id),
+            "default": refund_policy.get_default_threshold_percent(),
+            "min": refund_policy.MIN_THRESHOLD_PERCENT, "max": refund_policy.MAX_THRESHOLD_PERCENT,
+        }
 
     return render_template(
         "customers/detail.html", customer=customer, notes=notes, interactions=interactions, followups=followups,
@@ -172,8 +184,40 @@ def detail(customer_id):
         quotes=quotes, orders=orders, invoices=invoices, payments=payments, subscriptions=subscriptions,
         licenses=licenses, installations=installations, commercial_summary=commercial_summary, timeline=timeline,
         assigned_staff=assigned_staff, primary_contact=primary_contact,
-        next_followup=next_followup, open_quote=open_quote,
+        next_followup=next_followup, open_quote=open_quote, refund_threshold=refund_threshold,
     )
+
+
+@bp.route("/<uuid:customer_id>/refund-licence-threshold", methods=["POST"])
+@require_permission("customers.update")
+@require_recent_auth
+def set_refund_licence_threshold(customer_id):
+    """Step 0 (2026-10-25): the owner's per-customer refund threshold
+    (refund_policy.py); empty = follow the system default. A real Super Admin
+    only, checked on the account (customers.update is held by every seller).
+    The change and its audit row are committed together."""
+    actor = load_current_staff()
+    if not actor.is_super_admin:
+        return jsonify({"error": "forbidden -- the refund threshold is set by a Super Admin"}), 403
+    customer = db_session.get(Customer, customer_id)
+    if customer is None:
+        return jsonify({"error": "not_found"}), 404
+    raw = (request.form.get("threshold_percent") or "").strip()
+    try:
+        percent = int(raw) if raw else None
+        before = refund_policy.set_customer_threshold_percent(customer, percent, actor)
+    except ValueError:
+        db_session.rollback()
+        flash(_("Enter a whole number from %(min)s to %(max)s.", min=refund_policy.MIN_THRESHOLD_PERCENT,
+                max=refund_policy.MAX_THRESHOLD_PERCENT), "error")
+        return redirect(url_for("customers.detail", customer_id=customer_id))
+    audit_record(
+        actor_staff_user_id=actor.id, actor_role_snapshot="SUPER_ADMIN",
+        action_code="CUSTOMER_REFUND_THRESHOLD_CHANGED", entity_type="customer", entity_public_id=str(customer.id),
+        before_state={"percent": before}, after_state={"percent": percent},
+    )
+    flash(_("Refund threshold saved."), "success")
+    return redirect(url_for("customers.detail", customer_id=customer_id))
 
 
 @bp.route("/<uuid:customer_id>", methods=["POST"])

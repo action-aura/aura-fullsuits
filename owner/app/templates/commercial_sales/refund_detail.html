@@ -15,6 +15,14 @@
     <dt>{{ _("Approved") }}</dt><dd>{{ format_owner_datetime(refund.approved_at) if refund.approved_at else "-" }}</dd>
     <dt>{{ _("Approved by") }}</dt><dd>{{ approved_by_name or "-" }}</dd>
     <dt>{{ _("Paid") }}</dt><dd>{{ format_owner_datetime(refund.paid_at) if refund.paid_at else "-" }}</dd>
+    {% if refund.window_override_at %}
+    <dt>{{ _("Allowed after the 30 days") }}</dt>
+    <dd data-refund-window-override>{{ _("By %(name)s on %(date)s: %(reason)s", name=override_by_name or "-", date=format_owner_datetime(refund.window_override_at), reason=refund.window_override_reason) }}</dd>
+    {% endif %}
+    {% if refund.threshold_percent_applied is not none %}
+    <dt>{{ _("Refund threshold") }}</dt>
+    <dd data-refund-over-threshold="{{ 'yes' if refund.package_refund_over_threshold else 'no' }}">{% if refund.package_refund_over_threshold %}{{ _("Above %(percent)s percent of the package money paid: the licence stops 2 days later and the sale does not count.", percent=refund.threshold_percent_applied) }}{% else %}{{ _("Not above %(percent)s percent of the package money paid: the licence keeps working and the sale still counts.", percent=refund.threshold_percent_applied) }}{% endif %}</dd>
+    {% endif %}
   </dl>
 
   {{ record.related_records([
@@ -39,6 +47,14 @@
   <form method="post" action="{{ url_for('commercial_sales_web.confirm_refund_route', refund_id=refund.id) }}" class="inline" data-confirm="{{ _('Confirm this refund as paid?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ refund.version }}">
+    {% if refund_window_closed and not refund.window_override_at %}
+    <p class="hint">{{ _("The 30 days for refunds are over. Only a Super Admin can allow this refund, with a written reason; it is recorded in the audit log.") }}</p>
+    {% if staff and staff.is_super_admin %}
+    <label><input type="checkbox" name="override_window" value="1"> {{ _("Allow this refund after the 30 days (Super Admin)") }}</label>
+    <label for="refund-detail-override-reason">{{ _("Why it is allowed (at least 10 characters)") }}</label>
+    <input id="refund-detail-override-reason" name="override_reason" minlength="10">
+    {% endif %}
+    {% endif %}
     <button type="submit" class="btn">{{ _("Confirm paid") }}</button>
   </form>
   {% endif %}

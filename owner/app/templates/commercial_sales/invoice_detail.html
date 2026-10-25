@@ -122,6 +122,17 @@
     <input id="commercial-sales-invoice-detail-reason" name="reason" required>
     <label for="commercial-sales-invoice-detail-payment-record-id-1">{{ _("Source payment (optional)") }}</label>
     <input id="commercial-sales-invoice-detail-payment-record-id-1" name="payment_record_id" placeholder="{{ _('Payment UUID') }}">
+    {# Step 0 (2026-10-25): after the 30 days only a Super Admin may allow a
+       refund, with a written reason (commercial_sales/refund_policy.py). The
+       service checks the account; this only hides the box from others. #}
+    {% if refund_window_closed %}
+    <p class="hint">{{ _("The 30 days for refunds are over. Only a Super Admin can allow this refund, with a written reason; it is recorded in the audit log.") }}</p>
+    {% if staff and staff.is_super_admin %}
+    <label><input type="checkbox" name="override_window" value="1"> {{ _("Allow this refund after the 30 days (Super Admin)") }}</label>
+    <label for="commercial-sales-invoice-detail-override-reason">{{ _("Why it is allowed (at least 10 characters)") }}</label>
+    <input id="commercial-sales-invoice-detail-override-reason" name="override_reason" minlength="10">
+    {% endif %}
+    {% endif %}
     <button type="submit" class="btn" style="margin-top:0.5rem;">{{ _("Request refund") }}</button>
   </form>
   {% endif %}

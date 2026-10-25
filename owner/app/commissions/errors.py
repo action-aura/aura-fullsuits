@@ -38,5 +38,8 @@ class CommissionError(StableCodeError):
         # Step 0 ladder (2026-10-24): the owner's 30-day hold, and the ladder
         # rule's own shape (amounts are the owner's, in JOD; no rate).
         "COMMISSION_ON_HOLD": "This commission is still inside its 30-day hold and cannot be approved yet.",
+        # Step 0 (2026-10-25): an approved row whose amount was taken back
+        # (REVERSED rows) before it was paid out pays only what is left.
+        "COMMISSION_TAKEN_BACK": "This commission was taken back (a refund or a correction) and nothing is left to pay.",
         "INVALID_LADDER_RULE": "The monthly ladder rule is in JOD and takes no rate or fixed amount.",
     }

@@ -17,7 +17,12 @@ additions):
     month the payment that crosses that line is confirmed; never before;
   - 10 JOD to the subscription's sales owner for each renewal;
   - commission is payable 30 days after the confirming date;
-  - a refund inside those 30 days: the sale does not count.
+  - a refund inside those 30 days: the sale does not count -- since
+    2026-10-25 only a refund ABOVE the owner's threshold (a percentage of the
+    package money paid, commercial_sales/refund_policy.py); at or below it
+    the sale still counts. After the 30 days no refund is possible, except
+    one a Super Admin allows in writing: then the sale stops counting too
+    (REFUND_LATE_OVERRIDE).
 
 HOW IT IS KEPT (auditable, crash-safe, exactly once):
   - CommissionLadderSale is the FACT "this order counted, at this moment, in
@@ -302,19 +307,9 @@ def _qualifying(sale: _Sale) -> _Qualifying | None:
     events: list[tuple[datetime, str, Decimal, _Qualifying]] = [
         (first.countable_at, str(first.payment_id), sale.package_amount, first)
     ]
-    if sale.subscription is not None:
-        sale_payments = _sale_payment_ids(sale)
-        later = db_session.execute(
-            select(PaymentRecord).where(
-                PaymentRecord.subscription_id == sale.subscription.id, PaymentRecord.status == "CONFIRMED"
-            )
-        ).scalars().all()
-        for payment in later:
-            if payment.id in sale_payments or payment.currency != sale.invoice.currency:
-                continue
-            at = payment_confirmed_at(payment.id) or _utc(payment.created_at)
-            events.append((at, str(payment.id), Decimal(payment.amount),
-                           _Qualifying(payment_id=payment.id, allocation_id=None, countable_at=at)))
+    for at, payment in later_package_payments(sale):
+        events.append((at, str(payment.id), Decimal(payment.amount),
+                       _Qualifying(payment_id=payment.id, allocation_id=None, countable_at=at)))
     paid = _ZERO
     for _at, _id, amount, qualifying in sorted(events, key=lambda e: (e[0], e[1])):
         paid += amount
@@ -324,6 +319,25 @@ def _qualifying(sale: _Sale) -> _Qualifying | None:
             # than the sale's own countable moment.
             return qualifying
     return None
+
+
+def later_package_payments(sale: _Sale) -> list[tuple[datetime, PaymentRecord]]:
+    """The subscription's confirmed payments after the sale's own (a monthly
+    package's later months, a Package 1 renewal), in the invoice's currency,
+    with the moment each was confirmed: package money paid on the sale beyond
+    its invoice. Used by _qualifying ("about 100 JOD") and by the refund
+    threshold (refund_policy.package_money_paid), so the two count the same
+    money."""
+    if sale.subscription is None:
+        return []
+    sale_payments = _sale_payment_ids(sale)
+    later = db_session.execute(
+        select(PaymentRecord).where(
+            PaymentRecord.subscription_id == sale.subscription.id, PaymentRecord.status == "CONFIRMED"
+        )
+    ).scalars().all()
+    return [(payment_confirmed_at(payment.id) or _utc(payment.created_at), payment) for payment in later
+            if payment.id not in sale_payments and payment.currency == sale.invoice.currency]
 
 
 def _countable_at(allocation: PaymentAllocation) -> datetime:
@@ -388,23 +402,34 @@ def rule_governing_payment(invoice: CommercialInvoice, payment_id: uuid.UUID, fa
     return ladder_rule_for(invoice.created_by_employee_profile_id, moment)
 
 
-def package_split(invoice: CommercialInvoice) -> tuple[Decimal, Decimal] | None:
-    """(package money, everything else -- the extra devices) on a package
-    sale's invoice, or None when the invoice is not a package sale's. A
-    refund is counted against the second part first (_package_refund): once
-    the refunds exceed it, the package is no longer fully paid."""
+def load_package_sale(invoice: CommercialInvoice) -> _Sale | None:
+    """The package sale this invoice is the sale's own invoice of, or None."""
     if invoice.sales_order_id is None:
         return None
     sale = _load_sale(invoice.sales_order_id)
     if sale is None or sale.invoice.id != invoice.id:
         return None
-    return sale.package_amount, sale.other_amount
+    return sale
+
+
+def package_split(invoice: CommercialInvoice) -> tuple[Decimal, Decimal] | None:
+    """(package money, everything else -- the extra devices) on a package
+    sale's invoice, or None when the invoice is not a package sale's. A
+    refund is counted against the second part first (_package_refund)."""
+    sale = load_package_sale(invoice)
+    return None if sale is None else (sale.package_amount, sale.other_amount)
 
 
 def _package_refund(sale: _Sale) -> CommercialRefund | None:
-    """The confirmed refund that first gave back PACKAGE money (refunds past
-    the pair's part of the invoice), or None. Refunding only the pair leaves
-    the sale a sale."""
+    """The confirmed refund that took the sale off the ladder, or None.
+    Step 0 (2026-10-25), the owner's threshold: the first refund judged ABOVE
+    it when it was paid out (refund_policy.refund_uncounts_sale -- the one
+    decision point). A refund at or below it leaves the sale a sale; so does
+    a refund of only the pair. A refund paid out before the threshold existed
+    keeps the old rule: the first one that gave back PACKAGE money (refunds
+    past the pair's part of the invoice)."""
+    from app.commercial_sales import refund_policy
+
     refunds = db_session.execute(
         select(CommercialRefund).where(
             CommercialRefund.commercial_invoice_id == sale.invoice.id, CommercialRefund.status == "PAID"
@@ -413,7 +438,7 @@ def _package_refund(sale: _Sale) -> CommercialRefund | None:
     running = _ZERO
     for refund in refunds:
         running += Decimal(refund.amount)
-        if running > sale.other_amount:
+        if refund_policy.refund_uncounts_sale(refund, legacy_package_money_back=running > sale.other_amount):
             return refund
     return None
 
@@ -521,6 +546,16 @@ def evaluate_sale(order_id: uuid.UUID, *, now: datetime | None = None) -> None:
             if refund.paid_at < counted.hold_ends_at:
                 _uncount(counted, "REFUND_IN_HOLD", f"Refund {refund.id} confirmed inside the 30-day hold.", now,
                          refund_id=refund.id)
+                touched.add(counted.ladder_month)
+            elif refund.window_override_at is not None:
+                # Step 0 (2026-10-25): a Super Admin allowed this refund after
+                # the 30 days (refund_policy.py). The sale stops counting and
+                # its month is re-derived: an only-EARNED row is cancelled, an
+                # APPROVED or PAID one gets a take-back (REVERSED) row -- the
+                # one other path, besides a CORRECTION, that takes back money
+                # already final, and only on the owner's own written decision.
+                _uncount(counted, "REFUND_LATE_OVERRIDE",
+                         f"Refund {refund.id} allowed by a Super Admin after the 30 days.", now, refund_id=refund.id)
                 touched.add(counted.ladder_month)
             elif counted.refunded_after_hold_at is None:
                 # Refunds already recorded before the owner's rule "no refunds

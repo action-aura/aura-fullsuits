@@ -12,7 +12,19 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -178,6 +190,23 @@ class CommercialInvoiceItem(Base, UUIDPKMixin, TimestampMixin):
 
 class CommercialRefund(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_commercial_refunds"
+    __table_args__ = (
+        # Step 0 (2026-10-25, f28dfb3efc40). Spelled with IS [NOT] NULL on
+        # every branch: a CHECK that evaluates to NULL passes.
+        CheckConstraint(
+            "(threshold_percent_applied IS NULL AND package_refund_over_threshold IS NULL) OR "
+            "(threshold_percent_applied IS NOT NULL AND package_refund_over_threshold IS NOT NULL "
+            "AND threshold_percent_applied >= 0 AND threshold_percent_applied <= 100)",
+            name="ck_owner_commercial_refunds_threshold_decision",
+        ),
+        CheckConstraint(
+            "(window_override_at IS NULL AND window_override_by_staff_user_id IS NULL "
+            "AND window_override_reason IS NULL) OR "
+            "(window_override_at IS NOT NULL AND window_override_by_staff_user_id IS NOT NULL "
+            "AND window_override_reason IS NOT NULL AND length(btrim(window_override_reason)) >= 10)",
+            name="ck_owner_commercial_refunds_window_override",
+        ),
+    )
 
     commercial_invoice_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_commercial_invoices.id"), nullable=False, index=True
@@ -206,6 +235,23 @@ class CommercialRefund(Base, UUIDPKMixin, TimestampMixin):
     approved_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
     )
+    # Step 0 (2026-10-25, revision f28dfb3efc40) -- the decision this refund
+    # was judged by when it was paid out, kept on the row so it never changes
+    # afterwards (a later change of the threshold, or a later payment, must
+    # not re-judge a refund already paid): the threshold in force and whether
+    # the package money given back so far (this refund included) was above it
+    # (refund_policy.py). Both NULL: not judged -- paid out before this rule,
+    # or not a package sale's invoice.
+    threshold_percent_applied: Mapped[int | None] = mapped_column(Integer)
+    package_refund_over_threshold: Mapped[bool | None] = mapped_column(Boolean)
+    # The Super Admin's override of "no refunds after 30 days": who, when,
+    # and the written reason. All three or none (CHECK). Recorded once, when
+    # it was actually needed (refunds.py).
+    window_override_reason: Mapped[str | None] = mapped_column(Text)
+    window_override_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+    window_override_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class CommercialOperationsIdempotencyKey(Base, UUIDPKMixin, TimestampMixin):

@@ -1,6 +1,21 @@
 {% extends "layout/base.html" %}
 {% block title %}{{ _("Owner database backups") }}{% endblock %}
 {% block content %}
+{# Step 0 (2026-10-25): the owner's refund threshold (commercial_sales/
+   refund_policy.py). Super Admin only -- the route checks the account too. #}
+{% if staff and staff.is_super_admin %}
+<div class="card" data-refund-threshold-default="{{ refund_threshold_percent }}">
+  <h2>{{ _("Refund: licence stop threshold") }}</h2>
+  <form method="post" action="{{ url_for('system.set_refund_licence_threshold') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <p>{{ _("Currently %(percent)s percent of the package money paid.", percent=refund_threshold_percent) }}</p>
+    <label for="refund-threshold-percent">{{ _("Default percentage") }}</label>
+    <input id="refund-threshold-percent" type="number" name="threshold_percent" min="{{ refund_threshold_min }}" max="{{ refund_threshold_max }}" step="1" value="{{ refund_threshold_percent }}" required>
+    <button type="submit">{{ _("Save") }}</button>
+  </form>
+  <p style="color:#6b7785;font-size:0.85rem;">{{ _("A refund stops the shop's licence (2 days later) only when the package money given back is above this percentage of the package money paid. At or below it the licence keeps working and the seller keeps the commission. A customer can have its own percentage, set on its page.") }}</p>
+</div>
+{% endif %}
 <div class="card">
   <h2>{{ _("Website demo requests") }}</h2>
   <form method="post" action="{{ url_for('system.set_website_lead_retention') }}">

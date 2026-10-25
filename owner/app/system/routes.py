@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.auth.session import load_current_staff
 from app.audit.services import record as audit_record
+from app.commercial_sales import refund_policy
 from app.extensions import db_session
 from app.leads.website_retention import (
     MAX_RETENTION_MONTHS,
@@ -35,7 +36,42 @@ def list_backups():
         retention_months=get_retention_months(db_session),
         retention_min=MIN_RETENTION_MONTHS,
         retention_max=MAX_RETENTION_MONTHS,
+        refund_threshold_percent=refund_policy.get_default_threshold_percent(),
+        refund_threshold_min=refund_policy.MIN_THRESHOLD_PERCENT,
+        refund_threshold_max=refund_policy.MAX_THRESHOLD_PERCENT,
     )
+
+
+@bp.route("/refund-licence-threshold", methods=["POST"])
+@require_permission("system.manage_settings")
+@require_recent_auth
+def set_refund_licence_threshold():
+    """Step 0 (2026-10-25): the owner sets the system default refund
+    threshold (refund_policy.py). A real Super Admin only, checked on the
+    account: system.manage_settings is a grantable permission, and a custom
+    role holding it must not decide when shops lose their licence. The change
+    and its audit row are committed together (audit_record commits)."""
+    actor = load_current_staff()
+    if not actor.is_super_admin:
+        return jsonify({"error": "forbidden -- the refund threshold is set by a Super Admin"}), 403
+    raw = (request.form.get("threshold_percent") or "").strip()
+    try:
+        percent = int(raw)
+        before = refund_policy.get_default_threshold_percent()
+        refund_policy.set_default_threshold_percent(percent, actor)
+    except ValueError:
+        db_session.rollback()
+        flash(_("Enter a whole number from %(min)s to %(max)s.", min=refund_policy.MIN_THRESHOLD_PERCENT,
+                max=refund_policy.MAX_THRESHOLD_PERCENT), "error")
+        return redirect(url_for("system.list_backups"))
+    audit_record(
+        actor_staff_user_id=actor.id, actor_role_snapshot="SUPER_ADMIN",
+        action_code="REFUND_THRESHOLD_DEFAULT_CHANGED", entity_type="system_setting",
+        entity_public_id=refund_policy.THRESHOLD_SETTING_KEY,
+        before_state={"percent": before}, after_state={"percent": percent},
+    )
+    flash(_("Refund threshold saved."), "success")
+    return redirect(url_for("system.list_backups"))
 
 
 @bp.route("/website-lead-retention", methods=["POST"])

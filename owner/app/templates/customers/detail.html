@@ -159,6 +159,25 @@
         <dt>{{ _("Archive state") }}</dt><dd>{% if customer.archived_at %}{{ _("Archived on %(date)s", date=format_owner_datetime(customer.archived_at)) }}{% else %}{{ _("Not archived") }}{% endif %}</dd>
       </dl>
     </div>
+    {# Step 0 (2026-10-25): the owner's per-customer refund threshold
+       (commercial_sales/refund_policy.py) -- the Super Admin only. #}
+    {% if refund_threshold %}
+    <div class="card" data-refund-threshold-effective="{{ refund_threshold.effective }}">
+      <h3>{{ _("Refund: licence stop threshold") }}</h3>
+      {% if refund_threshold.own is not none %}
+      <p>{{ _("This customer: %(percent)s percent (its own).", percent=refund_threshold.own) }}</p>
+      {% else %}
+      <p>{{ _("This customer: %(percent)s percent (the system default).", percent=refund_threshold.default) }}</p>
+      {% endif %}
+      <form method="post" action="{{ url_for('customers.set_refund_licence_threshold', customer_id=customer.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label for="customer-refund-threshold">{{ _("Percentage for this customer (empty = the system default)") }}</label>
+        <input id="customer-refund-threshold" type="number" name="threshold_percent" min="{{ refund_threshold.min }}" max="{{ refund_threshold.max }}" step="1" value="{{ refund_threshold.own if refund_threshold.own is not none else '' }}">
+        <button type="submit">{{ _("Save") }}</button>
+      </form>
+      <p style="color:#6b7785;font-size:0.85rem;">{{ _("A refund stops this customer's licence (2 days later) only when the package money given back is above this percentage of the package money paid.") }}</p>
+    </div>
+    {% endif %}
     {% if next_followup or open_quote %}
     <div class="card">
       <h3>{{ _("Open items") }}</h3>

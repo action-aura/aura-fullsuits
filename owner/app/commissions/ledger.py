@@ -416,14 +416,34 @@ def record_payout(
     not merely an application-level check."""
     if batch.status != "APPROVED":
         raise CommissionError("COMMISSION_INVALID_TRANSITION", from_status=batch.status, to_status="APPROVED")
+    # Step 0 (2026-10-25): an APPROVED row can have been taken back before it
+    # is paid out -- a refund's proportional reversal, a ladder month that
+    # shrank after approval, and now a refund a Super Admin allowed after the
+    # 30 days (refund_policy.py). Each is a REVERSED row pointing at this one,
+    # and the entry itself stays APPROVED (REVERSED rows are append-only), so
+    # this used to pay the FULL amount -- measured: 25.00 paid on an approved
+    # 25.00 row with 10.00 already taken back. Pay only what is left, and
+    # nothing when nothing is. The row lock comes first: a reversal is an
+    # INSERT whose FK takes FOR KEY SHARE on this row, so it waits for this
+    # payout (and is then a take-back of PAID money) or this payout waits for
+    # it (and sees it). Nothing here asks for the seller lock afterwards, so
+    # the lock order of ladder.py is kept.
+    entry = db_session.execute(
+        select(CommissionLedgerEntry).where(CommissionLedgerEntry.id == entry.id).with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalars().one()
     if entry.status != "APPROVED":
         raise CommissionError("COMMISSION_INVALID_TRANSITION", from_status=entry.status, to_status="PAID")
+    payable = Decimal(entry.commission_amount) - _already_reversed_amount(entry)
+    if payable <= 0:
+        db_session.rollback()
+        raise CommissionError("COMMISSION_TAKEN_BACK")
 
     line = CommissionPayoutLine(
         commission_payout_batch_id=batch.id,
         employee_profile_id=entry.employee_profile_id,
         commission_ledger_entry_id=entry.id,
-        amount=entry.commission_amount,
+        amount=payable,
         currency=entry.currency,
     )
     db_session.add(line)
@@ -443,6 +463,7 @@ def record_payout(
         action_code="COMMISSION_PAID",
         entity_type="commission_ledger_entry",
         entity_public_id=str(entry.id),
-        after_state={"payout_batch_reference": batch.batch_reference, "amount": str(entry.commission_amount)},
+        after_state={"payout_batch_reference": batch.batch_reference, "amount": str(payable),
+                     "taken_back_before_payout": str(Decimal(entry.commission_amount) - payable)},
     )
     return line

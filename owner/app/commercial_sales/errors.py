@@ -66,6 +66,10 @@ class CommercialSalesError(StableCodeError):
         "DISCOUNT_EXCEEDS_GROSS": "Discount cannot exceed the applicable gross amount.",
         "REFUND_EXCEEDS_REFUNDABLE": "Refund amount ({amount}) exceeds the refundable balance ({refundable}).",
         "REFUND_WINDOW_CLOSED": "Refunds are not possible once 30 days have passed since the payment was confirmed.",
+        # Step 0 (2026-10-25): a Super Admin's written override of the 30 days
+        # (refund_policy.py).
+        "REFUND_OVERRIDE_SUPER_ADMIN_ONLY": "Only a Super Admin can allow a refund after the 30 days.",
+        "REFUND_OVERRIDE_REASON_REQUIRED": "Write why this refund is allowed after the 30 days -- at least 10 characters.",
         "ALLOCATION_EXCEEDS_PAYMENT": "Allocation amount ({amount}) exceeds the unallocated payment balance ({available}).",
         "ALLOCATION_EXCEEDS_OUTSTANDING": "Allocation amount ({amount}) exceeds the invoice outstanding balance ({outstanding}).",
         "CURRENCY_MISMATCH": "Currency {given} does not match the required currency {expected}.",

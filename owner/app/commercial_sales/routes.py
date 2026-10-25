@@ -36,7 +36,14 @@ from app.commercial_sales.quotes import (
     remove_quote_line,
     submit_quote,
 )
-from app.commercial_sales.refunds import approve_refund, confirm_refund, create_refund, refundable_balance, void_refund
+from app.commercial_sales.refunds import (
+    approve_refund,
+    confirm_refund,
+    create_refund,
+    refund_window_closed,
+    refundable_balance,
+    void_refund,
+)
 from app.commercial_sales.sales_orders import cancel_order, confirm_order, create_order_from_quote
 from app.commercial_sales import list_queries
 from app.commissions.errors import CommissionError
@@ -484,6 +491,7 @@ def invoice_detail(invoice_id):
     return render_template(
         "commercial_sales/invoice_detail.html", invoice=invoice, lines=lines, allocations=allocations, refunds=refunds, order=order, customer=customer,
         collected=confirmed_allocated_amount(invoice), refundable=refundable_balance(invoice),
+        refund_window_closed=refund_window_closed(invoice),
         can_issue=("invoices.issue" in codes), error=error_text,
         created_by_name=_employee_profile_name(invoice.created_by_employee_profile_id),
     )
@@ -680,10 +688,20 @@ def create_refund_route(invoice_id):
             invoice, amount=Decimal(str(request.form["amount"])), reason=request.form.get("reason", ""),
             payment_record_id=uuid.UUID(request.form["payment_record_id"]) if request.form.get("payment_record_id") else None,
             actor_employee_profile_id=profile.id, actor_staff_user_id=staff.id,
+            window_override_reason=_window_override_reason(),
         )
     except CommercialSalesError as exc:
         return redirect(url_for("commercial_sales_web.invoice_detail", invoice_id=invoice_id, error=exc.code))
     return redirect(url_for("commercial_sales_web.refund_detail", refund_id=refund.id))
+
+
+def _window_override_reason():
+    """Step 0 (2026-10-25): the Super Admin's "allow after the 30 days" box.
+    Passed to the service whoever sent it -- the service decides who may
+    (refund_policy.check_window_override), the screen only hides the box."""
+    if not request.form.get("override_window"):
+        return None
+    return request.form.get("override_reason", "")
 
 
 @bp.route("/refunds/<uuid:refund_id>", methods=["GET"])
@@ -707,6 +725,8 @@ def refund_detail(refund_id):
         invoice=invoice, payment=payment, customer=customer,
         created_by_name=_employee_profile_name(refund.created_by_employee_profile_id),
         approved_by_name=_staff_display_name(refund.approved_by_staff_user_id),
+        override_by_name=_staff_display_name(refund.window_override_by_staff_user_id),
+        refund_window_closed=refund_window_closed(invoice) if invoice is not None else False,
     )
 
 
@@ -732,7 +752,8 @@ def confirm_refund_route(refund_id):
     if refund is None:
         return render_template("commercial_sales/not_found.html"), 404
     try:
-        confirm_refund(refund, actor_staff_user_id=staff.id, expected_version=request.form.get("version", type=int))
+        confirm_refund(refund, actor_staff_user_id=staff.id, expected_version=request.form.get("version", type=int),
+                       window_override_reason=_window_override_reason())
     except CommercialSalesError as exc:
         return redirect(url_for("commercial_sales_web.refund_detail", refund_id=refund_id, error=exc.code))
     return redirect(url_for("commercial_sales_web.refund_detail", refund_id=refund_id))

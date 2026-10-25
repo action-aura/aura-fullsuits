@@ -38,8 +38,9 @@ COMMISSION_ENTRY_KINDS = ("PAYMENT_RULE", "LADDER", "RENEWAL")
 LADDER_SALE_STATUSES = ("COUNTED", "UNCOUNTED")
 # Why a counted sale stopped counting: a refund confirmed inside its 30-day
 # hold (the owner's rule), or a correction that took its money off the sale
-# (allocation reversed, a qualifying payment no longer confirmed).
-LADDER_UNCOUNT_CAUSES = ("REFUND_IN_HOLD", "CORRECTION")
+# (allocation reversed, a qualifying payment no longer confirmed), or (Step 0,
+# 2026-10-25) a refund a Super Admin allowed after the 30 days.
+LADDER_UNCOUNT_CAUSES = ("REFUND_IN_HOLD", "CORRECTION", "REFUND_LATE_OVERRIDE")
 
 # AUDIT-owner-cross-screen: the single name for "a commission entry that is
 # waiting for a FINANCE approval decision". Verified in code, not assumed:
@@ -301,7 +302,7 @@ class CommissionLadderSale(Base, UUIDPKMixin, TimestampMixin):
         Index("ix_commission_ladder_sales_seller_month", "employee_profile_id", "ladder_month"),
         CheckConstraint("status IN ('COUNTED', 'UNCOUNTED')", name="ck_owner_commission_ladder_sales_status"),
         CheckConstraint(
-            "uncount_cause IS NULL OR uncount_cause IN ('REFUND_IN_HOLD', 'CORRECTION')",
+            "uncount_cause IS NULL OR uncount_cause IN ('REFUND_IN_HOLD', 'CORRECTION', 'REFUND_LATE_OVERRIDE')",
             name="ck_owner_commission_ladder_sales_uncount_cause",
         ),
         CheckConstraint(

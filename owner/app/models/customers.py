@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,6 +13,13 @@ from app.models.base import Base, TimestampMixin, UUIDPKMixin
 
 class Customer(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_customers"
+    __table_args__ = (
+        CheckConstraint(
+            "refund_licence_stop_threshold_percent IS NULL OR "
+            "(refund_licence_stop_threshold_percent >= 0 AND refund_licence_stop_threshold_percent <= 100)",
+            name="ck_owner_customers_refund_threshold_percent",
+        ),
+    )
 
     legal_name: Mapped[str] = mapped_column(String(255), nullable=False)
     trade_name: Mapped[str | None] = mapped_column(String(255))
@@ -42,6 +49,12 @@ class Customer(Base, UUIDPKMixin, TimestampMixin):
     # used by Lead.version and CustomerLocation.version. Defaults to 1 for
     # every pre-existing row via the migration's server_default.
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Step 0 (2026-10-25, revision f28dfb3efc40) -- the owner's per-customer
+    # refund threshold: a refund stops this customer's licence only when the
+    # package money given back is ABOVE this percentage of the package money
+    # paid. NULL = the system default (commercial_sales/refund_policy.py).
+    # Only a Super Admin sets it (customers/routes.py).
+    refund_licence_stop_threshold_percent: Mapped[int | None] = mapped_column(Integer)
 
     contacts: Mapped[list["CustomerContact"]] = relationship(back_populates="customer", cascade="all, delete-orphan")
     addresses: Mapped[list["CustomerAddress"]] = relationship(back_populates="customer", cascade="all, delete-orphan")

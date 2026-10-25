@@ -17,6 +17,7 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.audit.services import record as audit_record
+from app.commercial_sales import refund_policy
 from app.commercial_sales.calculator import calculate_refundable_balance, validate_refund_amount
 from app.commercial_sales.errors import REFUND_TRANSITIONS, CommercialSalesError
 from app.commercial_sales.invoices import confirmed_allocated_amount
@@ -48,10 +49,17 @@ def create_refund(
     payment_record_id: uuid.UUID | None,
     actor_employee_profile_id: uuid.UUID,
     actor_staff_user_id: uuid.UUID,
+    window_override_reason: str | None = None,
 ) -> CommercialRefund:
+    """window_override_reason: a Super Admin's written reason to allow this
+    refund after the 30 days (refund_policy.py). None = no override asked;
+    ignored while the window is still open (nothing is recorded)."""
     if not reason or not reason.strip():
         raise CommercialSalesError("REASON_REQUIRED")
-    _check_refund_window(invoice, utcnow())
+    now = utcnow()
+    override_reason = None
+    if _refund_window_closed(invoice, now):
+        override_reason = refund_policy.check_window_override(actor_staff_user_id, window_override_reason)
 
     amount = validate_refund_amount(amount, refundable_balance(invoice))
 
@@ -65,8 +73,16 @@ def create_refund(
         created_by_employee_profile_id=actor_employee_profile_id,
         version=1,
     )
+    if override_reason is not None:
+        refund_policy.record_window_override(refund, actor_staff_user_id=actor_staff_user_id, reason=override_reason,
+                                             now=now)
     db_session.add(refund)
-    db_session.commit()
+    db_session.flush()
+    if override_reason is not None:
+        # Commits the refund AND its override audit row together.
+        refund_policy.audit_window_override(refund, invoice, actor_staff_user_id=actor_staff_user_id)
+    else:
+        db_session.commit()
 
     audit_record(
         actor_staff_user_id=actor_staff_user_id,
@@ -79,17 +95,23 @@ def create_refund(
     return refund
 
 
-def _check_refund_window(invoice: CommercialInvoice, now) -> None:
+def _refund_window_closed(invoice: CommercialInvoice, now) -> bool:
     """Owner decision (2026-10-25): NO refunds after 30 days since the
     payment was confirmed. The window ends at ladder.refund_window_ends_at
     -- the same moment, function and constant (HOLD_PERIOD) as the
     commission hold, so a refund is possible exactly while the commission is
-    still held. Refused AT that moment (the hold is over at it)."""
+    still held. Closed AT that moment (the hold is over at it). Only a Super
+    Admin's written override lets a refund through after it
+    (refund_policy.check_window_override)."""
     from app.commissions import ladder
 
     ends_at = ladder.refund_window_ends_at(invoice)
-    if ends_at is not None and now >= ends_at:
-        raise CommercialSalesError("REFUND_WINDOW_CLOSED")
+    return ends_at is not None and now >= ends_at
+
+
+def refund_window_closed(invoice: CommercialInvoice) -> bool:
+    """For the screens: show the Super Admin's override box only when needed."""
+    return _refund_window_closed(invoice, utcnow())
 
 
 def _check_transition(status: str, target: str) -> None:
@@ -141,7 +163,8 @@ def _resolve_creator_staff_user_id(refund: CommercialRefund) -> uuid.UUID | None
 
 
 def confirm_refund(
-    refund: CommercialRefund, *, actor_staff_user_id: uuid.UUID, expected_version: int | None = None
+    refund: CommercialRefund, *, actor_staff_user_id: uuid.UUID, expected_version: int | None = None,
+    window_override_reason: str | None = None,
 ) -> CommercialRefund:
     _check_version(refund, expected_version)
     _check_transition(refund.status, "PAID")
@@ -171,10 +194,18 @@ def confirm_refund(
     ladder.lock_seller(invoice.created_by_employee_profile_id)
     # Owner decision (2026-10-25): no refunds after 30 days -- checked again
     # here, at the moment the money would go out: a refund requested on day
-    # 29 and paid out on day 31 is refused, nothing written.
+    # 29 and paid out on day 31 is refused, nothing written -- unless the
+    # refund already carries a Super Admin's override (given when it was
+    # requested), or a Super Admin gives one now. Decided under the invoice
+    # row lock, so the override is recorded once.
     now = utcnow()
+    override_now = False
     try:
-        _check_refund_window(invoice, now)
+        if _refund_window_closed(invoice, now) and refund.window_override_at is None:
+            reason_given = refund_policy.check_window_override(actor_staff_user_id, window_override_reason)
+            refund_policy.record_window_override(refund, actor_staff_user_id=actor_staff_user_id,
+                                                 reason=reason_given, now=now)
+            override_now = True
     except CommercialSalesError:
         db_session.rollback()
         raise
@@ -182,6 +213,10 @@ def confirm_refund(
     collected = confirmed_allocated_amount(invoice)
     already_refunded = total_confirmed_refunds(invoice)  # excludes this refund -- still pre-PAID
     if already_refunded + refund.amount > collected:
+        # Step 0 (2026-10-25): rolled back -- an override recorded above on
+        # this refund must not be left pending in the session for some later
+        # commit to write without its audit row.
+        db_session.rollback()
         raise CommercialSalesError("REFUND_EXCEEDS_REFUNDABLE", amount=refund.amount, refundable=collected - already_refunded)
 
     refund.status = "PAID"
@@ -198,6 +233,10 @@ def confirm_refund(
         invoice.status = "PARTIALLY_REFUNDED"
     invoice.version += 1
     db_session.flush()
+    # Step 0 (2026-10-25): the owner's threshold, judged now -- this refund
+    # included (flushed PAID above) -- and stored on the refund, before the
+    # licence and the ladder read it (refund_policy.py).
+    refund_policy.decide_refund(refund, invoice)
 
     # Step 0 ladder (2026-10-24): the refund, the commission it takes back and
     # the licence's stop are ONE transaction. Before (1025d626) the refund
@@ -219,7 +258,11 @@ def confirm_refund(
         # stays counted and the refund is recorded on it (ladder.py).
         if invoice.sales_order_id is not None:
             ladder.evaluate_sale(invoice.sales_order_id)
-        db_session.commit()
+        if override_now:
+            # Commits everything above together with the override's audit row.
+            refund_policy.audit_window_override(refund, invoice, actor_staff_user_id=actor_staff_user_id)
+        else:
+            db_session.commit()
     except BaseException:
         db_session.rollback()
         raise
@@ -230,7 +273,9 @@ def confirm_refund(
         action_code="REFUND_CONFIRMED",
         entity_type="commercial_refund",
         entity_public_id=str(refund.id),
-        after_state={"status": "PAID", "invoice_status": {"before": before_status, "after": invoice.status}},
+        after_state={"status": "PAID", "invoice_status": {"before": before_status, "after": invoice.status},
+                     "threshold_percent_applied": refund.threshold_percent_applied,
+                     "package_refund_over_threshold": refund.package_refund_over_threshold},
     )
     for stop in stops:
         audit_record(
@@ -294,9 +339,16 @@ def _schedule_entitlement_consequence(refund: CommercialRefund, invoice: Commerc
 
     split = ladder.package_split(invoice)
     refunded = total_confirmed_refunds(invoice)  # includes this refund: flushed PAID above
-    package_refunded = split is not None and refunded > split[1]
+    # Step 0 (2026-10-25), the owner's threshold: for a package sale the
+    # licence stops only when the package money given back so far is ABOVE
+    # the threshold (decided and stored on this refund by
+    # refund_policy.decide_refund) -- a full refund of a package sale is
+    # judged the same way (100% of a Package 1 is above any threshold below
+    # 100%). Before, any package money back stopped it (a 10 JOD goodwill
+    # refund cut the shop off). Not a package sale: the old rule (full refund).
+    stops_licence = refund_policy.refund_stops_licence(refund) if split is not None else is_full_refund
     consequence = determine_entitlement_consequence(
-        order_was_fulfilled=order_was_fulfilled, is_full_refund=is_full_refund or package_refunded,
+        order_was_fulfilled=order_was_fulfilled, is_full_refund=stops_licence,
     )
     if subscription is None:
         return []

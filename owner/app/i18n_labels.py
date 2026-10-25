@@ -680,6 +680,10 @@ def generic_audit_action_label(code: str) -> str:
         "ENTITLEMENT_CONSEQUENCE_SCHEDULED": _("Licence stop scheduled after a refund"),
         "LICENSE_SCHEDULED_STOP_APPLIED": _("Licence stopped after a refund"),
         "LICENSE_DEVICES_REMOVED_AFTER_REFUND": _("Devices removed after a refund"),
+        # Step 0 (2026-10-25): the refund threshold and the late-refund override.
+        "REFUND_WINDOW_OVERRIDDEN": _("Refund allowed after the 30 days"),
+        "REFUND_THRESHOLD_DEFAULT_CHANGED": _("Refund threshold changed (system default)"),
+        "CUSTOMER_REFUND_THRESHOLD_CHANGED": _("Refund threshold changed for a customer"),
         "LICENSE_STATUS_CHANGED": _("License status changed"),
         "LICENSE_REPLACED": _("License replaced"),
         "LICENSE_CREATED": _("License created"),
@@ -927,6 +931,8 @@ def localize_commercial_sales_error(code: str, **params) -> str:
         "DISCOUNT_EXCEEDS_GROSS": _("Discount cannot exceed the applicable gross amount."),
         "REFUND_EXCEEDS_REFUNDABLE": _("Refund amount (%(amount)s) exceeds the refundable balance (%(refundable)s)."),
         "REFUND_WINDOW_CLOSED": _("Refunds are not possible once 30 days have passed since the payment was confirmed."),
+        "REFUND_OVERRIDE_SUPER_ADMIN_ONLY": _("Only a Super Admin can allow a refund after the 30 days."),
+        "REFUND_OVERRIDE_REASON_REQUIRED": _("Write why this refund is allowed after the 30 days -- at least 10 characters."),
         "ALLOCATION_EXCEEDS_PAYMENT": _("Allocation amount (%(amount)s) exceeds the unallocated payment balance (%(available)s)."),
         "ALLOCATION_EXCEEDS_OUTSTANDING": _("Allocation amount (%(amount)s) exceeds the invoice outstanding balance (%(outstanding)s)."),
         "CURRENCY_MISMATCH": _("Currency %(given)s does not match the required currency %(expected)s."),
@@ -1073,6 +1079,7 @@ def localize_commission_error(code: str, **params) -> str:
         "COMMISSION_REASON_REQUIRED": _("A reason is required for this commission action."),
         "COMMISSION_ALREADY_IN_PAYOUT_BATCH": _("This commission entry is already included in a payout batch."),
         "COMMISSION_ON_HOLD": _("This commission is still inside its 30-day hold and cannot be approved yet."),
+        "COMMISSION_TAKEN_BACK": _("This commission was taken back (a refund or a correction) and nothing is left to pay."),
         "INVALID_LADDER_RULE": _("The monthly ladder rule is in JOD and takes no rate or fixed amount."),
     }
     template = messages.get(code)
