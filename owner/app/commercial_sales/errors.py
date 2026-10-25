@@ -65,6 +65,7 @@ class CommercialSalesError(StableCodeError):
         "NEGATIVE_DOCUMENT_TOTAL": "Document total cannot be negative.",
         "DISCOUNT_EXCEEDS_GROSS": "Discount cannot exceed the applicable gross amount.",
         "REFUND_EXCEEDS_REFUNDABLE": "Refund amount ({amount}) exceeds the refundable balance ({refundable}).",
+        "REFUND_WINDOW_CLOSED": "Refunds are not possible once 30 days have passed since the payment was confirmed.",
         "ALLOCATION_EXCEEDS_PAYMENT": "Allocation amount ({amount}) exceeds the unallocated payment balance ({available}).",
         "ALLOCATION_EXCEEDS_OUTSTANDING": "Allocation amount ({amount}) exceeds the invoice outstanding balance ({outstanding}).",
         "CURRENCY_MISMATCH": "Currency {given} does not match the required currency {expected}.",

@@ -926,6 +926,7 @@ def localize_commercial_sales_error(code: str, **params) -> str:
         "NEGATIVE_DOCUMENT_TOTAL": _("Document total cannot be negative."),
         "DISCOUNT_EXCEEDS_GROSS": _("Discount cannot exceed the applicable gross amount."),
         "REFUND_EXCEEDS_REFUNDABLE": _("Refund amount (%(amount)s) exceeds the refundable balance (%(refundable)s)."),
+        "REFUND_WINDOW_CLOSED": _("Refunds are not possible once 30 days have passed since the payment was confirmed."),
         "ALLOCATION_EXCEEDS_PAYMENT": _("Allocation amount (%(amount)s) exceeds the unallocated payment balance (%(available)s)."),
         "ALLOCATION_EXCEEDS_OUTSTANDING": _("Allocation amount (%(amount)s) exceeds the invoice outstanding balance (%(outstanding)s)."),
         "CURRENCY_MISMATCH": _("Currency %(given)s does not match the required currency %(expected)s."),

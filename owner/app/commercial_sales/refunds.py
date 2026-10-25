@@ -51,6 +51,7 @@ def create_refund(
 ) -> CommercialRefund:
     if not reason or not reason.strip():
         raise CommercialSalesError("REASON_REQUIRED")
+    _check_refund_window(invoice, utcnow())
 
     amount = validate_refund_amount(amount, refundable_balance(invoice))
 
@@ -76,6 +77,19 @@ def create_refund(
         after_state={"commercial_invoice_id": str(invoice.id), "amount": str(amount)},
     )
     return refund
+
+
+def _check_refund_window(invoice: CommercialInvoice, now) -> None:
+    """Owner decision (2026-10-25): NO refunds after 30 days since the
+    payment was confirmed. The window ends at ladder.refund_window_ends_at
+    -- the same moment, function and constant (HOLD_PERIOD) as the
+    commission hold, so a refund is possible exactly while the commission is
+    still held. Refused AT that moment (the hold is over at it)."""
+    from app.commissions import ladder
+
+    ends_at = ladder.refund_window_ends_at(invoice)
+    if ends_at is not None and now >= ends_at:
+        raise CommercialSalesError("REFUND_WINDOW_CLOSED")
 
 
 def _check_transition(status: str, target: str) -> None:
@@ -155,6 +169,15 @@ def confirm_refund(
     from app.commissions import ladder
 
     ladder.lock_seller(invoice.created_by_employee_profile_id)
+    # Owner decision (2026-10-25): no refunds after 30 days -- checked again
+    # here, at the moment the money would go out: a refund requested on day
+    # 29 and paid out on day 31 is refused, nothing written.
+    now = utcnow()
+    try:
+        _check_refund_window(invoice, now)
+    except CommercialSalesError:
+        db_session.rollback()
+        raise
 
     collected = confirmed_allocated_amount(invoice)
     already_refunded = total_confirmed_refunds(invoice)  # excludes this refund -- still pre-PAID
@@ -162,7 +185,7 @@ def confirm_refund(
         raise CommercialSalesError("REFUND_EXCEEDS_REFUNDABLE", amount=refund.amount, refundable=collected - already_refunded)
 
     refund.status = "PAID"
-    refund.paid_at = utcnow()
+    refund.paid_at = now
     refund.version += 1
     db_session.flush()
 

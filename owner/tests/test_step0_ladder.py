@@ -454,10 +454,17 @@ def test_refund_of_the_last_sale_inside_the_hold(app, seeded):
     assert (summary["count"], summary["total"]) == (4, Decimal("200.00"))
 
 
-def test_refund_after_the_hold_keeps_the_sale_counted_and_flags_it(app, seeded):
-    """The owner ruled only on refunds INSIDE the hold. Default chosen: after
-    the hold the sale stays counted (that commission had become final), and
-    the refund is flagged on the sale for a manager to see."""
+def test_refund_after_the_hold_is_refused_and_one_recorded_before_that_rule_keeps_the_sale_counted(app, seeded):
+    """Owner decision 2026-10-25: NO refunds after 30 days -- a refund after
+    the hold is refused (test_step0_refund_window.py). Changed from "refund
+    after the hold keeps the sale counted and flags it": that default now
+    applies only to refunds recorded BEFORE the rule, so it is exercised with
+    such a refund written directly (the refund service cannot make one any
+    more). What this can no longer catch: a refund service that pays out after
+    the hold AND then mis-handles the sale -- the refusal itself is pinned in
+    test_step0_refund_window.py."""
+    from app.commercial_sales.errors import CommercialSalesError
+
     w = _world(app)
     long_ago = datetime.now(timezone.utc) - timedelta(days=31)
     sale = _sell(app, w, "p1", confirmed_at=long_ago)["order_id"]
@@ -466,7 +473,23 @@ def test_refund_after_the_hold_keeps_the_sale_counted_and_flags_it(app, seeded):
 
         month = ladder_month_of(long_ago)
     assert _summary(app, w["seller_profile"], month=month)["payable"] == Decimal("20.00")
-    _refund(app, w, sale, "250.00")
+    with pytest.raises(CommercialSalesError) as exc:
+        _refund(app, w, sale, "250.00")
+    assert exc.value.code == "REFUND_WINDOW_CLOSED"
+    rows = _rows(app, sale)
+    with app.app_context():
+        from app.commissions import ladder
+        from app.extensions import db_session
+        from app.models.base import utcnow
+        from app.models.commercial_sales import CommercialRefund
+
+        db_session.add(CommercialRefund(  # a refund recorded before the rule existed
+            commercial_invoice_id=rows["invoice_id"], amount=Decimal("250.00"), currency=JOD, reason="before the rule",
+            status="PAID", paid_at=utcnow(), created_by_employee_profile_id=w["manager_profile"], version=1,
+        ))
+        db_session.flush()
+        ladder.evaluate_sale(sale)
+        db_session.commit()
     [s] = _ladder_sales(app, w["seller_profile"])
     assert s["status"] == "COUNTED" and s["refunded_after_hold_at"] is not None
     summary = _summary(app, w["seller_profile"], month=month)

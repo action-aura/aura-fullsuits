@@ -289,11 +289,9 @@ def _qualifying(sale: _Sale) -> _Qualifying | None:
             break
     if completing is None:
         return None  # the sale's own invoice is not fully paid (yet, or any more)
-    allocated_at = _utc(completing.allocated_at)
-    confirmed_at = payment_confirmed_at(completing.payment_record_id) or allocated_at
     first = _Qualifying(
         payment_id=completing.payment_record_id, allocation_id=completing.id,
-        countable_at=max(confirmed_at, allocated_at),
+        countable_at=_countable_at(completing),
     )
     if not sale.is_monthly:
         return first
@@ -326,6 +324,34 @@ def _qualifying(sale: _Sale) -> _Qualifying | None:
             # than the sale's own countable moment.
             return qualifying
     return None
+
+
+def _countable_at(allocation: PaymentAllocation) -> datetime:
+    """The moment an allocation's money became countable: the LATER of its
+    payment's confirmation and the allocation itself."""
+    allocated_at = _utc(allocation.allocated_at)
+    confirmed_at = payment_confirmed_at(allocation.payment_record_id) or allocated_at
+    return max(confirmed_at, allocated_at)
+
+
+def refund_window_ends_at(invoice: CommercialInvoice) -> datetime | None:
+    """Owner decision (2026-10-25): NO refunds after 30 days. The last moment
+    this invoice's money may be refunded: the moment its money became
+    countable (the allocation that completed it -- or, while it is not fully
+    paid, the latest one) + HOLD_PERIOD. The SAME function and constant as a
+    package sale's commission hold (_qualifying -> hold_ends_at), so "still
+    refundable" and "inside the hold" can never disagree. None when nothing
+    is allocated (nothing to refund)."""
+    allocations = _live_allocations(invoice)
+    if not allocations:
+        return None
+    running, completing = _ZERO, allocations[-1]
+    for allocation in allocations:
+        running += Decimal(allocation.allocated_amount)
+        if running >= Decimal(invoice.total):
+            completing = allocation
+            break
+    return _countable_at(completing) + HOLD_PERIOD
 
 
 def _first_package_payment_at(sale: _Sale) -> datetime | None:
@@ -497,9 +523,13 @@ def evaluate_sale(order_id: uuid.UUID, *, now: datetime | None = None) -> None:
                          refund_id=refund.id)
                 touched.add(counted.ladder_month)
             elif counted.refunded_after_hold_at is None:
-                # Default chosen here (the owner ruled only on refunds inside
-                # the hold): the sale stays counted -- its commission had
-                # become final -- and the refund is recorded on it.
+                # Refunds already recorded before the owner's rule "no refunds
+                # after 30 days" (2026-10-25) only: refunds.py now refuses a
+                # refund at or after refund_window_ends_at -- the same moment
+                # as this hold end -- so a NEW refund never reaches this
+                # branch. For those older refunds the default stands: the
+                # sale stays counted (its commission had become final) and the
+                # refund is recorded on it.
                 counted.refunded_after_hold_at = refund.paid_at
                 counted.source_refund_id = refund.id
                 _queue("COMMISSION_LADDER_REFUND_AFTER_HOLD", "commission_ladder_sale", counted.id, {

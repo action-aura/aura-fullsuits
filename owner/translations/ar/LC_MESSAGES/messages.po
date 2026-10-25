@@ -8937,3 +8937,7 @@ msgstr "تُزال %(count)s أجهزة إضافية من هذا الترخيص 
 #: app/i18n_labels.py
 msgid "Devices removed after a refund"
 msgstr "أُزيلت أجهزة بعد الاسترداد"
+
+#: app/i18n_labels.py
+msgid "Refunds are not possible once 30 days have passed since the payment was confirmed."
+msgstr "لا يمكن الاسترداد بعد مرور 30 يومًا على تأكيد الدفعة."

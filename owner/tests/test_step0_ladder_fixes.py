@@ -982,16 +982,22 @@ def test_the_on_hold_refusal_names_jordans_date(app, seeded):
     assert exc.value.params["payable_after"] == held["hold_ends_at"].astimezone(AMMAN).date().isoformat()
 
 
-def test_a_refund_in_the_last_days_of_the_hold_uncounts_and_one_after_it_does_not(app, seeded):
-    """Kills V6 (a refund in the last 2 days of the hold kept counting)."""
+def test_a_refund_in_the_last_days_of_the_hold_uncounts_and_one_after_it_is_refused(app, seeded):
+    """Kills V6 (a refund in the last 2 days of the hold kept counting). The
+    after-the-hold half changed with the owner's 2026-10-25 rule "no refunds
+    after 30 days": it was "keeps counting", it is now refused."""
+    from app.commercial_sales.errors import CommercialSalesError
+
     w = _world(app)
     inside = _sell(app, w, "p1", confirmed_at=datetime.now(UTC) - timedelta(days=29))["order_id"]
     after = _sell(app, w, "p1", confirmed_at=datetime.now(UTC) - timedelta(days=30, hours=1))["order_id"]
     _refund(app, w, inside, "250.00")
-    _refund(app, w, after, "250.00")
+    with pytest.raises(CommercialSalesError) as exc:
+        _refund(app, w, after, "250.00")
+    assert exc.value.code == "REFUND_WINDOW_CLOSED"
     sales = {s["order_id"]: s for s in _ladder_sales(app, w["seller_profile"])}
     assert (sales[inside]["status"], sales[inside]["cause"]) == ("UNCOUNTED", "REFUND_IN_HOLD")
-    assert sales[after]["status"] == "COUNTED" and sales[after]["refunded_after_hold_at"] is not None
+    assert sales[after]["status"] == "COUNTED" and sales[after]["refunded_after_hold_at"] is None
 
 
 def test_a_licence_stop_is_not_applied_early(app, seeded):
