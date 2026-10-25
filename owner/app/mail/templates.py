@@ -29,7 +29,21 @@ _SUBJECTS = {
     "staff_invitation": ("You have been invited to Aura Owner", "تمت دعوتك إلى Aura Owner"),
     "staff_password_reset": ("Reset your Aura Owner password", "إعادة تعيين كلمة مرور Aura Owner"),
     "test": ("Aura Owner test message", "رسالة اختبار من Aura Owner"),
+    # Step 2 CA1: customer website account mail. NOT in the product relay's KINDS
+    # (app/mail/relay.py): only Owner's own code can queue these.
+    "customer_invitation": ("Set up your Action Aura account", "إعداد حسابك في Action Aura"),
+    "customer_password_reset": ("Reset your Action Aura password", "إعادة تعيين كلمة مرور Action Aura"),
+    "customer_password_changed": ("Your Action Aura password was changed", "تم تغيير كلمة مرور Action Aura"),
+    "customer_email_change": ("Confirm your new Action Aura email address", "تأكيد بريدك الإلكتروني الجديد في Action Aura"),
+    "customer_email_changed_notice": ("The email address on your Action Aura account is changing",
+                                      "يجري تغيير البريد الإلكتروني في حسابك على Action Aura"),
 }
+
+# Kinds whose body carries a live one-time link. The sender clears the body the
+# moment such a message is SENT (app/mail/outbox.py::mark_sent), so a finished
+# mail row never keeps a usable token.
+LINK_BEARING_KINDS = frozenset({"customer_invitation", "customer_password_reset", "customer_email_change"})
+CUSTOMER_KIND_PREFIX = "customer_"
 
 # (english intro, arabic intro) per kind -- the link / list is added below.
 _INTROS = {
@@ -46,6 +60,18 @@ _INTROS = {
                              "طُلب إعادة تعيين كلمة مرور حسابك في Aura Owner. افتح هذا الرابط لاختيار كلمة مرور جديدة:"),
     "test": ("This is a test message from Aura Owner. If you can read it, email sending works.",
              "هذه رسالة اختبار من Aura Owner. إذا استطعت قراءتها فإرسال البريد يعمل."),
+    "customer_invitation": ("Action Aura has set up an account for you. Open this one-time link to choose your password:",
+                            "أنشأت Action Aura حساباً لك. افتح هذا الرابط لمرة واحدة لاختيار كلمة المرور:"),
+    "customer_password_reset": ("Someone asked to reset the password of your Action Aura account. Open this link to choose a new one:",
+                                "طُلب إعادة تعيين كلمة مرور حسابك في Action Aura. افتح هذا الرابط لاختيار كلمة مرور جديدة:"),
+    "customer_password_changed": ("The password of your Action Aura account was just changed. Your licences and devices are not affected.",
+                                  "تم تغيير كلمة مرور حسابك في Action Aura للتو. لا يتأثر ترخيصك ولا أجهزتك."),
+    "customer_email_change": ("Open this link to confirm this address as the new sign-in email of your Action Aura account:",
+                              "افتح هذا الرابط لتأكيد هذا العنوان بريداً جديداً لتسجيل الدخول إلى حسابك في Action Aura:"),
+    "customer_email_changed_notice": ("The sign-in email of your Action Aura account is being changed to the address below. "
+                                      "If this was not you, contact Action Aura at once.",
+                                      "يجري تغيير بريد تسجيل الدخول لحسابك في Action Aura إلى العنوان أدناه. "
+                                      "إذا لم تكن أنت، تواصل مع Action Aura فوراً."),
 }
 
 _LINK_NOTES = {
@@ -57,10 +83,23 @@ _LINK_NOTES = {
                          "يعمل الرابط مرة واحدة وتنتهي صلاحيته خلال 3 أيام."),
     "staff_password_reset": ("The link works for 30 minutes and stops working once your password changes. If you did not ask for this, ignore this email - your password will not change.",
                              "يعمل الرابط لمدة 30 دقيقة ويتوقف عن العمل بعد تغيير كلمة المرور. إذا لم تطلب ذلك فتجاهل هذه الرسالة - لن تتغير كلمة مرورك."),
+    "customer_invitation": ("The link works once and expires in 3 days. If you were not expecting this, ignore this email.",
+                            "يعمل الرابط مرة واحدة وتنتهي صلاحيته خلال 3 أيام. إذا لم تكن تتوقع هذه الرسالة فتجاهلها."),
+    "customer_password_reset": ("The link works for 30 minutes and only once. If you did not ask for this, ignore this email - your password will not change.",
+                                "يعمل الرابط لمدة 30 دقيقة ولمرة واحدة. إذا لم تطلب ذلك فتجاهل هذه الرسالة - لن تتغير كلمة مرورك."),
+    "customer_password_changed": ("If this was not you, reset your password now from the sign-in page and contact Action Aura.",
+                                  "إذا لم تكن أنت، أعد تعيين كلمة المرور الآن من صفحة تسجيل الدخول وتواصل مع Action Aura."),
+    "customer_email_change": ("The link works once and expires in 24 hours. Until you use it, the old address stays in force.",
+                              "يعمل الرابط مرة واحدة وتنتهي صلاحيته خلال 24 ساعة. يبقى العنوان القديم ساري المفعول إلى أن تستخدمه."),
 }
 
 
-def _footer() -> tuple:
+def _footer(kind: str = "") -> tuple:
+    if kind.startswith(CUSTOMER_KIND_PREFIX):
+        # No support address: whether that mailbox exists is not known yet, and
+        # a customer must not be told to write to one that bounces.
+        return ("Sent by Action Aura - please do not reply to this message.",
+                "أُرسلت من Action Aura - يرجى عدم الرد على هذه الرسالة.")
     # No caller-supplied shop name in the footer: it was free text from the
     # relay, placed in a mail sent from OUR address (phishing text with our
     # reputation; found by adversarial verification 2026-10-10).
@@ -78,7 +117,7 @@ def _block_text(kind: str, idx: int, link: Optional[str], lines: list) -> str:
     note = _LINK_NOTES.get(kind)
     if note:
         parts += ["", note[idx]]
-    parts += ["", _footer()[idx]]
+    parts += ["", _footer(kind)[idx]]
     return "\n".join(parts)
 
 
@@ -93,7 +132,7 @@ def _block_html(kind: str, idx: int, link: Optional[str], lines: list) -> str:
     note = _LINK_NOTES.get(kind)
     if note:
         out.append(f"<p>{escape(note[idx])}</p>")
-    out.append(f'<p style="color:#666;font-size:12px">{escape(_footer()[idx])}</p>')
+    out.append(f'<p style="color:#666;font-size:12px">{escape(_footer(kind)[idx])}</p>')
     out.append("</div>")
     return "".join(out)
 

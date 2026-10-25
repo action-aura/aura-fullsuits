@@ -121,6 +121,14 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("customers.assign", "CUSTOMERS", "Assign/reassign a customer"),
     ("customers.capture_location", "CUSTOMERS", "Capture a lead/customer location"),
     ("customers.verify_location", "CUSTOMERS", "Verify/correct another employee's captured location"),
+    # Step 2 CA1 (2026-10-25): a customer's account on the website. Scope: Sales sees
+    # and manages only their OWN customers; anyone holding customers.view_all or
+    # customer_accounts.disable sees every customer's account (the scope rule lives in
+    # customer_accounts/staff_routes.py::can_reach_customer).
+    ("customer_accounts.view", "CUSTOMERS", "View a customer's website account"),
+    ("customer_accounts.manage", "CUSTOMERS", "Create a website account, send/resend its invitation or reset link, sign it out everywhere"),
+    ("customer_accounts.disable", "CUSTOMERS", "Disable or enable a customer's website account (blocks sign-in only, never a licence)"),
+    ("customer_accounts.change_email", "CUSTOMERS", "Change the sign-in email of a customer's website account"),
     ("quotes.create", "COMMERCIAL_SALES", "Create a quote"),
     ("quotes.approve", "COMMERCIAL_SALES", "Approve/send a quote"),
     ("orders.create", "COMMERCIAL_SALES", "Create a sales order"),
@@ -201,6 +209,8 @@ ROLES: dict[str, dict] = {
             "employees.view_own", "employees.view_presence",
             "leads.create", "leads.discover", "leads.view_own", "leads.update_own", "leads.convert",
             "customers.view_own", "customers.update_own", "customers.capture_location",
+            # Step 2 CA1: a seller creates the website account for THEIR OWN customer.
+            "customer_accounts.view", "customer_accounts.manage",
             "quotes.create", "orders.create", "invoices.create",
             # Phase 9.5D Milestone 18 -- real gap found and closed:
             # payments.create was FINANCE-only, but submit_payment()'s own
@@ -265,6 +275,7 @@ ROLES: dict[str, dict] = {
             "customers.view", "customers.create", "customers.update", "customers.manage_contacts",
             "customers.manage_notes", "customers.view_own", "customers.view_all", "customers.update_own",
             "customers.update_all", "customers.assign", "customers.capture_location", "customers.verify_location",
+            "customer_accounts.view", "customer_accounts.manage",
             "leads.create", "leads.discover", "leads.view_own", "leads.view_all", "leads.update_own",
             "leads.update_all", "leads.assign", "leads.convert", "leads.archive",
             "subscriptions.view", "licenses.view", "installations.view", "pilots.view",
@@ -308,6 +319,9 @@ ROLES: dict[str, dict] = {
             # does not own the sales pipeline or approve money.
             "customers.view_own", "leads.view_own",
             "device_policy.view",
+            # Step 2 CA1: Support looks after customers' website sign-in -- all of it.
+            "customer_accounts.view", "customer_accounts.manage", "customer_accounts.disable",
+            "customer_accounts.change_email",
         ],
     },
     "FINANCE": {
@@ -343,6 +357,7 @@ ROLES: dict[str, dict] = {
             "commissions.view_all", "commissions.approve", "commissions.pay", "commissions.reverse",
             "expenses.view_all", "expenses.approve", "expenses.pay", "expenses.void",
             "customers.view_all",
+            "customer_accounts.view",
             "dashboard.view_all", "reports.view_all",
             # Phase 9.5E -- real gaps closed, same class as Milestone 16/18's
             # own findings: management_notes.* and reports.regenerate_daily

@@ -247,6 +247,17 @@ def _tapped_sale(raw_order_id):
     return {"state": "rejected", "order_id": order.id, "order_number": order.order_number}
 
 
+def _account_prompt(confirmed):
+    """Step 2 CA1: after a sale is confirmed, remind the confirmer when the customer
+    has no website account yet (never creates one by itself)."""
+    if not confirmed or not confirmed.get("order_id"):
+        return None
+    from app.customer_accounts.staff_routes import prompt_for_order
+
+    actor = load_current_staff()
+    return prompt_for_order(confirmed["order_id"], actor, get_staff_permission_codes(actor))
+
+
 def _render_sales_list(*, error: str | None = None, confirmed=None, status: int = 200, tapped=None):
     return render_template(
         "licensing/sales_pending.html",
@@ -255,6 +266,7 @@ def _render_sales_list(*, error: str | None = None, confirmed=None, status: int 
         confirmed=confirmed,
         recent_auth_ok=has_recent_auth(),
         tapped=tapped,
+        account_prompt=_account_prompt(confirmed),
         push_card=_push_card(),
     ), status
 

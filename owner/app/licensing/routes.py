@@ -87,6 +87,43 @@ def detail(license_id):
     )
 
 
+BRANCH_LABEL_MAX = 120
+
+
+@bp.route("/<uuid:license_id>/branch-label", methods=["POST"])
+@require_permission("subscriptions.update")
+def set_branch_label(license_id):
+    """Step 2 CA1: the shop's name in the customer's own branch picker ("Branch 2 -
+    Dabouq"). Free text on the licence's subscription, empty = unnamed. Only exists
+    while customer website accounts are switched on (otherwise 404)."""
+    from flask import abort, flash
+    from flask_babel import gettext as _
+
+    from app.audit.services import record as audit_record
+
+    if not current_app.config.get("CUSTOMER_ACCOUNTS_ENABLED"):
+        abort(404)
+    license_row = db_session.get(License, license_id)
+    if license_row is None:
+        return jsonify({"error": "not_found"}), 404
+    label = " ".join((request.form.get("branch_label") or "").split())
+    if len(label) > BRANCH_LABEL_MAX:
+        flash(_("The branch name can be at most %(max)s characters.", max=BRANCH_LABEL_MAX), "error")
+        return redirect(url_for("licensing.detail", license_id=license_id))
+    actor = load_current_staff()
+    subscription = license_row.subscription
+    before = subscription.branch_label
+    subscription.branch_label = label or None
+    db_session.commit()
+    audit_record(
+        actor_staff_user_id=actor.id, actor_role_snapshot=None, action_code="SUBSCRIPTION_BRANCH_LABEL_CHANGED",
+        entity_type="subscription", entity_public_id=str(subscription.id),
+        before_state={"branch_label": before}, after_state={"branch_label": subscription.branch_label},
+    )
+    flash(_("Branch name saved."), "success")
+    return redirect(url_for("licensing.detail", license_id=license_id))
+
+
 @bp.route("/<uuid:license_id>/issue", methods=["POST"])
 @require_permission("licenses.issue")
 @require_recent_auth

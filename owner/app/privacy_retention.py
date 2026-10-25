@@ -16,6 +16,13 @@ SAFETY FLOOR: the relay's abuse caps (app/mail/relay.py) read to_address and
 created_at over windows of at most one day, so the e-mail window is clamped to
 >= MIN_EMAIL_DAYS; a mis-set environment variable can never blind the caps.
 
+CUSTOMER WEBSITE ACCOUNTS (Step 2 CA1): customer login attempts (hashed email / IP)
+are deleted after 90 days; customer sessions and account tokens 30 days after they
+EXPIRED (a live one is never touched); and the body of an invitation / reset /
+email-change mail -- which IS a one-time link -- is cleared as soon as the message
+is finished (the sender already clears it at SENT; this catches stragglers and
+FAILED/CANCELLED rows).
+
 LOGIN ATTEMPTS: rows older than N days (default 180) are deleted. The lockout
 and reset throttles look back minutes to an hour, so this cannot loosen them.
 """
@@ -27,6 +34,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, delete, func, select, update
 
 from app.extensions import db_session
+from app.mail.templates import LINK_BEARING_KINDS
+from app.models.customer_accounts import CustomerAccountToken, CustomerLoginAttempt, CustomerSession
 from app.models.email_outbox import EmailOutbox
 from app.models.staff import LoginAttempt
 
@@ -98,5 +107,63 @@ def purge_old_login_attempts(*, now: datetime | None = None, days: int | None = 
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(days=days or login_attempt_days())
     result = db_session.execute(delete(LoginAttempt).where(LoginAttempt.created_at < cutoff))
+    db_session.commit()
+    return result.rowcount
+
+
+# --- Step 2 CA1: customer website accounts -------------------------------------
+CUSTOMER_LOGIN_ATTEMPT_DAYS = 90
+CUSTOMER_EXPIRED_GRACE_DAYS = 30
+
+
+def _cutoff(now, days):
+    return (now or datetime.now(timezone.utc)) - timedelta(days=days)
+
+
+def count_customer_login_attempts_to_purge(*, now: datetime | None = None) -> int:
+    return db_session.execute(select(func.count(CustomerLoginAttempt.id)).where(
+        CustomerLoginAttempt.created_at < _cutoff(now, CUSTOMER_LOGIN_ATTEMPT_DAYS))).scalar_one()
+
+
+def purge_customer_login_attempts(*, now: datetime | None = None) -> int:
+    result = db_session.execute(delete(CustomerLoginAttempt).where(
+        CustomerLoginAttempt.created_at < _cutoff(now, CUSTOMER_LOGIN_ATTEMPT_DAYS)))
+    db_session.commit()
+    return result.rowcount
+
+
+def count_expired_customer_sessions_and_tokens(*, now: datetime | None = None) -> int:
+    cutoff = _cutoff(now, CUSTOMER_EXPIRED_GRACE_DAYS)
+    sessions = db_session.execute(select(func.count(CustomerSession.id)).where(
+        CustomerSession.absolute_expires_at < cutoff)).scalar_one()
+    tokens = db_session.execute(select(func.count(CustomerAccountToken.id)).where(
+        CustomerAccountToken.expires_at < cutoff)).scalar_one()
+    return sessions + tokens
+
+
+def purge_expired_customer_sessions_and_tokens(*, now: datetime | None = None) -> int:
+    cutoff = _cutoff(now, CUSTOMER_EXPIRED_GRACE_DAYS)
+    sessions = db_session.execute(delete(CustomerSession).where(CustomerSession.absolute_expires_at < cutoff)).rowcount
+    tokens = db_session.execute(delete(CustomerAccountToken).where(CustomerAccountToken.expires_at < cutoff)).rowcount
+    db_session.commit()
+    return sessions + tokens
+
+
+def _link_mail_condition():
+    return and_(
+        EmailOutbox.kind.in_(sorted(LINK_BEARING_KINDS)),
+        EmailOutbox.status.in_(_FINISHED_STATES),
+        EmailOutbox.body_text != "",
+    )
+
+
+def count_customer_link_mail_bodies_to_clear() -> int:
+    return db_session.execute(select(func.count(EmailOutbox.id)).where(_link_mail_condition())).scalar_one()
+
+
+def clear_customer_link_mail_bodies() -> int:
+    """Not time-based: a finished link mail has no reason to keep its token. Rows
+    still QUEUED/SENDING are never touched (they have not been delivered)."""
+    result = db_session.execute(update(EmailOutbox).where(_link_mail_condition()).values(body_text="", body_html=None))
     db_session.commit()
     return result.rowcount

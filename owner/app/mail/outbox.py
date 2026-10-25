@@ -30,6 +30,7 @@ from typing import Optional
 from sqlalchemy import select, update
 
 from app.extensions import db_session
+from app.mail import templates
 from app.models.email_outbox import EmailOutbox
 
 TERMINAL_STATES = frozenset({"SENT", "FAILED_PERMANENT", "CANCELLED"})
@@ -87,7 +88,16 @@ def _transition(row_id, from_state: str, **values) -> bool:
 
 
 def mark_sent(row_id) -> bool:
-    return _transition(row_id, "SENDING", status="SENT", sent_at=_now(), lease_expires_at=None)
+    row = db_session.get(EmailOutbox, row_id)
+    values = {}
+    if row is not None and row.kind in templates.LINK_BEARING_KINDS:
+        # Step 2 CA1: the body of an invitation / reset / email-change mail IS a
+        # usable one-time token. Once it has gone out nothing needs it again, so
+        # it is cleared in the same statement that marks it SENT (the nightly
+        # retention job only handles stragglers). The subject marker keeps the
+        # housekeeping count idempotent.
+        values = {"body_text": "", "body_html": None}
+    return _transition(row_id, "SENDING", status="SENT", sent_at=_now(), lease_expires_at=None, **values)
 
 
 def mark_retry(row_id, *, error: str, next_attempt_at: datetime) -> bool:

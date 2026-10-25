@@ -1,0 +1,87 @@
+{# Step 2 CA1: the "Website account" panel. Rendered only when the feature is on
+   and the actor may see this customer's account (customer_accounts/staff_routes.py::panel_context). #}
+{% set acct = website_account_panel.account %}
+<div class="card" id="website-account" data-website-account-status="{{ acct.status if acct else 'NONE' }}">
+  <h3>{{ _("Website account") }}</h3>
+  {% if not acct %}
+  <p>{{ _("This customer has no website account.") }}</p>
+  {% if website_account_panel.can_manage %}
+  <form method="post" action="{{ url_for('customer_accounts.create', customer_id=customer.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="wa-email">{{ _("Email address of the person who will sign in") }}</label>
+    <input id="wa-email" type="email" name="email" dir="ltr" required value="{{ website_account_panel.default_email }}">
+    <label for="wa-lang">{{ _("Language of the emails") }}</label>
+    <select id="wa-lang" name="language">
+      <option value="en" {% if website_account_panel.default_language == 'en' %}selected{% endif %}>{{ _("English") }}</option>
+      <option value="ar" {% if website_account_panel.default_language == 'ar' %}selected{% endif %}>{{ _("Arabic") }}</option>
+    </select>
+    <button type="submit">{{ _("Create website account and send the invitation") }}</button>
+  </form>
+  <p style="color:#6b7785;font-size:0.85rem;">{{ _("The customer gets a link to choose a password. An account is about signing in to the website only; it does not change any licence or device.") }}</p>
+  {% endif %}
+  {% else %}
+  <dl class="kv">
+    <dt>{{ _("Status") }}</dt>
+    <dd>
+      {% if acct.status == 'ACTIVE' %}<span class="badge active">{{ _("Active") }}</span>
+      {% elif acct.status == 'INVITED' %}<span class="badge draft">{{ _("Invited -- password not set yet") }}</span>
+      {% else %}<span class="badge danger">{{ _("Disabled") }}</span>{% endif %}
+    </dd>
+    <dt>{{ _("Email") }}</dt><dd><bdi dir="ltr">{{ acct.email }}</bdi></dd>
+    <dt>{{ _("Language") }}</dt><dd>{{ _("Arabic") if acct.language == 'ar' else _("English") }}</dd>
+    <dt>{{ _("Last sign-in") }}</dt><dd>{{ format_owner_datetime(acct.last_sign_in_at) if acct.last_sign_in_at else "-" }}</dd>
+    {% if acct.status == 'DISABLED' %}
+    <dt>{{ _("Reason it was disabled") }}</dt><dd>{{ acct.disabled_reason }}</dd>
+    {% endif %}
+  </dl>
+  {% if website_account_panel.can_manage and acct.status != 'DISABLED' %}
+  <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+    {% if acct.status == 'INVITED' %}
+    <form method="post" action="{{ url_for('customer_accounts.resend', customer_id=customer.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="secondary">{{ _("Send the invitation again") }}</button>
+    </form>
+    {% else %}
+    <form method="post" action="{{ url_for('customer_accounts.reset_link', customer_id=customer.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="secondary">{{ _("Send a password reset link") }}</button>
+    </form>
+    {% endif %}
+    <form method="post" action="{{ url_for('customer_accounts.sign_out', customer_id=customer.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="secondary">{{ _("Sign out everywhere") }}</button>
+    </form>
+  </div>
+  {% endif %}
+  {% if website_account_panel.can_disable %}
+  {% if not website_account_panel.recent_auth_ok %}
+  <p><a href="{{ url_for('auth.reauth_form', next=request.path) }}">{{ _("Confirm it is you to disable, enable or change the email") }}</a></p>
+  {% endif %}
+  {% if acct.status == 'DISABLED' %}
+  <form method="post" action="{{ url_for('customer_accounts.enable', customer_id=customer.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">{{ _("Enable this account") }}</button>
+  </form>
+  {% else %}
+  <form method="post" action="{{ url_for('customer_accounts.disable', customer_id=customer.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="wa-disable-reason">{{ _("Reason for disabling (kept in the audit log)") }}</label>
+    <input id="wa-disable-reason" type="text" name="reason" required maxlength="500">
+    <button type="submit" class="danger">{{ _("Disable this account") }}</button>
+  </form>
+  <p style="color:#6b7785;font-size:0.85rem;">{{ _("Disabling stops the customer signing in to the website. Their licences and devices keep working.") }}</p>
+  {% endif %}
+  {% endif %}
+  {% if website_account_panel.can_change_email and acct.status != 'DISABLED' %}
+  <form method="post" action="{{ url_for('customer_accounts.change_email', customer_id=customer.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="wa-new-email">{{ _("New sign-in email address") }}</label>
+    <input id="wa-new-email" type="email" name="new_email" dir="ltr" required>
+    <label for="wa-email-reason">{{ _("Reason for the change (kept in the audit log)") }}</label>
+    <input id="wa-email-reason" type="text" name="reason" required maxlength="500">
+    <button type="submit" class="secondary">{{ _("Change the sign-in email") }}</button>
+  </form>
+  <p style="color:#6b7785;font-size:0.85rem;">{{ _("The new address gets a confirmation link and the old address gets a notice. The email only changes when the link is used.") }}</p>
+  {% endif %}
+  {% endif %}
+</div>

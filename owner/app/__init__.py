@@ -158,6 +158,8 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.leads.intake_routes import warn_if_intake_secret_unusable
     from app.pwa import bp as pwa_bp
     from app.push.routes import bp as push_bp
+    from app.customer_accounts.api import bp as website_account_api_bp
+    from app.customer_accounts.staff_routes import bp as customer_accounts_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(staff_bp)
@@ -205,6 +207,15 @@ def create_app(config_name: str | None = None) -> Flask:
     # OWNER_WEBSITE_INTAKE_SECRET is set. See app/leads/intake_routes.py.
     csrf.exempt(website_intake_bp)
     warn_if_intake_secret_unusable(app)
+    # Step 2 CA1: customer website accounts. The website-facing API is registered
+    # unconditionally but default-off (404 unless a real shared secret is set) and is
+    # csrf-exempt for the same reason as website intake: server-to-server, no browser
+    # session; the HMAC signature (customer_accounts/signature.py) is its CSRF-equivalent.
+    # The staff routes 404 unless OWNER_CUSTOMER_ACCOUNTS_ENABLED=true.
+    app.register_blueprint(website_account_api_bp)
+    csrf.exempt(website_account_api_bp)
+    app.register_blueprint(customer_accounts_bp)
+    app.jinja_env.globals["customer_accounts_enabled"] = lambda: bool(app.config.get("CUSTOMER_ACCOUNTS_ENABLED"))
 
     if app.config.get("EXTERNAL_API_ENABLED"):
         from app.api.routes import bp as external_api_bp
