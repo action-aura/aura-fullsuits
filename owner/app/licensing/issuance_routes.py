@@ -57,6 +57,7 @@ from app.licensing.issuance import LicenseIssuanceError, issue_no_charge_license
 from app.models.catalog import Plan
 from app.models.customers import Customer
 from app.models.employees import EmployeeProfile
+from app.operational_reports.periods import jordan_today
 from app.security.rbac import get_staff_permission_codes, require_permission, require_recent_auth
 
 bp = Blueprint("license_issuance", __name__, url_prefix="/licenses/issuance")
@@ -131,7 +132,7 @@ def _render_sale_form(*, error: str | None, idempotency_key: str, form_values=No
         may_choose_seller=may_choose_seller,
         own_profile=find_own_profile(actor.id),
         payment_methods=DIRECT_SALE_PAYMENT_METHODS,
-        today=date.today().isoformat(),
+        today=jordan_today().isoformat(),  # the form's default and max: Jordan's date
         error=error,
         form_values=form_values,
         recorded=recorded,

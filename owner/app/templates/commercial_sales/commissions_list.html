@@ -78,7 +78,7 @@
       <td>{{ format_owner_datetime(e.earned_at) if e.earned_at else "-" }}</td>
       <td>
         {% if e.status == "EARNED" and e.payable_after and e.payable_after > now %}
-        <span class="badge pending" data-on-hold="{{ e.id }}">{{ _("On hold until") }} {{ format_owner_date(e.payable_after.date()) }}</span>
+        <span class="badge pending" data-on-hold="{{ e.id }}" data-on-hold-until="{{ jordan_date(e.payable_after).isoformat() }}">{{ _("On hold until") }} {{ format_owner_date(jordan_date(e.payable_after)) }}</span>
         {% elif e.status == "EARNED" and can_approve %}
         <form method="post" action="{{ url_for('commercial_sales_web.approve_commission_route', entry_id=e.id) }}" class="inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

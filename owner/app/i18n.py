@@ -176,6 +176,26 @@ def init_app(app) -> None:
 
         return url_for("licensing.list_licenses", status=status)
 
+    # Step 0 fix round (2026-10-25): Jordan's date for screens -- a stored
+    # timestamp's .date() is the date in the DB SESSION's zone (Asia/Gaza),
+    # and a form's "today"/max must be Jordan's (operational_reports/periods.py).
+    from app.operational_reports.periods import jordan_date, jordan_today
+
+    def pending_licence_stop(license_id):
+        from app.licensing.scheduled_stops import pending_stop_for
+
+        return pending_stop_for(license_id)
+
+    def pending_subscription_stop(subscription_id):
+        from app.licensing.scheduled_stops import pending_stop_for_subscription
+
+        return pending_stop_for_subscription(subscription_id)
+
+    app.jinja_env.globals.update(
+        jordan_date=jordan_date, jordan_today=jordan_today,
+        pending_licence_stop=pending_licence_stop, pending_subscription_stop=pending_subscription_stop,
+    )
+
     # Domain-label and formatting helpers are Jinja globals (not filters) --
     # exposed once, here, reused by every template rather than each screen
     # importing/registering its own (Non-Negotiable Principle 1/10).

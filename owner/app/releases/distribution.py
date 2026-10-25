@@ -120,6 +120,17 @@ def authenticate_device_request(body: dict, *, nonce_scope: str, config: dict) -
     if installation.status in ("SUSPENDED", "DEACTIVATED", "REPLACED"):
         raise DownloadAuthorizationRejected(f"INSTALLATION_{installation.status}")
 
+    # Step 0 fix round (2026-10-25): a refund's stored stop ("the licence
+    # keeps working 2 days, then stops", licensing/scheduled_stops.py) is
+    # applied HERE, before the licence status is read -- the same as check-in
+    # and activation do. Without it a refunded shop past its 2 days could
+    # still download updates until something else applied the stop.
+    if installation.license_id is not None:
+        from app.licensing.scheduled_stops import apply_due_licence_stops
+
+        if apply_due_licence_stops(license_id=installation.license_id):
+            db_session.expire_all()
+
     license_row = installation.license
     if license_row is None:
         raise DownloadAuthorizationRejected("INSTALLATION_NOT_FOUND")

@@ -8964,3 +8964,17 @@ msgstr "Monthly ladder"
 #: app/templates/commercial_sales/commissions_list.html
 msgid "On hold until"
 msgstr "On hold until"
+
+#: app/templates/licensing/detail.html
+#, python-format
+msgid "This licence stops on %(date)s: a refund was confirmed."
+msgstr "This licence stops on %(date)s: a refund was confirmed."
+
+#: app/templates/licensing/detail.html
+#, python-format
+msgid "%(count)s extra devices are removed from this licence on %(date)s: a refund was confirmed."
+msgstr "%(count)s extra devices are removed from this licence on %(date)s: a refund was confirmed."
+
+#: app/i18n_labels.py
+msgid "Devices removed after a refund"
+msgstr "Devices removed after a refund"

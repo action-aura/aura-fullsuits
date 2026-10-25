@@ -28,7 +28,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import text
 
-from tests.conftest import force_login, make_staff
+from tests.conftest import force_login, jordan_today, make_staff
 from tests.test_issuance_sale import _codes, _profile
 from tests.test_step0_packages import _make_plan
 
@@ -112,10 +112,20 @@ def _backdate_confirmation(payment_id, when: datetime):
     db_session.commit()
 
 
-def _sell(app, w, plan_key, *, pairs=0, seller="seller", confirmed_at: datetime | None = None):
+def _sell(app, w, plan_key, *, pairs=0, seller="seller", confirmed_at: datetime | None = None,
+          finished_late: bool = False):
     """One sale through the one-screen sale: recorded by the seller, confirmed
     by the manager. With confirmed_at, the manager confirms the payment on
-    the payments screen first, at that moment, then finishes the sale."""
+    the payments screen first, at that moment, and finishes the sale at that
+    same moment (the allocation is dated then too).
+
+    Fix round (2026-10-25): this used to backdate ONLY the payment's
+    confirmation and finish the sale now -- a sale whose money was confirmed
+    weeks ago but which became countable only today. That is the late-finished
+    sale the verifier proved wrong (probe v10): it now counts when it is
+    finished. finished_late=True keeps that shape for the test that pins it."""
+    from unittest.mock import patch
+
     amount = _PRICES[plan_key] + Decimal("50.00") * pairs
     with app.app_context():
         from app.commercial_sales.direct_sale import confirm_direct_sale, record_direct_sale
@@ -126,14 +136,20 @@ def _sell(app, w, plan_key, *, pairs=0, seller="seller", confirmed_at: datetime 
         result = record_direct_sale(
             new_customer_legal_name=f"Shop {uuid.uuid4().hex[:6]}", plan_id=w[plan_key], extra_device_pairs=pairs,
             amount=amount, method="BANK_TRANSFER", reference=f"CLIQ-{uuid.uuid4().hex[:6]}",
-            payment_date=date.today(),
+            payment_date=jordan_today(),
             idempotency_key=str(uuid.uuid4()), actor_staff_user_id=w[seller], actor_permission_codes=_codes(w[seller]),
-            as_of=date.today(),
+            as_of=jordan_today(),
         )
         if confirmed_at is not None:
             confirm_payment(db_session.get(PaymentRecord, result["payment_id"]), actor_staff_user_id=w["manager"])
             _backdate_confirmation(result["payment_id"], confirmed_at)
-        done = confirm_direct_sale(result["order_id"], actor_staff_user_id=w["manager"], license_pepper=app.config["LICENSE_PEPPER"])
+        if confirmed_at is not None and not finished_late:
+            with patch("app.commercial_sales.allocation.utcnow", return_value=confirmed_at):
+                done = confirm_direct_sale(result["order_id"], actor_staff_user_id=w["manager"],
+                                           license_pepper=app.config["LICENSE_PEPPER"])
+        else:
+            done = confirm_direct_sale(result["order_id"], actor_staff_user_id=w["manager"],
+                                       license_pepper=app.config["LICENSE_PEPPER"])
         return {"order_id": result["order_id"], "payment_id": result["payment_id"], "full_key": done["full_key"]}
 
 
@@ -165,7 +181,7 @@ def _pay_month(app, w, subscription_id, amount, *, payment_date=None, confirmed_
         sub = db_session.get(Subscription, subscription_id)
         payment = record_payment(
             {"customer_id": sub.customer_id, "subscription_id": sub.id, "amount": Decimal(amount), "currency": JOD,
-             "method": "BANK_TRANSFER", "payment_date": payment_date or date.today(),
+             "method": "BANK_TRANSFER", "payment_date": payment_date or jordan_today(),
              "reference": f"CLIQ-{uuid.uuid4().hex[:6]}", "status": "PENDING"},
             w["seller"],
         )
@@ -470,7 +486,12 @@ def test_a_refund_of_only_the_pair_leaves_the_sale_counted_and_the_licence_runni
         from app.extensions import db_session
         from app.models.licensing import LicenseScheduledStop
 
-        assert db_session.execute(select(LicenseScheduledStop)).scalars().all() == []
+        # Fix round (2026-10-25): no STOP -- but the pair's devices are now
+        # scheduled off (test_step0_ladder_fixes.py); this used to assert no
+        # scheduled row of any kind, which can no longer hold.
+        assert db_session.execute(
+            select(LicenseScheduledStop).where(LicenseScheduledStop.to_status.is_not(None))
+        ).scalars().all() == []
 
 
 def test_held_ladder_commission_cannot_be_approved_until_the_hold_ends(app, seeded):
@@ -756,12 +777,18 @@ def test_monthly_payments_inside_the_contract_are_not_renewals_but_a_new_contrac
     sub = _rows(app, sale)["subscription_id"]
     _pay_month(app, w, sub, "35.00")
     assert _entries(app, w["seller_profile"], kind="RENEWAL") == []
+    # The 12 months pass: the contract ended yesterday. (Fix round 2026-10-25:
+    # this used to pay with payment_date = the contract end + 1 day, a date a
+    # year in the FUTURE -- refused now (PaymentDateInFutureError); a typed
+    # future date was how a renewal could be manufactured. Same rule tested,
+    # with the contract's end moved into the past instead.)
     with app.app_context():
         from app.extensions import db_session
         from app.models.subscriptions import Subscription
 
-        ends = db_session.get(Subscription, sub).contract_ends_on
-    _pay_month(app, w, sub, "35.00", payment_date=ends + timedelta(days=1))
+        db_session.get(Subscription, sub).contract_ends_on = jordan_today() - timedelta(days=1)
+        db_session.commit()
+    _pay_month(app, w, sub, "35.00")
     assert [r[1] for r in _entries(app, w["seller_profile"], kind="RENEWAL")] == [Decimal("10.00")]
 
 

@@ -20,6 +20,7 @@ from app.subscriptions.services import (
     VALID_TRANSITIONS,
     InvalidTransitionError,
     PaymentAllocatedError,
+    PaymentDateInFutureError,
     PaymentSelfVerificationError,
     correct_payment,
     create_subscription,
@@ -200,6 +201,10 @@ def create_payment():
             },
             actor.id,
         )
+    except PaymentDateInFutureError as exc:
+        # Step 0 fix round: a typed future date could place a payment in a
+        # renewal period that has not started (ladder.py::_renewal_period).
+        return jsonify({"error": "payment_date_in_future", "message": str(exc)}), 400
     except ValueError as exc:  # includes PaymentSelfVerificationError
         return jsonify({"error": str(exc)}), 400
     return redirect(url_for("subscriptions.detail", subscription_id=payment.subscription_id) if payment.subscription_id else url_for("dashboard.index"))

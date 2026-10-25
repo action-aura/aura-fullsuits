@@ -130,12 +130,22 @@ class LicenseScheduledStop(Base, UUIDPKMixin, TimestampMixin):
     that licence before they read its status -- so the shop learns at its
     first check-in after the moment even if no job ran -- and by the
     `flask commercial apply-licence-stops` job for everything else (the
-    Owner screens). applied_at makes it happen once."""
+    Owner screens). applied_at makes it happen once.
+
+    Step 0 fix round (2026-10-25, revision f16f0245da18): a refund of only the
+    extra-device (pair) money keeps the licence but takes those devices away
+    after the same 2 days -- such a row has no to_status and names
+    devices_removed. One CHECK: a stop (SUSPENDED, no devices) or a device
+    removal (no status, devices > 0), never both, never neither."""
 
     __tablename__ = "owner_license_scheduled_stops"
     __table_args__ = (
         UniqueConstraint("source_refund_id", "license_id", name="uq_owner_license_scheduled_stops_refund_license"),
-        CheckConstraint("to_status IN ('SUSPENDED')", name="ck_owner_license_scheduled_stops_to_status"),
+        CheckConstraint(
+            "(to_status IS NOT NULL AND to_status = 'SUSPENDED' AND devices_removed IS NULL) "
+            "OR (to_status IS NULL AND devices_removed IS NOT NULL AND devices_removed > 0)",
+            name="ck_owner_license_scheduled_stops_to_status",
+        ),
         Index(
             "ix_owner_license_scheduled_stops_due", "effective_at",
             postgresql_where=text("applied_at IS NULL AND cancelled_at IS NULL"),
@@ -147,7 +157,8 @@ class LicenseScheduledStop(Base, UUIDPKMixin, TimestampMixin):
     )
     subscription_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_subscriptions.id"))
     effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    to_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    to_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    devices_removed: Mapped[int | None] = mapped_column(nullable=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     source_refund_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_commercial_refunds.id"), nullable=False

@@ -36,6 +36,7 @@ from app.commercial_sales.errors import QUOTE_TRANSITIONS, CommercialSalesError
 from app.commercial_sales.numbering import allocate_document_number
 from app.extensions import db_session
 from app.models.base import utcnow
+from app.operational_reports.periods import jordan_today
 from app.models.commercial_sales import Quote, QuoteLine
 
 DEFAULT_QUOTE_VALIDITY_DAYS = 30
@@ -97,7 +98,7 @@ def create_quote(fields: dict, *, actor_employee_profile_id: uuid.UUID, actor_st
         raise CommercialSalesError("CUSTOMER_REQUIRED")
 
     currency = validate_currency(fields.get("currency"))
-    valid_until = fields.get("valid_until") or (utcnow().date() + timedelta(days=DEFAULT_QUOTE_VALIDITY_DAYS))
+    valid_until = fields.get("valid_until") or (jordan_today() + timedelta(days=DEFAULT_QUOTE_VALIDITY_DAYS))
 
     quote = Quote(
         customer_id=customer_id,
@@ -324,7 +325,9 @@ def record_customer_decision(
     if not accepted and (not reason or not reason.strip()):
         raise CommercialSalesError("REASON_REQUIRED")
 
-    if quote.valid_until and quote.valid_until < utcnow().date():
+    # Jordan's day (Step 0 fix round): at 00:30 in Amman a quote valid until
+    # "yesterday" had expired there but was still accepted (UTC's today).
+    if quote.valid_until and quote.valid_until < jordan_today():
         raise CommercialSalesError("PRICE_VERSION_EXPIRED")
 
     if accepted:
@@ -360,7 +363,7 @@ def expire_stale_quotes(*, as_of: date | None = None) -> int:
     """Server-evaluated expiry -- only still-SENT quotes past valid_until;
     an ACCEPTED quote can never silently expire (Non-Negotiable: 'an
     ACCEPTED Quote cannot silently expire')."""
-    as_of = as_of or utcnow().date()
+    as_of = as_of or jordan_today()  # the same day record_customer_decision() refuses by
     stale = db_session.execute(
         select(Quote).where(Quote.status == "SENT", Quote.valid_until.is_not(None), Quote.valid_until < as_of)
     ).scalars().all()

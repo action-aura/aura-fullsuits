@@ -36,6 +36,7 @@ from app.operational_reports.aggregation import (
     paid_expenses_total,
     recorded_commission_payouts_total,
 )
+from app.operational_reports.periods import jordan_today
 
 
 # AUDIT: single shared definition of "overdue invoice", reused by both the
@@ -98,7 +99,7 @@ DUPLICATE_REVIEW_EXCLUDED_STATUSES = NON_ACTIVE_FOR_DUPLICATE_CHECK
 
 
 def is_invoice_overdue(invoice: CommercialInvoice, *, as_of: date | None = None) -> bool:
-    as_of = as_of or date.today()
+    as_of = as_of or jordan_today()  # Jordan's day, as Attention decides it
     if invoice.status in OVERDUE_INVOICE_EXCLUDED_STATUSES:
         return False
     if invoice.due_date is None or invoice.due_date >= as_of:
@@ -190,7 +191,7 @@ def management_operational_dashboard(currency: str) -> dict:
     """Management scope -- currency-separated (caller supplies exactly one
     currency; never blended). Every figure is either a scoped COUNT/GROUP BY
     or a direct call into the already-proven aggregation/service functions."""
-    today = date.today()
+    today = jordan_today()  # "this month" is Jordan's month
     month_start = today.replace(day=1)
 
     expense_totals_by_category = dict(db_session.execute(
@@ -313,7 +314,7 @@ def finance_operational_dashboard(currency: str) -> dict:
     """Finance scope -- money-authorization queues + cash position, matching
     the exact FINANCE role shape already established (commercial_sales
     dashboards, RBAC SoD matrix)."""
-    today = date.today()
+    today = jordan_today()  # today's cash closing is Jordan's business day
 
     # AUDIT-owner-cross-screen: shared with the Management dashboard, and
     # currency-scoped -- "Expense approvals pending" sat directly above

@@ -88,6 +88,21 @@ class PaymentAllocatedError(ValueError):
     code = "PAYMENT_ALLOCATED"
 
 
+class PaymentDateInFutureError(ValueError):
+    """A payment dated after Jordan's today (Step 0 fix round, 2026-10-25).
+
+    record_payment accepted any typed date. A renewal of a contract package
+    is decided by the period its payment_date falls in (commissions/
+    ladder.py::_renewal_period), so a date typed into a period that has not
+    started could manufacture a renewal commission -- and money cannot have
+    arrived tomorrow anyway. The one-screen sale already refused it
+    (direct_sale.py PAYMENT_DATE_IN_FUTURE); this binds every other caller.
+    Jordan's date: at 00:30 in Amman, money that arrived today is UTC's
+    tomorrow and is NOT refused. A ValueError subclass, like the two above."""
+
+    code = "PAYMENT_DATE_IN_FUTURE"
+
+
 def transition_subscription(subscription: Subscription, to_status: str, actor_staff_user_id, reason: str | None = None) -> None:
     allowed = VALID_TRANSITIONS.get(subscription.status, set())
     if to_status not in allowed:
@@ -95,9 +110,9 @@ def transition_subscription(subscription: Subscription, to_status: str, actor_st
     from_status = subscription.status
     subscription.status = to_status
     if to_status == "CANCELLED":
-        from app.models.base import utcnow
+        from app.operational_reports.periods import jordan_today
 
-        subscription.cancellation_date = utcnow().date()
+        subscription.cancellation_date = jordan_today()
         subscription.cancellation_reason = reason
     db_session.add(
         SubscriptionStatusHistory(
@@ -177,6 +192,10 @@ def record_payment(fields: dict, actor_staff_user_id) -> PaymentRecord:
             "A payment cannot be recorded as already confirmed. Record it as PENDING; "
             "a different staff member must confirm it."
         )
+    from app.operational_reports.periods import jordan_today
+
+    if fields.get("payment_date") is not None and fields["payment_date"] > jordan_today():
+        raise PaymentDateInFutureError("The payment date cannot be in the future.")
     payment = PaymentRecord(recorded_by_staff_user_id=actor_staff_user_id, **fields)
     db_session.add(payment)
     db_session.commit()
@@ -216,7 +235,17 @@ def lock_payment_for_update(payment: PaymentRecord) -> PaymentRecord:
     ever asks for a payment row lock, and nothing waits for an advisory lock
     while holding this one (fulfill_order runs after the payment's lock was
     released by its own commit). Re-taking it in the same transaction is a
-    no-op, so confirm_payment -> correct_payment is safe."""
+    no-op, so confirm_payment -> correct_payment is safe.
+
+    The commission ladder's per-SELLER advisory lock (commissions/ladder.py
+    ::lock_seller, transaction-scoped, same connection) comes AFTER the
+    payment and invoice rows and BEFORE any commission ledger row, on every
+    path (allocate_payment, correct_payment's hook, confirm_refund,
+    reverse_allocation, approve_commission_entry). Step 0 fix round
+    (2026-10-25): confirm_refund and reverse_allocation used to insert the
+    percentage reversal -- FOR KEY SHARE on the reversed row -- before taking
+    it, while an approval holds it and asks FOR UPDATE on that row: a
+    measured deadlock. Two sellers in one transaction are taken in key order."""
     return db_session.execute(
         select(PaymentRecord)
         .where(PaymentRecord.id == payment.id)

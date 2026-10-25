@@ -7,6 +7,12 @@
     <dt>{{ _("Start / End") }}</dt><dd>{{ format_owner_date(subscription.start_date) if subscription.start_date else "-" }} / {{ format_owner_date(subscription.end_date) if subscription.end_date else "-" }}</dd>
     <dt>{{ _("Device allowance") }}</dt><dd>{{ format_owner_number(subscription.device_allowance) if subscription.device_allowance else "-" }}</dd>
   </dl>
+  {% set pending_stop = pending_subscription_stop(subscription.id) %}
+  {% if pending_stop %}
+  <p class="badge pending" data-pending-stop="{{ jordan_date(pending_stop.effective_at).isoformat() }}">
+    {% if pending_stop.to_status %}{{ _("This licence stops on %(date)s: a refund was confirmed.", date=format_owner_date(jordan_date(pending_stop.effective_at))) }}{% else %}{{ _("%(count)s extra devices are removed from this licence on %(date)s: a refund was confirmed.", count=pending_stop.devices_removed, date=format_owner_date(jordan_date(pending_stop.effective_at))) }}{% endif %}
+  </p>
+  {% endif %}
   <p>
     <a href="{{ url_for('commercial_ops_ui.subscription_timeline', subscription_id=subscription.id) }}">{{ _("Commercial timeline") }}</a>
     &middot; <a href="{{ url_for('commercial_ops_ui.new_renewal_form', subscription_id=subscription.id) }}">{{ _("Create renewal (Phase 8 workflow)") }}</a>
@@ -60,7 +66,7 @@
     <label for="subscriptions-detail-amount">{{ _("Amount") }}</label><input id="subscriptions-detail-amount" name="amount" type="number" step="0.01" required>
     <label for="subscriptions-detail-currency">{{ _("Currency") }}</label><input id="subscriptions-detail-currency" name="currency" value="USD" required>
     <label for="subscriptions-detail-method">{{ _("Method") }}</label><input id="subscriptions-detail-method" name="method">
-    <label for="subscriptions-detail-payment-date">{{ _("Payment date") }}</label><input id="subscriptions-detail-payment-date" name="payment_date" type="date" required>
+    <label for="subscriptions-detail-payment-date">{{ _("Payment date") }}</label><input id="subscriptions-detail-payment-date" name="payment_date" type="date" max="{{ jordan_today().isoformat() }}" required>
     <label for="subscriptions-detail-reference">{{ _("Reference") }}</label><input id="subscriptions-detail-reference" name="reference">
     <label for="subscriptions-detail-status">{{ _("Status") }}</label>
     {# No CONFIRMED here: recording is never confirming -- record_payment

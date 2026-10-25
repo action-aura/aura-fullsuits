@@ -179,11 +179,20 @@ def reverse_allocation(
     # Locked in the documented order (subscriptions/services.py::
     # lock_payment_for_update): the payment row first -- correct_payment
     # decides "is this payment allocated?" under that same lock -- then the
-    # invoice row; the ladder's seller lock last.
+    # invoice row; then the seller's ladder lock, before any commission row.
     try:
         lock_payment_for_update(db_session.get(PaymentRecord, allocation.payment_record_id))
-        db_session.execute(select(CommercialInvoice).where(CommercialInvoice.id == allocation.commercial_invoice_id)
-                           .with_for_update().execution_options(populate_existing=True))
+        locked_invoice = db_session.execute(
+            select(CommercialInvoice).where(CommercialInvoice.id == allocation.commercial_invoice_id)
+            .with_for_update().execution_options(populate_existing=True)
+        ).scalars().one()
+        # Step 0 fix round (2026-10-25): the seller lock NOW, before the
+        # percentage reversal below inserts a row whose FK takes FOR KEY SHARE
+        # on the row being reversed -- an approval of that row holds the
+        # seller lock and asks FOR UPDATE on it; taken after the insert (as on
+        # d15d11f0, inside ladder.evaluate_sale) the two deadlocked (verifier
+        # probe v12, same shape as confirm_refund).
+        ladder.lock_seller(locked_invoice.created_by_employee_profile_id)
         allocation = db_session.execute(
             select(PaymentAllocation).where(PaymentAllocation.id == allocation.id)
             .execution_options(populate_existing=True)

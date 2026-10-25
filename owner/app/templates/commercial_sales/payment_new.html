@@ -23,7 +23,7 @@
       <option value="OTHER">{{ _("Other") }}</option>
     </select>
     <label for="commercial-sales-payment-new-payment-date">{{ _("Payment date") }}</label>
-    <input id="commercial-sales-payment-new-payment-date" type="date" name="payment_date" required>
+    <input id="commercial-sales-payment-new-payment-date" type="date" name="payment_date" max="{{ jordan_today().isoformat() }}" required>
     <label for="commercial-sales-payment-new-commercial-invoice-id">{{ _("Invoice (optional)") }}</label>
     <input id="commercial-sales-payment-new-commercial-invoice-id" name="commercial_invoice_id" placeholder="{{ _('Invoice UUID') }}">
     <label for="commercial-sales-payment-new-reference">{{ _("Reference") }}</label>

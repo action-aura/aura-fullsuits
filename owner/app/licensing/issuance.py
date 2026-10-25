@@ -82,7 +82,7 @@ from app.customers.services import create_customer
 from app.extensions import db_session, get_engine
 from app.licensing.services import create_license, issue_license_key
 from app.models.audit import AuditLog
-from app.models.base import utcnow
+from app.operational_reports.periods import jordan_today
 from app.models.catalog import Plan
 from app.models.customers import Customer
 from app.models.licensing import License, LicenseKeyIssuanceEvent
@@ -132,7 +132,7 @@ def resolve_license_term(plan: Plan, *, as_of: date | None = None) -> tuple[date
     licence on the anniversary of a purchase they were told was final -- the
     single most damaging mistake this function could make.
     """
-    as_of = as_of or utcnow().date()
+    as_of = as_of or jordan_today()  # Jordan's day; activation.py judges validity by the same day
     if plan.billing_model == "ONE_TIME":
         return as_of, None
     if plan.billing_model == "PILOT":

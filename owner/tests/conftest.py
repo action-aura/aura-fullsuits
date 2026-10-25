@@ -107,6 +107,22 @@ def seeded(app):
 TOTP_SECRET = pyotp.random_base32()
 
 
+def jordan_today():
+    """Jordan's date (Asia/Amman, UTC+3) -- the business date the Owner
+    decides "today" by (app/operational_reports/periods.py::jordan_today).
+    A test that compares a business date with "today", or feeds one in,
+    uses this, never date.today(): that is the MACHINE's calendar (UTC+2 in
+    winter here, UTC on CI), a day behind Jordan between 21:00 and 22:00 (or
+    24:00) UTC. Computed here, independently of the helper under test.
+    Step 0 fix round (2026-10-25): a full suite started at 00:17 local time
+    failed 54 tests with "The payment date cannot be in the future." -- local
+    date vs the code's UTC date."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Amman")).date()
+
+
 def make_staff(app, email="staff@example.com", *, super_admin=False, role_codes=None, password="Sup3r-Str0ng-Pass!", mfa=False):
     with app.app_context():
         from app.extensions import db_session

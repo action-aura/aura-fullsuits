@@ -46,6 +46,13 @@ def submit_payment(
     validate_currency(currency)
     if method not in PAYMENT_METHODS:
         raise CommercialSalesError("INVALID_PAYMENT_METHOD")
+    # Step 0 fix round: record_payment now refuses a date after Jordan's
+    # today (PaymentDateInFutureError, a plain ValueError); refused here first
+    # with this domain's own code so the form and the API show it, not a 500.
+    from app.operational_reports.periods import jordan_today
+
+    if payment_date is not None and payment_date > jordan_today():
+        raise CommercialSalesError("PAYMENT_DATE_IN_FUTURE")
 
     return record_payment(
         {

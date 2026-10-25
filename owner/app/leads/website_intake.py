@@ -30,7 +30,6 @@ import re
 import unicodedata
 import uuid
 from dataclasses import dataclass
-from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -40,6 +39,7 @@ from app.extensions import db_session
 from app.leads.services import LEAD_CREATION_OPERATION_CODE, add_lead_note, create_lead
 from app.leads.validation import validate_lead_fields
 from app.models.base import utcnow
+from app.operational_reports.periods import jordan_today
 from app.models.commercial_sales import CommercialOperationsIdempotencyKey
 from app.models.employees import EmployeeProfile
 from app.models.leads import Lead, LeadNote
@@ -225,7 +225,7 @@ def seed_website_intake_actor() -> dict:
             full_name=WEBSITE_INTAKE_DISPLAY_NAME,
             job_title="System",
             department="Website",
-            employment_start_date=date.today(),
+            employment_start_date=jordan_today(),
             employment_status="ARCHIVED",
             archived_at=now,
             notes="System actor for website demo-request intake (app/leads/website_intake.py).",

@@ -2,7 +2,7 @@
 never Retail sales/inventory or Clinic patient/medical data (Part W)."""
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 from sqlalchemy import func, select
 
@@ -15,10 +15,11 @@ from app.models.customers import Customer
 from app.models.installations import Installation
 from app.models.licensing import License
 from app.models.subscriptions import Subscription
+from app.operational_reports.periods import jordan_today
 
 
 def get_dashboard_summary() -> dict:
-    today = date.today()
+    today = jordan_today()  # Jordan's day (Step 0 fix round): was the server's calendar
 
     def count(stmt):
         return db_session.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()

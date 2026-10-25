@@ -8923,3 +8923,17 @@ msgstr "السلم الشهري"
 #: app/templates/commercial_sales/commissions_list.html
 msgid "On hold until"
 msgstr "محجوزة حتى"
+
+#: app/templates/licensing/detail.html
+#, python-format
+msgid "This licence stops on %(date)s: a refund was confirmed."
+msgstr "يتوقف هذا الترخيص في %(date)s: تم تأكيد استرداد."
+
+#: app/templates/licensing/detail.html
+#, python-format
+msgid "%(count)s extra devices are removed from this licence on %(date)s: a refund was confirmed."
+msgstr "تُزال %(count)s أجهزة إضافية من هذا الترخيص في %(date)s: تم تأكيد استرداد."
+
+#: app/i18n_labels.py
+msgid "Devices removed after a refund"
+msgstr "أُزيلت أجهزة بعد الاسترداد"

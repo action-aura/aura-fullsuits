@@ -40,20 +40,50 @@ HOW IT IS KEPT (auditable, crash-safe, exactly once):
     always the FIRST k of the month -- so a refund inside a hold can only
     move sales that are themselves still held. Approved or paid money is
     never re-sliced by a refund inside the hold.
+    That ordering argument needs every NEW sale to qualify no earlier than
+    the moment it is counted. Fix round (2026-10-25), verifier probe v10: a
+    sale qualified at its payment's CONFIRMATION, so a payment confirmed on
+    1 September whose sale was finished (allocated) on 25 October went to
+    position 1 of September -- a closed month whose five sales were approved
+    -- and took back 120 JOD of approved money; its own share was payable at
+    once. A sale now qualifies at the LATER of its payment's confirmation and
+    the moment it actually became countable (the allocation that completed
+    its invoice; for a monthly package, also the payment that crossed the
+    line): in practice the moment it is counted. Its month and hold run from
+    there, so it lands after every sale already past its hold.
+    (A CORRECTION -- reverse_allocation -- of a sale already past its hold
+    still re-derives its month and may take back from the later sales of
+    that month: the month stays exactly ladder(count). That is the one path
+    that re-slices approved money, by design, and only for money that turned
+    out never to have been the sale's.)
   - Everything here runs INSIDE the caller's transaction (allocation,
     payment confirmation, refund, allocation reversal): flush only, never
     commit. The caller's commit writes the cause and its commission
     together; a crash leaves neither. Audit rows are queued and written by
     write_pending_audit() after that commit (audit_record commits on its own).
-  - One lock: a transaction-scoped advisory lock per SELLER, taken LAST --
-    after the payment row and invoice row locks the callers already hold
-    (subscriptions/services.py::lock_payment_for_update documents that
-    order). Nothing holding it asks for a payment or invoice lock, so no
-    cycle. Two managers confirming two payments of one seller at once are
-    serialized here; the second sees the first's committed result.
+  - One lock: a transaction-scoped advisory lock per SELLER. Lock order on
+    every path: the payment row, then the invoice row (the callers already
+    hold them; subscriptions/services.py::lock_payment_for_update), then the
+    seller lock, then commission ledger rows. Nothing holding the seller lock
+    asks for a payment or invoice lock, and nothing touches a commission row
+    before it -- fix round (2026-10-25), verifier probe v12: confirm_refund
+    and reverse_allocation inserted the percentage reversal (its FK takes
+    FOR KEY SHARE on the reversed row) BEFORE asking for the seller lock,
+    while approve_commission_entry holds the seller lock and asks FOR UPDATE
+    on that row: "deadlock detected". Both now take the seller lock right
+    after the invoice row. Where one transaction needs TWO sellers (a renewal
+    payment: the sale's seller and the subscription's sales owner) both are
+    taken up front in lock-key order (on_payment_status_written). Two
+    managers confirming two payments of one seller at once are serialized
+    here; the second sees the first's committed result.
 
-Coexistence with the percentage plans: the rule in force (Jordan date of the
-payment's confirmation) decides. A MONTHLY_LADDER seller gets ladder rows
+Coexistence with the percentage plans: the rule in force on the Jordan date
+the sale's FIRST package payment was confirmed governs the WHOLE sale, on
+both sides (rule_governing_payment). Fix round (2026-10-25), verifier probe
+v8: each side used the rule at its own payment, so a ladder seller moved to a
+percentage plan before a Package 2's 3rd payment earned NOTHING for the sale
+-- the ladder read the percentage rule at the 3rd payment and the percentage
+side never sees a later monthly payment. A MONTHLY_LADDER seller gets ladder rows
 and no percentage row; a percentage seller gets the percentage row (pair
 part excluded, ledger.py) and no ladder row. Never both for one sale: a sale
 with a live percentage row never counts on the ladder, and the percentage
@@ -87,7 +117,7 @@ from app.models.commercial_sales import (
 from app.models.commissions import CommissionLadderSale, CommissionLedgerEntry
 from app.models.employees import EmployeeProfile
 from app.models.subscriptions import PaymentRecord, Subscription
-from app.operational_reports.periods import OWNER_TIMEZONE
+from app.operational_reports.periods import OWNER_TIMEZONE, jordan_date
 
 LADDER_RULE_TYPE = "MONTHLY_LADDER"
 LADDER_CURRENCY = "JOD"
@@ -126,10 +156,6 @@ def ladder_month_of(moment: datetime) -> date:
     return moment.astimezone(OWNER_TIMEZONE).date().replace(day=1)
 
 
-def _jordan_date(moment: datetime) -> date:
-    return moment.astimezone(OWNER_TIMEZONE).date()
-
-
 def _utc(moment: datetime) -> datetime:
     """Every moment this module adds days to is UTC first. A timestamp read
     back from Postgres carries the SESSION's zone (Asia/Gaza on the dev and
@@ -161,7 +187,7 @@ def payment_confirmed_at(payment_id: uuid.UUID) -> datetime | None:
 
 def ladder_rule_for(employee_profile_id: uuid.UUID, moment: datetime):
     """The seller's rule in force on that moment's Jordan date, or None."""
-    return resolve_active_rule(employee_profile_id, _jordan_date(moment))
+    return resolve_active_rule(employee_profile_id, jordan_date(moment))
 
 
 def is_ladder_rule(rule) -> bool:
@@ -184,7 +210,10 @@ class _Sale:
 class _Qualifying:
     payment_id: uuid.UUID
     allocation_id: uuid.UUID | None
-    confirmed_at: datetime
+    # The moment the sale became countable: the LATER of this payment's
+    # confirmation and the allocation that completed the sale's invoice
+    # (see the module docstring, fix round probe v10).
+    countable_at: datetime
 
 
 def _load_sale(order_id: uuid.UUID) -> _Sale | None:
@@ -260,9 +289,11 @@ def _qualifying(sale: _Sale) -> _Qualifying | None:
             break
     if completing is None:
         return None  # the sale's own invoice is not fully paid (yet, or any more)
+    allocated_at = _utc(completing.allocated_at)
+    confirmed_at = payment_confirmed_at(completing.payment_record_id) or allocated_at
     first = _Qualifying(
         payment_id=completing.payment_record_id, allocation_id=completing.id,
-        confirmed_at=payment_confirmed_at(completing.payment_record_id) or _utc(completing.allocated_at),
+        countable_at=max(confirmed_at, allocated_at),
     )
     if not sale.is_monthly:
         return first
@@ -271,7 +302,7 @@ def _qualifying(sale: _Sale) -> _Qualifying | None:
         return None
     required = required_monthly_amount(monthly_price)
     events: list[tuple[datetime, str, Decimal, _Qualifying]] = [
-        (first.confirmed_at, str(first.payment_id), sale.package_amount, first)
+        (first.countable_at, str(first.payment_id), sale.package_amount, first)
     ]
     if sale.subscription is not None:
         sale_payments = _sale_payment_ids(sale)
@@ -285,13 +316,63 @@ def _qualifying(sale: _Sale) -> _Qualifying | None:
                 continue
             at = payment_confirmed_at(payment.id) or _utc(payment.created_at)
             events.append((at, str(payment.id), Decimal(payment.amount),
-                           _Qualifying(payment_id=payment.id, allocation_id=None, confirmed_at=at)))
+                           _Qualifying(payment_id=payment.id, allocation_id=None, countable_at=at)))
     paid = _ZERO
     for _at, _id, amount, qualifying in sorted(events, key=lambda e: (e[0], e[1])):
         paid += amount
         if paid >= required:
+            # A later payment exists only once the sale was finished (its
+            # subscription is made at fulfilment), so it is never earlier
+            # than the sale's own countable moment.
             return qualifying
     return None
+
+
+def _first_package_payment_at(sale: _Sale) -> datetime | None:
+    """When the sale's FIRST package payment was confirmed: the earliest
+    confirmation among the payments live-allocated to its invoice."""
+    moments = [payment_confirmed_at(a.payment_record_id) or _utc(a.allocated_at) for a in _live_allocations(sale.invoice)]
+    return min(moments) if moments else None
+
+
+def _governing_rule(sale: _Sale):
+    """The rule that governs the whole sale: the seller's rule in force on
+    the Jordan date its first package payment was confirmed (module
+    docstring, fix round probe v8). None while nothing is paid."""
+    first = _first_package_payment_at(sale)
+    return ladder_rule_for(sale.seller_profile_id, first) if first is not None else None
+
+
+def rule_governing_payment(invoice: CommercialInvoice, payment_id: uuid.UUID, fallback_moment: datetime):
+    """The commission rule a payment allocated to this invoice is paid
+    under -- the percentage side's question (ledger.py). For a package sale
+    the rule that governs the whole sale, so the two sides can never
+    disagree; for any other invoice (no plan line: extra devices sold later,
+    a quote-pipeline invoice without an order) the rule on the Jordan date
+    this payment was confirmed."""
+    if invoice.sales_order_id is not None:
+        sale = _load_sale(invoice.sales_order_id)
+        if sale is not None and sale.invoice.id == invoice.id:
+            first = _first_package_payment_at(sale)
+            if first is not None:
+                # None here is a real answer (no plan in force then): the
+                # sale earns nothing, it does not fall back to a later rule.
+                return ladder_rule_for(sale.seller_profile_id, first)
+    moment = payment_confirmed_at(payment_id) or _utc(fallback_moment)
+    return ladder_rule_for(invoice.created_by_employee_profile_id, moment)
+
+
+def package_split(invoice: CommercialInvoice) -> tuple[Decimal, Decimal] | None:
+    """(package money, everything else -- the extra devices) on a package
+    sale's invoice, or None when the invoice is not a package sale's. A
+    refund is counted against the second part first (_package_refund): once
+    the refunds exceed it, the package is no longer fully paid."""
+    if invoice.sales_order_id is None:
+        return None
+    sale = _load_sale(invoice.sales_order_id)
+    if sale is None or sale.invoice.id != invoice.id:
+        return None
+    return sale.package_amount, sale.other_amount
 
 
 def _package_refund(sale: _Sale) -> CommercialRefund | None:
@@ -334,9 +415,9 @@ def counted_sale_for_order(order_id: uuid.UUID) -> CommissionLadderSale | None:
 # --------------------------------------------------------------- locking --
 
 def lock_seller(employee_profile_id: uuid.UUID) -> None:
-    """Transaction-scoped: released by the caller's commit or rollback."""
-    digest = hashlib.sha256(f"{_SELLER_LOCK_NAMESPACE}|{employee_profile_id}".encode("utf-8")).hexdigest()
-    db_session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": int(digest[:15], 16)})
+    """Transaction-scoped: released by the caller's commit or rollback.
+    Taken again in the same transaction it is a no-op (advisory locks stack)."""
+    db_session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _seller_lock_key(employee_profile_id)})
 
 
 # ----------------------------------------------------------------- audit --
@@ -389,7 +470,7 @@ def evaluate_sale(order_id: uuid.UUID, *, now: datetime | None = None) -> None:
             return
         if _has_live_payment_rule_entry(sale.invoice.id):
             return  # already paid by the percentage rule: never both
-        rule = ladder_rule_for(sale.seller_profile_id, qualifying.confirmed_at)
+        rule = _governing_rule(sale)
         if not is_ladder_rule(rule):
             return
         row = CommissionLadderSale(
@@ -397,8 +478,8 @@ def evaluate_sale(order_id: uuid.UUID, *, now: datetime | None = None) -> None:
             commercial_invoice_id=sale.invoice.id, subscription_id=sale.subscription.id if sale.subscription else None,
             package_plan_id=sale.plan.id, commission_rule_version_id=rule.id,
             qualifying_payment_record_id=qualifying.payment_id, qualifying_allocation_id=qualifying.allocation_id,
-            qualified_at=qualifying.confirmed_at, ladder_month=ladder_month_of(qualifying.confirmed_at),
-            hold_ends_at=qualifying.confirmed_at + HOLD_PERIOD, currency=sale.invoice.currency, status="COUNTED",
+            qualified_at=qualifying.countable_at, ladder_month=ladder_month_of(qualifying.countable_at),
+            hold_ends_at=qualifying.countable_at + HOLD_PERIOD, currency=sale.invoice.currency, status="COUNTED",
         )
         db_session.add(row)
         db_session.flush()
@@ -531,23 +612,42 @@ def _sales_owner_profile_id(subscription: Subscription) -> uuid.UUID | None:
     ).scalar_one_or_none()
 
 
-def _is_renewal(subscription: Subscription, payment: PaymentRecord) -> bool:
-    """A renewal is a confirmed payment that starts a NEW term for the
-    subscription -- not the sale's own payment:
-      - a package with no contract (Package 1, yearly): every later payment
-        of at least the renewal price is one renewal year;
-      - a package with a contract (Packages 2/3): monthly payments inside the
-        contract are the contract itself, never renewals; a payment for a
-        period after the contract ended is the new contract the doc means
-        ("A new contract at the end earns the 10 JOD renewal")."""
+def _renewal_period(subscription: Subscription, payment: PaymentRecord):
+    """WHICH renewed period a payment of the subscription renews (a hashable
+    key), or None when it renews nothing. The owner: "10 JOD per renewal";
+    "a new contract at the end earns the 10 JOD renewal" -- one renewal per
+    renewed period, never one per payment:
+      - a package with a contract (Packages 2/3, term T months, ending E):
+        a payment dated inside the contract is the contract itself, never a
+        renewal; one dated after E falls in the k-th new contract period
+        (E + (k-1)T, E + kT] -- one renewal per period, however many monthly
+        payments it holds. Fix round (2026-10-25), verifier probe v7: every
+        payment after E earned 10 JOD (E never moves -- the contract is fixed
+        at the sale, 1dfa1f6108b2), so a shop paying month to month after
+        its 12 months earned its seller 10 JOD a month, for ever. The period
+        is read from payment_date, which may no longer be in the future
+        (subscriptions/services.py::PaymentDateInFutureError), so a typed date
+        cannot reach a period that has not started;
+      - a package with no contract (Package 1, yearly): each payment of at
+        least a year's renewal price IS one renewed year -- its own period."""
+    if payment.id is None or payment.payment_date is None:
+        return None
     if subscription.contract_term_months:
-        return subscription.contract_ends_on is not None and payment.payment_date > subscription.contract_ends_on
+        ends = subscription.contract_ends_on
+        if ends is None or payment.payment_date <= ends:
+            return None
+        from app.commercial_ops.renewal_dates import add_interval
+
+        period = 1
+        while payment.payment_date > add_interval(ends, months=subscription.contract_term_months * period):
+            period += 1
+        return ("CONTRACT", period)
     from app.commercial_sales.packages import renewal_price
 
     price = renewal_price(subscription)
     if price is not None and price[1] == payment.currency and Decimal(payment.amount) < price[0]:
-        return False
-    return True
+        return None
+    return ("PAYMENT", payment.id)
 
 
 def _renewal_rows(payment_id: uuid.UUID) -> list[CommissionLedgerEntry]:
@@ -555,13 +655,89 @@ def _renewal_rows(payment_id: uuid.UUID) -> list[CommissionLedgerEntry]:
         select(CommissionLedgerEntry)
         .where(CommissionLedgerEntry.source_payment_record_id == payment_id,
                CommissionLedgerEntry.entry_kind == "RENEWAL", CommissionLedgerEntry.status != "CANCELLED")
+        .order_by(CommissionLedgerEntry.created_at, CommissionLedgerEntry.id)
         .with_for_update()
         .execution_options(populate_existing=True)
     ).scalars().all()
 
 
+def _subscription_renewal_candidates(subscription: Subscription, sale_payment_ids: set) -> list[PaymentRecord]:
+    """Every payment of the subscription that is not the sale's own."""
+    return [p for p in db_session.execute(
+        select(PaymentRecord).where(PaymentRecord.subscription_id == subscription.id)
+        .execution_options(populate_existing=True)
+    ).scalars().all() if p.id not in sale_payment_ids]
+
+
+def _period_holder(subscription: Subscription, period, payments: list[PaymentRecord]) -> PaymentRecord | None:
+    """The payment that holds this period's renewal: a live (net > 0)
+    renewal row -- whatever the payment's status now (a refund after the
+    hold keeps it, see evaluate_renewal_payment)."""
+    for candidate in payments:
+        if _renewal_period(subscription, candidate) != period:
+            continue
+        if sum((Decimal(r.commission_amount) for r in _renewal_rows(candidate.id)), _ZERO) > _ZERO:
+            return candidate
+    return None
+
+
+def _post_renewal(payment: PaymentRecord, subscription: Subscription, owner_profile_id: uuid.UUID, sale,
+                  *, now: datetime) -> None:
+    confirmed_at = payment_confirmed_at(payment.id) or now
+    rule = ladder_rule_for(owner_profile_id, confirmed_at)
+    if not is_ladder_rule(rule):
+        return
+    entry = CommissionLedgerEntry(
+        employee_profile_id=owner_profile_id, commission_rule_version_id=rule.id,
+        source_commercial_invoice_id=sale.invoice.id if sale is not None else None,
+        source_payment_record_id=payment.id, source_payment_allocation_id=None,
+        base_amount=Decimal(payment.amount), rate_or_fixed_applied=RENEWAL_COMMISSION,
+        commission_amount=RENEWAL_COMMISSION, currency=payment.currency, status="EARNED", earned_at=now,
+        entry_kind="RENEWAL", ladder_month=ladder_month_of(confirmed_at), payable_after=confirmed_at + HOLD_PERIOD,
+    )
+    db_session.add(entry)
+    db_session.flush()
+    _queue("COMMISSION_RENEWAL_EARNED", "commission_ledger_entry", entry.id, {
+        "payment_record_id": str(payment.id), "subscription_id": str(subscription.id),
+        "commission_amount": str(RENEWAL_COMMISSION), "period": str(_renewal_period(subscription, payment)),
+    })
+
+
+def _take_back_renewal(payment: PaymentRecord, rows: list[CommissionLedgerEntry], *, now: datetime) -> bool:
+    """Take a payment's renewal back (cancel what is held, a REVERSED row
+    for what was approved). False when it is kept: a refund after the hold
+    is final, like a ladder sale's (evaluate_sale)."""
+    posted = sum((Decimal(r.commission_amount) for r in rows), _ZERO)
+    if posted <= _ZERO:
+        return False
+    open_rows = [r for r in rows if r.status == "EARNED"]
+    if payment.status == "REFUNDED" and all(r.payable_after is not None and r.payable_after <= now for r in rows):
+        return False
+    for row in open_rows:
+        row.status = "CANCELLED"
+    db_session.flush()
+    settled = posted - sum((Decimal(r.commission_amount) for r in open_rows), _ZERO)
+    if settled > _ZERO:
+        target = next(r for r in rows if r.status in ("APPROVED", "PAID") and Decimal(r.commission_amount) > 0)
+        db_session.add(CommissionLedgerEntry(
+            employee_profile_id=target.employee_profile_id, commission_rule_version_id=target.commission_rule_version_id,
+            source_commercial_invoice_id=target.source_commercial_invoice_id, source_payment_record_id=payment.id,
+            source_payment_allocation_id=None, base_amount=target.base_amount,
+            rate_or_fixed_applied=target.rate_or_fixed_applied, commission_amount=-settled, currency=target.currency,
+            status="REVERSED", earned_at=now, entry_kind="RENEWAL", ladder_month=target.ladder_month,
+            payable_after=now, reversal_of_ledger_entry_id=target.id,
+        ))
+        db_session.flush()
+    _queue("COMMISSION_RENEWAL_TAKEN_BACK", "payment_record", payment.id, {
+        "payment_status": payment.status, "cancelled_entry_ids": [str(r.id) for r in open_rows],
+        "taken_back_after_approval": str(settled),
+    })
+    return True
+
+
 def evaluate_renewal_payment(payment: PaymentRecord, *, now: datetime | None = None) -> None:
-    """Post (or take back) the 10 JOD renewal commission for one payment."""
+    """Post (or take back) the 10 JOD renewal commission for one payment --
+    at most one per renewed period (_renewal_period). Idempotent."""
     now = now or utcnow()
     if payment.subscription_id is None:
         return
@@ -572,68 +748,71 @@ def evaluate_renewal_payment(payment: PaymentRecord, *, now: datetime | None = N
     owner_profile_id = _sales_owner_profile_id(subscription)
     if owner_profile_id is None:
         return
-    if subscription.sales_order_id is not None:
-        sale = _load_sale(subscription.sales_order_id)
-        if sale is not None and payment.id in _sale_payment_ids(sale):
-            return  # the sale's own payment is the sale, not a renewal
-    else:
-        sale = None
+    sale = _load_sale(subscription.sales_order_id) if subscription.sales_order_id is not None else None
+    sale_payment_ids = _sale_payment_ids(sale) if sale is not None else set()
+    if payment.id in sale_payment_ids:
+        return  # the sale's own payment is the sale, not a renewal
     lock_seller(owner_profile_id)
+    period = _renewal_period(subscription, payment)
     rows = _renewal_rows(payment.id)
-    posted = sum((Decimal(r.commission_amount) for r in rows), _ZERO)
-    wanted = payment.status == "CONFIRMED" and _is_renewal(subscription, payment)
-    if wanted and posted == _ZERO and not rows:
-        confirmed_at = payment_confirmed_at(payment.id) or now
-        rule = ladder_rule_for(owner_profile_id, confirmed_at)
-        if not is_ladder_rule(rule):
-            return
-        entry = CommissionLedgerEntry(
-            employee_profile_id=owner_profile_id, commission_rule_version_id=rule.id,
-            source_commercial_invoice_id=sale.invoice.id if sale is not None else None,
-            source_payment_record_id=payment.id, source_payment_allocation_id=None,
-            base_amount=Decimal(payment.amount), rate_or_fixed_applied=RENEWAL_COMMISSION,
-            commission_amount=RENEWAL_COMMISSION, currency=payment.currency, status="EARNED", earned_at=now,
-            entry_kind="RENEWAL", ladder_month=ladder_month_of(confirmed_at), payable_after=confirmed_at + HOLD_PERIOD,
-        )
-        db_session.add(entry)
-        db_session.flush()
-        _queue("COMMISSION_RENEWAL_EARNED", "commission_ledger_entry", entry.id, {
-            "payment_record_id": str(payment.id), "subscription_id": str(subscription.id),
-            "commission_amount": str(RENEWAL_COMMISSION),
-        })
-    elif not wanted and posted > _ZERO:
-        open_rows = [r for r in rows if r.status == "EARNED"]
-        if payment.status == "REFUNDED" and all(r.payable_after is not None and r.payable_after <= now for r in rows):
-            return  # refunded after the hold: final, like a ladder sale (see evaluate_sale)
-        for row in open_rows:
-            row.status = "CANCELLED"
-        db_session.flush()
-        settled = posted - sum((Decimal(r.commission_amount) for r in open_rows), _ZERO)
-        if settled > _ZERO:
-            target = next(r for r in rows if r.status in ("APPROVED", "PAID") and Decimal(r.commission_amount) > 0)
-            db_session.add(CommissionLedgerEntry(
-                employee_profile_id=target.employee_profile_id, commission_rule_version_id=target.commission_rule_version_id,
-                source_commercial_invoice_id=target.source_commercial_invoice_id, source_payment_record_id=payment.id,
-                source_payment_allocation_id=None, base_amount=target.base_amount,
-                rate_or_fixed_applied=target.rate_or_fixed_applied, commission_amount=-settled, currency=target.currency,
-                status="REVERSED", earned_at=now, entry_kind="RENEWAL", ladder_month=target.ladder_month,
-                payable_after=now, reversal_of_ledger_entry_id=target.id,
-            ))
-            db_session.flush()
-        _queue("COMMISSION_RENEWAL_TAKEN_BACK", "payment_record", payment.id, {
-            "payment_status": payment.status, "cancelled_entry_ids": [str(r.id) for r in open_rows],
-            "taken_back_after_approval": str(settled),
-        })
+    if payment.status != "CONFIRMED" or period is None:
+        if _take_back_renewal(payment, rows, now=now) and period is not None:
+            _hand_period_on(subscription, period, owner_profile_id, sale, sale_payment_ids, now=now)
+        return
+    if rows:
+        return  # it holds (or held) its renewal already: a retry, a re-saved note
+    if _period_holder(subscription, period, _subscription_renewal_candidates(subscription, sale_payment_ids)):
+        return  # another payment of the same period already earned it
+    _post_renewal(payment, subscription, owner_profile_id, sale, now=now)
+
+
+def _hand_period_on(subscription: Subscription, period, owner_profile_id: uuid.UUID, sale, sale_payment_ids: set,
+                    *, now: datetime) -> None:
+    """A period's renewal was taken back (its payment bounced, was voided,
+    or refunded inside the hold): the period's earliest-confirmed OTHER
+    confirmed payment, if any, earns it -- the shop did renew once."""
+    payments = _subscription_renewal_candidates(subscription, sale_payment_ids)
+    if _period_holder(subscription, period, payments) is not None:
+        return
+    waiting = [p for p in payments if p.status == "CONFIRMED" and _renewal_period(subscription, p) == period
+               and not _renewal_rows(p.id)]
+    if not waiting:
+        return
+    waiting.sort(key=lambda p: (payment_confirmed_at(p.id) or _utc(p.created_at), str(p.id)))
+    _post_renewal(waiting[0], subscription, owner_profile_id, sale, now=now)
+
+
+def _seller_lock_key(employee_profile_id: uuid.UUID) -> int:
+    digest = hashlib.sha256(f"{_SELLER_LOCK_NAMESPACE}|{employee_profile_id}".encode("utf-8")).hexdigest()
+    return int(digest[:15], 16)
 
 
 def on_payment_status_written(payment: PaymentRecord, *, now: datetime | None = None) -> None:
     """correct_payment's hook (the one writer of payment status), inside its
     transaction: a later monthly payment may count a monthly sale, and a
-    renewal payment earns (or loses) its 10 JOD."""
+    renewal payment earns (or loses) its 10 JOD.
+
+    Two seller locks may be needed -- the sale's seller (the ladder) and the
+    subscription's sales owner (the renewal) -- so both are taken HERE, in
+    lock-key order, before either step runs (each step re-takes its own: a
+    no-op). Taken in the order the steps need them, two payments with the
+    roles swapped would wait for each other (fix round, 2026-10-25)."""
     if payment.subscription_id is None:
         return
     subscription = db_session.get(Subscription, payment.subscription_id)
-    if subscription is not None and subscription.sales_order_id is not None:
+    if subscription is None:
+        return
+    sellers: set[uuid.UUID] = set()
+    if subscription.sales_order_id is not None:
+        sale = _load_sale(subscription.sales_order_id)
+        if sale is not None:
+            sellers.add(sale.seller_profile_id)
+    owner_profile_id = _sales_owner_profile_id(subscription)
+    if owner_profile_id is not None:
+        sellers.add(owner_profile_id)
+    for seller_profile_id in sorted(sellers, key=_seller_lock_key):
+        lock_seller(seller_profile_id)
+    if subscription.sales_order_id is not None:
         evaluate_sale(subscription.sales_order_id, now=now)
     evaluate_renewal_payment(payment, now=now)
 

@@ -17,6 +17,12 @@
 
 <div class="card">
   <h2>{{ license.customer.legal_name }} -- {{ license.product.product_code }} <span class="badge {{ license_badge_class(license.status) }}">{{ license_status_label(license.status) }}</span></h2>
+  {% set pending_stop = pending_licence_stop(license.id) %}
+  {% if pending_stop %}
+  <p class="badge pending" data-pending-stop="{{ jordan_date(pending_stop.effective_at).isoformat() }}">
+    {% if pending_stop.to_status %}{{ _("This licence stops on %(date)s: a refund was confirmed.", date=format_owner_date(jordan_date(pending_stop.effective_at))) }}{% else %}{{ _("%(count)s extra devices are removed from this licence on %(date)s: a refund was confirmed.", count=pending_stop.devices_removed, date=format_owner_date(jordan_date(pending_stop.effective_at))) }}{% endif %}
+  </p>
+  {% endif %}
 
   {{ record.steps(license_timeline(license)) }}
 

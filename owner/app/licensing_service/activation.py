@@ -29,6 +29,7 @@ from app.models.catalog import Platform, Product, ReleaseChannel
 from app.models.installations import ActivationEvent, Installation
 from app.models.licensing import License
 from app.models.licensing_service import ActivationRequest
+from app.operational_reports.periods import jordan_today
 from app.security.license_keys import hash_license_secret
 
 SUPPORTED_CONTRACT_VERSIONS = ("v1",)
@@ -163,7 +164,10 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         raise ActivationRejected("SUBSCRIPTION_INACTIVE")
 
     # Step 14: validity dates
-    today = date.today()
+    # Jordan's day (Step 0 fix round): licence dates are issued from Jordan's
+    # date (licensing/issuance.py::resolve_license_term), so they are judged
+    # by it -- date.today() was the SERVER's calendar (UTC on the VM).
+    today = jordan_today()
     if license_row.valid_from and today < license_row.valid_from:
         raise ActivationRejected("LICENSE_NOT_YET_VALID")
     if license_row.valid_until and today > license_row.valid_until:

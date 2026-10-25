@@ -29,7 +29,7 @@ deliberately avoids for new code).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from flask import url_for
@@ -54,6 +54,7 @@ from app.models.customers import Customer
 from app.models.employees import EmployeeProfile
 from app.models.expenses import Expense, ExpenseApproval
 from app.models.base import utcnow
+from app.operational_reports.periods import jordan_today
 from app.models.leads import CustomerFollowup, Lead, LeadFollowup
 from app.models.licensing import License, LicenseStatusHistory
 from app.models.subscriptions import PaymentRecord
@@ -270,7 +271,7 @@ def _quotes_pending_approval_items() -> list[AttentionItem]:
 # ----------------------------------------------------------- Invoices --
 
 def _overdue_invoice_items(profile, codes) -> list[AttentionItem]:
-    today = date.today()
+    today = jordan_today()  # Jordan's day (Step 0 fix round): was the server's calendar
     all_held = "invoices.issue" in codes
     # AUDIT: previously filtered on status.in_(("ISSUED", "PARTIALLY_PAID"))
     # and never checked the remaining balance -- silently missing
@@ -492,7 +493,7 @@ _EXPIRING_LICENSE_WINDOW_DAYS = 30
 
 
 def _expiring_license_items() -> list[AttentionItem]:
-    today = date.today()
+    today = jordan_today()  # licence dates are Jordan dates
     window_end = today + timedelta(days=_EXPIRING_LICENSE_WINDOW_DAYS)
     rows = db_session.execute(
         select(License, Customer)

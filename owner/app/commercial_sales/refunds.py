@@ -142,6 +142,19 @@ def confirm_refund(
     # concurrently and over-refund the customer past what was actually
     # collected. Row-locked, matching allocate_payment()'s own pattern.
     db_session.execute(select(CommercialInvoice).where(CommercialInvoice.id == invoice.id).with_for_update())
+    # Step 0 fix round (2026-10-25) -- the seller's ladder lock NEXT, before
+    # anything below touches a commission row. The percentage reversal is an
+    # INSERT whose FK to the reversed row takes FOR KEY SHARE on it, and the
+    # approval of that row holds the seller lock while it asks FOR UPDATE on
+    # it: with the seller lock taken after the reversal (inside
+    # ladder.evaluate_sale, as on d15d11f0) the two waited for each other --
+    # measured: "deadlock detected" (verifier probe v12). Lock order, every
+    # path: payment row -> invoice row -> seller lock -> commission rows
+    # (ladder.py module docstring). Re-taking it later in this transaction
+    # (evaluate_sale) is a no-op.
+    from app.commissions import ladder
+
+    ladder.lock_seller(invoice.created_by_employee_profile_id)
 
     collected = confirmed_allocated_amount(invoice)
     already_refunded = total_confirmed_refunds(invoice)  # excludes this refund -- still pre-PAID
@@ -168,7 +181,6 @@ def confirm_refund(
     # committed first, then the subscription was suspended (its own commit),
     # then each commission reversal committed on its own -- a crash between
     # them left a refunded customer whose seller kept the commission.
-    from app.commissions import ladder
     from app.commissions.ledger import audit_reversal, reverse_commissions_for_refund
 
     reason = f"Refund {refund.id} confirmed against invoice {invoice.id}"
@@ -204,7 +216,8 @@ def confirm_refund(
             action_code="ENTITLEMENT_CONSEQUENCE_SCHEDULED",
             entity_type="license",
             entity_public_id=str(stop.license_id),
-            after_state={"to_status": stop.to_status, "effective_at": stop.effective_at.isoformat(),
+            after_state={"to_status": stop.to_status, "devices_removed": stop.devices_removed,
+                         "effective_at": stop.effective_at.isoformat(),
                          "subscription_id": str(stop.subscription_id) if stop.subscription_id else None},
         )
     for reversal in reversals:
@@ -225,9 +238,26 @@ def _schedule_entitlement_consequence(refund: CommercialRefund, invoice: Commerc
     licence checks themselves. It used to suspend the subscription on the
     spot (and never the licence). Only a FULL refund after fulfilment has
     this consequence -- a partial one (e.g. only the extra pair given back)
-    keeps the licence, as entitlement_consequence.py has always decided."""
+    keeps the licence, as entitlement_consequence.py has always decided.
+
+    Step 0 fix round (2026-10-25), verifier probe v9: for a PACKAGE sale (an
+    order with a plan line) "full" is decided on the PACKAGE money. Refunds
+    are counted against the extra-device part first, so once the refunds
+    exceed it the package is no longer fully paid -- the ladder stops
+    counting the sale at the same line (ladder.py::_package_refund) -- and
+    the licence stops 2 days later. Measured on d15d11f0: 250 of a 300
+    Package 1 + pair sale refunded, the sale uncounted, no stop: the shop kept
+    the package for 50 JOD. A refund of ONLY the extra-device money keeps the
+    licence and removes the devices it paid for, 2 days later
+    (scheduled_stops.py). An order with no plan line keeps the old rule
+    (full refund -> stop)."""
     from app.commercial_sales.entitlement_consequence import SUSPEND_ENTITLEMENTS, determine_entitlement_consequence
-    from app.licensing.scheduled_stops import schedule_stops_after_refund
+    from app.commissions import ladder
+    from app.licensing.scheduled_stops import (
+        devices_already_scheduled_off,
+        schedule_device_removal_after_refund,
+        schedule_stops_after_refund,
+    )
     from app.models.commercial_sales import SalesOrder
     from app.models.subscriptions import Subscription
 
@@ -235,17 +265,57 @@ def _schedule_entitlement_consequence(refund: CommercialRefund, invoice: Commerc
         return []
     order = db_session.get(SalesOrder, invoice.sales_order_id)
     order_was_fulfilled = order is not None and order.status == "FULFILLED"
-
-    consequence = determine_entitlement_consequence(order_was_fulfilled=order_was_fulfilled, is_full_refund=is_full_refund)
-    if consequence != SUSPEND_ENTITLEMENTS:
-        return []
-
     subscription = db_session.execute(
         select(Subscription).where(Subscription.sales_order_id == order.id)
-    ).scalars().first()
+    ).scalars().first() if order is not None else None
+
+    split = ladder.package_split(invoice)
+    refunded = total_confirmed_refunds(invoice)  # includes this refund: flushed PAID above
+    package_refunded = split is not None and refunded > split[1]
+    consequence = determine_entitlement_consequence(
+        order_was_fulfilled=order_was_fulfilled, is_full_refund=is_full_refund or package_refunded,
+    )
     if subscription is None:
         return []
-    return schedule_stops_after_refund(refund, subscription, actor_staff_user_id=actor_staff_user_id)
+    if consequence == SUSPEND_ENTITLEMENTS:
+        return schedule_stops_after_refund(refund, subscription, actor_staff_user_id=actor_staff_user_id)
+    if not order_was_fulfilled or split is None or refunded <= 0:
+        return []
+    refund_ids = db_session.execute(
+        select(CommercialRefund.id).where(CommercialRefund.commercial_invoice_id == invoice.id,
+                                          CommercialRefund.status == "PAID")
+    ).scalars().all()
+    devices = _refunded_devices(invoice, refunded) - devices_already_scheduled_off(subscription.id, refund_ids)
+    return schedule_device_removal_after_refund(refund, subscription, devices=devices,
+                                                actor_staff_user_id=actor_staff_user_id)
+
+
+def _refunded_devices(invoice: CommercialInvoice, refunded: Decimal) -> int:
+    """How many extra devices the refunded extra-device money paid for: the
+    invoice's device lines in order, a unit counted only once its whole price
+    is given back (25 of a 50 JOD pair removes nothing)."""
+    from app.commercial_sales.catalog_for_sales import DEVICES_PER_UNIT_BY_ADDON_CODE
+    from app.models.catalog import Addon
+    from app.models.commercial_sales import CommercialInvoiceItem
+
+    lines = db_session.execute(
+        select(CommercialInvoiceItem.line_total, CommercialInvoiceItem.quantity, Addon.addon_code)
+        .join(Addon, Addon.id == CommercialInvoiceItem.addon_id)
+        .where(CommercialInvoiceItem.commercial_invoice_id == invoice.id,
+               Addon.addon_code.in_(tuple(DEVICES_PER_UNIT_BY_ADDON_CODE)))
+        .order_by(CommercialInvoiceItem.sort_order, CommercialInvoiceItem.id)
+    ).all()
+    remaining, devices = Decimal(refunded), 0
+    for line_total, quantity, code in lines:
+        if quantity <= 0 or Decimal(line_total) <= 0:
+            continue
+        unit = Decimal(line_total) / quantity
+        units = min(quantity, int(remaining // unit))
+        devices += units * DEVICES_PER_UNIT_BY_ADDON_CODE[code]
+        remaining -= unit * units
+        if units < quantity:
+            break
+    return devices
 
 
 def void_refund(refund: CommercialRefund, *, actor_staff_user_id: uuid.UUID, expected_version: int | None = None) -> CommercialRefund:

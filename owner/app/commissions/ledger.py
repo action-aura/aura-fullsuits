@@ -98,14 +98,24 @@ def post_earning_for_allocation(
     # ladder here, inside this same transaction (ladder.py), and gets no
     # percentage row; an order already counted on a ladder never gets one
     # either -- never both for one sale.
+    #
+    # Fix round (2026-10-25), verifier probe v8: the rule that decides is the
+    # one that governs the whole SALE -- in force when its first package
+    # payment was confirmed (ladder.rule_governing_payment) -- not this
+    # payment's own: a seller moved from the ladder to a percentage plan
+    # mid-Package 2 had the sale paid by neither side.
     from app.commissions import ladder
 
-    confirmed_at = ladder.payment_confirmed_at(allocation.payment_record_id) or allocation.allocated_at
     if invoice.sales_order_id is not None:
         ladder.evaluate_sale(invoice.sales_order_id)
-    rule = ladder.ladder_rule_for(employee_profile_id, confirmed_at)
+    rule = ladder.rule_governing_payment(invoice, allocation.payment_record_id, allocation.allocated_at)
     if rule is None or ladder.is_ladder_rule(rule):
         return None
+    # Never both, defence in depth: no normal flow reaches this with a
+    # percentage rule -- one governing rule decides both sides, and an order
+    # counted on a ladder was counted under a ladder rule -- but a rule table
+    # edited back in time could still make the two disagree. Pinned with a
+    # hand-made counted row (test_step0_ladder_fixes.py).
     if invoice.sales_order_id is not None and ladder.counted_sale_for_order(invoice.sales_order_id) is not None:
         return None
 
@@ -188,9 +198,12 @@ def approve_commission_entry(entry: CommissionLedgerEntry, *, actor_staff_user_i
         db_session.rollback()
         raise CommissionError("COMMISSION_INVALID_TRANSITION", from_status=entry.status, to_status="APPROVED")
     if entry.payable_after is not None and entry.payable_after > utcnow():
-        payable_after = entry.payable_after
+        from app.operational_reports.periods import jordan_date
+
+        # Jordan's date: payable_after comes back in the DB session's zone.
+        payable_after = jordan_date(entry.payable_after)
         db_session.rollback()
-        raise CommissionError("COMMISSION_ON_HOLD", payable_after=payable_after.date().isoformat())
+        raise CommissionError("COMMISSION_ON_HOLD", payable_after=payable_after.isoformat())
 
     beneficiary_staff_user_id = _resolve_staff_user_id(entry.employee_profile_id)
     if beneficiary_staff_user_id == actor_staff_user_id:

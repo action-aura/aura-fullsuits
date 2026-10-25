@@ -16,6 +16,7 @@ from app.audit.services import record as audit_record
 from app.auth.session import revoke_all_sessions_for_staff
 from app.extensions import db_session
 from app.models.base import utcnow
+from app.operational_reports.periods import jordan_today
 from app.models.employees import EmployeeProfile, EmployeePresenceSession
 from app.models.staff import StaffUser
 from app.security.super_admin_guard import assert_can_remove_super_admin_status
@@ -189,7 +190,7 @@ def terminate_employee(profile: EmployeeProfile, reason: str, actor_staff_user_i
     _assert_valid_transition(before_status, "TERMINATED")
     assert_can_remove_super_admin_status(profile.staff_user_id)
     profile.employment_status = "TERMINATED"
-    profile.employment_end_date = utcnow().date()
+    profile.employment_end_date = jordan_today()
     profile.updated_by_staff_user_id = actor_staff_user_id
     profile.version += 1
     staff = db_session.get(StaffUser, profile.staff_user_id)

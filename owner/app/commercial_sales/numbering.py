@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db_session
-from app.models.base import utcnow
+from app.operational_reports.periods import jordan_today
 from app.models.commercial_sales import DocumentNumberCounter
 
 DOCUMENT_TYPE_PREFIXES = {
@@ -37,7 +37,7 @@ def allocate_document_number(document_type: str, *, as_of: date | None = None) -
     if document_type not in DOCUMENT_TYPE_PREFIXES:
         raise ValueError(f"Unknown document_type for numbering: {document_type}")
     prefix = DOCUMENT_TYPE_PREFIXES[document_type]
-    as_of = as_of or utcnow().date()
+    as_of = as_of or jordan_today()  # Jordan's year: 00:30 on 1 January in Amman is the new year
     period_key = str(as_of.year)
 
     counter = db_session.execute(

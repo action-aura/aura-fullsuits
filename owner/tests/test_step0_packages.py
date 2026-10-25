@@ -26,7 +26,7 @@ from decimal import Decimal
 
 import pytest
 
-from tests.conftest import force_login, get_csrf, login_and_verify_mfa
+from tests.conftest import force_login, get_csrf, jordan_today, login_and_verify_mfa
 from tests.test_issuance_sale import NOTHING, PEPPER, _codes, _counts, _email, _profile
 
 JOD = "JOD"
@@ -210,7 +210,7 @@ def _finished(app, order_id):
 def _months(n):
     from app.commercial_ops.renewal_dates import add_interval
 
-    return add_interval(date.today(), months=n)
+    return add_interval(jordan_today(), months=n)  # licence terms start on Jordan's day
 
 
 # --------------------------------------------- Package 1: 250, then 100 --
@@ -228,7 +228,7 @@ def test_p1_alone_charges_250_and_issues_a_one_year_two_device_licence(app, clie
     assert done["order_status"] == "FULFILLED" and done["invoice_status"] == "PAID"
     assert done["invoice_total"] == Decimal("250.00")
     assert done["device_limit"] == 2 and done["device_allowance"] == 2      # 1 desktop + 1 phone
-    assert (done["valid_from"], done["valid_until"]) == (date.today(), _months(12))
+    assert (done["valid_from"], done["valid_until"]) == (jordan_today(), _months(12))
     assert (done["contract_term_months"], done["contract_ends_on"]) == (None, None)  # P1 has no contract
     assert done["pair_invoice_items"] == []
     assert done["commission"] == Decimal("25.00")  # commission behaviour unchanged: 10% of what was paid
@@ -324,7 +324,7 @@ def test_p2_records_the_first_month_and_stores_the_12_month_contract(app, client
     assert done["invoice_total"] == Decimal("35.00") and done["device_limit"] == 2
     # The licence runs through the PAID period (one month); the contract is
     # stored on the subscription for the later months and the ladder.
-    assert (done["valid_from"], done["valid_until"], done["end_date"]) == (date.today(), _months(1), _months(1))
+    assert (done["valid_from"], done["valid_until"], done["end_date"]) == (jordan_today(), _months(1), _months(1))
     assert (done["contract_term_months"], done["contract_ends_on"]) == (12, _months(12))
 
 

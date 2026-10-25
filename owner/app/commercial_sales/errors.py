@@ -99,6 +99,7 @@ class CommercialSalesError(StableCodeError):
         "PRICE_VERSION_EXPIRED": "This price is no longer effective.",
         # Payments
         "PAYMENT_NOT_CONFIRMED": "The payment must be confirmed before it can be allocated.",
+        "PAYMENT_DATE_IN_FUTURE": "The payment date cannot be in the future.",
         "PAYMENT_ALREADY_CONFIRMED": "This payment has already been confirmed.",
         "SELF_CONFIRMATION_FORBIDDEN": "You cannot confirm a payment you submitted yourself.",
         "SELLER_CONFIRMATION_FORBIDDEN": "You cannot confirm the payment for a sale you made yourself.",

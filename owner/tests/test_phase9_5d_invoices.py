@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta, timezone
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -152,7 +152,16 @@ def test_issue_invoice_sets_default_due_date(app, seeded):
         # itself drifting from real wall-clock "now" -- only that due_date
         # correctly trails issued_at by DEFAULT_DUE_DAYS, whatever day issued_at
         # fell on. That relationship is the actual business rule this test names.
-        assert invoice.due_date == invoice.issued_at.astimezone(timezone.utc).date() + timedelta(days=DEFAULT_DUE_DAYS)
+        #
+        # Step 0 fix round (2026-10-25): the due date now counts from JORDAN's
+        # day (operational_reports/periods.py::jordan_today) -- the UTC day was
+        # the bug (an invoice issued at 00:30 in Amman was due a day early).
+        # Same no-clock-read shape: issued_at normalized to Asia/Amman instead
+        # of UTC. What it can no longer catch: a due date counted from the UTC
+        # day -- exactly what is wrong now.
+        from zoneinfo import ZoneInfo
+
+        assert invoice.due_date == invoice.issued_at.astimezone(ZoneInfo("Asia/Amman")).date() + timedelta(days=DEFAULT_DUE_DAYS)
 
 
 def test_void_invoice_with_no_payments(app, seeded):

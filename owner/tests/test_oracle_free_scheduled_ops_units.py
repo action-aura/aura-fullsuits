@@ -209,3 +209,11 @@ class TestCleanupJobsAreScheduled:
         invoked = _invoked_argv_from_run_scheduled_ops_sh()
         assert ["crash-reports", "prune", "--apply"] in invoked
         assert ["commercial", "housekeeping", "--apply"] in invoked
+
+    def test_licence_stops_are_applied_every_night(self):
+        """Step 0 fix round (2026-10-25): `commercial apply-licence-stops
+        --apply` existed with no caller. A refunded shop's licence stops 2
+        days after the refund only when something applies the stop -- its own
+        check-in, its activation, a download, or this job; without the job a
+        shop that never checks in again stayed ISSUED on every Owner screen."""
+        assert ["commercial", "apply-licence-stops", "--apply"] in _invoked_argv_from_run_scheduled_ops_sh()

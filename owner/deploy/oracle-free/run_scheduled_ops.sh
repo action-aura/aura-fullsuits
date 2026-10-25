@@ -98,6 +98,12 @@ run_job "sync prune-events (dry-run; SYNC-JOIN gap)" sync prune-events
 # expired replay nonces / idempotency records / old rate-limit counters.
 run_job "crash-reports prune --apply" crash-reports prune --apply
 run_job "commercial housekeeping --apply" commercial housekeeping --apply
+# Added 2026-10-25 (Step 0 fix round): a refund's licence stop ("keeps working
+# 2 days, then stops") and a pair refund's device removal are stored moments;
+# the shop's own check-in, activation and download apply them for that licence,
+# this applies the rest -- a shop that never checks in again would otherwise
+# stay ISSUED on every Owner screen. Idempotent (applied_at, once per stop).
+run_job "commercial apply-licence-stops --apply" commercial apply-licence-stops --apply
 # Added 2026-10-21: the website privacy page promises demo requests are deleted
 # after 24 months, including the copy the website intake puts in the CRM. Only
 # unconverted WEBSITE leads; a lead that became a customer or a quote is kept.

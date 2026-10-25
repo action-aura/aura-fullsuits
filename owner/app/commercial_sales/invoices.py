@@ -21,6 +21,7 @@ from app.commercial_sales.errors import INVOICE_TRANSITIONS, CommercialSalesErro
 from app.commercial_sales.numbering import allocate_document_number
 from app.extensions import db_session
 from app.models.base import utcnow
+from app.operational_reports.periods import jordan_today
 from app.models.commercial_sales import (
     CommercialInvoice,
     CommercialInvoiceItem,
@@ -139,7 +140,7 @@ def issue_invoice(
     invoice.status = "ISSUED"
     invoice.issued_at = utcnow()
     if invoice.due_date is None:
-        invoice.due_date = utcnow().date() + timedelta(days=DEFAULT_DUE_DAYS)
+        invoice.due_date = jordan_today() + timedelta(days=DEFAULT_DUE_DAYS)  # Jordan days
     invoice.version += 1
     db_session.commit()
 

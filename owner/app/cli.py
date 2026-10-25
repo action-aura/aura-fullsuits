@@ -16,6 +16,7 @@ from app.extensions import db_session
 from app.licensing_service import signing as signing_service
 from app.licensing_service.offline_policy import seed_default_offline_policy
 from app.models.staff import MfaCredential, Role, StaffUser
+from app.operational_reports.periods import jordan_today
 from app.security.passwords import PasswordPolicyError, hash_password
 from app.staff.services import seed_rbac as seed_rbac_service
 
@@ -463,7 +464,7 @@ def register_cli(app: Flask) -> None:
 
         actor = _staff_by_email(actor_email, require_super_admin=True)
         seller = _staff_by_email(seller_email)
-        start = date.fromisoformat(effective_from) if effective_from else date.today()
+        start = date.fromisoformat(effective_from) if effective_from else jordan_today()
         try:
             assignment = assign_seller_to_ladder(seller.id, effective_from=start, actor_staff_user_id=actor.id)
         except ValueError as exc:
@@ -573,7 +574,7 @@ def register_cli(app: Flask) -> None:
             result = {
                 "dry_run": True,
                 "quotes_expired": _count(
-                    Quote, Quote.status == "SENT", Quote.valid_until.is_not(None), Quote.valid_until < now.date()
+                    Quote, Quote.status == "SENT", Quote.valid_until.is_not(None), Quote.valid_until < jordan_today()
                 ),
                 "nonces_purged": _count(SecurityNonceRecord, SecurityNonceRecord.expires_at < now),
                 "idempotency_records_purged": _count(ExternalIdempotencyRecord, ExternalIdempotencyRecord.expires_at < now),
@@ -757,7 +758,7 @@ def register_cli(app: Flask) -> None:
         except SchedulerNotOwnerError as exc:
             raise click.ClickException(str(exc)) from exc
 
-        as_of_date = date.fromisoformat(as_of) if as_of else date.today()
+        as_of_date = date.fromisoformat(as_of) if as_of else jordan_today()
         generated = []
 
         if period_type == "daily":

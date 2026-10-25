@@ -23,7 +23,7 @@ from decimal import Decimal
 
 import pytest
 
-from tests.conftest import force_login, get_csrf, login_and_verify_mfa, make_staff
+from tests.conftest import force_login, get_csrf, jordan_today, login_and_verify_mfa, make_staff
 
 PEPPER = "test-pepper"
 
@@ -628,7 +628,7 @@ def test_manager_recording_must_name_an_active_seller(app, seeded):
     {"method": "CASH"},                                 # sellers never take cash
     {"method": "CHEQUE"},
     {"reference": "   "},                               # proof required
-    {"payment_date": date.today() + timedelta(days=1)},  # money from the future
+    {"payment_date": jordan_today() + timedelta(days=1)},  # money from the future (Jordan's tomorrow)
     {"payment_date": None},
     {"extra_device_pairs": -1},
 ], ids=["short", "over", "cash", "cheque", "no-reference", "future-date", "no-date", "negative-pairs"])
@@ -699,8 +699,8 @@ def test_annual_package_sold_this_way_gets_a_term(app, seeded):
 
         licence = db_session.get(License, done["license_id"])
         subscription = db_session.get(Subscription, licence.subscription_id)
-        assert subscription.start_date == date.today() and subscription.end_date is not None
-        assert subscription.end_date > date.today() + timedelta(days=360)
+        assert subscription.start_date == jordan_today() and subscription.end_date is not None
+        assert subscription.end_date > jordan_today() + timedelta(days=360)
         assert (licence.valid_from, licence.valid_until) == (subscription.start_date, subscription.end_date)
 
 
@@ -1008,8 +1008,8 @@ def test_pipeline_fulfilment_sets_the_term_of_a_yearly_package(app, seeded):
     sub_id, lic_id = _pipeline_fulfil(app, w)
     with app.app_context():
         subscription, licence = _sub_and_licence(app, sub_id, lic_id)
-        assert subscription.start_date == date.today()
-        assert subscription.end_date is not None and subscription.end_date > date.today() + timedelta(days=360)
+        assert subscription.start_date == jordan_today()
+        assert subscription.end_date is not None and subscription.end_date > jordan_today() + timedelta(days=360)
         assert licence.valid_until == subscription.end_date
 
 

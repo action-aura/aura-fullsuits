@@ -91,6 +91,7 @@ from app.customers.services import create_customer, customer_visible_to_actor
 from app.extensions import db_session, get_engine
 from app.licensing.issuance import compose_activation_whatsapp_message
 from app.models.base import utcnow
+from app.operational_reports.periods import jordan_today
 from app.models.catalog import Addon, Plan
 from app.models.commercial_sales import (
     CommercialInvoice,
@@ -496,7 +497,10 @@ def record_direct_sale(
     its original rows."""
     if not idempotency_key:
         raise DirectSaleError("KEY_REQUIRED")
-    as_of = as_of or utcnow().date()
+    # Jordan's date (Step 0 fix round): at 00:30 in Amman, utcnow().date() is
+    # still yesterday and money that arrived today was refused as "in the
+    # future" (verifier probe v13).
+    as_of = as_of or jordan_today()
     reference = (reference or "").strip()
     method = (method or "").strip()
 
