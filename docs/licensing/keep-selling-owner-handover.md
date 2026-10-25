@@ -12,8 +12,13 @@ reach it; after renewal sync catches up with nothing lost.
   `/bootstrap`). Its outbox keeps filling and drains on the first sync after renewal.
 - CANCELLED and SUSPENDED subscriptions still restrict the till (owner has not ruled; note that
   staff can SUSPEND by hand for non-payment via `subscriptions.suspend`).
-- Not covered: the Android Kotlin `SyncCoordinator` and the KMP `OfflineCommercialDecision.kt`
-  still behave as before.
+- Android now pauses its own sync too: every `SyncCoordinator` tick first asks the embedded Python
+  backend (`GET /api/sync/_internal/pause-status`, the same `licence_pauses_sync()` rule) and stops
+  before touching the outbox or any relay. It FAILS OPEN by design (a 404, non-200, exception or
+  unreadable body means "not paused", so a probe that cannot read the licence lets the phone sync).
+  That makes the Owner-side refusal in section 1 the authoritative gate, not the phone. A paused
+  phone also refuses to join a LAN hub until it has caught up from the cloud after renewal.
+- Not covered: the KMP `OfflineCommercialDecision.kt` still behaves as before.
 
 ## 1. Sync (authoritative gate belongs on Owner)
 Today: `owner/app/sync/routes.py::_authenticate` checks signature, key, installation existence
@@ -41,6 +46,9 @@ Needed: a release field (e.g. `release_kind` in FEATURE/SAFETY, default FEATURE)
 unpaid subscription (same definition as section 1), filter discovery candidates to SAFETY releases
 BEFORE picking the highest version, and allow download only of a SAFETY release. Loosening line
 139 alone would open feature updates to unpaid shops.
+NOTE: the phone's and web app's "updates are paused" wording for an unpaid shop depends on this
+Owner-side update gate. Until it is built, a PAST_DUE-past-grace shop (PAST_DUE is allowed by line
+139) is still offered feature updates today, so the wording promises more than the server enforces.
 
 ## 3. When a subscription becomes unpaid (for reference)
 `commercial_ops/expiry_scan.py`: ACTIVE -> PAST_DUE once `end_date + past_due_start_days` is
