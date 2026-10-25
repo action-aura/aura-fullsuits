@@ -8941,3 +8941,47 @@ msgstr "أُزيلت أجهزة بعد الاسترداد"
 #: app/i18n_labels.py
 msgid "Refunds are not possible once 30 days have passed since the payment was confirmed."
 msgstr "لا يمكن الاسترداد بعد مرور 30 يومًا على تأكيد الدفعة."
+
+#: app/i18n_labels.py
+msgid "Sales Manager"
+msgstr "مدير المبيعات"
+
+#: app/templates/layout/_nav_model.html
+msgid "Sales leaderboard"
+msgstr "لوحة صدارة المبيعات"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "Sales leaderboard periods"
+msgstr "فترات لوحة صدارة المبيعات"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "This month"
+msgstr "هذا الشهر"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "Last month"
+msgstr "الشهر الماضي"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "Ranked by sales counted on the ladder, then by ladder total. Months are Jordan calendar months."
+msgstr "الترتيب حسب المبيعات المحتسبة على السلم، ثم حسب مجموع السلم. الأشهر أشهر تقويمية بتوقيت الأردن."
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "Only your own money is shown. Other sellers' earnings are private."
+msgstr "تظهر مبالغك أنت فقط. أرباح البائعين الآخرين خاصة بهم."
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "Rank"
+msgstr "الترتيب"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "You"
+msgstr "أنت"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "Renewal commission"
+msgstr "عمولة التجديد"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "No sellers on the ladder yet."
+msgstr "لا يوجد بائعون على السلم بعد."

@@ -8982,3 +8982,47 @@ msgstr "Devices removed after a refund"
 #: app/i18n_labels.py
 msgid "Refunds are not possible once 30 days have passed since the payment was confirmed."
 msgstr "Refunds are not possible once 30 days have passed since the payment was confirmed."
+
+#: app/i18n_labels.py
+msgid "Sales Manager"
+msgstr "Sales Manager"
+
+#: app/templates/layout/_nav_model.html
+msgid "Sales leaderboard"
+msgstr "Sales leaderboard"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "Sales leaderboard periods"
+msgstr "Sales leaderboard periods"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "This month"
+msgstr "This month"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "Last month"
+msgstr "Last month"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "Ranked by sales counted on the ladder, then by ladder total. Months are Jordan calendar months."
+msgstr "Ranked by sales counted on the ladder, then by ladder total. Months are Jordan calendar months."
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "Only your own money is shown. Other sellers' earnings are private."
+msgstr "Only your own money is shown. Other sellers' earnings are private."
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "Rank"
+msgstr "Rank"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "You"
+msgstr "You"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "Renewal commission"
+msgstr "Renewal commission"
+
+#: app/templates/commercial_sales/leaderboard.html
+msgid "No sellers on the ladder yet."
+msgstr "No sellers on the ladder yet."
