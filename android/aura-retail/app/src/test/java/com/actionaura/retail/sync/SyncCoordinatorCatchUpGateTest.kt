@@ -259,6 +259,24 @@ class SyncCoordinatorCatchUpGateTest {
         assertThat(SyncCoordinator.readyToJoinHub(nowMillis = fakeNow + graceMs)).isTrue()
     }
 
+    // Planner follow-up to G1: Builder G left cloudCaughtUpAtMillis untouched on renewal, so a phone that
+    // had caught up BEFORE the lapse kept that stamp and could join a hub straight after renewal without
+    // pulling what the cloud gained during the lapse.
+    @Test
+    fun `a catch-up from before the lapse does not survive renewal`() {
+        SyncCoordinator.start(tempFolder.newFolder(), "", baseUrl())
+        tick() // empty page = caught up, before the lapse
+        assertThat(SyncCoordinator.readyToJoinHub(nowMillis = fakeNow)).isTrue()
+
+        answerPause(true)
+        tick()
+        configureHappyPath(pullEventCount = 500) // the cloud moved on during the lapse: a full page now
+        answerPause(false)
+        tick() // renewal; this pull is NOT a catch-up
+
+        assertThat(SyncCoordinator.readyToJoinHub(nowMillis = fakeNow)).isFalse()
+    }
+
     @Test
     fun `renewal followed by a real caught-up pull -- ready at once`() {
         SyncCoordinator.start(tempFolder.newFolder(), "", baseUrl())

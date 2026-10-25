@@ -786,12 +786,17 @@ object SyncCoordinator {
      *  mid-lapse would reach the end of the grace, pass [readyToJoinHub], join the LAN hub and never pull the
      *  cloud events it missed (the G3 gap the gate exists to prevent). So the grace restarts at renewal.
      *  Only a CLOUD target carries a clock (a hub target has null) -- a hub is left alone.
-     *  [cloudCaughtUpAtMillis] is deliberately not touched here.
+     *  A "caught up" stamp from BEFORE the lapse is cleared too: the cloud kept moving while this phone
+     *  pulled nothing, so that stamp no longer means caught up, and keeping it would let the phone join
+     *  a hub straight after renewal and skip exactly the events it missed.
      *
      *  G4: failures counted before the lapse say nothing about the post-renewal network, and the shared
      *  backoff in [nextDelayMillis] would otherwise make the first resumed tick wait up to 300 s. */
     private fun onLicenceResumed() = synchronized(lock) {
-        if (cloudTargetSinceMillis != null) cloudTargetSinceMillis = clock()
+        if (cloudTargetSinceMillis != null) {
+            cloudTargetSinceMillis = clock()
+            cloudCaughtUpAtMillis = null
+        }
         pushHealth = pushHealth.copy(consecutiveFailures = 0)
         pullHealth = pullHealth.copy(consecutiveFailures = 0)
     }

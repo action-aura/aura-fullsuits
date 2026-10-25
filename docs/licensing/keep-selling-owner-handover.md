@@ -10,8 +10,9 @@ reach it; after renewal sync catches up with nothing lost.
   the device in `SUBSCRIPTION_LAPSED`: every local capability stays on.
 - The device pauses its OWN sync (SyncService, hub ForwarderLoop, LAN hub `/push` `/pull`
   `/bootstrap`). Its outbox keeps filling and drains on the first sync after renewal.
-- CANCELLED and SUSPENDED subscriptions still restrict the till (owner has not ruled; note that
-  staff can SUSPEND by hand for non-payment via `subscriptions.suspend`).
+- CANCELLED and SUSPENDED subscriptions still restrict the till — owner decision 2026-10-24: they
+  stay locked. Note staff can SUSPEND by hand via `subscriptions.suspend`; doing that to a shop that
+  merely has not paid LOCKS its till, so staff should leave unpaid shops to the expiry scan instead.
 - Android now pauses its own sync too: every `SyncCoordinator` tick first asks the embedded Python
   backend (`GET /api/sync/_internal/pause-status`, the same `licence_pauses_sync()` rule) and stops
   before touching the outbox or any relay. It FAILS OPEN by design (a 404, non-200, exception or
@@ -23,7 +24,8 @@ reach it; after renewal sync catches up with nothing lost.
 ## 1. Sync (authoritative gate belongs on Owner)
 Today: `owner/app/sync/routes.py::_authenticate` checks signature, key, installation existence
 and `installation.status` only; it never reads the subscription, so a lapsed shop can still sync
-through the cloud (the product-side pause is the only gate, and Android has none).
+through the cloud (the product-side pause is the only gate, and on both Windows and Android it
+fails open if the licence cannot be read).
 Needed: in `_authenticate`, after the installation checks, refuse with
 `SyncAuthError("SUBSCRIPTION_LAPSED")` (HTTP 400 `{"reason_code": ...}`, the existing shape) when
 the subscription is EXPIRED, or PAST_DUE **past its commercial grace end** — use the same rule the
