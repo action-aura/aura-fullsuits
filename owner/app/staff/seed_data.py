@@ -271,6 +271,11 @@ ROLES: dict[str, dict] = {
             "employees.view_own", "employees.view_all", "employees.view_presence",
             # confirming: the sale-confirm screen and the payments screen
             "payments.view", "payments.confirm", "orders.approve", "invoices.issue",
+            # Owner decision 2026-10-25 (changes the earlier rule, which kept
+            # quotes.approve out of this role): a Sales Manager may approve a
+            # seller's discount. quotes.create stays out, so the manager is
+            # still only ever the checker of a quote, never its maker.
+            "quotes.approve",
             # the team's commissions and the leaderboard (commissions.view_all)
             "commissions.view_own", "commissions.view_all", "commissions.approve",
             "expenses.create", "expenses.view_own",
