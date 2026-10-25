@@ -10,11 +10,11 @@ discovery each get independent budgets.
 from __future__ import annotations
 
 import hashlib
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 
 from app.extensions import db_session
 from app.models.licensing_service import RateLimitCounter
@@ -81,39 +81,62 @@ def _window_start(now: datetime, window_seconds: int) -> datetime:
     return datetime.fromtimestamp(bucket_start, tz=timezone.utc)
 
 
+# ONE conditional upsert, not read-then-write. The old code SELECTed the row,
+# compared row.count in Python, then wrote `row.count += 1` -- which the ORM
+# sends as an absolute `SET count = <value it read + 1>`. Requests released
+# together all read the same count, all passed, and all wrote the same value:
+# measured 12 of 12 concurrent requests accepted against a limit of 5, and
+# 5 to 12 of 12 accepted with only the last slot (4 of 5 used) left
+# (tests/test_licensing_ratelimit_atomic.py). These buckets are the
+# brute-force guard on licence activation / check-in, so the limit has to
+# hold exactly when someone is hammering it in parallel.
+#
+# Here Postgres takes the row lock on conflict and re-evaluates
+# `count < :limit` against the latest committed value, so each request
+# either takes a slot or gets no row back -- no two can take the same one.
+# A refused request writes nothing (the stored count stops at the limit).
+# Same pattern as the Leads Finder spending cap (feat/step0-leads-cap,
+# app/leads/discovery_budget.py), on the same table and the same unique
+# (bucket_key, window_start) constraint. Implemented here rather than shared:
+# that branch is unmerged; one small helper both can call is the natural
+# follow-up once it lands.
+#
+# Nightly housekeeping (`flask commercial housekeeping --apply`) deletes
+# counters whose window_start is more than a day old. window_start here is
+# the window's START and every policy's window is minutes long, so a row is
+# only purged long after its window ended -- pinned by
+# test_housekeeping_purge_cannot_reset_a_live_window, which also refuses any
+# policy whose window is a day or longer.
+_TAKE_SLOT_SQL = text(
+    """
+    INSERT INTO owner_rate_limit_counters (id, bucket_key, window_start, count)
+    VALUES (:id, :bucket_key, :window_start, 1)
+    ON CONFLICT (bucket_key, window_start) DO UPDATE
+       SET count = owner_rate_limit_counters.count + 1, updated_at = now()
+     WHERE owner_rate_limit_counters.count < :limit
+    RETURNING count
+    """
+)
+
+
 def check_and_increment(policy_name: str, bucket_key: str, *, now: datetime | None = None) -> None:
     """Raises RateLimitExceeded if the bucket is over budget; otherwise
-    atomically increments it. Fixed-window counter -- simple, race-safe via
-    the unique (bucket_key, window_start) constraint + an atomic UPDATE."""
+    takes one slot, committed. Fixed-window counter; race-free because the
+    check and the increment are one statement (see _TAKE_SLOT_SQL)."""
     policy = POLICIES[policy_name]
     now = now or datetime.now(timezone.utc)
     window_start = _window_start(now, policy.window_seconds)
     full_key = f"{policy_name}:{bucket_key}"
 
-    row = db_session.execute(
-        select(RateLimitCounter).where(RateLimitCounter.bucket_key == full_key, RateLimitCounter.window_start == window_start)
-    ).scalars().first()
+    taken = db_session.execute(
+        _TAKE_SLOT_SQL,
+        {"id": uuid.uuid4(), "bucket_key": full_key, "window_start": window_start, "limit": policy.max_requests},
+    ).first()
+    db_session.commit()
 
-    if row is None:
-        row = RateLimitCounter(bucket_key=full_key, window_start=window_start, count=0)
-        db_session.add(row)
-        try:
-            db_session.flush()
-        except IntegrityError:
-            db_session.rollback()
-            row = db_session.execute(
-                select(RateLimitCounter).where(
-                    RateLimitCounter.bucket_key == full_key, RateLimitCounter.window_start == window_start
-                )
-            ).scalars().first()
-
-    if row.count >= policy.max_requests:
-        db_session.commit()
+    if taken is None:
         retry_after = int((window_start + timedelta(seconds=policy.window_seconds) - now).total_seconds())
         raise RateLimitExceeded(max(retry_after, 1))
-
-    row.count += 1
-    db_session.commit()
 
 
 def purge_old_counters(*, older_than: datetime) -> int:
