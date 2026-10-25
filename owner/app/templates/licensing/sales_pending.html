@@ -34,7 +34,9 @@
   {% if not sales %}
   <p class="empty">{{ _("No sales are waiting.") }}</p>
   {% else %}
-  <table>
+  {# Responsive like every other list table: the head hides at phone width
+     and each cell names itself (data-label). #}
+  <table class="responsive-table">
     <thead><tr>
       <th>{{ _("Order") }}</th><th>{{ _("Customer") }}</th><th>{{ _("Package") }}</th><th>{{ _("Seller") }}</th>
       <th>{{ _("Payment") }}</th><th>{{ _("Actions") }}</th>
@@ -42,19 +44,20 @@
     <tbody>
     {% for sale in sales %}
     <tr>
-      <td dir="ltr">{{ sale.order.order_number }}</td>
-      <td>{{ sale.customer.legal_name if sale.customer else "" }}</td>
-      <td>{{ sale.plan.name if sale.plan else "" }}{% if sale.extra_device_pairs == 1 %} {{ _("+ 1 extra pair") }}{% elif sale.extra_device_pairs %} {{ _("+ %(count)d extra pairs", count=sale.extra_device_pairs) }}{% endif %}{% if sale.extra_devices == 1 %} {{ _("+ 1 extra device") }}{% elif sale.extra_devices %} {{ _("+ %(count)d extra devices", count=sale.extra_devices) }}{% endif %}</td>
-      <td>{{ sale.seller.full_name if sale.seller else "" }}</td>
-      <td>
+      <td data-label="{{ _('Order') }}" dir="ltr">{{ sale.order.order_number }}</td>
+      <td data-label="{{ _('Customer') }}">{{ sale.customer.legal_name if sale.customer else "" }}</td>
+      <td data-label="{{ _('Package') }}">{{ sale.plan.name if sale.plan else "" }}{% if sale.extra_device_pairs == 1 %} {{ _("+ 1 extra pair") }}{% elif sale.extra_device_pairs %} {{ _("+ %(count)d extra pairs", count=sale.extra_device_pairs) }}{% endif %}{% if sale.extra_devices == 1 %} {{ _("+ 1 extra device") }}{% elif sale.extra_devices %} {{ _("+ %(count)d extra devices", count=sale.extra_devices) }}{% endif %}</td>
+      <td data-label="{{ _('Seller') }}">{{ sale.seller.full_name if sale.seller else "" }}</td>
+      <td data-label="{{ _('Payment') }}">
         {% if sale.payment %}
         <span dir="ltr">{{ sale.payment.amount }} {{ sale.payment.currency }}</span> &middot; {{ _("ref.") }} <span dir="ltr">{{ sale.payment.reference }}</span>
-        &middot; {{ sale.payment.payment_date }} &middot; {{ payment_status_label(sale.payment.status) }}
+        &middot; <span dir="ltr">{{ format_owner_date(sale.payment.payment_date) }}</span>
+        &middot; {{ payment_status_label(sale.payment.status) }}
         {% else %}
         {{ _("Not recorded -- the seller must submit the same form again.") }}
         {% endif %}
       </td>
-      <td>
+      <td data-label="{{ _('Actions') }}">
         {% if sale.payment %}
         {% if recent_auth_ok %}
         <form method="post" action="{{ url_for('license_issuance.confirm_sale', order_id=sale.order.id) }}" class="inline">
