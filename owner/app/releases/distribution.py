@@ -28,7 +28,7 @@ import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.audit.services import record as audit_record
 from app.extensions import db_session
@@ -239,13 +239,33 @@ def fetch_download(raw_token: str) -> tuple[bytes, ProductVersion]:
         # not handed to the client as a distinct signal.
         raise DownloadAuthorizationRejected("ARTIFACT_UNAVAILABLE")
 
-    authorization.use_count += 1
-    authorization.used_at = now
+    # Take the use in ONE conditional UPDATE, not `use_count += 1`: the
+    # check above is a read, and the ORM writes `+= 1` as an absolute value,
+    # so concurrent fetches of one token all passed it and all downloaded
+    # (measured 8 of 8 on a max_uses=1 token,
+    # tests/test_licensing_ratelimit_atomic.py). The WHERE is re-evaluated
+    # under the row lock, so only max_uses fetches can ever get a row back.
+    # Taken after the artifact is read and verified, so a storage failure
+    # never burns the token.
+    used = db_session.execute(
+        update(ReleaseDownloadAuthorization)
+        .where(
+            ReleaseDownloadAuthorization.id == authorization.id,
+            ReleaseDownloadAuthorization.use_count < ReleaseDownloadAuthorization.max_uses,
+        )
+        .values(use_count=ReleaseDownloadAuthorization.use_count + 1, used_at=now)
+        .returning(ReleaseDownloadAuthorization.use_count)
+        .execution_options(synchronize_session=False)
+    ).first()
+    if used is None:
+        db_session.rollback()
+        raise DownloadAuthorizationRejected("TOKEN_ALREADY_USED")
+    authorization_id = authorization.id
     db_session.commit()
 
     audit_record(
         actor_staff_user_id=None, actor_role_snapshot=None, action_code="RELEASE_DOWNLOAD_FETCHED",
-        entity_type="release_download_authorization", entity_public_id=str(authorization.id),
-        after_state={"product_version": release.version, "use_count": authorization.use_count},
+        entity_type="release_download_authorization", entity_public_id=str(authorization_id),
+        after_state={"product_version": release.version, "use_count": used.use_count},
     )
     return content, release
