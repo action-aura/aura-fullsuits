@@ -644,6 +644,9 @@ def generic_audit_action_label(code: str) -> str:
     unlocalized but never blank or crashing -- exactly like every other
     label function in this module."""
     labels = {
+        # Step 0 (2026-10-25): lead discovery's paid-search cap was reached
+        # (app/leads/discovery_budget.py -- written once per Jordan day).
+        "LEAD_DISCOVERY_CAP_REACHED": _("Map search limit reached"),
         "STAFF_LOGIN_SUCCESS": _("Signed in"),
         "STAFF_LOGIN_MFA_SUCCESS": _("Signed in with MFA"),
         "STAFF_LOGOUT": _("Signed out"),

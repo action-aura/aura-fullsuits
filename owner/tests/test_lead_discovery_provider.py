@@ -259,3 +259,76 @@ def test_build_provider_returns_google_places_provider_when_enabled():
     provider = build_provider(config)
 
     assert isinstance(provider, GooglePlacesTextSearchProvider)
+
+
+# -- (j) cost controls (Step 0 spending cap, 2026-10-25) -----------------------
+
+
+def test_field_mask_is_exactly_the_fields_the_screen_uses():
+    """Google bills Text Search by the most expensive field requested. Every
+    field below is shown or imported (id = dedup key, name, address, phone x2
+    as fallback, website shown in results). Adding one -- rating, opening
+    hours, photos -- must be a deliberate change to this list, not a drift."""
+    captured: dict = {}
+
+    def fake_post(url, headers, body, timeout):
+        captured["mask"] = headers["X-Goog-FieldMask"]
+        return _response({"places": []})
+
+    GooglePlacesTextSearchProvider("key-1", http_post=fake_post).search("pharmacies", "Irbid")
+
+    assert sorted(captured["mask"].split(",")) == sorted([
+        "places.id", "places.displayName", "places.formattedAddress",
+        "places.nationalPhoneNumber", "places.internationalPhoneNumber", "places.websiteUri",
+    ])
+
+
+def test_one_search_is_exactly_one_request_even_when_google_offers_another_page():
+    calls = []
+
+    def fake_post(url, headers, body, timeout):
+        calls.append(json.loads(body))
+        return _response({"places": [_place()], "nextPageToken": "more-results-cost-money"})
+
+    GooglePlacesTextSearchProvider("key-1", http_post=fake_post).search("pharmacies", "Irbid")
+
+    assert len(calls) == 1
+    assert "pageToken" not in calls[0]
+
+
+def test_before_request_hook_runs_once_before_the_transport_and_can_stop_it():
+    order = []
+
+    def fake_post(url, headers, body, timeout):
+        order.append("http")
+        return _response({"places": []})
+
+    def refuse():
+        order.append("budget")
+        raise LeadDiscoveryError("DAILY_CAP_REACHED")
+
+    provider = GooglePlacesTextSearchProvider("key-1", http_post=fake_post, before_request=refuse)
+    with pytest.raises(LeadDiscoveryError) as exc_info:
+        provider.search("pharmacies", "Irbid")
+    assert exc_info.value.code == "DAILY_CAP_REACHED"
+    assert order == ["budget"]
+
+
+def test_transport_failure_does_not_chain_the_raw_exception_that_may_hold_the_key():
+    """`raise ... from exc` would keep the UNSANITIZED transport message as
+    __cause__, and any traceback logger (logger.exception, Flask's error
+    handler) prints the cause chain -- the key would land in the log even
+    though .detail is clean."""
+    import traceback
+
+    api_key = "SECRET-KEY-DO-NOT-LEAK"
+
+    def raising_post(url, headers, body, timeout):
+        raise ConnectionError(f"failed with key {headers['X-Goog-Api-Key']}")
+
+    provider = GooglePlacesTextSearchProvider(api_key, http_post=raising_post)
+    with pytest.raises(LeadDiscoveryError) as exc_info:
+        provider.search("pharmacies", "Irbid")
+
+    rendered = "".join(traceback.format_exception(exc_info.value))
+    assert api_key not in rendered

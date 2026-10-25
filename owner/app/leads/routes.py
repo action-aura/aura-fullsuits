@@ -23,6 +23,7 @@ from app.i18n_labels import localize_lead_error, localize_location_error
 from app.leads.contacts import add_lead_contact, list_lead_contacts
 from app.leads.conversion import DuplicateCustomerError, InvalidLeadStateError, convert
 from app.leads.discovery import LeadDiscoveryError, MAX_RESULTS, build_provider, is_discovery_enabled
+from app.leads.discovery_budget import current_budget
 from app.leads.engagement import (
     cancel_customer_followup,
     cancel_lead_followup,
@@ -72,6 +73,13 @@ def _localized_discovery_error(code: str) -> tuple[str, int]:
         "INVALID_QUERY": (_("Check the segment and area and try again."), 400),
         "RATE_LIMITED": (_("The map service is busy -- try again in a minute."), 502),
         "PROVIDER_ERROR": (_("The map service could not be reached."), 502),
+        # Our own spending cap (app/leads/discovery_budget.py) -- refused
+        # before anything was sent to Google, so nothing was billed.
+        "DAILY_CAP_REACHED": (_("Today's limit of map searches has been reached. It resets at midnight, Jordan time."), 429),
+        "MONTHLY_CAP_REACHED": (
+            _("This month's limit of map searches has been reached. It resets on the 1st of next month, Jordan time."),
+            429,
+        ),
     }
     return messages.get(code, (_("The map service could not be reached."), 502))
 
@@ -211,12 +219,21 @@ def create():
 _DISCOVERY_FORM_DEFAULTS = {"segment": "", "area": "", "priority": "MEDIUM", "assigned_employee_profile_id": ""}
 
 
+def _budget_or_none():
+    """What is left of today's / this month's paid-search budget, for the
+    screen. Read AFTER a search so the number shown includes it. None when
+    discovery is off (nothing to show)."""
+    if not is_discovery_enabled(current_app.config):
+        return None
+    return current_budget(current_app.config)
+
+
 @bp.route("/discover", methods=["GET"])
 @require_permission("leads.discover")
 def discover_form():
     return render_template(
         "leads/discover.html", enabled=is_discovery_enabled(current_app.config),
-        results=None, error=None, **_DISCOVERY_FORM_DEFAULTS,
+        results=None, error=None, budget=_budget_or_none(), **_DISCOVERY_FORM_DEFAULTS,
     )
 
 
@@ -236,7 +253,8 @@ def discover_search():
     staff, profile = _actor()
     if _missing_profile(profile):
         return render_template(
-            "leads/discover.html", enabled=True, results=None, error=_NO_PROFILE_MESSAGE, **_DISCOVERY_FORM_DEFAULTS,
+            "leads/discover.html", enabled=True, results=None, error=_NO_PROFILE_MESSAGE,
+            budget=_budget_or_none(), **_DISCOVERY_FORM_DEFAULTS,
         ), 400
 
     segment = (request.form.get("segment") or "").strip()
@@ -248,19 +266,27 @@ def discover_search():
     if not segment or not area or len(segment) > 120 or len(area) > 120:
         return render_template(
             "leads/discover.html", enabled=True, results=None,
-            error=_("Enter both a segment and an area, each 120 characters or fewer."), **echo,
+            error=_("Enter both a segment and an area, each 120 characters or fewer."),
+            budget=_budget_or_none(), **echo,
         ), 400
 
     try:
-        provider = build_provider(current_app.config)
+        # build_provider() returns a CAPPED provider: one budget slot is
+        # reserved (atomically, in Postgres) right before the billed request,
+        # and DAILY_/MONTHLY_CAP_REACHED is raised instead of calling Google.
+        provider = build_provider(current_app.config, actor_staff_user_id=staff.id)
         results = provider.search(segment, area, limit=MAX_RESULTS)
     except LeadDiscoveryError as exc:
         if exc.code == "NOT_CONFIGURED":
-            return render_template("leads/discover.html", enabled=False, results=None, error=None, **echo)
+            return render_template("leads/discover.html", enabled=False, results=None, error=None, budget=None, **echo)
         message, status = _localized_discovery_error(exc.code)
-        return render_template("leads/discover.html", enabled=True, results=None, error=message, **echo), status
+        return render_template(
+            "leads/discover.html", enabled=True, results=None, error=message, budget=_budget_or_none(), **echo,
+        ), status
 
-    return render_template("leads/discover.html", enabled=True, results=results, error=None, **echo)
+    return render_template(
+        "leads/discover.html", enabled=True, results=results, error=None, budget=_budget_or_none(), **echo,
+    )
 
 
 @bp.route("/discover/import", methods=["POST"])

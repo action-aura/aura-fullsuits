@@ -95,6 +95,8 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_LEAD_DISCOVERY_PROVIDER",
         "OWNER_GOOGLE_PLACES_API_KEY",
         "OWNER_LEAD_DISCOVERY_TIMEOUT_SECONDS",
+        "OWNER_LEAD_DISCOVERY_DAILY_CAP",
+        "OWNER_LEAD_DISCOVERY_MONTHLY_CAP",
         # Real-email wave: Owner's own SMTP sender (app/mail/smtp.py)
         "OWNER_SMTP_HOST",
         "OWNER_SMTP_PORT",
@@ -290,6 +292,15 @@ class BaseConfig:
     LEAD_DISCOVERY_PROVIDER = os.environ.get("OWNER_LEAD_DISCOVERY_PROVIDER", "")   # "" (disabled) | "google_places"
     GOOGLE_PLACES_API_KEY = os.environ.get("OWNER_GOOGLE_PLACES_API_KEY", "")
     LEAD_DISCOVERY_TIMEOUT_SECONDS = float(os.environ.get("OWNER_LEAD_DISCOVERY_TIMEOUT_SECONDS", "10"))
+    # Spending cap (Step 0, 2026-10-25): billed Google searches allowed per
+    # Jordan day / month, counted in Postgres across every worker
+    # (app/leads/discovery_budget.py). Kept as the raw strings on purpose:
+    # app.leads.discovery.discovery_caps() reads them, and anything that is
+    # not a whole number >= 1 switches discovery OFF instead of crashing the
+    # whole Owner at boot or meaning "unlimited". 1,000/month = Google's free
+    # monthly allowance for the Text Search Enterprise SKU this search uses.
+    LEAD_DISCOVERY_DAILY_CAP = os.environ.get("OWNER_LEAD_DISCOVERY_DAILY_CAP", "100")
+    LEAD_DISCOVERY_MONTHLY_CAP = os.environ.get("OWNER_LEAD_DISCOVERY_MONTHLY_CAP", "1000")
 
     # -- Real-email wave: Owner sends email (staff invitations + the product
     # mail relay) through ITS OWN mailbox. OWNER_SMTP_HOST unset == email off:

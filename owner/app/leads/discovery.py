@@ -14,7 +14,8 @@ stylistic:
    (DiscoveredPlace, the parsed API response, the eventual CRM import) and
    nothing downstream is allowed to paper over that gap.
 2. The feature is OFF unless BOTH `OWNER_LEAD_DISCOVERY_PROVIDER` and
-   `OWNER_GOOGLE_PLACES_API_KEY` are set (is_discovery_enabled()) --
+   `OWNER_GOOGLE_PLACES_API_KEY` are set, and both spending caps are
+   positive whole numbers (is_discovery_enabled()) --
    costing nothing to an install that never opts in, the same
    invisible-unless-enabled posture as e-invoicing
    (commercial_runtime/einvoicing) and license enforcement. build_provider()
@@ -38,6 +39,21 @@ The API key is never allowed into an exception message or `.detail` --
 see GooglePlacesTextSearchProvider._safe_detail(). A leaked key in a log
 line or an error banner shown to a sales rep is a real credential leak,
 not a cosmetic bug.
+
+Spending cap (Step 0, 2026-10-25). Every search() is ONE billed Text Search
+request, and the phone/website fields in _FIELD_MASK put it in Google's
+"Text Search Enterprise" SKU -- the expensive one (as of Google's March 2025
+Places pricing: 1,000 free requests a month, then about USD 35 per 1,000).
+build_provider() therefore hands the provider a `before_request` hook that
+reserves one slot of a per-Jordan-day and per-Jordan-month budget
+(app/leads/discovery_budget.py) immediately before the HTTP call and AFTER
+the query is validated, so: a refused search never reaches Google, an
+invalid one costs nothing, and no caller that gets its provider from
+build_provider() can search uncapped. The defaults (100 a day, 1,000 a
+month) keep a whole month inside that free allowance; the daily one stops a
+single busy day -- or a stuck double-clicker -- from spending the month.
+A cap of 0, a negative or a non-number switches discovery OFF (it never
+means "unlimited"); an unset cap means the default, never "unlimited".
 """
 from __future__ import annotations
 
@@ -60,6 +76,11 @@ _MAX_DETAIL_LEN = 300
 
 MAX_RESULTS = 20  # Places Text Search pageSize ceiling; also a cost bound.
 
+# Spending caps -- see the module docstring. Config overrides them
+# (OWNER_LEAD_DISCOVERY_DAILY_CAP / OWNER_LEAD_DISCOVERY_MONTHLY_CAP).
+DEFAULT_DAILY_CAP = 100
+DEFAULT_MONTHLY_CAP = 1000
+
 
 @dataclass(frozen=True)
 class DiscoveredPlace:
@@ -71,7 +92,9 @@ class DiscoveredPlace:
 
 
 class LeadDiscoveryError(Exception):
-    """code is one of: NOT_CONFIGURED, INVALID_QUERY, PROVIDER_ERROR, RATE_LIMITED"""
+    """code is one of: NOT_CONFIGURED, INVALID_QUERY, PROVIDER_ERROR, RATE_LIMITED,
+    DAILY_CAP_REACHED, MONTHLY_CAP_REACHED (our own spending cap, raised
+    before any request is sent -- app/leads/discovery_budget.py)"""
 
     def __init__(self, code: str, detail: str = ""):
         super().__init__(detail or code)
@@ -113,10 +136,21 @@ def _urllib_http_post(url: str, headers: dict, body: bytes, timeout: float) -> t
 
 
 class GooglePlacesTextSearchProvider:
-    def __init__(self, api_key: str, *, timeout_seconds: float = 10.0, http_post: Callable | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        timeout_seconds: float = 10.0,
+        http_post: Callable | None = None,
+        before_request: Callable[[], object] | None = None,
+    ):
         self._api_key = api_key
         self._timeout_seconds = timeout_seconds
         self._http_post = http_post or _urllib_http_post
+        # Called exactly once per search, after validation and immediately
+        # before the (billed) HTTP call; raising LeadDiscoveryError stops the
+        # call. build_provider() wires the spending cap in here.
+        self._before_request = before_request
 
     def _safe_detail(self, message: str) -> str:
         """Never let the API key reach a caller, even indirectly (an
@@ -146,12 +180,20 @@ class GooglePlacesTextSearchProvider:
             "X-Goog-FieldMask": _FIELD_MASK,
         }
 
+        if self._before_request is not None:
+            self._before_request()
+
         try:
             status, response_body = self._http_post(_SEARCH_URL, headers, body, self._timeout_seconds)
         except LeadDiscoveryError:
             raise
         except Exception as exc:  # noqa: BLE001 -- any transport failure becomes PROVIDER_ERROR, never propagates raw
-            raise LeadDiscoveryError("PROVIDER_ERROR", detail=self._safe_detail(str(exc))) from exc
+            # `from None`, not `from exc`: the raw exception's message is the
+            # UNSANITIZED one (a transport may quote the request headers
+            # back), and a chained __cause__ is printed by every traceback
+            # logger -- the key would reach the log even with .detail clean.
+            # The sanitized text is kept in .detail for diagnosis.
+            raise LeadDiscoveryError("PROVIDER_ERROR", detail=self._safe_detail(str(exc))) from None
 
         if status == 429:
             raise LeadDiscoveryError("RATE_LIMITED", detail=self._safe_detail(_decode(response_body)))
@@ -199,23 +241,67 @@ def _decode(response_body: bytes) -> str:
         return ""
 
 
+def _cap_value(raw, default: int) -> int | None:
+    """A cap is a whole number >= 1. Unset or blank -> the default (never
+    "unlimited"); anything else that is not a positive whole number (0,
+    negative, garbage, a fraction, a bool -- which Python counts as an int)
+    -> None, which switches discovery off rather than guessing."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return default
+    if isinstance(raw, bool):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(raw, float) and raw != value:
+        return None
+    return value if value >= 1 else None
+
+
+def discovery_caps(config) -> tuple[int, int] | None:
+    """(daily, monthly) requests allowed, or None when either is invalid."""
+    daily = _cap_value(config.get("LEAD_DISCOVERY_DAILY_CAP"), DEFAULT_DAILY_CAP)
+    monthly = _cap_value(config.get("LEAD_DISCOVERY_MONTHLY_CAP"), DEFAULT_MONTHLY_CAP)
+    if daily is None or monthly is None:
+        return None
+    return daily, monthly
+
+
 def is_discovery_enabled(config) -> bool:
     """`config` is a Flask app.config (a Mapping) -- always accessed via
     .get(), never subscripted, so a deployment that hasn't set these keys
-    at all (rather than set them empty) is handled identically."""
+    at all (rather than set them empty) is handled identically.
+
+    OWNER_LEAD_DISCOVERY_PROVIDER=google_places is the explicit "switch it
+    on" flag: a key alone never enables anything, so creating the key in
+    Google Cloud and pasting it into the env file is not, by itself, the
+    moment spending can start."""
     provider = config.get("LEAD_DISCOVERY_PROVIDER")
     api_key = config.get("GOOGLE_PLACES_API_KEY")
-    return provider == "google_places" and isinstance(api_key, str) and bool(api_key)
+    return (
+        provider == "google_places"
+        and isinstance(api_key, str)
+        and bool(api_key)
+        and discovery_caps(config) is not None
+    )
 
 
-def build_provider(config) -> LeadDiscoveryProvider:
+def build_provider(config, *, actor_staff_user_id=None) -> LeadDiscoveryProvider:
+    """The ONLY way the app gets a provider, and every provider it returns
+    is capped: its before_request hook reserves a budget slot (one atomic
+    database statement per period) before each billed call.
+    `actor_staff_user_id` goes on the once-a-day "cap reached" audit row."""
     if not is_discovery_enabled(config):
         raise LeadDiscoveryError("NOT_CONFIGURED", detail="lead discovery is not configured for this deployment")
     provider_name = config.get("LEAD_DISCOVERY_PROVIDER")
     if provider_name == "google_places":
+        from app.leads.discovery_budget import reserve_search  # local: the budget module imports this one
+
         return GooglePlacesTextSearchProvider(
             config.get("GOOGLE_PLACES_API_KEY"),
             timeout_seconds=config.get("LEAD_DISCOVERY_TIMEOUT_SECONDS", 10.0),
+            before_request=lambda: reserve_search(config, actor_staff_user_id=actor_staff_user_id),
         )
     # Unreachable while is_discovery_enabled() only recognizes
     # "google_places", but kept explicit rather than falling through to an
