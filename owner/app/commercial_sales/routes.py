@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from flask import Blueprint, current_app, redirect, render_template, request, url_for
 
@@ -46,6 +46,7 @@ from app.commercial_sales.refunds import (
 )
 from app.commercial_sales.sales_orders import cancel_order, confirm_order, create_order_from_quote
 from app.commercial_sales import list_queries
+from app.commissions import clawback as clawback_service
 from app.commissions.errors import CommissionError
 from app.commissions.ledger import approve_commission_entry, approve_payout_batch, create_payout_batch, record_payout
 from app.employees.queries import find_own_profile
@@ -847,10 +848,36 @@ def list_payout_batches():
     approved_entries = db_session.execute(select(CommissionLedgerEntry).where(CommissionLedgerEntry.status == "APPROVED").limit(200)).scalars().all()
     error_code = request.args.get("error")
     error_text = localize_commission_error(error_code) if error_code else None
+    # Step 1 (2026-10-25): what each seller still owes back from earlier
+    # take-backs of money already paid out. Shown to anyone who can pay (the
+    # next pay-out will deduct it); the hand-settle form only to a Super Admin.
+    staff, _profile = _actor()
     return render_template(
         "commercial_sales/payout_batches_list.html", result=result, approved_entries=approved_entries,
         approved_batches=approved_batches, search=search, error=error_text,
+        clawback_debts=clawback_service.all_open_debts(), is_super_admin=bool(staff.is_super_admin),
     )
+
+
+@bp.route("/commission-clawbacks/<uuid:debt_id>/settle-by-hand", methods=["POST"])
+@require_permission("commissions.pay")
+def settle_clawback_by_hand_route(debt_id):
+    """Super Admin only (re-checked in clawback.settle_by_hand on the account,
+    not on a grantable permission): record that what remains of an earlier
+    take-back was settled outside the system. A written reason is required."""
+    staff, _profile = _actor()
+    raw_amount = (request.form.get("amount") or "").strip()
+    try:
+        amount = Decimal(raw_amount) if raw_amount else None
+    except InvalidOperation:
+        return redirect(url_for("commercial_sales_web.list_payout_batches", error="COMMISSION_CLAWBACK_AMOUNT_INVALID"))
+    try:
+        clawback_service.settle_by_hand(
+            debt_id, actor_staff_user_id=staff.id, reason=request.form.get("reason") or "", amount=amount,
+        )
+    except CommissionError as exc:
+        return redirect(url_for("commercial_sales_web.list_payout_batches", error=exc.code))
+    return redirect(url_for("commercial_sales_web.list_payout_batches"))
 
 
 @bp.route("/commission-payouts", methods=["POST"])

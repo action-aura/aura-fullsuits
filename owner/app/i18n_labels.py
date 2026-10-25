@@ -1098,6 +1098,12 @@ def localize_commission_error(code: str, **params) -> str:
         "COMMISSION_ON_HOLD": _("This commission is still inside its 30-day hold and cannot be approved yet."),
         "COMMISSION_TAKEN_BACK": _("This commission was taken back (a refund or a correction) and nothing is left to pay."),
         "INVALID_LADDER_RULE": _("The monthly ladder rule is in JOD and takes no rate or fixed amount."),
+        "COMMISSION_CLAWBACK_SUPER_ADMIN_ONLY": _("Only a Super Admin can settle a take-back by hand."),
+        "COMMISSION_CLAWBACK_REASON_REQUIRED": _("A written reason is required to settle a take-back by hand."),
+        "COMMISSION_CLAWBACK_NOT_A_DEBT": _("This is not a take-back of money that was already paid out."),
+        "COMMISSION_CLAWBACK_NOTHING_REMAINING": _("Nothing remains of this take-back; it is already settled."),
+        "COMMISSION_CLAWBACK_AMOUNT_INVALID": _("The amount to settle must be greater than 0."),
+        "COMMISSION_CLAWBACK_AMOUNT_TOO_LARGE": _("The amount is more than what remains of this take-back."),
     }
     template = messages.get(code)
     if template is None:

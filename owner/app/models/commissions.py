@@ -347,3 +347,56 @@ class CommissionLadderSale(Base, UUIDPKMixin, TimestampMixin):
     # this change chose; the owner ruled only on refunds inside the hold) and
     # this records that it happened, for the month's breakdown.
     refunded_after_hold_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CommissionClawbackDeduction(Base, UUIDPKMixin, TimestampMixin):
+    """Step 1 (2026-10-25, revision c7d41e90b2a5) -- one amount taken off a
+    seller's pay-out (kind PAYOUT) or settled outside the system by a Super
+    Admin (kind HAND) against a commission that was taken back AFTER the
+    seller had already been paid for it.
+
+    The DEBT is not stored here: it is the REVERSED ledger row itself
+    (debt_ledger_entry_id) whose parent entry is PAID and which was posted
+    after that payment (app/commissions/clawback.py::open_debts). This table
+    only records what has been taken off it, so a debt larger than one
+    pay-out is taken in pieces over several pay-outs (remaining = |debt| -
+    sum of its deductions) and nothing is ever edited in place.
+
+    PAYOUT: payout_line_id + commission_payout_batch_id say which pay-out line
+    it was taken from (the line's amount is already NET of it). HAND: neither,
+    and a written reason is mandatory (CHECK, not only application code).
+    """
+    __tablename__ = "owner_commission_clawback_deductions"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_owner_commission_clawback_deductions_amount_positive"),
+        CheckConstraint("kind IN ('PAYOUT', 'HAND')", name="ck_owner_commission_clawback_deductions_kind"),
+        CheckConstraint(
+            "(kind = 'PAYOUT' AND payout_line_id IS NOT NULL AND commission_payout_batch_id IS NOT NULL) "
+            "OR (kind = 'HAND' AND payout_line_id IS NULL AND commission_payout_batch_id IS NULL "
+            "AND reason IS NOT NULL AND length(btrim(reason)) > 0)",
+            name="ck_owner_commission_clawback_deductions_kind_shape",
+        ),
+        Index("ix_owner_commission_clawback_deductions_debt", "debt_ledger_entry_id"),
+        Index("ix_owner_commission_clawback_deductions_line", "payout_line_id"),
+        Index("ix_owner_commission_clawback_deductions_employee", "employee_profile_id"),
+    )
+
+    debt_ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_commission_ledger_entries.id"), nullable=False
+    )
+    payout_line_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_commission_payout_lines.id"), nullable=True
+    )
+    commission_payout_batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_commission_payout_batches.id"), nullable=True
+    )
+    employee_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_by_staff_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False
+    )

@@ -98,6 +98,12 @@ class EmployeeCommercialDashboard(_MetricPayload):
     commission_paid_total: Decimal
     commission_reversed_total: Decimal
     commission_totals_by_currency: dict[str, dict[str, Decimal]]
+    # Step 1 (2026-10-25): earlier take-backs of money already paid out, in
+    # `currency`: still owed back, taken off pay-outs so far, settled by hand
+    # so far (app/commissions/clawback.py::seller_summary).
+    clawback_outstanding: Decimal
+    clawback_deducted_from_payouts: Decimal
+    clawback_settled_by_hand: Decimal
 
 
 @dataclass(frozen=True)

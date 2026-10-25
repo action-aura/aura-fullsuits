@@ -70,4 +70,33 @@
     </tbody>
   </table>
 </div>
+<div class="card">
+  <h3>{{ _("Earlier refund take-backs still owed by sellers") }}</h3>
+  <p>{{ _("These are commissions taken back after the seller was already paid. They are deducted automatically from the seller's next pay-out.") }}</p>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Employee") }}</th><th>{{ _("Taken back") }}</th><th>{{ _("Still owed") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
+    <tbody>
+    {% for d in clawback_debts %}
+    <tr>
+      <td data-label="{{ _('Employee') }}"><bdi dir="ltr">{{ d.employee_profile_id }}</bdi></td>
+      <td data-label="{{ _('Taken back') }}">{{ format_owner_number(d.amount) }} {{ d.currency }}</td>
+      <td data-label="{{ _('Still owed') }}">{{ format_owner_number(d.remaining) }} {{ d.currency }}</td>
+      <td>
+        {% if is_super_admin %}
+        <form method="post" action="{{ url_for('commercial_sales_web.settle_clawback_by_hand_route', debt_id=d.id) }}" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label for="clawback-reason-{{ d.id }}">{{ _("Reason (required)") }}</label>
+          <input id="clawback-reason-{{ d.id }}" name="reason" required>
+          <label for="clawback-amount-{{ d.id }}">{{ _("Amount (empty = all that remains)") }}</label>
+          <input id="clawback-amount-{{ d.id }}" name="amount" inputmode="decimal">
+          <button type="submit">{{ _("Settle by hand") }}</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No take-backs are waiting to be deducted.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}

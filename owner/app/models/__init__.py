@@ -144,6 +144,7 @@ from app.models.commissions import (  # noqa: F401
     CommissionPayoutBatch,
     CommissionPayoutLine,
     CommissionLadderSale,
+    CommissionClawbackDeduction,
 )
 from app.models.expenses import (  # noqa: F401
     ExpenseCategory,

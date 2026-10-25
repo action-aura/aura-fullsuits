@@ -20,6 +20,7 @@ from decimal import Decimal
 
 from sqlalchemy import func, select
 
+from app.commissions import clawback
 from app.extensions import db_session
 from app.leads.ownership import apply_ownership_filter
 from app.metrics_contracts import EmployeeCommercialDashboard, FinanceCommercialDashboard
@@ -132,6 +133,7 @@ def employee_commercial_dashboard(
         commission_paid_total=scoped["paid_total"],
         commission_reversed_total=scoped["reversed_total"],
         commission_totals_by_currency=commission_totals_by_currency,
+        **clawback.seller_summary(actor_employee_profile_id, currency),
     ).to_payload()
 
 

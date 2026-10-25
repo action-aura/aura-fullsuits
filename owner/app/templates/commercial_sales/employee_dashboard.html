@@ -40,6 +40,11 @@
     <dt>{{ _("Approved, awaiting payout") }}</dt><dd>{{ format_owner_number(data.commission_approved_unpaid) }} {{ data.currency }}</dd>
     <dt>{{ _("Paid to date") }}</dt><dd>{{ format_owner_number(data.commission_paid_total) }} {{ data.currency }}</dd>
     <dt>{{ _("Reversed") }}</dt><dd>{{ format_owner_number(data.commission_reversed_total) }} {{ data.currency }}</dd>
+    {% if data.clawback_deducted_from_payouts or data.clawback_settled_by_hand or data.clawback_outstanding %}
+    <dt>{{ _("Deducted: earlier refund take-back") }}</dt><dd>{{ format_owner_number(data.clawback_deducted_from_payouts) }} {{ data.currency }}</dd>
+    <dt>{{ _("Settled by hand: earlier refund take-back") }}</dt><dd>{{ format_owner_number(data.clawback_settled_by_hand) }} {{ data.currency }}</dd>
+    <dt>{{ _("Still to be deducted from your next pay-out") }}</dt><dd>{{ format_owner_number(data.clawback_outstanding) }} {{ data.currency }}</dd>
+    {% endif %}
     <dt>{{ _("Pending approval requests") }}</dt><dd>{{ data.own_pending_approval_requests }}</dd>
   </dl>
 
