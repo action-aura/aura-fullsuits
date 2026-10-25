@@ -107,7 +107,62 @@ self.addEventListener("fetch", (event) => {
 });
 
 // ------------------------------------------------------------------- push
-// Push notifications are the next Growth Plan item. Their "push" and
-// "notificationclick" listeners belong here, below the fetch policy. They
-// must not write to CACHE_NAME (activate() would not know about it) and must
-// not put money/customer data into a notification body without a decision.
+// Manager push notifications (Step 1, app/push/). The server decides every
+// word: title/body arrive already translated, and by the owner's rule they
+// never carry money or a customer (app/push/worker.py::build_payload) --
+// this worker only displays them. Nothing here touches the cache.
+//
+// One fixed tag (renotify: true): a newer message REPLACES the one on screen
+// and still buzzes, so a burst of sales is one notification that says how
+// many are waiting, not a pile. "userVisibleOnly" is a promise to the browser:
+// every push shows a notification, even one with no readable data.
+const PUSH_CONFIG = {{ push_config|tojson }};
+
+function samePathOrFallback(raw) {
+  // Only a non-empty string can name a page: new URL(undefined, origin) would
+  // otherwise "resolve" to /undefined (caught by tests/pwa_push_harness.js).
+  if (typeof raw !== "string" || raw === "") return PUSH_CONFIG.fallbackUrl;
+  try {
+    const url = new URL(raw, self.location.origin);
+    if (url.origin === self.location.origin) return url.pathname + url.search + url.hash;
+  } catch (error) { /* not a URL: use the fallback */ }
+  return PUSH_CONFIG.fallbackUrl;
+}
+
+self.addEventListener("push", (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (error) { data = {}; }
+  const text = (value) => (typeof value === "string" ? value : "");
+  const title = text(data.title) || PUSH_CONFIG.fallbackTitle;
+  event.waitUntil(self.registration.showNotification(title, {
+    body: text(data.body),
+    tag: text(data.tag) || PUSH_CONFIG.fallbackTag,
+    renotify: true,
+    lang: text(data.lang),
+    dir: data.dir === "rtl" ? "rtl" : (data.dir === "ltr" ? "ltr" : "auto"),
+    icon: PUSH_CONFIG.icon,
+    badge: PUSH_CONFIG.badge,
+    data: { url: samePathOrFallback(data.url) },
+  }));
+});
+
+// Tapping opens the sales list (at the sale, when the message was about one):
+// an Aura Owner window that is already open is reused, otherwise a new one.
+// The page itself says "already confirmed" when another manager was first.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = samePathOrFallback(event.notification.data && event.notification.data.url);
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const client of windows) {
+      if (new URL(client.url).origin !== self.location.origin) continue;
+      if ("navigate" in client) {
+        try {
+          const navigated = await client.navigate(target);
+          if (navigated) { await navigated.focus(); return; }
+        } catch (error) { /* an uncontrolled window cannot be navigated: open one below */ }
+      }
+    }
+    await self.clients.openWindow(target);
+  })());
+});

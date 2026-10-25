@@ -279,6 +279,11 @@ def disable_staff(staff: StaffUser, reason: str, actor_staff_user_id: uuid.UUID)
     staff.disabled_at = utcnow()
     staff.disabled_reason = reason
     staff.session_version += 1
+    # Step 1: their phones stop getting sale notifications at once -- the
+    # devices are removed in THIS transaction (app/push/subscriptions.py).
+    from app.push.subscriptions import remove_all_for_staff
+
+    remove_all_for_staff(staff.id)
     db_session.commit()
     revoke_all_sessions_for_staff(staff.id, reason="account_disabled")
     audit_record(

@@ -112,19 +112,39 @@
             <span class="aura-topbar__attention-count" aria-hidden="true">{{ format_owner_number(attention_count) }}</span>
           </a>
           {% endif %}
+          {% if can_confirm_sales %}
+          {# Step 1: sales waiting for THIS manager's confirmation (their own
+             sales left out -- they could never confirm those). Rendered with
+             the real count, [hidden] at zero, then kept fresh every 30 s by
+             static/js/count-badge.js from license_issuance.sales_waiting_count.
+             The badge for managers without phone notifications; also there
+             for those with them. Presentation only -- the count endpoint and
+             the confirm route enforce the permissions server-side. #}
+          <a class="aura-topbar__sales-waiting" id="aura-sales-waiting-badge"{% if not sales_waiting_count %} hidden{% endif %}
+             href="{{ url_for('license_issuance.sales_awaiting_confirmation') }}"
+             data-count-badge
+             data-count-url="{{ url_for('license_issuance.sales_waiting_count') }}"
+             data-poll-ms="30000"
+             data-label-template="{{ _('Sales waiting for your confirmation: %(count)s', count='__COUNT__') }}"
+             aria-label="{{ _('Sales waiting for your confirmation: %(count)s', count=format_owner_number(sales_waiting_count)) }}">
+            <span aria-hidden="true">&#10003;</span>
+            <span class="aura-topbar__sales-waiting-count" data-count-badge-value aria-hidden="true">{{ format_owner_number(sales_waiting_count) }}</span>
+          </a>
+          {% endif %}
           {% if has_any_permission('leads.view_own', 'leads.view_all') %}
           {# Website demo requests, polled every 30 s by
-             static/js/website-leads-badge.js from attention.website_leads_count.
+             static/js/count-badge.js from attention.website_leads_count.
              Ships [hidden]: it appears only once a poll returns a count above
              zero and hides again at zero. Presentation only -- the count
              endpoint enforces the same permission pair server-side. #}
           <a class="aura-topbar__website-leads" id="aura-website-leads-badge" hidden
              href="{{ url_for('attention.index') }}"
+             data-count-badge
              data-count-url="{{ url_for('attention.website_leads_count') }}"
              data-poll-ms="30000"
              data-label-template="{{ _('New website leads: %(count)s', count='__COUNT__') }}">
             <span aria-hidden="true">&#9993;</span>
-            <span class="aura-topbar__website-leads-count" aria-hidden="true"></span>
+            <span class="aura-topbar__website-leads-count" data-count-badge-value aria-hidden="true"></span>
           </a>
           {% endif %}
           <div class="aura-theme-switch" role="group" aria-label="{{ _('Theme') }}">
@@ -210,7 +230,7 @@
   <script src="{{ url_for('static', filename='js/shortcuts.js') }}"></script>
   <script src="{{ url_for('static', filename='js/chart-palette.js') }}"></script>
   <script src="{{ url_for('static', filename='js/dept-cards.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/website-leads-badge.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/count-badge.js') }}"></script>
   {% endif %}
 </body>
 </html>

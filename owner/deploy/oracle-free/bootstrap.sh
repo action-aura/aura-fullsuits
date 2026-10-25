@@ -310,6 +310,21 @@ else
   bold "WARNING: NO nightly backup is scheduled -- $COMPOSE_DIR/.env.r2 is missing (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, BACKUP_PASSPHRASE). See run_backup.sh."
 fi
 
+# 7c. Manager push notifications (Step 1, 2026-10-25): the every-minute
+#     backstop sender (run_push_sender.sh). Installed only when .env.oracle
+#     has a VAPID key -- push is off without one, so there is nothing to send.
+#     The key itself is made with `flask notifications generate-vapid-keys`
+#     (docs/ops/free-hosting-owner.md, "Phone notifications").
+if [ -n "$(env_value OWNER_PUSH_VAPID_PRIVATE_KEY)" ] && [ -d "$SYSTEMD_SRC_DIR" ] && command -v systemctl >/dev/null 2>&1; then
+  sed "s|__COMPOSE_DIR__|$COMPOSE_DIR|g" "$SYSTEMD_SRC_DIR/aura-owner-push.service"     | sudo tee /etc/systemd/system/aura-owner-push.service >/dev/null
+  sudo cp "$SYSTEMD_SRC_DIR/aura-owner-push.timer" /etc/systemd/system/aura-owner-push.timer
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now aura-owner-push.timer
+  bold "Push-notification sender timer installed (every minute)."
+else
+  bold "Phone notifications are OFF (no OWNER_PUSH_VAPID_PRIVATE_KEY in $ENV_FILE) -- nothing to schedule. Everything else works without them."
+fi
+
 cat <<'BANNER'
 
 =====================================================================

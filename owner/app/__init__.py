@@ -97,6 +97,16 @@ def create_app(config_name: str | None = None) -> Flask:
         # layout/_sidebar.html. Only computed for logged-in staff (base.html
         # only renders the palette trigger when `staff` is set).
         command_palette_data = get_static_commands(permission_codes) if staff else {"navigate": [], "create": []}
+        # Step 1: the managers' "sales waiting" badge (top bar + the Sales
+        # menu link). Only for someone who may CONFIRM a sale (the confirm
+        # route's own permission set), and the count leaves out the sales they
+        # recorded or sold themselves -- the ones they could never confirm.
+        # One COUNT per page for those people only, the same trade-off as
+        # attention_count above; static/js/count-badge.js keeps it fresh.
+        from app.commercial_sales.direct_sale import CONFIRM_SALE_PERMISSIONS, count_sales_awaiting_for
+
+        can_confirm_sales = staff is not None and CONFIRM_SALE_PERMISSIONS <= permission_codes
+        sales_waiting_count = count_sales_awaiting_for(staff.id) if can_confirm_sales else 0
         return {
             "staff": staff,
             # Presentation-only: the shell/nav use this to avoid showing
@@ -109,6 +119,8 @@ def create_app(config_name: str | None = None) -> Flask:
             "can_view_attention_center": can_view_attention,
             "attention_count": attention_count,
             "command_palette_data": command_palette_data,
+            "can_confirm_sales": can_confirm_sales,
+            "sales_waiting_count": sales_waiting_count,
         }
 
     from app.auth import bp as auth_bp
@@ -145,6 +157,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.leads.intake_routes import bp as website_intake_bp
     from app.leads.intake_routes import warn_if_intake_secret_unusable
     from app.pwa import bp as pwa_bp
+    from app.push.routes import bp as push_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(staff_bp)
@@ -182,6 +195,9 @@ def create_app(config_name: str | None = None) -> Flask:
     # Installable web app: /manifest.webmanifest, /sw.js, /offline -- public,
     # GET-only, no database. Its cache-safety policy is in app/pwa/routes.py.
     app.register_blueprint(pwa_bp)
+    # Manager push notifications: POST /push/subscribe|unsubscribe, 404 while
+    # no VAPID key is configured (app/push/__init__.py).
+    app.register_blueprint(push_bp)
     # Website demo-request intake: server-to-server from the actionaura.me
     # Pages Function, authenticated by a bearer secret (no browser session, so
     # no CSRF token to carry; the bearer check is its CSRF-equivalent).
@@ -260,6 +276,14 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.mail.worker import start_worker_if_configured
 
     start_worker_if_configured(app)
+    from app.push.cli import register_cli as register_push_cli
+
+    register_push_cli(app)
+    # The one place the push worker thread can start: a VAPID key configured
+    # AND not a test app (app/push/worker.py). With push off no thread exists.
+    from app.push.worker import start_worker_if_configured as start_push_worker_if_configured
+
+    start_push_worker_if_configured(app)
 
     @app.get("/healthz")
     def healthz():

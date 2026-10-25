@@ -1,0 +1,13 @@
+# Step 1 (2026-10-25). Every minute, starting two minutes after boot (the
+# owner container needs that long to be healthy). A oneshot that is still
+# running is never started a second time by systemd.
+[Unit]
+Description=Every-minute Aura Owner manager push notifications sender
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

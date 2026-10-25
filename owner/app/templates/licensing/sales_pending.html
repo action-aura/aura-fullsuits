@@ -1,6 +1,26 @@
 {% extends "layout/base.html" %}
 {% block title %}{{ _("Sales waiting for confirmation") }}{% endblock %}
 {% block content %}
+{# Where a phone notification lands (?sale=<order>, Step 1). The first
+   manager to confirm wins; everyone else who taps the same notification is
+   told so here instead of finding the row silently gone. #}
+{% if tapped and not confirmed %}
+{% if tapped.state == "confirmed" %}
+<div class="card" role="status">
+  <h2>{{ _("Already confirmed") }}</h2>
+  {% if tapped.by %}
+  <p>{{ _("Sale %(order)s was already confirmed by %(name)s. Nothing more to do.", order=tapped.order_number, name=tapped.by) }}</p>
+  {% else %}
+  <p>{{ _("Sale %(order)s was already confirmed. Nothing more to do.", order=tapped.order_number) }}</p>
+  {% endif %}
+</div>
+{% elif tapped.state == "rejected" %}
+<div class="card" role="status">
+  <h2>{{ _("Already rejected") }}</h2>
+  <p>{{ _("Sale %(order)s was already rejected. Nothing more to do.", order=tapped.order_number) }}</p>
+</div>
+{% endif %}
+{% endif %}
 {% if confirmed %}
 <div class="card card--critical">
   {% if confirmed.full_key %}
@@ -43,7 +63,7 @@
     </tr></thead>
     <tbody>
     {% for sale in sales %}
-    <tr>
+    <tr id="sale-{{ sale.order.id }}"{% if tapped and tapped.state == "waiting" and tapped.order_id == sale.order.id %} class="is-highlighted" aria-current="true"{% endif %}>
       <td data-label="{{ _('Order') }}" dir="ltr">{{ sale.order.order_number }}</td>
       <td data-label="{{ _('Customer') }}">{{ sale.customer.legal_name if sale.customer else "" }}</td>
       <td data-label="{{ _('Package') }}">{{ sale.plan.name if sale.plan else "" }}{% if sale.extra_device_pairs == 1 %} {{ _("+ 1 extra pair") }}{% elif sale.extra_device_pairs %} {{ _("+ %(count)d extra pairs", count=sale.extra_device_pairs) }}{% endif %}{% if sale.extra_devices == 1 %} {{ _("+ 1 extra device") }}{% elif sale.extra_devices %} {{ _("+ %(count)d extra devices", count=sale.extra_devices) }}{% endif %}</td>
@@ -82,4 +102,5 @@
   </table>
   {% endif %}
 </div>
+{% if push_card %}{% include "licensing/_push_optin.html" %}{% endif %}
 {% endblock %}

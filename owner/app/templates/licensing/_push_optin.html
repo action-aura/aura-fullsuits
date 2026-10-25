@@ -1,0 +1,23 @@
+{# Phone notifications for this device (Step 1, app/push/). Rendered only
+   while push is configured and only for someone who may confirm sales
+   (issuance_routes._push_card); ships [hidden] and static/js/push.js shows
+   the sentence that fits this browser. Every word is here, translated --
+   the script adds none. #}
+<section class="card aura-push-card" id="aura-push-optin" hidden
+         aria-labelledby="aura-push-optin-title"
+         data-public-key="{{ push_card.public_key }}"
+         data-subscribe-url="{{ push_card.subscribe_url }}"
+         data-unsubscribe-url="{{ push_card.unsubscribe_url }}"
+         data-csrf="{{ csrf_token() }}">
+  <h2 id="aura-push-optin-title">{{ _("Phone notifications") }}</h2>
+  <p>{{ _("Get a notification on this device when a seller records a sale you can confirm. It shows only the seller's first name -- never the customer or the money.") }}</p>
+  <p class="aura-push-card__state" data-push-state="off" hidden>{{ _("Notifications are off on this device.") }}</p>
+  <p class="aura-push-card__state aura-push-card__state--on" data-push-state="on" hidden>{{ _("Notifications are on for this device.") }}</p>
+  <p class="aura-push-card__state" data-push-state="denied" hidden>{{ _("This browser blocks notifications from Aura Owner. Allow them in the browser's settings for this site, then reload this page.") }}</p>
+  <p class="aura-push-card__state" data-push-state="ios-install" hidden>{{ _("On iPhone: first add Aura Owner to the Home Screen (Share, then Add to Home Screen), open it from there, then turn notifications on.") }}</p>
+  <p class="aura-push-card__state" data-push-state="unsupported" hidden>{{ _("This browser cannot receive notifications. The number next to Sales to confirm still shows what is waiting.") }}</p>
+  <p class="aura-push-card__state error" data-push-state="error" role="alert" hidden>{{ _("Notifications could not be switched. Try again.") }}</p>
+  <button type="button" class="btn" data-push-action="enable" hidden>{{ _("Turn on notifications on this device") }}</button>
+  <button type="button" class="secondary" data-push-action="disable" hidden>{{ _("Turn off on this device") }}</button>
+</section>
+<script src="{{ url_for('static', filename='js/push.js') }}"></script>

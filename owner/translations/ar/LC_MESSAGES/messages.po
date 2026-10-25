@@ -9123,3 +9123,89 @@ msgstr "عمولة التجديد"
 #: app/templates/commercial_sales/leaderboard.html
 msgid "No sellers on the ladder yet."
 msgstr "لا يوجد بائعون على السلم بعد."
+
+#: app/push/worker.py
+msgid "New sale waiting for confirmation"
+msgstr "بيع جديد بانتظار التأكيد"
+
+#: app/push/worker.py
+#, python-format
+msgid "From %(name)s. Sales waiting for you now: %(count)s"
+msgstr "من %(name)s. مبيعات بانتظار تأكيدك الآن: %(count)s"
+
+#: app/push/worker.py
+#, python-format
+msgid "From %(name)s"
+msgstr "من %(name)s"
+
+#: app/i18n_labels.py
+msgid "Phone notifications turned on for a device"
+msgstr "تم تشغيل إشعارات الهاتف لجهاز"
+
+#: app/i18n_labels.py
+msgid "Phone notifications turned off for a device"
+msgstr "تم إيقاف إشعارات الهاتف لجهاز"
+
+#: app/templates/licensing/sales_pending.html
+#, python-format
+msgid "Sale %(order)s was already confirmed by %(name)s. Nothing more to do."
+msgstr "تم تأكيد البيع %(order)s مسبقًا من قبل %(name)s. لا حاجة لأي إجراء."
+
+#: app/templates/licensing/sales_pending.html
+#, python-format
+msgid "Sale %(order)s was already confirmed. Nothing more to do."
+msgstr "تم تأكيد البيع %(order)s مسبقًا. لا حاجة لأي إجراء."
+
+#: app/templates/licensing/sales_pending.html
+msgid "Already rejected"
+msgstr "تم الرفض مسبقًا"
+
+#: app/templates/licensing/sales_pending.html
+#, python-format
+msgid "Sale %(order)s was already rejected. Nothing more to do."
+msgstr "تم رفض البيع %(order)s مسبقًا. لا حاجة لأي إجراء."
+
+#: app/templates/licensing/_push_optin.html
+msgid "Phone notifications"
+msgstr "إشعارات الهاتف"
+
+#: app/templates/licensing/_push_optin.html
+msgid "Get a notification on this device when a seller records a sale you can confirm. It shows only the seller's first name -- never the customer or the money."
+msgstr "استلم إشعارًا على هذا الجهاز عندما يسجّل بائع بيعًا يمكنك تأكيده. يظهر فيه الاسم الأول للبائع فقط -- ولا يظهر العميل أو المبلغ أبدًا."
+
+#: app/templates/licensing/_push_optin.html
+msgid "Notifications are off on this device."
+msgstr "الإشعارات متوقفة على هذا الجهاز."
+
+#: app/templates/licensing/_push_optin.html
+msgid "Notifications are on for this device."
+msgstr "الإشعارات مفعّلة على هذا الجهاز."
+
+#: app/templates/licensing/_push_optin.html
+msgid "This browser blocks notifications from Aura Owner. Allow them in the browser's settings for this site, then reload this page."
+msgstr "هذا المتصفح يمنع إشعارات Aura Owner. اسمح بها من إعدادات المتصفح لهذا الموقع، ثم أعد تحميل هذه الصفحة."
+
+#: app/templates/licensing/_push_optin.html
+msgid "On iPhone: first add Aura Owner to the Home Screen (Share, then Add to Home Screen), open it from there, then turn notifications on."
+msgstr "على iPhone: أضف Aura Owner أولًا إلى الشاشة الرئيسية («مشاركة»، ثم «إضافة إلى الشاشة الرئيسية»)، وافتحه من هناك، ثم شغّل الإشعارات."
+
+#: app/templates/licensing/_push_optin.html
+msgid "This browser cannot receive notifications. The number next to Sales to confirm still shows what is waiting."
+msgstr "لا يستطيع هذا المتصفح استلام الإشعارات. الرقم بجانب «مبيعات بانتظار التأكيد» يُظهر ما ينتظرك."
+
+#: app/templates/licensing/_push_optin.html
+msgid "Notifications could not be switched. Try again."
+msgstr "تعذّر تغيير حالة الإشعارات. حاول مرة أخرى."
+
+#: app/templates/licensing/_push_optin.html
+msgid "Turn on notifications on this device"
+msgstr "تشغيل الإشعارات على هذا الجهاز"
+
+#: app/templates/licensing/_push_optin.html
+msgid "Turn off on this device"
+msgstr "إيقافها على هذا الجهاز"
+
+#: app/templates/layout/base.html
+#, python-format
+msgid "Sales waiting for your confirmation: %(count)s"
+msgstr "مبيعات بانتظار تأكيدك: %(count)s"

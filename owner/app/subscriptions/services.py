@@ -180,7 +180,14 @@ def record_renewal(
     return renewal
 
 
-def record_payment(fields: dict, actor_staff_user_id) -> PaymentRecord:
+def record_payment(fields: dict, actor_staff_user_id, *, in_same_transaction=None) -> PaymentRecord:
+    """`in_same_transaction(payment)`, when given, runs after the payment is
+    added and flushed and BEFORE the one commit, so whatever it adds commits
+    or rolls back together with the payment. Step 1 (2026-10-25): the
+    one-screen sale writes its push-notification outbox row this way
+    (app/push/outbox.py::enqueue_sale_waiting) -- a crash right after this
+    commit can no longer lose the managers' notification, and a payment that
+    never committed can never notify anyone."""
     if fields.get("status") not in PAYMENT_STATUSES:
         raise ValueError(f"Invalid payment status: {fields.get('status')}")
     # Recording is never confirming (Non-Negotiable Rule 4). A payment born
@@ -198,6 +205,13 @@ def record_payment(fields: dict, actor_staff_user_id) -> PaymentRecord:
         raise PaymentDateInFutureError("The payment date cannot be in the future.")
     payment = PaymentRecord(recorded_by_staff_user_id=actor_staff_user_id, **fields)
     db_session.add(payment)
+    if in_same_transaction is not None:
+        try:
+            db_session.flush()  # the payment row exists before anything that references it
+            in_same_transaction(payment)
+        except Exception:
+            db_session.rollback()
+            raise
     db_session.commit()
     audit_record(
         actor_staff_user_id=actor_staff_user_id,

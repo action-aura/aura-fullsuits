@@ -24,13 +24,18 @@
   server (see nav_group below), so a page load never paints everything
   shut and then pops one open once JS arrives.
 #}
-{% macro nav_link(endpoint, label) %}
+{% macro nav_link(endpoint, label, count=None, count_url=None) %}
   {% set is_current = (request.endpoint == endpoint) %}
   <li>
     <a class="aura-nav-link{{ ' is-active' if is_current else '' }}"
        href="{{ url_for(endpoint) }}"
        {% if is_current %}aria-current="page"{% endif %}>
       <span class="aura-nav-link__text">{{ label }}</span>
+      {%- if count_url %}
+      {# A live count (Step 1: sales waiting). [hidden] at zero; kept fresh by
+         static/js/count-badge.js, sharing the top-bar badge's poll. #}
+      <span class="aura-nav-link__count" data-count-badge data-count-url="{{ count_url }}" data-poll-ms="30000"{% if not count %} hidden{% endif %}><span data-count-badge-value>{{ format_owner_number(count or 0) }}</span></span>
+      {%- endif %}
     </a>
   </li>
 {% endmacro %}
@@ -100,7 +105,7 @@
   {% if dept.links %}
   {% call nav_group(dept.slug, dept.label) %}
     {% for link in dept.links %}
-      {{ nav_link(link.endpoint, link.label) }}
+      {{ nav_link(link.endpoint, link.label, link.count, link.count_url) }}
     {% endfor %}
   {% endcall %}
   {% endif %}

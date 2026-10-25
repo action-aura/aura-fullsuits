@@ -17,7 +17,7 @@ COUNT_URL = "/attention/website-leads/count"
 
 _OWNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CSS_PATH = os.path.join(_OWNER_DIR, "app", "static", "css", "shell.css")
-_JS_PATH = os.path.join(_OWNER_DIR, "app", "static", "js", "website-leads-badge.js")
+_JS_PATH = os.path.join(_OWNER_DIR, "app", "static", "js", "count-badge.js")  # website-leads-badge.js until 2026-10-25: one script now drives every count badge
 
 
 def _make_profile(app, staff_id, number):
@@ -225,7 +225,7 @@ def test_badge_markup_only_for_lead_permission_holders_and_ships_hidden(app, cli
     html = client.get("/attention").get_data(as_text=True)
     assert re.search(r'<a class="aura-topbar__website-leads" id="aura-website-leads-badge" hidden', html)
     assert 'data-count-url="/attention/website-leads/count"' in html
-    assert "js/website-leads-badge.js" in html
+    assert "js/count-badge.js" in html
 
     finance_client = app.test_client()
     force_login(finance_client, app, finance)

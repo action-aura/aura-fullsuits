@@ -105,6 +105,10 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_SMTP_USE_TLS",
         # Website intake (2026-10): bearer secret for POST /api/intake/website-lead
         "OWNER_WEBSITE_INTAKE_SECRET",
+        # Step 1 manager push notifications (app/push/): the VAPID private key
+        # and the contact the push services see. Key unset == push off.
+        "OWNER_PUSH_VAPID_PRIVATE_KEY",
+        "OWNER_PUSH_VAPID_SUBJECT",
         # Read directly by other modules (not by this Config class), but
         # still legitimate OWNER_* variables -- must not trip the unknown-key
         # check in strict mode.
@@ -304,6 +308,19 @@ class BaseConfig:
     # 404 exactly like a route that does not exist (default-off). The same
     # value is the website's Pages secret OWNER_INTAKE_SECRET.
     WEBSITE_INTAKE_SECRET = os.environ.get("OWNER_WEBSITE_INTAKE_SECRET", "").strip()
+    # -- Step 1 (2026-10-25): manager push notifications (app/push/). The
+    # VAPID private key is the raw P-256 private key, base64url, as printed by
+    # `flask notifications generate-vapid-keys` (which writes it ONLY into a
+    # redirected file, never to a terminal). Unset == push is OFF: no worker
+    # thread, no outbox rows, no "turn on notifications" button -- every sale,
+    # confirmation and badge works exactly as without it. A value that does
+    # not parse also means OFF, with one startup WARNING (app/push/vapid.py),
+    # rather than refusing to boot the whole Owner for an optional channel.
+    # The public key is derived from it, so the two can never disagree.
+    PUSH_VAPID_PRIVATE_KEY = os.environ.get("OWNER_PUSH_VAPID_PRIVATE_KEY", "").strip()
+    # The contact a push service may use to reach the sender (RFC 8292 "sub");
+    # Apple refuses a message without a mailto: or https: subject.
+    PUSH_VAPID_SUBJECT = os.environ.get("OWNER_PUSH_VAPID_SUBJECT", "mailto:info@actionaura.me").strip()
     # M2: when true, validate() also rejects any OWNER_* environment variable
     # that isn't in KNOWN_CONFIG_ENV_VARS (catches typos like a misspelled
     # override that would otherwise silently fall back to a default). Off by
@@ -516,6 +533,9 @@ class TestingConfig(BaseConfig):
     # Website intake is off unless a test turns it on via
     # app.config["WEBSITE_INTAKE_SECRET"] (never inherited from the shell env).
     WEBSITE_INTAKE_SECRET = ""
+    # Push is off unless a test turns it on via app.config (never inherited
+    # from the shell env), like the intake secret above.
+    PUSH_VAPID_PRIVATE_KEY = ""
 
 
 class ProductionConfig(BaseConfig):

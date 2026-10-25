@@ -150,9 +150,22 @@ def build_sw_config() -> dict:
     }
 
 
+def build_push_config() -> dict:
+    """What the worker's push listeners need that is not in the message: the
+    icon and where a tap goes when the message names no page. Public, the
+    same for everyone -- like the rest of /sw.js."""
+    return {
+        "icon": url_for("static", filename="img/brand/icon-192.png"),
+        "badge": url_for("static", filename="img/brand/icon-192.png"),
+        "fallbackUrl": url_for("license_issuance.sales_awaiting_confirmation"),
+        "fallbackTitle": "Aura Owner",
+        "fallbackTag": "aura-owner",
+    }
+
+
 @bp.get("/sw.js")
 def service_worker():
-    body = current_app.jinja_env.get_template("pwa/sw.js").render(pwa_config=build_sw_config())
+    body = current_app.jinja_env.get_template("pwa/sw.js").render(pwa_config=build_sw_config(), push_config=build_push_config())
     response = make_response(body)
     response.headers["Content-Type"] = "text/javascript; charset=utf-8"
     # The browser re-checks the worker on every navigation; "no-cache" makes

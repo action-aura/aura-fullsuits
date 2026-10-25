@@ -685,6 +685,9 @@ def generic_audit_action_label(code: str) -> str:
         "REFUND_WINDOW_OVERRIDDEN": _("Refund allowed after the 30 days"),
         "REFUND_THRESHOLD_DEFAULT_CHANGED": _("Refund threshold changed (system default)"),
         "CUSTOMER_REFUND_THRESHOLD_CHANGED": _("Refund threshold changed for a customer"),
+        # Step 1 manager push notifications (app/push/routes.py)
+        "PUSH_DEVICE_SUBSCRIBED": _("Phone notifications turned on for a device"),
+        "PUSH_DEVICE_UNSUBSCRIBED": _("Phone notifications turned off for a device"),
         "LICENSE_STATUS_CHANGED": _("License status changed"),
         "LICENSE_REPLACED": _("License replaced"),
         "LICENSE_CREATED": _("License created"),

@@ -9164,3 +9164,89 @@ msgstr "Renewal commission"
 #: app/templates/commercial_sales/leaderboard.html
 msgid "No sellers on the ladder yet."
 msgstr "No sellers on the ladder yet."
+
+#: app/push/worker.py
+msgid "New sale waiting for confirmation"
+msgstr "New sale waiting for confirmation"
+
+#: app/push/worker.py
+#, python-format
+msgid "From %(name)s. Sales waiting for you now: %(count)s"
+msgstr "From %(name)s. Sales waiting for you now: %(count)s"
+
+#: app/push/worker.py
+#, python-format
+msgid "From %(name)s"
+msgstr "From %(name)s"
+
+#: app/i18n_labels.py
+msgid "Phone notifications turned on for a device"
+msgstr "Phone notifications turned on for a device"
+
+#: app/i18n_labels.py
+msgid "Phone notifications turned off for a device"
+msgstr "Phone notifications turned off for a device"
+
+#: app/templates/licensing/sales_pending.html
+#, python-format
+msgid "Sale %(order)s was already confirmed by %(name)s. Nothing more to do."
+msgstr "Sale %(order)s was already confirmed by %(name)s. Nothing more to do."
+
+#: app/templates/licensing/sales_pending.html
+#, python-format
+msgid "Sale %(order)s was already confirmed. Nothing more to do."
+msgstr "Sale %(order)s was already confirmed. Nothing more to do."
+
+#: app/templates/licensing/sales_pending.html
+msgid "Already rejected"
+msgstr "Already rejected"
+
+#: app/templates/licensing/sales_pending.html
+#, python-format
+msgid "Sale %(order)s was already rejected. Nothing more to do."
+msgstr "Sale %(order)s was already rejected. Nothing more to do."
+
+#: app/templates/licensing/_push_optin.html
+msgid "Phone notifications"
+msgstr "Phone notifications"
+
+#: app/templates/licensing/_push_optin.html
+msgid "Get a notification on this device when a seller records a sale you can confirm. It shows only the seller's first name -- never the customer or the money."
+msgstr "Get a notification on this device when a seller records a sale you can confirm. It shows only the seller's first name -- never the customer or the money."
+
+#: app/templates/licensing/_push_optin.html
+msgid "Notifications are off on this device."
+msgstr "Notifications are off on this device."
+
+#: app/templates/licensing/_push_optin.html
+msgid "Notifications are on for this device."
+msgstr "Notifications are on for this device."
+
+#: app/templates/licensing/_push_optin.html
+msgid "This browser blocks notifications from Aura Owner. Allow them in the browser's settings for this site, then reload this page."
+msgstr "This browser blocks notifications from Aura Owner. Allow them in the browser's settings for this site, then reload this page."
+
+#: app/templates/licensing/_push_optin.html
+msgid "On iPhone: first add Aura Owner to the Home Screen (Share, then Add to Home Screen), open it from there, then turn notifications on."
+msgstr "On iPhone: first add Aura Owner to the Home Screen (Share, then Add to Home Screen), open it from there, then turn notifications on."
+
+#: app/templates/licensing/_push_optin.html
+msgid "This browser cannot receive notifications. The number next to Sales to confirm still shows what is waiting."
+msgstr "This browser cannot receive notifications. The number next to Sales to confirm still shows what is waiting."
+
+#: app/templates/licensing/_push_optin.html
+msgid "Notifications could not be switched. Try again."
+msgstr "Notifications could not be switched. Try again."
+
+#: app/templates/licensing/_push_optin.html
+msgid "Turn on notifications on this device"
+msgstr "Turn on notifications on this device"
+
+#: app/templates/licensing/_push_optin.html
+msgid "Turn off on this device"
+msgstr "Turn off on this device"
+
+#: app/templates/layout/base.html
+#, python-format
+msgid "Sales waiting for your confirmation: %(count)s"
+msgstr "Sales waiting for your confirmation: %(count)s"

@@ -1,0 +1,14 @@
+# Step 1 (2026-10-25) -- manager push notifications, the every-minute
+# backstop sender (run_push_sender.sh's header says why there are two).
+# Same shape as aura-owner-scheduled-ops.service: Type=oneshot, driven by the
+# matching .timer; __COMPOSE_DIR__ is substituted by bootstrap.sh.
+[Unit]
+Description=Aura Owner (Oracle Free path) manager push notifications sender
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=__COMPOSE_DIR__
+ExecStart=/usr/bin/env bash __COMPOSE_DIR__/run_push_sender.sh
+TimeoutStartSec=120

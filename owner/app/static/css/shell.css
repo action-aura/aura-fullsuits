@@ -515,6 +515,54 @@ summary:focus-visible {
   font-size: var(--aura-font-size-xs);
 }
 
+/* Step 1: sales waiting for this manager's confirmation (top bar + the
+   Sales to confirm menu link), kept fresh by static/js/count-badge.js.
+   Rendered with the real count and [hidden] at zero -- the display rules
+   below would otherwise override [hidden], the same trap as above. Brand
+   blue, not warning amber: a waiting sale is work, not a problem. */
+.aura-topbar__sales-waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aura-space-1);
+  background: var(--aura-color-brand-primary-soft);
+  border: 1px solid var(--aura-color-brand-primary);
+  border-radius: var(--aura-radius-sm);
+  color: var(--aura-color-brand-primary);
+  font-size: var(--aura-font-size-sm);
+  padding: 0.4rem 0.6rem;
+  text-decoration: none;
+}
+.aura-topbar__sales-waiting[hidden] { display: none; }
+.aura-topbar__sales-waiting:hover, .aura-topbar__sales-waiting:focus-visible {
+  border-color: var(--aura-color-brand-primary-hover);
+  color: var(--aura-color-text-primary);
+}
+.aura-topbar__sales-waiting-count {
+  font-weight: var(--aura-font-weight-semibold);
+  font-size: var(--aura-font-size-xs);
+}
+.aura-nav-link__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 1.4rem;
+  margin-inline-start: auto;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--aura-color-brand-primary);
+  color: #FFFFFF;
+  font-size: var(--aura-font-size-xs);
+  font-weight: var(--aura-font-weight-semibold);
+  line-height: 1.4;
+}
+.aura-nav-link__count[hidden] { display: none; }
+
+/* Step 1: the phone-notifications card (licensing/_push_optin.html) and the
+   row a notification opened. */
+.aura-push-card[hidden], .aura-push-card [hidden] { display: none; }
+.aura-push-card__state--on { color: var(--aura-color-success); font-weight: var(--aura-font-weight-semibold); }
+tr.is-highlighted > td { background: var(--aura-color-brand-primary-soft); }
+
 .aura-theme-switch {
   display: inline-flex;
   border: 1px solid var(--aura-color-border-default);

@@ -77,7 +77,11 @@
   {% set _unused = sales_links.append({'endpoint': 'license_issuance.new_form', 'label': _('Sell a licence')}) %}
 {% endif %}
 {% if has_permission('payments.confirm') %}
-  {% set _unused = sales_links.append({'endpoint': 'license_issuance.sales_awaiting_confirmation', 'label': _('Sales to confirm')}) %}
+  {# Step 1: a live count for someone who may confirm (layout/_sidebar.html
+     renders it; the department cards ignore it). #}
+  {% set _unused = sales_links.append({'endpoint': 'license_issuance.sales_awaiting_confirmation', 'label': _('Sales to confirm'),
+     'count': sales_waiting_count if can_confirm_sales else None,
+     'count_url': url_for('license_issuance.sales_waiting_count') if can_confirm_sales else None}) %}
 {% endif %}
 {% if has_any_permission('quotes.create', 'quotes.approve') %}
   {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.list_quotes', 'label': _('Quotes')}) %}

@@ -139,6 +139,11 @@ def suspend_employee(profile: EmployeeProfile, reason: str, actor_staff_user_id:
     staff = db_session.get(StaffUser, profile.staff_user_id)
     if staff is not None:
         staff.is_active = False
+    # Step 1: their phones stop getting sale notifications at once -- the
+    # devices are removed in THIS transaction (app/push/subscriptions.py).
+    from app.push.subscriptions import remove_all_for_staff
+
+    remove_all_for_staff(profile.staff_user_id)
     revoke_all_sessions_for_staff(profile.staff_user_id, reason="employee_suspended")
     _revoke_all_presence_sessions(profile.id)
     db_session.commit()
@@ -196,6 +201,11 @@ def terminate_employee(profile: EmployeeProfile, reason: str, actor_staff_user_i
     staff = db_session.get(StaffUser, profile.staff_user_id)
     if staff is not None:
         staff.is_active = False
+    # Step 1: their phones stop getting sale notifications at once -- the
+    # devices are removed in THIS transaction (app/push/subscriptions.py).
+    from app.push.subscriptions import remove_all_for_staff
+
+    remove_all_for_staff(profile.staff_user_id)
     revoke_all_sessions_for_staff(profile.staff_user_id, reason="employee_terminated")
     _revoke_all_presence_sessions(profile.id)
     db_session.commit()

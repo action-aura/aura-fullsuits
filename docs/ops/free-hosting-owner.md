@@ -757,6 +757,50 @@ signing key still needs the same reachability this script assumes) and out
 of scope for this pass; flagged here rather than silently left for the next
 session to rediscover.
 
+### 4.8 Phone notifications for managers (Step 1, 2026-10-25) — optional, OFF by default
+
+When a seller records a sale with **Sell a licence**, every manager who may
+confirm it (Sales Manager, Finance, Super Admin — never the seller, never
+whoever typed it in) gets a notification on each phone where they turned
+notifications on. It shows only "New sale waiting for confirmation" and the
+seller's first name — never the customer or the money. Tapping it opens
+**Sales to confirm**; if another manager was first, the page says so.
+Without push, managers still see the count badge in the top bar and the menu.
+
+Turning it on, on the VM (once):
+
+```bash
+cd ~/aura-fullsuits/owner/deploy/oracle-free
+# 1. Make the server key. The private key is APPENDED to .env.oracle and never
+#    shown -- the command refuses to print it to a terminal. The public key
+#    (not secret) is printed on the screen.
+docker compose -f docker-compose.yml --env-file .env.oracle exec -T owner     flask --app app:create_app notifications generate-vapid-keys >> .env.oracle
+# If .env.oracle already had an empty OWNER_PUSH_VAPID_PRIVATE_KEY= line, the
+# appended one (the last) is the one that counts; deleting the empty one is tidier.
+# 2. Restart so the app reads it, then install the every-minute sender timer:
+docker compose -f docker-compose.yml --env-file .env.oracle up -d owner
+./bootstrap.sh            # step 7c installs aura-owner-push.timer when the key is set
+# 3. Check:
+docker compose -f docker-compose.yml --env-file .env.oracle exec -T owner     flask --app app:create_app notifications status      # "push_enabled": true
+systemctl list-timers aura-owner-push.timer
+```
+
+Then each manager, on their phone: open Owner (Android: Chrome; iPhone:
+iOS 16.4 or newer, and ONLY from the app added to the Home Screen — Safari
+itself cannot receive web notifications), go to **Sales to confirm**, press
+**Turn on notifications on this device** and allow it.
+
+Who sends: the web process itself (a background thread, every 10 s) and, as
+a backstop, `run_push_sender.sh` every minute (`aura-owner-push.timer`). Both
+use the same claims, so nothing is sent twice. A burst of sales becomes at
+most one notification per phone per minute, saying how many are waiting.
+
+**Keep the key secret.** It lives only in `.env.oracle` (never in git, a chat
+or a ticket). If it leaks, make a new one the same way and restart: every
+phone then simply turns notifications on again by itself on its next visit
+to Sales to confirm. To turn push OFF, delete the line and restart — nothing
+else changes.
+
 ## 5. Path B — Fly.io, ~$2.34/month (if you'd rather pay to skip sysadmin)
 
 Full runbook already lives at `owner/deploy/fly/DEPLOY.md` (updated

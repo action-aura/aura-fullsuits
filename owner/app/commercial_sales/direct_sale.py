@@ -67,7 +67,7 @@ from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import select, text
+from sqlalchemy import String, cast, func, select, text
 from sqlalchemy.exc import OperationalError
 
 from app.audit.services import record as audit_record
@@ -104,6 +104,7 @@ from app.models.customers import Customer
 from app.models.employees import EmployeeProfile
 from app.models.licensing import License
 from app.models.subscriptions import PaymentRecord, Subscription
+from app.push.outbox import enqueue_sale_waiting
 from app.subscriptions.services import lock_payment_for_update, record_payment
 
 # Sellers never take cash: the customer pays the company by CliQ or bank
@@ -117,6 +118,20 @@ DIRECT_SALE_PAYMENT_METHODS = ("BANK_TRANSFER",)
 # employee (a manager entering a seller's sale). Anyone else -- SALES --
 # can only ever be the seller of their own sale.
 CHOOSE_SELLER_PERMISSION = "orders.approve"
+
+# What confirming a one-screen sale needs: issuance_routes.confirm_sale's own
+# decorators. Step 1 (2026-10-25): who is told a sale is waiting -- the push
+# notification, the badge -- is derived from THIS set (app/push/recipients.py),
+# and tests/test_step1_push.py proves a role holding exactly these can confirm
+# and a role missing any one cannot, so "notified" and "may confirm" cannot
+# drift apart.
+CONFIRM_SALE_PERMISSIONS = frozenset({"payments.confirm", "orders.approve", "invoices.issue"})
+
+# A one-screen sale is waiting for a manager while its order is not yet
+# fulfilled or cancelled and its payment is recorded and not rejected -- the
+# list below and the confirm both act on exactly these.
+WAITING_ORDER_STATUSES = ("DRAFT", "CONFIRMED")
+WAITING_PAYMENT_STATUSES = ("PENDING", "CONFIRMED")
 
 _RECORD_LOCK_NAMESPACE = "commercial_sales.record_direct_sale"
 _CONFIRM_LOCK_NAMESPACE = "commercial_sales.confirm_direct_sale"
@@ -640,7 +655,12 @@ def record_direct_sale(
 
 def _record_sale_payment(order, payment_id, *, amount, method, reference, payment_date, seller, actor_staff_user_id):
     # The existing storage writer, PENDING -- record_payment itself refuses
-    # CONFIRMED (two-person rule, 16cbc323).
+    # CONFIRMED (two-person rule, 16cbc323). The managers' push-notification
+    # outbox row is written in the payment's OWN transaction (Step 1): the sale
+    # becomes confirmable at exactly this commit, so this is the one commit
+    # that may announce it. A replay never gets here (record_direct_sale
+    # returns early when the payment exists), and the outbox row is unique per
+    # sale, so one sale is announced once.
     record_payment(
         {
             "id": payment_id,
@@ -653,6 +673,7 @@ def _record_sale_payment(order, payment_id, *, amount, method, reference, paymen
             "status": "PENDING",
         },
         actor_staff_user_id,
+        in_same_transaction=lambda payment: enqueue_sale_waiting(order_id=order.id, payment_id=payment.id),
     )
     audit_record(
         actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="DIRECT_SALE_RECORDED",
@@ -698,6 +719,45 @@ def list_sales_awaiting_confirmation(limit: int = 200) -> list[dict]:
             "extra_devices": _addon_quantity_on(order, EXTRA_DEVICE_ADDON_CODE),
         })
     return sales
+
+
+def _waiting_sales_select(*columns):
+    """One-screen sales waiting for a manager, as a SELECT of `columns`. The
+    link row stores the payment id as TEXT (CommercialOperationsIdempotencyKey
+    .idempotency_key), so the payment is joined by comparing text -- never by
+    casting that column to uuid, which would fail on other operations' keys."""
+    link = CommercialOperationsIdempotencyKey
+    return (
+        select(*columns)
+        .select_from(SalesOrder)
+        .join(link, link.result_reference_id == SalesOrder.id)
+        .join(PaymentRecord, cast(PaymentRecord.id, String) == link.idempotency_key)
+        .outerjoin(EmployeeProfile, EmployeeProfile.id == SalesOrder.created_by_employee_profile_id)
+        .where(
+            link.operation_code == DIRECT_SALE_PAYMENT_LINK,
+            SalesOrder.status.in_(WAITING_ORDER_STATUSES),
+            PaymentRecord.status.in_(WAITING_PAYMENT_STATUSES),
+        )
+    )
+
+
+def count_sales_awaiting_for(staff_user_id) -> int:
+    """How many waiting sales THIS person could confirm: every waiting sale
+    except the ones they recorded or sold (the two-person rule,
+    _guard_confirmer). The managers' badge and the number in a push
+    notification (Step 1)."""
+    stmt = _waiting_sales_select(func.count()).where(
+        (PaymentRecord.recorded_by_staff_user_id.is_(None)) | (PaymentRecord.recorded_by_staff_user_id != staff_user_id),
+        (EmployeeProfile.staff_user_id.is_(None)) | (EmployeeProfile.staff_user_id != staff_user_id),
+    )
+    return int(db_session.execute(stmt).scalar_one())
+
+
+def sale_is_waiting(order_id) -> bool:
+    """True while this one-screen sale can still be confirmed."""
+    return db_session.execute(
+        _waiting_sales_select(SalesOrder.id).where(SalesOrder.id == order_id)
+    ).first() is not None
 
 
 def _guard_confirmer(order: SalesOrder, payment: PaymentRecord, actor_staff_user_id) -> None:

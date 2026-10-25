@@ -6,7 +6,9 @@ The one screen now SELLS a licence (commercial_sales/direct_sale.py):
   GET  /new                       the sale form -- customer, package, extra
                                   devices, seller, payment
   POST /sale                      records the sale + its PENDING payment; no key
-  GET  /sales                     sales waiting for a manager
+  GET  /sales                     sales waiting for a manager (?sale=<order>
+                                  is where a phone notification lands)
+  GET  /sales/count               the managers' badge count, polled
   POST /sales/<order>/confirm     a manager confirms -> licence + key, shown once
   POST /sales/<order>/reject      the money did not arrive -> no licence
 and keeps, for a licence nobody pays for, the old immediate path:
@@ -40,6 +42,7 @@ from app.auth.session import has_recent_auth, load_current_staff
 from app.commercial_sales.catalog_for_sales import describe_plan_for_sale
 from app.commercial_sales.direct_sale import (
     CHOOSE_SELLER_PERMISSION,
+    CONFIRM_SALE_PERMISSIONS,
     DIRECT_SALE_PAYMENT_METHODS,
     DirectSaleError,
     confirm_direct_sale,
@@ -47,7 +50,10 @@ from app.commercial_sales.direct_sale import (
     list_sales_awaiting_confirmation,
     parse_amount,
     record_direct_sale,
+    count_sales_awaiting_for,
+    direct_sale_payment,
     reject_direct_sale,
+    sale_is_waiting,
 )
 from app.commercial_sales.errors import CommercialSalesError
 from app.employees.queries import find_own_profile
@@ -56,8 +62,11 @@ from app.i18n_labels import localize_commercial_sales_error, localize_direct_sal
 from app.licensing.issuance import LicenseIssuanceError, issue_no_charge_license
 from app.models.catalog import Plan
 from app.models.customers import Customer
+from app.models.commercial_sales import SalesOrder
 from app.models.employees import EmployeeProfile
+from app.models.staff import StaffUser
 from app.operational_reports.periods import jordan_today
+from app.push.vapid import keys_from_config
 from app.security.rbac import get_staff_permission_codes, require_permission, require_recent_auth
 
 bp = Blueprint("license_issuance", __name__, url_prefix="/licenses/issuance")
@@ -200,20 +209,80 @@ def record_sale():
 
 # ------------------------------------------------------- the manager side --
 
-def _render_sales_list(*, error: str | None = None, confirmed=None, status: int = 200):
+def _push_card():
+    """The "phone notifications" card: only while push is configured and only
+    for someone the sender would ever notify (app/push/recipients.py)."""
+    from app.push.recipients import staff_may_confirm_sales
+
+    keys = keys_from_config(current_app.config)
+    if keys is None or not staff_may_confirm_sales(load_current_staff()):
+        return None
+    return {
+        "public_key": keys.public_key_b64,
+        "subscribe_url": url_for("push.subscribe"),
+        "unsubscribe_url": url_for("push.unsubscribe"),
+    }
+
+
+def _tapped_sale(raw_order_id):
+    """Where a phone notification lands (?sale=<order>). The confirm is
+    already race-safe -- the first manager wins -- so a second manager tapping
+    the same notification must be TOLD the sale is done, not left looking for
+    a row that silently vanished from the list."""
+    if not raw_order_id:
+        return None
+    try:
+        order = db_session.get(SalesOrder, uuid.UUID(str(raw_order_id)))
+    except ValueError:
+        return None
+    payment = direct_sale_payment(order) if order is not None else None
+    if order is None or payment is None:
+        return None
+    if sale_is_waiting(order.id):
+        return {"state": "waiting", "order_id": order.id, "order_number": order.order_number}
+    if order.status == "FULFILLED" or payment.status == "CONFIRMED":
+        confirmer = db_session.get(StaffUser, payment.verified_by_staff_user_id) if payment.verified_by_staff_user_id else None
+        return {"state": "confirmed", "order_id": order.id, "order_number": order.order_number,
+                "by": confirmer.display_name if confirmer is not None else None}
+    return {"state": "rejected", "order_id": order.id, "order_number": order.order_number}
+
+
+def _render_sales_list(*, error: str | None = None, confirmed=None, status: int = 200, tapped=None):
     return render_template(
         "licensing/sales_pending.html",
         sales=list_sales_awaiting_confirmation(),
         error=error,
         confirmed=confirmed,
         recent_auth_ok=has_recent_auth(),
+        tapped=tapped,
+        push_card=_push_card(),
     ), status
 
 
 @bp.route("/sales", methods=["GET"])
 @require_permission("payments.confirm")
 def sales_awaiting_confirmation():
-    return _render_sales_list()
+    return _render_sales_list(tapped=_tapped_sale(request.args.get("sale")))
+
+
+@bp.route("/sales/count", methods=["GET"])
+def sales_waiting_count():
+    """Polled every 30 s by static/js/count-badge.js (the managers' badge).
+    load_current_staff(touch=False), like attention.website_leads_count: the
+    session is validated as usual but its idle timer is NOT pushed forward, so
+    a tab left open still times out. Only for someone who may confirm a sale;
+    the count leaves out the sales they recorded or sold."""
+    staff = load_current_staff(touch=False)
+    if staff is None:
+        status, payload = 401, {"error": "authentication_required"}
+    elif not CONFIRM_SALE_PERMISSIONS <= get_staff_permission_codes(staff):
+        status, payload = 403, {"error": "forbidden"}
+    else:
+        status, payload = 200, {"count": count_sales_awaiting_for(staff.id)}
+    response = jsonify(payload)
+    response.status_code = status
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @bp.route("/sales/<uuid:order_id>/confirm", methods=["POST"])
