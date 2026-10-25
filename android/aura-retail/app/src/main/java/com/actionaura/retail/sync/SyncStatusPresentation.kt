@@ -73,6 +73,17 @@ fun classifySync(health: SyncHealth): SyncTier {
 }
 
 /**
+ * Which detail rows the screen shows for [tier]. While PAUSED the push/pull loop does not run, so the
+ * "N waiting to send", "Sending: Healthy" and "Last success Xs ago" numbers are frozen from BEFORE the lapse
+ * (an emulator showed "0 waiting to send" and "Healthy" under the PAUSED headline). They describe the past,
+ * not the present, so the PAUSED tier shows its headline and body sentence only. NOT_CONFIGURED hides both
+ * for its own reason (nothing ever ran); every other tier shows both, unchanged.
+ */
+fun showsPendingCount(tier: SyncTier): Boolean = tier != SyncTier.NOT_CONFIGURED && tier != SyncTier.PAUSED
+
+fun showsHealthBreakdown(tier: SyncTier): Boolean = tier != SyncTier.NOT_CONFIGURED && tier != SyncTier.PAUSED
+
+/**
  * The later of push/pull's `lastSuccessAtMillis`, handling either or both
  * being null. Either half reaching the relay counts as "this device is in
  * contact with sync" -- mirrors the desktop's `_mostRecentSyncIso`

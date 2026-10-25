@@ -389,7 +389,12 @@ internal class RoutedFakeServer {
      *  `relay_url`) still can, without weakening the stripped-`path`
      *  matching every existing exact-path assertion in this file relies
      *  on. */
-    data class RecordedRequest(val method: String, val path: String, val rawTarget: String, val body: String)
+    data class RecordedRequest(
+        val method: String, val path: String, val rawTarget: String, val body: String,
+        /** Request headers, keys LOWER-CASED (HTTP header names are case-insensitive). Defaulted so every
+         *  existing construction/destructuring of a RecordedRequest keeps compiling unchanged. */
+        val headers: Map<String, String> = emptyMap(),
+    )
     private data class CannedResponse(val status: Int, val body: String)
 
     val requests = CopyOnWriteArrayList<RecordedRequest>()
@@ -466,10 +471,12 @@ internal class RoutedFakeServer {
         val path = rawTarget.substringBefore('?')
 
         var contentLength = 0
+        val headers = mutableMapOf<String, String>()
         while (true) {
             val line = readLine(input) ?: return
             if (line.isEmpty()) break
             val idx = line.indexOf(':')
+            if (idx > 0) headers[line.substring(0, idx).trim().lowercase()] = line.substring(idx + 1).trim()
             if (idx > 0 && line.substring(0, idx).equals("Content-Length", ignoreCase = true)) {
                 contentLength = line.substring(idx + 1).trim().toIntOrNull() ?: 0
             }
@@ -482,7 +489,7 @@ internal class RoutedFakeServer {
             if (n == -1) break
             read += n
         }
-        val recorded = RecordedRequest(method, path, rawTarget, String(bodyBytes, Charsets.UTF_8))
+        val recorded = RecordedRequest(method, path, rawTarget, String(bodyBytes, Charsets.UTF_8), headers)
         requests.add(recorded)
 
         val canned = dynamic[path]?.invoke(recorded)?.let { CannedResponse(it.first, it.second) }

@@ -140,15 +140,32 @@ class SyncCoordinatorLicencePauseTest {
     }
 
     @Test
-    fun `paused tick sends the internal secret with the probe`() {
+    fun `the pause probe is a GET carrying X-Aura-Internal-Secret with the internal secret`() {
         answerPause(true)
         runOnce()
-        // RoutedFakeServer does not record headers; a probe sent with the wrong secret would be a 403 from
-        // the real route, which fails open and would SYNC. Proving the probe itself is addressed correctly
-        // (GET, retail prefix) is the part observable here; the secret header is pinned on the Python side
-        // (test_internal_routes: missing-secret -> 403).
+        // G2 (verifier): a probe with a wrong/missing secret header gets a 403 from the real route, which
+        // FAILS OPEN -- a lapsed phone would keep syncing with every other test green. So the header itself
+        // is asserted, name and value (RoutedFakeServer lower-cases header names).
         val probe = server.requests.single { it.path == pauseStatus }
         assertThat(probe.method).isEqualTo("GET")
+        assertThat(probe.headers["x-aura-internal-secret"]).isEqualTo("test-internal-secret")
+    }
+
+    // -- G4: resume must not wait out old backoff -------------------------------------
+
+    @Test
+    fun `renewal resets the failure backoff so the first resumed tick is scheduled at the base delay`() {
+        server.on("/api/sync/_internal/outbox", status = 500, body = "boom")
+        runOnce(); runOnce(); runOnce()
+        val base = 10_000L // INTERVAL_SECONDS * 1000
+        assertThat(SyncCoordinator.nextDelayMillis()).isGreaterThan(base) // failures really are backing off
+
+        answerPause(true)
+        SyncCoordinator.licencePausesSync(base(), "test-internal-secret")
+        answerPause(false)
+        SyncCoordinator.licencePausesSync(base(), "test-internal-secret") // paused -> not paused
+
+        assertThat(SyncCoordinator.nextDelayMillis()).isEqualTo(base)
     }
 
     // -- renewal -------------------------------------------------------------------

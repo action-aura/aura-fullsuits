@@ -18,6 +18,8 @@ import com.actionaura.retail.sync.bootstrapNeedsSupportText
 import com.actionaura.retail.sync.classifySync
 import com.actionaura.retail.sync.formatRelative
 import com.actionaura.retail.sync.mostRecentSuccessMillis
+import com.actionaura.retail.sync.showsHealthBreakdown
+import com.actionaura.retail.sync.showsPendingCount
 import com.actionaura.retail.ui.components.SectionHeader
 import com.actionaura.retail.ui.components.TillCard
 import com.actionaura.retail.ui.i18n.tr
@@ -71,7 +73,7 @@ fun SyncStatusScreen() {
         // Pending count is meaningless when there is no relay configured at
         // all -- shown for every other tier, including NEVER_SYNCED, where a
         // nonzero count is itself informative (things are queued, waiting).
-        if (tier != SyncTier.NOT_CONFIGURED) SyncPendingCard(health.pendingCount)
+        if (showsPendingCount(tier)) SyncPendingCard(health.pendingCount)
         // The breakdown is HIDDEN, not merely relabelled, when there is no
         // relay configured. Found by running the real screen on a real phone:
         // it read "Sync is not set up" in the banner and then "Sending --
@@ -80,8 +82,9 @@ fun SyncStatusScreen() {
         // Both halves were literally accurate and together they said the
         // opposite of the truth: "Healthy" reads as "working fine" to anyone
         // who is not the person who wrote the data class. There is nothing to
-        // detail about a loop that has never run, so nothing is shown.
-        if (tier != SyncTier.NOT_CONFIGURED) {
+        // detail about a loop that has never run, so nothing is shown. PAUSED hides it too: the
+        // numbers are frozen from before the lapse (see showsHealthBreakdown).
+        if (showsHealthBreakdown(tier)) {
             SectionHeader(tr("Detail"))
             SyncBreakdownCard(health, now)
         }

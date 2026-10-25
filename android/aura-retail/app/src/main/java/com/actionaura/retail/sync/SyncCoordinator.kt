@@ -774,8 +774,26 @@ object SyncCoordinator {
             logInfo("Sync paused: the subscription is unpaid. Selling continues; sync resumes on renewal.")
         } else if (!paused && was) {
             logInfo("Sync resumed: the subscription is paid again.")
+            onLicenceResumed()
         }
         return paused
+    }
+
+    /** Paused -> not paused (renewal). Two things from BEFORE/DURING the lapse must not leak past it.
+     *
+     *  G1 (verifier, 2026-10-25): while paused [runOnce] never pulls, so [cloudCaughtUpAtMillis] cannot be
+     *  set and the [CLOUD_CATCHUP_GRACE_MS] clock keeps running through the lapse; a phone restarted
+     *  mid-lapse would reach the end of the grace, pass [readyToJoinHub], join the LAN hub and never pull the
+     *  cloud events it missed (the G3 gap the gate exists to prevent). So the grace restarts at renewal.
+     *  Only a CLOUD target carries a clock (a hub target has null) -- a hub is left alone.
+     *  [cloudCaughtUpAtMillis] is deliberately not touched here.
+     *
+     *  G4: failures counted before the lapse say nothing about the post-renewal network, and the shared
+     *  backoff in [nextDelayMillis] would otherwise make the first resumed tick wait up to 300 s. */
+    private fun onLicenceResumed() = synchronized(lock) {
+        if (cloudTargetSinceMillis != null) cloudTargetSinceMillis = clock()
+        pushHealth = pushHealth.copy(consecutiveFailures = 0)
+        pullHealth = pullHealth.copy(consecutiveFailures = 0)
     }
 
     private fun reasonOf(exc: Throwable): String = when (exc) {
@@ -845,7 +863,7 @@ object SyncCoordinator {
         pausedByLicence = pausedByLicence,
     )
 
-    private fun nextDelayMillis(): Long {
+    internal fun nextDelayMillis(): Long {
         val failures = maxOf(pushHealth.consecutiveFailures, pullHealth.consecutiveFailures)
         if (failures == 0) return INTERVAL_SECONDS * 1000
         val exponent = minOf(failures - 1, 16)          // 10 << 16 already far past the cap; guards overflow
@@ -1061,6 +1079,9 @@ object SyncCoordinator {
      */
     internal fun readyToJoinHub(nowMillis: Long = clock()): Boolean {
         val t = target
+        // Never while the subscription pause is on: a paused phone cannot pull, so "ready" would only mean
+        // "the grace ran out", and joining a hub now would strand the cloud events it has not fetched.
+        if (pausedByLicence) return false
         if (!running || t.baseUrl.isBlank()) return true
         if (t.spkiPin.isNotBlank()) return true
         if (cloudCaughtUpAtMillis != null) return true
