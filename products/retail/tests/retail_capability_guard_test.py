@@ -230,3 +230,63 @@ def test_restricted_blocks_resuming_and_discarding_a_held_sale(client_and_compan
     assert r_resume.status_code == 403
     r_discard = c.delete(f'/api/sub/retail/held-sales/{held_id}')
     assert r_discard.status_code == 403
+
+
+# ── Subscription lapsed UNPAID: the shop keeps selling ─────────────────────
+# Owner decision 2026-10-24 (Aura Growth Plan). These go through the REAL
+# routes and check the ROW, not just the status code: a 2xx from a route that
+# silently did nothing (or a guard that was never consulted) would otherwise
+# pass. The RESTRICTED siblings above stay exactly as they were -- they are
+# the proof the same routes really are gated, so a LAPSED pass is meaningful.
+
+def _row_count(sql, params=()):
+    from database.schema import get_retail_conn
+    conn = get_retail_conn()
+    try:
+        return conn.execute(sql, params).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_subscription_lapsed_real_sale_succeeds_and_row_exists(client_and_company):
+    c, _ = client_and_company
+    pid = _seed_product(c, price=100.0, stock=10)
+    _set_state("SUBSCRIPTION_LAPSED")
+    r = c.post('/api/sub/retail/sales', json={'items': [{'product_id': pid, 'quantity': 2}]})
+    assert r.status_code == 200, r.get_json()
+    sale_id = r.get_json()['data']['id']
+    assert _row_count("SELECT COUNT(*) FROM sales WHERE id = ?", (sale_id,)) == 1
+    # And the very same call is refused when the licence is RESTRICTED, so the
+    # 200 above is the lapse rule working, not an unguarded route.
+    _set_state("RESTRICTED")
+    assert c.post('/api/sub/retail/sales', json={'items': [{'product_id': pid, 'quantity': 1}]}).status_code == 403
+
+
+def test_subscription_lapsed_can_hold_a_sale(client_and_company):
+    c, _ = client_and_company
+    pid = _seed_product(c)
+    _set_state("SUBSCRIPTION_LAPSED")
+    r = c.post('/api/sub/retail/held-sales', json={'items': [{'product_id': pid, 'quantity': 1, 'line_total': 100}]})
+    assert r.status_code == 200, r.get_json()
+    held_id = r.get_json()['data']['id']
+    assert _row_count("SELECT COUNT(*) FROM held_sales WHERE id = ?", (held_id,)) == 1
+
+
+def test_subscription_lapsed_can_open_a_cash_session(client_and_company):
+    c, _ = client_and_company
+    _set_state("SUBSCRIPTION_LAPSED")
+    r = c.post('/api/sub/retail/cash-sessions/open', json={'opening_float': 50})
+    assert r.status_code == 200, r.get_json()
+    session_id = r.get_json()['data']['id']
+    assert _row_count("SELECT COUNT(*) FROM cash_sessions WHERE id = ? AND status = 'open'", (session_id,)) == 1
+
+
+def test_subscription_lapsed_can_create_a_product(client_and_company):
+    c, _ = client_and_company
+    _set_state("SUBSCRIPTION_LAPSED")
+    sku = f'LAPSED-{uuid.uuid4().hex[:8]}'
+    r = c.post('/api/sub/retail/products', json={
+        'name': 'Made While Lapsed', 'sku': sku, 'sell_price': 5.0, 'tax_rate': 0, 'initial_stock': 3,
+    })
+    assert r.status_code == 200, r.get_json()
+    assert _row_count("SELECT COUNT(*) FROM products WHERE sku = ?", (sku,)) == 1

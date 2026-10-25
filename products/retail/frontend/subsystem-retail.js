@@ -6603,6 +6603,9 @@ const RetailSystem = {
     const health = this._syncHealth;
     if (!health || health.configured !== true) return false;
     if (health.never_synced) return false;
+    // Keep-selling rule: an unpaid subscription pauses sync ON PURPOSE (health.paused_by_licence).
+    // The figure is not hidden as "stale" for that -- the shop keeps selling and keeps seeing stock.
+    if (health.paused_by_licence) return false;
     const secs = health.seconds_since_last_success;
     return typeof secs === 'number' && secs > this.SYNC_STALE_THRESHOLD_SECONDS;
   },

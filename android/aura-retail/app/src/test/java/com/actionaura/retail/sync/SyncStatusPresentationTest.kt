@@ -44,6 +44,90 @@ class SyncStatusPresentationTest {
         assertThat(classifySync(health)).isEqualTo(SyncTier.NOT_CONFIGURED)
     }
 
+    // -- keep-selling G3: PAUSED shows only the headline, not frozen pre-lapse numbers ------
+
+    @Test
+    fun `PAUSED hides the pending count and the push-pull breakdown`() {
+        assertThat(showsPendingCount(SyncTier.PAUSED)).isFalse()
+        assertThat(showsHealthBreakdown(SyncTier.PAUSED)).isFalse()
+    }
+
+    @Test
+    fun `the screen actually routes both detail cards through the tier seam`() {
+        // The pure seam proves nothing if the screen stopped asking it.
+        val screen = File(File("."), "src/main/java/com/actionaura/retail/ui/screens/SyncStatusScreen.kt").readText()
+        assertThat(screen).contains("if (showsPendingCount(tier)) SyncPendingCard(")
+        assertThat(screen).contains("if (showsHealthBreakdown(tier)) {")
+    }
+
+    @Test
+    fun `every other tier keeps its rows exactly as before -- only NOT_CONFIGURED hides them`() {
+        for (tier in listOf(SyncTier.NEVER_SYNCED, SyncTier.FAILING, SyncTier.CALM)) {
+            assertThat(showsPendingCount(tier)).isTrue()
+            assertThat(showsHealthBreakdown(tier)).isTrue()
+        }
+        assertThat(showsPendingCount(SyncTier.NOT_CONFIGURED)).isFalse()
+        assertThat(showsHealthBreakdown(SyncTier.NOT_CONFIGURED)).isFalse()
+    }
+
+    // -- keep-selling: PAUSED precedence (mirrors the web app-shell banner) --------
+
+    @Test
+    fun paused_wins_over_never_synced() {
+        val health = SyncHealth(
+            configured = true, running = true,
+            push = SyncHalfHealth(), pull = SyncHalfHealth(),
+            pausedByLicence = true,
+        )
+        assertThat(classifySync(health)).isEqualTo(SyncTier.PAUSED)
+    }
+
+    @Test
+    fun paused_wins_over_failing() {
+        // Failures recorded BEFORE the lapse must not make a deliberately paused device read "failing".
+        val health = SyncHealth(
+            configured = true, running = true,
+            push = SyncHalfHealth(healthy = false, consecutiveFailures = SYNC_DEGRADED_THRESHOLD),
+            pull = SyncHalfHealth(healthy = false, consecutiveFailures = SYNC_DEGRADED_THRESHOLD),
+            pausedByLicence = true,
+        )
+        assertThat(classifySync(health)).isEqualTo(SyncTier.PAUSED)
+    }
+
+    @Test
+    fun paused_wins_over_calm() {
+        val health = SyncHealth(
+            configured = true, running = true,
+            push = SyncHalfHealth(lastSuccessAtMillis = 1_000L), pull = SyncHalfHealth(lastSuccessAtMillis = 2_000L),
+            pausedByLicence = true,
+        )
+        assertThat(classifySync(health)).isEqualTo(SyncTier.PAUSED)
+    }
+
+    @Test
+    fun not_configured_still_wins_over_paused() {
+        val health = SyncHealth(
+            configured = false, running = true,
+            push = SyncHalfHealth(), pull = SyncHalfHealth(),
+            pausedByLicence = true,
+        )
+        assertThat(classifySync(health)).isEqualTo(SyncTier.NOT_CONFIGURED)
+    }
+
+    @Test
+    fun not_paused_leaves_the_other_tiers_unchanged() {
+        val calm = SyncHealth(
+            configured = true, running = true,
+            push = SyncHalfHealth(lastSuccessAtMillis = 1_000L), pull = SyncHalfHealth(),
+            pausedByLicence = false,
+        )
+        assertThat(classifySync(calm)).isEqualTo(SyncTier.CALM)
+        val failing = calm.copy(push = SyncHalfHealth(healthy = false, consecutiveFailures = SYNC_DEGRADED_THRESHOLD))
+        assertThat(classifySync(failing)).isEqualTo(SyncTier.FAILING)
+        val never = calm.copy(push = SyncHalfHealth())
+        assertThat(classifySync(never)).isEqualTo(SyncTier.NEVER_SYNCED)
+    }
+
     @Test
     fun push_failures_at_threshold_are_failing() {
         val health = SyncHealth(

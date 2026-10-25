@@ -70,8 +70,8 @@ def _pk(conn, table):
 def test_a_fresh_install_is_stamped_56(install):
     c = _conn(install)
     try:
-        assert schema.RETAIL_SCHEMA_VERSION == 57  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.
-        assert c.execute("PRAGMA user_version").fetchone()[0] == 57  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.
+        assert schema.RETAIL_SCHEMA_VERSION == 58  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.  # v58 UPDATE: head moved 57 -> 58 (KEEP-SELLING C3 pause clock, ROADMAP v58 claim); same exact pin, not loosened.
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 58  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.  # v58 UPDATE: head moved 57 -> 58 (KEEP-SELLING C3 pause clock, ROADMAP v58 claim); same exact pin, not loosened.
         assert _pk(c, "site_device_cursors") == ["installation_id", "stream"]
         assert c.execute("SELECT pruned_through_seq, site_log_floor FROM site_prune_state WHERE id=1"
                          ).fetchone()[:] == (0, 0)
@@ -109,7 +109,7 @@ def test_a_v54_hub_database_is_upgraded_through_the_real_chain_and_keeps_its_cur
 
     c = _conn(install)
     try:
-        assert c.execute("PRAGMA user_version").fetchone()[0] == 57  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 58  # v57 UPDATE: head moved 56 -> 57 (STOCK-TAKE, ROADMAP v57 claim); same exact pin, not loosened.  # v58 UPDATE: head moved 57 -> 58 (KEEP-SELLING C3 pause clock, ROADMAP v58 claim); same exact pin, not loosened.
         assert _pk(c, "site_device_cursors") == ["installation_id", "stream"]
         rows = {(r["installation_id"], r["stream"]): r["last_seq"]
                 for r in c.execute("SELECT * FROM site_device_cursors")}

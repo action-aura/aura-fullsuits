@@ -222,6 +222,20 @@ _STATE_ENTRY_EVENTS = {
 }
 
 
+def _aware_datetime_or_none(value) -> Optional[datetime]:
+    """Parse an ISO-8601 string into an AWARE datetime, or None if it is missing, unparseable or
+    timezone-naive. Naive values are treated as absent on purpose: every writer in this package
+    stamps UTC-aware values, so a naive one can only come from tampering/corruption, and
+    subtracting it from an aware `now` raises TypeError (it used to escape `run_once`)."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
 class LicenseCheckInScheduler:
     def __init__(
         self,
@@ -561,25 +575,94 @@ class LicenseCheckInScheduler:
         import json
 
         envelope = json.loads(record.assertion_envelope_json)
-        try:
-            verified = verify_assertion(
+
+        def _verify_at(trusted_now: datetime):
+            return verify_assertion(
                 envelope,
                 trust_store=self._trust_store,
                 expected_product_code=self._product_code,
                 expected_platform=self._platform,
                 expected_installation_id=record.owner_installation_id,
                 expected_device_key_fingerprint=self._device_fingerprint,
-                trusted_now=datetime.now(timezone.utc),
+                trusted_now=trusted_now,
             )
-        except AssertionVerificationError:
-            self._events.record("LOCAL_STATE_CORRUPT")
-            return LicenseState.LOCAL_STATE_CORRUPT
+
+        # Wall-clock lower bound on offline time, set ONLY on the
+        # ASSERTION_EXPIRED path below (None everywhere else = unchanged).
+        offline_floor_seconds = None
+        try:
+            verified = _verify_at(datetime.now(timezone.utc))
+        except AssertionVerificationError as exc:
+            verified = None
+            if exc.reason_code == "ASSERTION_EXPIRED":
+                # An assertion that has merely OUTLIVED its own validity window
+                # is not corrupt, it is old. Owner's assertion TTL defaults to
+                # 24h while the signed offline policy grants days of grace
+                # (14 by default, WARN_ONLY on some plans), so every shop that
+                # is offline for more than a day lands here -- and treating it
+                # as LOCAL_STATE_CORRUPT blocked selling after one day offline,
+                # the opposite of what policy_evaluator.evaluate() intends ("an
+                # expired assertion and 'we haven't checked in' are the same
+                # practical situation"). How long the shop may stay offline is
+                # decided by the signed grace arithmetic in evaluate_policy(),
+                # NOT by the assertion's TTL.
+                #
+                # So re-verify the SAME envelope as of the moment it was still
+                # valid: trusted_now = its own signed expires_at. That second
+                # pass still checks the signature over the whole payload
+                # (expires_at included, so it cannot be edited to look
+                # fresher), the signing key, product, platform, installation
+                # and device fingerprint -- only the wall-clock window check is
+                # neutralised. ONLY ASSERTION_EXPIRED gets this; a bad
+                # signature, mismatch, not-yet-valid or malformed assertion
+                # still falls through to LOCAL_STATE_CORRUPT below.
+                try:
+                    verified = _verify_at(datetime.fromisoformat(envelope["payload"]["expires_at"]))
+                except (AssertionVerificationError, KeyError, TypeError, ValueError):
+                    verified = None
+                # The 24h assertion TTL used to be the (accidental) bound on
+                # offline time: past it the assertion was rejected outright.
+                # Re-verifying at expires_at removed that bound, and the
+                # trusted-time anchor does not replace it -- after a RESTART
+                # the anchor re-pins the stored issued_at to monotonic-now, so
+                # trusted "now" ~ issued_at and the trusted clock reports ~0
+                # offline time whether 2 or 365 days have passed (residual-risk
+                # register #7, docs/licensing/phase7v-final/
+                # final-residual-risk-register.md; proven by the verifier at
+                # 2/15/60/365 days: ACTIVE_OFFLINE every time).
+                #
+                # So hand evaluate() the wall-clock gap since the last
+                # successful check-in as a FLOOR on elapsed_offline. It is
+                # max()'d with the trusted figure, so the wall clock can only
+                # make the device reach grace/restriction SOONER, never later:
+                # a rolled-back wall clock leaves the trusted value in charge.
+                # That is no weaker than before this branch (which also relied
+                # on the wall clock, via the TTL check) and it restores the
+                # bound the signed offline policy intends. Negative -> 0.
+                #
+                # E2 (fix round 2): the floor is measured from min(last_successful_checkin_at,
+                # the assertion's SIGNED issued_at), not from the column alone. The column is an
+                # UNSIGNED licensing.db value: setting it to "now", or NULL, after a restart gave
+                # an ACTIVE_OFFLINE verdict at 365 days (measured with attack_floor.py -- the
+                # previous commit gave LOCAL_STATE_CORRUPT there). The stored assertion is the one
+                # issued at the last successful check-in, so its issued_at is the honest lower
+                # bound on how long ago that was, and it cannot be edited without breaking the
+                # signature (re-verified just above). A NULL or timezone-naive column (only
+                # producible by tampering) counts as absent -> issued_at alone; never an exception.
+                floor_start = self._offline_floor_start(record, envelope)
+                if verified is not None and floor_start is not None:
+                    offline_floor_seconds = max(
+                        0.0, (datetime.now(timezone.utc) - floor_start).total_seconds())
+            if verified is None:
+                self._events.record("LOCAL_STATE_CORRUPT")
+                return LicenseState.LOCAL_STATE_CORRUPT
 
         anchor = self._resolve_anchor(record)
+        # A naive/unparseable stored value is treated as absent (E2): it used to make this
+        # subtraction raise TypeError out of run_once().
         last_checkin = (
-            datetime.fromisoformat(record.last_successful_checkin_at)
-            if record.last_successful_checkin_at
-            else verified.evidence.not_before
+            _aware_datetime_or_none(record.last_successful_checkin_at)
+            or verified.evidence.not_before
         )
         return evaluate_policy(
             evidence=verified.evidence,
@@ -588,7 +671,21 @@ class LicenseCheckInScheduler:
             last_successful_checkin_at=last_checkin,
             last_checkin_attempt_ok=checkin_ok,
             local_safety_ceiling_seconds=self._safety_ceiling,
+            offline_elapsed_floor_seconds=offline_floor_seconds,
         )
+
+    @staticmethod
+    def _offline_floor_start(record: LicenseStateRecord, envelope: dict) -> Optional[datetime]:
+        """Earliest honest start of the current offline stretch: min of the stored last-check-in
+        column (if present, parseable and timezone-aware) and the stored assertion's SIGNED
+        issued_at. None only if neither is usable. See the E2 note in `_reevaluate`."""
+        candidates = [_aware_datetime_or_none(record.last_successful_checkin_at)]
+        try:
+            candidates.append(_aware_datetime_or_none(envelope["payload"]["issued_at"]))
+        except (KeyError, TypeError):
+            pass
+        usable = [c for c in candidates if c is not None]
+        return min(usable) if usable else None
 
     def _resolve_anchor(self, record: LicenseStateRecord) -> TrustedTimeAnchor:
         """Phase 7V-F fix (found via live production-like validation):

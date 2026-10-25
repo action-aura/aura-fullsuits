@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Optional
 
-from .state_machine import ACTIVE_FAMILY, DATA_PRESERVED_FAMILY, LicenseState
+from .state_machine import DATA_PRESERVED_FAMILY, SELLING_FAMILY, LicenseState
 
 # Distinguishes WHY a capability was denied -- Part S requires the guard to
 # tell apart "feature not built" (a caller-side concept: this guard was
@@ -44,7 +44,15 @@ def evaluate_capability(
     entitlement-resolution-design.md's own deny-by-default philosophy
     reused client-side.
     """
-    if current_state in ACTIVE_FAMILY:
+    # SELLING_FAMILY, not ACTIVE_FAMILY: owner decision 2026-10-24 (Aura Growth
+    # Plan) -- a shop whose subscription lapsed UNPAID keeps every local
+    # commercial operation. What it loses (sync, online extras, updates) is
+    # switched off elsewhere: sync by licence_pauses_sync(); online extras and
+    # updates are refused server-side by Owner today (updates, the mail relay
+    # and crash reports all refuse an EXPIRED subscription). No retail route
+    # passes required_entitlement yet -- the entitlement gate below, which still
+    # runs for this state, is where a product-side extra would be gated.
+    if current_state in SELLING_FAMILY:
         pass  # full normal operation, subject only to the entitlement gate below
     elif current_state in DATA_PRESERVED_FAMILY:
         if capability_code not in restricted_mode_allowlist:

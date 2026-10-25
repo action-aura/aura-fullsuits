@@ -1011,6 +1011,12 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "This build has no relay address, so this device never sends or receives. Other devices will not see its sales." to
         "لا يحتوي هذا الإصدار على عنوان مُرحّل، لذا لا يرسل هذا الجهاز أو يستقبل أي بيانات أبدًا. لن تظهر مبيعاته على الأجهزة الأخرى.",
     "Waiting for first sync" to "بانتظار أول مزامنة",
+    "Subscription unpaid — you can keep selling. Sync and updates are paused until you renew." to
+        "الاشتراك غير مدفوع — يمكنك متابعة البيع. المزامنة والتحديثات متوقفة مؤقتاً حتى تجدّد الاشتراك.",
+    "Subscription unpaid" to "الاشتراك غير مدفوع",
+    "Sync paused — subscription unpaid" to "المزامنة متوقفة — الاشتراك غير مدفوع",
+    "You can keep selling. Sales are saved on this device and will sync after you renew." to
+        "يمكنك متابعة البيع. تُحفظ المبيعات على هذا الجهاز وستتم مزامنتها بعد تجديد الاشتراك.",
     "Set up, but this device has not reached the relay yet." to "تم الإعداد، لكن هذا الجهاز لم يصل إلى المُرحّل بعد.",
     "Sync is failing" to "المزامنة تفشل",
     "This device is not reaching your other devices." to "لا يصل هذا الجهاز إلى أجهزتك الأخرى.",

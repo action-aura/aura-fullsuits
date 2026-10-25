@@ -74,12 +74,15 @@ class SyncCoordinatorCatchUpGateTest {
         // stale target/catch-up state) in from whatever test ran before
         // this one in the same JVM.
         SyncCoordinator.stop()
+        SyncCoordinator.pausedByLicence = false
         identity = DeviceIdentity(tempFolder.newFolder(), TestKeyWrapper())
         identity.generateNewKey()
         server = RoutedFakeServer()
         server.start()
         configureHappyPath()
         SyncCoordinator.logError = { _, _ -> }
+        // The pause/resume transitions log through logInfo (android.util.Log throws on the plain JVM).
+        SyncCoordinator.logInfo = { _ -> }
         fakeNow = 1_000_000_000L
         SyncCoordinator.clock = { fakeNow }
     }
@@ -88,10 +91,12 @@ class SyncCoordinatorCatchUpGateTest {
     fun tearDown() {
         server.shutdown()
         SyncCoordinator.stop()
+        SyncCoordinator.pausedByLicence = false
         SyncCoordinator.logError = { message, exc ->
             if (exc != null) android.util.Log.e("SyncCoordinator", message, exc)
             else android.util.Log.e("SyncCoordinator", message)
         }
+        SyncCoordinator.logInfo = { message -> android.util.Log.i("SyncCoordinator", message) }
         SyncCoordinator.clock = { System.currentTimeMillis() }
     }
 
@@ -220,5 +225,66 @@ class SyncCoordinatorCatchUpGateTest {
         assertThat(SyncCoordinator.currentRelayTarget()).isEqualTo(RelayTarget(baseUrl(), ""))
 
         assertThat(SyncCoordinator.readyToJoinHub(nowMillis = fakeNow)).isFalse()
+    }
+
+    // -- keep-selling G1 (verifier, 2026-10-25): the licence pause must not open the hub gate ----------
+
+    private val pauseStatus = "/api/sync/_internal/pause-status"
+    private fun answerPause(paused: Boolean) = server.on(pauseStatus, body = """{"paused_by_licence":$paused}""")
+    private val graceMs = 10 * 60_000L
+
+    @Test
+    fun `paused by licence -- not ready even with the grace period long elapsed`() {
+        SyncCoordinator.start(tempFolder.newFolder(), "", baseUrl())
+        answerPause(true)
+        tick() // the gate observes the pause; no pull happens, so nothing ever "caught up"
+
+        assertThat(SyncCoordinator.readyToJoinHub(nowMillis = fakeNow + 3 * graceMs)).isFalse()
+    }
+
+    @Test
+    fun `renewal restarts the grace clock -- still not ready until a pull or ten minutes after renewal`() {
+        // A full page keeps the post-renewal tick from counting as "caught up", isolating the clock.
+        configureHappyPath(pullEventCount = 500)
+        SyncCoordinator.start(tempFolder.newFolder(), "", baseUrl())
+        answerPause(true)
+        tick()
+        fakeNow += 2 * graceMs // the lapse outlasts the original grace window
+        assertThat(SyncCoordinator.readyToJoinHub(nowMillis = fakeNow)).isFalse()
+
+        answerPause(false)
+        tick() // paused -> not paused: the grace restarts HERE; the full page is not a catch-up
+        assertThat(SyncCoordinator.readyToJoinHub(nowMillis = fakeNow)).isFalse()
+        assertThat(SyncCoordinator.readyToJoinHub(nowMillis = fakeNow + graceMs - 1)).isFalse()
+        assertThat(SyncCoordinator.readyToJoinHub(nowMillis = fakeNow + graceMs)).isTrue()
+    }
+
+    // Planner follow-up to G1: Builder G left cloudCaughtUpAtMillis untouched on renewal, so a phone that
+    // had caught up BEFORE the lapse kept that stamp and could join a hub straight after renewal without
+    // pulling what the cloud gained during the lapse.
+    @Test
+    fun `a catch-up from before the lapse does not survive renewal`() {
+        SyncCoordinator.start(tempFolder.newFolder(), "", baseUrl())
+        tick() // empty page = caught up, before the lapse
+        assertThat(SyncCoordinator.readyToJoinHub(nowMillis = fakeNow)).isTrue()
+
+        answerPause(true)
+        tick()
+        configureHappyPath(pullEventCount = 500) // the cloud moved on during the lapse: a full page now
+        answerPause(false)
+        tick() // renewal; this pull is NOT a catch-up
+
+        assertThat(SyncCoordinator.readyToJoinHub(nowMillis = fakeNow)).isFalse()
+    }
+
+    @Test
+    fun `renewal followed by a real caught-up pull -- ready at once`() {
+        SyncCoordinator.start(tempFolder.newFolder(), "", baseUrl())
+        answerPause(true)
+        tick()
+        answerPause(false)
+        tick() // empty page = caught up
+
+        assertThat(SyncCoordinator.readyToJoinHub(nowMillis = fakeNow)).isTrue()
     }
 }

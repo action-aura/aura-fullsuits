@@ -75,6 +75,7 @@ def evaluate(
     last_successful_checkin_at: datetime,
     last_checkin_attempt_ok: bool,
     local_safety_ceiling_seconds: Optional[int] = None,
+    offline_elapsed_floor_seconds: Optional[float] = None,
 ) -> LicenseState:
     """Implements offline-enforcement-policy.md's evaluation, in order.
 
@@ -82,6 +83,12 @@ def evaluate(
     offline_grace_seconds -- it can only shorten the effective grace window,
     per Part O's "a local release may apply a stricter safety limit, but not
     silently extend" rule; it is never allowed to lengthen it.
+
+    offline_elapsed_floor_seconds, if given, is a lower bound on the offline
+    time: elapsed_offline = max(trusted computation, floor). The caller
+    supplies a wall-clock based figure; because it is only a FLOOR it can make
+    a device reach grace/restriction sooner, never later, so a rolled-back
+    wall clock leaves the trusted value in charge. None = unchanged behaviour.
     """
     policy = evidence.offline_policy
 
@@ -121,7 +128,18 @@ def evaluate(
         and now < policy.emergency_extension_until
     )
     if not emergency_extension_effective:
-        if evidence.subscription_status in ("EXPIRED", "CANCELLED"):
+        # Owner decision 2026-10-24 (Aura Growth Plan): a shop whose
+        # subscription lapses UNPAID keeps selling. Only an EXPIRED
+        # subscription, or PAST_DUE past its signed commercial grace, is an
+        # unpaid lapse -> SUBSCRIPTION_LAPSED (sells; multi-device sync, online
+        # extras and updates pause). Before this, both returned RESTRICTED and
+        # a till that had not paid stopped taking money.
+        # CANCELLED (deliberate end) and SUSPENDED (a full refund in Owner)
+        # are NOT unpaid lapses and the owner has not said they keep selling,
+        # so they deliberately stay RESTRICTED until that is decided.
+        if evidence.subscription_status == "EXPIRED":
+            return LicenseState.SUBSCRIPTION_LAPSED
+        if evidence.subscription_status == "CANCELLED":
             return LicenseState.RESTRICTED
         if evidence.subscription_status == "SUSPENDED":
             return LicenseState.RESTRICTED
@@ -130,7 +148,7 @@ def evaluate(
             and evidence.commercial_grace_end is not None
             and now > evidence.commercial_grace_end
         ):
-            return LicenseState.RESTRICTED
+            return LicenseState.SUBSCRIPTION_LAPSED
 
     if now < evidence.not_before or now > evidence.expires_at:
         # Assertion is not currently valid by its own signed dates -- fall
@@ -149,6 +167,8 @@ def evaluate(
             effective_grace_seconds = max(effective_grace_seconds, effective_grace_seconds + extension_seconds)
 
     elapsed_offline = (now - last_successful_checkin_at).total_seconds()
+    if offline_elapsed_floor_seconds is not None:
+        elapsed_offline = max(elapsed_offline, offline_elapsed_floor_seconds)
 
     if last_checkin_attempt_ok and elapsed_offline < policy.check_in_interval_seconds:
         return LicenseState.ACTIVE_ONLINE

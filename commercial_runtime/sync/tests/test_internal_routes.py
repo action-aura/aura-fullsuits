@@ -170,6 +170,7 @@ def _bulk_insert_outbox_rows(get_conn, n):
     ("/api/sync/_internal/outbox/ack", "POST"),
     ("/api/sync/_internal/cursor", "GET"),
     ("/api/sync/_internal/pull-apply", "POST"),
+    ("/api/sync/_internal/pause-status", "GET"),
 ])
 def test_every_internal_route_rejects_missing_secret(client, path, method):
     resp = client.open(path, method=method, json={})
@@ -453,3 +454,82 @@ def test_two_independently_parameterized_blueprints_coexist_on_one_flask_app(get
     # Still secret-guarded independently on both prefixes.
     assert two_bp_client.get("/api/sync/_internal/cursor").status_code == 403
     assert two_bp_client.get("/api/registry-sync/_internal/cursor").status_code == 403
+
+
+# -- keep-selling: pause-status ------------------------------------------------
+# Android's Kotlin SyncCoordinator does ALL the network sync, so it needs to
+# ask Python (which owns licensing.db) "is this licence state one that pauses
+# sync?" before every tick. These tests pin that seam. Every case asserts the
+# callable was actually CALLED (the check ran), not only the resulting boolean.
+
+_UNSET = object()
+_PAUSE_URL = "/api/sync/_internal/pause-status"
+
+
+def _pause_client(get_conn, sync_paused):
+    app = Flask(__name__)
+    sync_service = SyncService(None, get_conn, lambda: "receiving-company")
+    kwargs = {} if sync_paused is _UNSET else {"sync_paused": sync_paused}
+    app.register_blueprint(make_sync_internal_blueprint(
+        sync_service=sync_service,
+        get_conn=get_conn,
+        state_repository=FakeStateRepository(owner_installation_id="inst-123"),
+        shared_secret=SECRET,
+        **kwargs,
+    ))
+    app.testing = True
+    return app.test_client()
+
+
+def test_pause_status_true_when_licence_pauses_sync(get_conn):
+    calls = []
+    c = _pause_client(get_conn, lambda: calls.append(1) or True)
+    resp = c.get(_PAUSE_URL, headers=_auth_headers())
+    assert resp.status_code == 200
+    assert resp.get_json() == {"paused_by_licence": True}
+    assert calls == [1]
+
+
+def test_pause_status_false_when_licence_does_not_pause_sync(get_conn):
+    calls = []
+    c = _pause_client(get_conn, lambda: calls.append(1) or False)
+    resp = c.get(_PAUSE_URL, headers=_auth_headers())
+    assert resp.status_code == 200
+    assert resp.get_json() == {"paused_by_licence": False}
+    assert calls == [1]
+
+
+def test_pause_status_false_when_no_callable_wired(get_conn):
+    # Every older caller passes nothing: sync is never paused for them.
+    c = _pause_client(get_conn, _UNSET)
+    resp = c.get(_PAUSE_URL, headers=_auth_headers())
+    assert resp.status_code == 200
+    assert resp.get_json() == {"paused_by_licence": False}
+
+
+def test_pause_status_raising_callable_fails_open_and_logs_once(get_conn, caplog):
+    calls = []
+
+    def boom():
+        calls.append(1)
+        raise RuntimeError("licensing.db locked")
+
+    c = _pause_client(get_conn, boom)
+    with caplog.at_level("ERROR"):
+        r1 = c.get(_PAUSE_URL, headers=_auth_headers())
+        r2 = c.get(_PAUSE_URL, headers=_auth_headers())
+    assert r1.status_code == r2.status_code == 200
+    assert r1.get_json() == r2.get_json() == {"paused_by_licence": False}
+    assert calls == [1, 1]  # asked every time ...
+    logged = [r for r in caplog.records if "pause" in r.getMessage().lower()]
+    assert len(logged) == 1  # ... but complained once
+
+
+def test_pause_status_reads_fresh_on_every_request(get_conn):
+    state = {"paused": True}
+    c = _pause_client(get_conn, lambda: state["paused"])
+    assert c.get(_PAUSE_URL, headers=_auth_headers()).get_json() == {"paused_by_licence": True}
+    state["paused"] = False  # renewal arrives while the process runs
+    assert c.get(_PAUSE_URL, headers=_auth_headers()).get_json() == {"paused_by_licence": False}
+    state["paused"] = True
+    assert c.get(_PAUSE_URL, headers=_auth_headers()).get_json() == {"paused_by_licence": True}

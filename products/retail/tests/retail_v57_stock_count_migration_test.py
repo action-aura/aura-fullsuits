@@ -94,8 +94,8 @@ def test_a_v56_database_upgrades_through_the_real_chain_to_v57():
     before = _rows(db, "SELECT * FROM branches ORDER BY id")
     assert not _rows(db, "SELECT name FROM sqlite_master WHERE name IN ('stock_counts','stock_count_lines')")
     backup_dir = _migrate(sch, db)
-    assert sch.RETAIL_SCHEMA_VERSION == 57
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 57
+    assert sch.RETAIL_SCHEMA_VERSION == 58  # v58 UPDATE: head moved 57 -> 58 (KEEP-SELLING C3 pause clock, ROADMAP v58 claim); same exact pin, not loosened.
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 58  # v58 UPDATE: head moved 57 -> 58 (KEEP-SELLING C3 pause clock, ROADMAP v58 claim); same exact pin, not loosened.
     assert _rows(db, 'PRAGMA integrity_check')[0]['integrity_check'] == 'ok'
     assert os.listdir(backup_dir), 'ensure_schema_version must have written its pre-migration backup'
     tables = {r['name'] for r in _rows(db, "SELECT name FROM sqlite_master WHERE type='table'")}

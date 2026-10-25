@@ -21,7 +21,7 @@ const val SYNC_DEGRADED_THRESHOLD = 3
 /** The four states the desktop's sync banner distinguishes, ported to native
  *  Android. Order is NOT significant here (see [classifySync] for the
  *  precedence that matters). */
-enum class SyncTier { NOT_CONFIGURED, NEVER_SYNCED, FAILING, CALM }
+enum class SyncTier { NOT_CONFIGURED, PAUSED, NEVER_SYNCED, FAILING, CALM }
 
 /** The sentence shown when copies of the shop kept failing to install and this device stopped asking
  *  ([SyncHealth.bootstrapNeedsSupport]). One key for both languages: [tr] picks Arabic on an Arabic till. */
@@ -38,6 +38,13 @@ fun bootstrapNeedsSupportText(): String = tr(BOOTSTRAP_NEEDS_SUPPORT_EN)
  *  1. Not configured at all (`!health.configured`) always wins, regardless of
  *     what push/pull otherwise report -- an unconfigured build has nothing
  *     meaningful to say about failures or staleness.
+ *  1b. PAUSED (keep-selling rule: the subscription is unpaid, so multi-device
+ *     sync is paused ON PURPOSE; selling is not) wins over everything below
+ *     it. A paused device records no successes and no failures, so without
+ *     this it would read "waiting for first sync" or, with stale failures
+ *     from before the lapse, "Sync is failing" -- both wrong: nothing is
+ *     broken and nothing is waiting, the owner just needs to renew. Same
+ *     precedence as the web app-shell's banner.
  *  2. FAILING is checked BEFORE never-synced. This is the one precedence
  *     choice worth spelling out: a fresh install that cannot reach the relay
  *     has never synced AND is failing at the same time -- its push/pull
@@ -55,6 +62,7 @@ fun bootstrapNeedsSupportText(): String = tr(BOOTSTRAP_NEEDS_SUPPORT_EN)
  */
 fun classifySync(health: SyncHealth): SyncTier {
     if (!health.configured) return SyncTier.NOT_CONFIGURED
+    if (health.pausedByLicence) return SyncTier.PAUSED
     if (health.push.consecutiveFailures >= SYNC_DEGRADED_THRESHOLD ||
         health.pull.consecutiveFailures >= SYNC_DEGRADED_THRESHOLD
     ) {
@@ -63,6 +71,17 @@ fun classifySync(health: SyncHealth): SyncTier {
     if (mostRecentSuccessMillis(health) == null) return SyncTier.NEVER_SYNCED
     return SyncTier.CALM
 }
+
+/**
+ * Which detail rows the screen shows for [tier]. While PAUSED the push/pull loop does not run, so the
+ * "N waiting to send", "Sending: Healthy" and "Last success Xs ago" numbers are frozen from BEFORE the lapse
+ * (an emulator showed "0 waiting to send" and "Healthy" under the PAUSED headline). They describe the past,
+ * not the present, so the PAUSED tier shows its headline and body sentence only. NOT_CONFIGURED hides both
+ * for its own reason (nothing ever ran); every other tier shows both, unchanged.
+ */
+fun showsPendingCount(tier: SyncTier): Boolean = tier != SyncTier.NOT_CONFIGURED && tier != SyncTier.PAUSED
+
+fun showsHealthBreakdown(tier: SyncTier): Boolean = tier != SyncTier.NOT_CONFIGURED && tier != SyncTier.PAUSED
 
 /**
  * The later of push/pull's `lastSuccessAtMillis`, handling either or both

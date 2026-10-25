@@ -90,6 +90,8 @@
     SUSPENDED: ['Suspended', 'bad'],
     REVOKED: ['Revoked', 'bad'],
     EXPIRED: ['Expired', 'bad'],
+    // Keep-selling rule: unpaid subscription -- selling continues, sync/updates pause.
+    SUBSCRIPTION_LAPSED: ['Subscription unpaid', 'warn'],
     LOCAL_STATE_CORRUPT: ['Local state needs reset', 'bad'],
     DEVICE_DEACTIVATED: ['Computer deactivated', 'bad'],
     DEVICE_REPLACED: ['Computer replaced', 'bad'],

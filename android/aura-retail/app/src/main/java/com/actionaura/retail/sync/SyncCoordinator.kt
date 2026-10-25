@@ -111,6 +111,9 @@ data class SyncHealth(
     /** SYNC-BOOT Phase 3: copies of the shop kept failing to install. This device stopped asking for more and
      *  needs a person (support); the screen says so in the user's language. */
     val bootstrapNeedsSupport: Boolean = false,
+    /** Keep-selling rule: the subscription is unpaid, so multi-device sync is PAUSED on purpose (selling
+     *  is not). Not a failure: no failure is recorded while paused. Defaulted like its siblings. */
+    val pausedByLicence: Boolean = false,
 ) {
     val healthy: Boolean get() = push.healthy && pull.healthy
 }
@@ -157,6 +160,14 @@ object SyncCoordinator {
     internal var logError: (String, Throwable?) -> Unit = { message, exc ->
         if (exc != null) Log.e(TAG, message, exc) else Log.e(TAG, message)
     }
+
+    /** Info-level twin of [logError] (same reason: `android.util.Log` is "not mocked" in plain-JVM tests).
+     *  Production callers must never assign this. */
+    internal var logInfo: (String) -> Unit = { message -> Log.i(TAG, message) }
+
+    /** Keep-selling rule: true while the Python side says the licence (an UNPAID subscription) pauses
+     *  multi-device sync. Set by [licencePausesSync]; read by [health]. Starts false = not paused. */
+    @Volatile internal var pausedByLicence: Boolean = false
 
     /** AUDIT-033: log a failed authority-event signature once, not per event/tick. */
     @Volatile
@@ -704,6 +715,8 @@ object SyncCoordinator {
      *  so `SyncCoordinatorRebindTest` K10 can drive it synchronously against
      *  a pinned TLS hub. `internal`, not `private`, for that one reason. */
     internal fun nudgeAgainstCurrentTarget(localBaseUrl: String, internalSecret: String, identity: DeviceIdentity) {
+        // Keep-selling: an unpaid subscription pauses sync (never selling) -- no outbox read, no relay call.
+        if (licencePausesSync(localBaseUrl, internalSecret)) return
         // ONE volatile read -- see [runOnceAgainstCurrentTarget]'s own
         // comment on why url and pin must never be read separately.
         val targetSnapshot = target
@@ -719,6 +732,73 @@ object SyncCoordinator {
                      "reason=${reasonOf(exc)}, consecutive push failures=$n); that stream's " +
                      "outbox was left untouched and the next timer tick will retry.", exc)
         }
+    }
+
+    /**
+     * Keep-selling gate, asked at the top of every tick and nudge: does the embedded Python backend say
+     * the licence pauses sync? Only Python can read licensing.db, so this is one GET to the retail
+     * stream's `/_internal/pause-status` (the registry stream's route answers identically).
+     *
+     * FAILS OPEN: any problem -- 404 (an older backend / a test fake), a non-200, an exception, a body
+     * that is not JSON, a missing key, a non-boolean value -- means NOT paused and sync proceeds exactly
+     * as before this rule. Python and Kotlin ship in the same APK, so a missing route is never a real
+     * "paused"; and an unreadable licence must never take a working shop's sync away.
+     *
+     * Deliberately NOT [getLocal]: that logs an error on every non-2xx, which would be per-tick noise
+     * for a probe whose failure is an expected, handled case.
+     *
+     * Logs ONE line on entering the pause and ONE on leaving it (the [pausedByLicence] flag is the dedupe).
+     */
+    internal fun licencePausesSync(localBaseUrl: String, internalSecret: String): Boolean {
+        val paused = try {
+            val request = Request.Builder()
+                .url(localUrl(SyncStream.RETAIL.prefix + "/_internal/pause-status", localBaseUrl))
+                .header("X-Aura-Internal-Secret", internalSecret)
+                .get()
+                .build()
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    false
+                } else {
+                    val flag = JsonParser.parseString(response.body?.string() ?: "")
+                        .asJsonObject.get("paused_by_licence")
+                    flag != null && flag.isJsonPrimitive && flag.asJsonPrimitive.isBoolean && flag.asBoolean
+                }
+            }
+        } catch (_: Exception) {
+            false
+        }
+        val was = pausedByLicence
+        pausedByLicence = paused
+        if (paused && !was) {
+            logInfo("Sync paused: the subscription is unpaid. Selling continues; sync resumes on renewal.")
+        } else if (!paused && was) {
+            logInfo("Sync resumed: the subscription is paid again.")
+            onLicenceResumed()
+        }
+        return paused
+    }
+
+    /** Paused -> not paused (renewal). Two things from BEFORE/DURING the lapse must not leak past it.
+     *
+     *  G1 (verifier, 2026-10-25): while paused [runOnce] never pulls, so [cloudCaughtUpAtMillis] cannot be
+     *  set and the [CLOUD_CATCHUP_GRACE_MS] clock keeps running through the lapse; a phone restarted
+     *  mid-lapse would reach the end of the grace, pass [readyToJoinHub], join the LAN hub and never pull the
+     *  cloud events it missed (the G3 gap the gate exists to prevent). So the grace restarts at renewal.
+     *  Only a CLOUD target carries a clock (a hub target has null) -- a hub is left alone.
+     *  A "caught up" stamp from BEFORE the lapse is cleared too: the cloud kept moving while this phone
+     *  pulled nothing, so that stamp no longer means caught up, and keeping it would let the phone join
+     *  a hub straight after renewal and skip exactly the events it missed.
+     *
+     *  G4: failures counted before the lapse say nothing about the post-renewal network, and the shared
+     *  backoff in [nextDelayMillis] would otherwise make the first resumed tick wait up to 300 s. */
+    private fun onLicenceResumed() = synchronized(lock) {
+        if (cloudTargetSinceMillis != null) {
+            cloudTargetSinceMillis = clock()
+            cloudCaughtUpAtMillis = null
+        }
+        pushHealth = pushHealth.copy(consecutiveFailures = 0)
+        pullHealth = pullHealth.copy(consecutiveFailures = 0)
     }
 
     private fun reasonOf(exc: Throwable): String = when (exc) {
@@ -769,11 +849,10 @@ object SyncCoordinator {
         pendingByStream = pendingByStream + (stream.label to count)
     }
 
-    /** Queryable sync health. No UI consumes this yet (deliberate -- native
-     *  Android has no StateFlow anywhere in this module, and the UI-banner
-     *  ask for this task was for the web frontend, not this app); this
-     *  exists so a failure is inspectable rather than invisible, and is the
-     *  seam any future UI would read. */
+    /** Queryable sync health. Read by the Sync status screen (SyncStatusScreen
+     *  via classifySync) and inspectable in tests, so a failure is visible
+     *  rather than invisible. Native Android has no StateFlow anywhere in this
+     *  module; the screen polls this. */
     fun health(): SyncHealth = SyncHealth(
         // The `||` matters: BuildConfig alone keeps reporting "configured"
         // even before [start] has ever run (unchanged pre-existing
@@ -786,9 +865,10 @@ object SyncCoordinator {
         pendingCount = pendingByStream.values.sum(),
         resyncRequiredStreams = resyncRequired.keys,
         bootstrapNeedsSupport = bootstrapNeedsSupport,
+        pausedByLicence = pausedByLicence,
     )
 
-    private fun nextDelayMillis(): Long {
+    internal fun nextDelayMillis(): Long {
         val failures = maxOf(pushHealth.consecutiveFailures, pullHealth.consecutiveFailures)
         if (failures == 0) return INTERVAL_SECONDS * 1000
         val exponent = minOf(failures - 1, 16)          // 10 << 16 already far past the cap; guards overflow
@@ -903,6 +983,12 @@ object SyncCoordinator {
         identity: DeviceIdentity,
         spkiPin: String = "",
     ) {
+        // Keep-selling: an unpaid subscription pauses sync (never selling). Return BEFORE anything else:
+        // no outbox read, no Owner/hub call, no ack, no pull-apply, no bootstrap step -- and no
+        // recordSuccess/recordFailure, because a deliberate pause is neither (it must not make the
+        // health look failing, nor reset the failure/backoff bookkeeping). The outbox keeps filling;
+        // the first tick after renewal pushes all of it.
+        if (licencePausesSync(localBaseUrl, internalSecret)) return
         val pushFailure = eachStreamCatching("push") { stream ->
             pushOnce(stream, localBaseUrl, internalSecret, relayBaseUrl, identity, spkiPin)
         }
@@ -998,6 +1084,9 @@ object SyncCoordinator {
      */
     internal fun readyToJoinHub(nowMillis: Long = clock()): Boolean {
         val t = target
+        // Never while the subscription pause is on: a paused phone cannot pull, so "ready" would only mean
+        // "the grace ran out", and joining a hub now would strand the cloud events it has not fetched.
+        if (pausedByLicence) return false
         if (!running || t.baseUrl.isBlank()) return true
         if (t.spkiPin.isNotBlank()) return true
         if (cloudCaughtUpAtMillis != null) return true

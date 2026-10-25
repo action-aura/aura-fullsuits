@@ -511,3 +511,32 @@ def test_lockout_guard_a_second_admin_attempt_still_gets_the_ordinary_409_not_a_
     })
     assert r.status_code == 409, r.get_json()
     assert 'licen' not in (r.get_json().get('error') or '').lower()
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# SUBSCRIPTION_LAPSED -- an unpaid shop must still be able to manage staff
+# ═════════════════════════════════════════════════════════════════════════
+# Owner decision 2026-10-24 (Aura Growth Plan): a lapse only pauses sync,
+# online extras and updates; the shop keeps selling, and a till that cannot
+# get a new cashier an account cannot keep selling. The deny tests above are
+# unchanged (NON_ACTIVE_STATES does not include the lapse) -- they are the
+# proof the same routes are really gated.
+
+def test_employee_manage_allowed_under_subscription_lapsed_and_row_written(app, admin, db_path):
+    _set_license_state("ACTIVE_ONLINE")
+    user_id, _ = _make_employee(admin, 'cashier')
+
+    _set_license_state("SUBSCRIPTION_LAPSED")
+    before_count = sqlite3.connect(str(db_path)).execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    r = admin.post('/api/admin/employees', json={'email': 'added-while-lapsed@test.local'})
+    assert r.status_code == 200, r.get_json()
+    after_count = sqlite3.connect(str(db_path)).execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    assert after_count == before_count + 1, "an allowed create must actually insert the row"
+
+    r2 = admin.put(f'/api/admin/employees/{user_id}/status', json={'status': 'disabled'})
+    assert r2.status_code == 200, r2.get_json()
+    assert _user_row(db_path, user_id)['status'] == 'disabled'
+
+    # Same route, RESTRICTED: still refused (the allow above is the lapse rule).
+    _set_license_state("RESTRICTED")
+    assert admin.post('/api/admin/employees', json={'email': 'blocked@test.local'}).status_code == 403

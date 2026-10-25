@@ -211,3 +211,31 @@ def test_backup_restore_export_never_blocked_by_license_state(client_and_company
     _set_state("REVOKED")
     r = c.get('/api/backup/list')
     assert r.status_code != 403
+
+
+# ── Subscription lapsed UNPAID: the practice keeps working ─────────────────
+# Owner decision 2026-10-24 (Aura Growth Plan): a lapse only pauses sync,
+# online extras and updates. Real routes, and the ROW is checked (a 2xx from a
+# route that did nothing would otherwise pass). The RESTRICTED tests above
+# stay unchanged and are the proof these same routes really are gated.
+
+def _clinic_row_count(sql, params=()):
+    from database.schema import get_clinic_conn
+    conn = get_clinic_conn()
+    try:
+        return conn.execute(sql, params).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_subscription_lapsed_allows_patient_and_appointment_creation(client_and_company):
+    c, _ = client_and_company
+    _set_state("SUBSCRIPTION_LAPSED")
+    pid = _seed_patient(c)  # asserts 200 itself
+    assert _clinic_row_count("SELECT COUNT(*) FROM clinic_patients WHERE id = ?", (pid,)) == 1
+    r = c.post('/api/sub/clinic/appointments', json={'patient_id': pid, 'appointment_dt': '2026-08-01 10:00'})
+    assert r.status_code == 200, r.get_json()
+    assert _clinic_row_count("SELECT COUNT(*) FROM clinic_appointments WHERE patient_id = ?", (pid,)) == 1
+    # Same call refused under RESTRICTED -> the 200s above are the lapse rule.
+    _set_state("RESTRICTED")
+    assert c.post('/api/sub/clinic/patients', json={'name': 'Blocked'}).status_code == 403

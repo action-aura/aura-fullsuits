@@ -1441,7 +1441,17 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # Posting writes ordinary inventory movements through the SAME path a manual adjustment uses (Dr/Cr 5910), with
 # uids derived from (count, product) so the same count posted on two computers moves the stock once. No data
 # backfill: no count exists before this step. Appended LAST and shape-gated.
-RETAIL_SCHEMA_VERSION = 57
+# v58 (2026-10-24, KEEP-SELLING C3 -- claimed in ROADMAP.md "retail schema v58 CLAIMED"): the licence-pause
+# clock. ONE nullable TEXT column, `sync_freshness.last_paused_seen_at` (ISO-8601 UTC, the same format as the
+# two success clocks beside it), device-local and never synced. SyncService stamps it whenever an unpaid
+# subscription has paused sync. Why: the 72-hour sales stop measures "time since the last successful sync",
+# and a lapse is time the shop was NOT allowed to sync -- after renewal that whole lapse still counted, so a
+# shop that renewed after 100 hours was refused a sale (HTTP 403, measured live on a real server) until the
+# first successful sync landed. The stop now measures from max(last success, last time we saw the pause), so
+# the lapse stops counting the moment sync resumes while a sync that genuinely stays broken after renewal
+# still trips the 72h stop. NULL = never observed paused (every pre-v58 install) = today's behaviour exactly.
+# No data backfill. Appended LAST and shape-gated.
+RETAIL_SCHEMA_VERSION = 58
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2690,6 +2700,10 @@ def _migrate_retail_schema(conn):
     # derive from nothing but `branches` / `products` ids as plain text. See the v57 comment on
     # RETAIL_SCHEMA_VERSION.
     _migrate_add_stock_counts(conn)
+    # v57 -> v58 (KEEP-SELLING C3): appended LAST. One nullable column on `sync_freshness`, which
+    # `_migrate_add_sync_freshness` (v18) created earlier in this same chain on every pass, so only the
+    # column needs a guard. See the v58 comment on RETAIL_SCHEMA_VERSION.
+    _migrate_add_sync_pause_clock(conn)
 
 
 def _migrate_add_stock_counts(conn):
@@ -2766,6 +2780,25 @@ def _migrate_add_stock_counts(conn):
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_count_lines_company_count "
                  "ON stock_count_lines(company_id, count_uid)")
+
+
+def _migrate_add_sync_pause_clock(conn):
+    """One-time migration (schema v57 -> v58): KEEP-SELLING C3, the licence-pause clock. See the
+    RETAIL_SCHEMA_VERSION v58 comment for the reasoning; this is deliberately tiny.
+
+    ONE nullable column, `last_paused_seen_at TEXT`, on the existing single-row `sync_freshness`
+    table -- the same row that already holds the two success clocks, because the 72h stop compares
+    them (max of last success and last pause) and a reader must never fetch the halves at two
+    different moments. NULL means "never observed paused", which is every install that has never
+    had an unpaid lapse and the exact state today's code assumes, so nothing changes for them.
+
+    Guarded by `PRAGMA table_info` so a second run (the normal retry shape after an interrupted
+    migration -- `ensure_schema_version` leaves `user_version` un-advanced on failure) is a clean
+    no-op, exactly like `_migrate_add_offline_override`'s identical single-column ALTER.
+    """
+    cols = {row[1] for row in conn.execute('PRAGMA table_info(sync_freshness)').fetchall()}
+    if 'last_paused_seen_at' not in cols:
+        conn.execute('ALTER TABLE sync_freshness ADD COLUMN last_paused_seen_at TEXT')
 
 
 def _migrate_add_site_stream_cursors_and_prune_state(conn):
@@ -8488,15 +8521,19 @@ def load_sync_freshness(conn) -> dict:
     different moments in time.
     """
     row = conn.execute(
-        'SELECT last_push_success_at, last_pull_success_at, offline_override_at '
+        'SELECT last_push_success_at, last_pull_success_at, offline_override_at, last_paused_seen_at '
         'FROM sync_freshness WHERE id = 1'
     ).fetchone()
     if row is None:
-        return {'push': None, 'pull': None, 'override_at': None}
+        return {'push': None, 'pull': None, 'override_at': None, 'paused_seen_at': None}
     return {
         'push': row['last_push_success_at'],
         'pull': row['last_pull_success_at'],
         'override_at': row['offline_override_at'],
+        # Schema v58 (KEEP-SELLING C3): a FOURTH key on the same single query, for the identical
+        # reason `override_at` rides along -- the pause clock is compared against the success clocks,
+        # so all of them are read at one instant.
+        'paused_seen_at': row['last_paused_seen_at'],
     }
 
 
@@ -8517,6 +8554,14 @@ def record_offline_override(conn, when: str) -> None:
     its own.
     """
     conn.execute('UPDATE sync_freshness SET offline_override_at = ? WHERE id = 1', (when,))
+
+
+def record_paused_seen(conn, when: str) -> None:
+    """Writes the last instant SyncService observed the licence pausing sync -- the concrete
+    `record_paused_seen` half of the `SyncFreshnessStore` collaborator (schema v58, KEEP-SELLING
+    C3). Mirrors `record_offline_override` exactly: does not commit (the caller owns the
+    transaction on the connection it opened) and writes one column of the single `id = 1` row."""
+    conn.execute('UPDATE sync_freshness SET last_paused_seen_at = ? WHERE id = 1', (when,))
 
 
 def record_sync_freshness(conn, half: str, when: str) -> None:
