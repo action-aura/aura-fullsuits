@@ -769,7 +769,19 @@ def list_commissions():
     )
     error_code = request.args.get("error")
     error_text = localize_commission_error(error_code) if error_code else None
-    return render_template("commercial_sales/commissions_list.html", result=result, status_filter=status_filter, can_approve=("commissions.approve" in codes), error=error_text)
+    # Step 0 ladder (2026-10-24): the owner's monthly ladder, per month --
+    # sales counted, the ladder total, held vs payable, renewals. The seller
+    # sees their OWN months only (the same own-only scoping as the rows
+    # below); a viewer with commissions.view_all also gets every seller's
+    # current month.
+    from app.commissions.ladder import ladder_month_of, ladder_month_overview, ladder_months_for
+    from app.models.base import utcnow
+
+    ladder_months = ladder_months_for(profile.id) if profile is not None else []
+    ladder_overview = ladder_month_overview(ladder_month_of(utcnow())) if "commissions.view_all" in codes else None
+    return render_template("commercial_sales/commissions_list.html", result=result, status_filter=status_filter,
+                           can_approve=("commissions.approve" in codes), error=error_text,
+                           ladder_months=ladder_months, ladder_overview=ladder_overview, now=utcnow())
 
 
 @bp.route("/commissions/<uuid:entry_id>/approve", methods=["POST"])

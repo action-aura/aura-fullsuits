@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -118,3 +118,42 @@ class LicenseKeyIssuanceEvent(Base, UUIDPKMixin, TimestampMixin):
     key_format_version: Mapped[int] = mapped_column(Integer, nullable=False)
 
     license: Mapped[License] = relationship(back_populates="issuance_events")
+
+
+class LicenseScheduledStop(Base, UUIDPKMixin, TimestampMixin):
+    """Step 0 (2026-10-24, revision 38a13f8b2f8e) -- "a refunded licence keeps
+    working 2 days, then stops" (the owner's rule), as a STORED moment, not a
+    timer: confirm_refund writes the row (effective_at = the refund's paid_at
+    + 2 days); app/licensing/scheduled_stops.py::apply_due_licence_stops moves
+    the licence (and its subscription) to to_status once that moment has
+    passed. It is applied by the product's own check-in and activation for
+    that licence before they read its status -- so the shop learns at its
+    first check-in after the moment even if no job ran -- and by the
+    `flask commercial apply-licence-stops` job for everything else (the
+    Owner screens). applied_at makes it happen once."""
+
+    __tablename__ = "owner_license_scheduled_stops"
+    __table_args__ = (
+        UniqueConstraint("source_refund_id", "license_id", name="uq_owner_license_scheduled_stops_refund_license"),
+        CheckConstraint("to_status IN ('SUSPENDED')", name="ck_owner_license_scheduled_stops_to_status"),
+        Index(
+            "ix_owner_license_scheduled_stops_due", "effective_at",
+            postgresql_where=text("applied_at IS NULL AND cancelled_at IS NULL"),
+        ),
+    )
+
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_licenses.id"), nullable=False, index=True
+    )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_subscriptions.id"))
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    to_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    source_refund_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_commercial_refunds.id"), nullable=False
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )

@@ -23,7 +23,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.audit.services import record as audit_record
 from app.commissions.errors import CommissionError
-from app.commissions.services import calculate_commission, resolve_active_rule
+from app.commissions.services import calculate_commission
 from app.extensions import db_session
 from app.models.base import utcnow
 from app.models.commercial_sales import CommercialInvoice, PaymentAllocation
@@ -41,11 +41,32 @@ def _tax_excluded_base(invoice: CommercialInvoice, allocated_amount: Decimal) ->
     discount_total) / total) rather than assuming the whole allocation
     is tax-free or blindly subtracting a flat tax figure -- a partial
     allocation should exclude tax in the same proportion the invoice
-    itself carries it."""
+    itself carries it.
+
+    Step 0 ladder (2026-10-24), the owner's rule "Commission follows the rule
+    exactly: no commission on the extra-device part of any payment": the
+    extra-device lines' share of the invoice is excluded the same way, in
+    proportion. Measured on 1025d626: Package 1 + one pair (300) earned
+    30.00 at 10% -- 5.00 of it on the pair."""
     if invoice.total <= 0:
         return Decimal("0.00")
     taxable_fraction = (invoice.subtotal - invoice.discount_total) / invoice.total
-    return (allocated_amount * taxable_fraction).quantize(Decimal("0.01"))
+    device_fraction = _extra_device_total(invoice) / invoice.subtotal if invoice.subtotal > 0 else Decimal("0")
+    return (allocated_amount * taxable_fraction * (Decimal("1") - device_fraction)).quantize(Decimal("0.01"))
+
+
+def _extra_device_total(invoice: CommercialInvoice) -> Decimal:
+    from app.commercial_sales.catalog_for_sales import DEVICES_PER_UNIT_BY_ADDON_CODE
+    from app.models.catalog import Addon
+    from app.models.commercial_sales import CommercialInvoiceItem
+
+    totals = db_session.execute(
+        select(CommercialInvoiceItem.line_total)
+        .join(Addon, Addon.id == CommercialInvoiceItem.addon_id)
+        .where(CommercialInvoiceItem.commercial_invoice_id == invoice.id,
+               Addon.addon_code.in_(tuple(DEVICES_PER_UNIT_BY_ADDON_CODE)))
+    ).scalars().all()
+    return sum((Decimal(t) for t in totals), Decimal("0.00"))
 
 
 def post_earning_for_allocation(
@@ -70,11 +91,27 @@ def post_earning_for_allocation(
     invoice = db_session.get(CommercialInvoice, allocation.commercial_invoice_id)
     employee_profile_id = invoice.created_by_employee_profile_id
 
-    rule = resolve_active_rule(employee_profile_id, allocation.allocated_at.date())
-    if rule is None:
+    # Step 0 ladder (2026-10-24): ONE decision date for both rules -- the
+    # Jordan date the payment was confirmed (the date the owner counts
+    # commission by), so the two can never disagree about which rule a
+    # payment falls under. A seller on MONTHLY_LADDER is counted on the
+    # ladder here, inside this same transaction (ladder.py), and gets no
+    # percentage row; an order already counted on a ladder never gets one
+    # either -- never both for one sale.
+    from app.commissions import ladder
+
+    confirmed_at = ladder.payment_confirmed_at(allocation.payment_record_id) or allocation.allocated_at
+    if invoice.sales_order_id is not None:
+        ladder.evaluate_sale(invoice.sales_order_id)
+    rule = ladder.ladder_rule_for(employee_profile_id, confirmed_at)
+    if rule is None or ladder.is_ladder_rule(rule):
+        return None
+    if invoice.sales_order_id is not None and ladder.counted_sale_for_order(invoice.sales_order_id) is not None:
         return None
 
     base_amount = _tax_excluded_base(invoice, allocation.allocated_amount)
+    if base_amount <= 0:
+        return None  # nothing but extra devices on it: no commission (owner's rule)
     commission_amount = calculate_commission(rule, base_amount)
     rate_or_fixed = rule.rate_percentage if rule.rate_percentage is not None else rule.fixed_amount
 
@@ -106,6 +143,7 @@ def post_earning_for_allocation(
         return entry
     db_session.commit()
     audit_earning(entry, actor_staff_user_id=actor_staff_user_id)
+    ladder.write_pending_audit(actor_staff_user_id)
     return entry
 
 
@@ -132,12 +170,31 @@ def approve_commission_entry(entry: CommissionLedgerEntry, *, actor_staff_user_i
     """Non-Negotiable: beneficiary cannot approve their own adjustment --
     checked in the service layer regardless of permission grant, same
     self-approval-block pattern used throughout this phase
-    (CommercialApproval, payment confirmation, refund approval)."""
+    (CommercialApproval, payment confirmation, refund approval).
+
+    Step 0 ladder (2026-10-24): the owner's 30-day hold -- a row whose
+    payable_after is still ahead cannot be approved (COMMISSION_ON_HOLD).
+    Decided on the row re-read under the seller's ladder lock and a row
+    lock, because the ladder re-derives a month by CANCELLING held rows: an
+    approval racing that must see the row's real status, not a stale one."""
+    from app.commissions.ladder import lock_seller
+
+    lock_seller(entry.employee_profile_id)
+    entry = db_session.execute(
+        select(CommissionLedgerEntry).where(CommissionLedgerEntry.id == entry.id).with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalars().one()
     if entry.status != "EARNED":
+        db_session.rollback()
         raise CommissionError("COMMISSION_INVALID_TRANSITION", from_status=entry.status, to_status="APPROVED")
+    if entry.payable_after is not None and entry.payable_after > utcnow():
+        payable_after = entry.payable_after
+        db_session.rollback()
+        raise CommissionError("COMMISSION_ON_HOLD", payable_after=payable_after.date().isoformat())
 
     beneficiary_staff_user_id = _resolve_staff_user_id(entry.employee_profile_id)
     if beneficiary_staff_user_id == actor_staff_user_id:
+        db_session.rollback()
         raise CommissionError("COMMISSION_SELF_APPROVAL_FORBIDDEN")
 
     entry.status = "APPROVED"
@@ -157,12 +214,19 @@ def approve_commission_entry(entry: CommissionLedgerEntry, *, actor_staff_user_i
 
 
 def reverse_commission_entry(
-    entry: CommissionLedgerEntry, *, reversal_amount: Decimal, reason: str, actor_staff_user_id: uuid.UUID
+    entry: CommissionLedgerEntry, *, reversal_amount: Decimal, reason: str, actor_staff_user_id: uuid.UUID,
+    commit: bool = True,
 ) -> CommissionLedgerEntry:
     """Refunds create append-only proportional reversal entries -- never
     an edit of the original. reversal_amount may be less than
     entry.commission_amount for a proportional (partial-refund-driven)
-    reversal."""
+    reversal.
+
+    commit=False (Step 0 ladder, 2026-10-24) flushes only and leaves the
+    commit and the COMMISSION_REVERSED audit row to the caller
+    (audit_reversal), so a refund or an allocation reversal and the
+    commission it takes back are ONE transaction -- the same reason
+    post_earning_for_allocation has commit=False."""
     if entry.status not in ("EARNED", "APPROVED", "PAID"):
         raise CommissionError("COMMISSION_INVALID_TRANSITION", from_status=entry.status, to_status="REVERSED")
     if not reason or not reason.strip():
@@ -183,10 +247,18 @@ def reverse_commission_entry(
         status="REVERSED",
         earned_at=utcnow(),
         reversal_of_ledger_entry_id=entry.id,
+        entry_kind=entry.entry_kind,
     )
     db_session.add(reversal)
+    if not commit:
+        db_session.flush()
+        return reversal
     db_session.commit()
+    audit_reversal(reversal, reason=reason, actor_staff_user_id=actor_staff_user_id)
+    return reversal
 
+
+def audit_reversal(reversal: CommissionLedgerEntry, *, reason: str, actor_staff_user_id: uuid.UUID) -> None:
     audit_record(
         actor_staff_user_id=actor_staff_user_id,
         actor_role_snapshot=None,
@@ -194,9 +266,9 @@ def reverse_commission_entry(
         entity_type="commission_ledger_entry",
         entity_public_id=str(reversal.id),
         reason=reason,
-        after_state={"reversal_of_ledger_entry_id": str(entry.id), "commission_amount": str(-reversal_amount)},
+        after_state={"reversal_of_ledger_entry_id": str(reversal.reversal_of_ledger_entry_id),
+                     "commission_amount": str(reversal.commission_amount)},
     )
-    return reversal
 
 
 def _already_reversed_amount(entry: CommissionLedgerEntry) -> Decimal:
@@ -209,7 +281,8 @@ def _already_reversed_amount(entry: CommissionLedgerEntry) -> Decimal:
 
 
 def reverse_commissions_for_refund(
-    invoice: CommercialInvoice, *, refund_amount: Decimal, collected_amount: Decimal, reason: str, actor_staff_user_id: uuid.UUID
+    invoice: CommercialInvoice, *, refund_amount: Decimal, collected_amount: Decimal, reason: str, actor_staff_user_id: uuid.UUID,
+    commit: bool = True,
 ) -> list[CommissionLedgerEntry]:
     """The real refund-driven reversal trigger -- wired from
     refunds.py::confirm_refund(). Reverses each active (non-fully-reversed)
@@ -217,7 +290,11 @@ def reverse_commissions_for_refund(
     collected money being given back, never the full entry unless the
     refund itself is full -- matching 'refunds create append-only
     proportional reversal entries', never a blanket all-or-nothing
-    reversal of every entry regardless of the refund's actual size."""
+    reversal of every entry regardless of the refund's actual size.
+
+    Only PAYMENT_RULE rows (Step 0 ladder): a ladder sale is not a share of
+    a payment -- a refund inside its hold removes the sale and its month is
+    re-derived (ladder.py), never a proportional cut."""
     if collected_amount <= 0:
         return []
     proportion = min(refund_amount / collected_amount, Decimal("1"))
@@ -225,6 +302,7 @@ def reverse_commissions_for_refund(
     entries = db_session.execute(
         select(CommissionLedgerEntry).where(
             CommissionLedgerEntry.source_commercial_invoice_id == invoice.id,
+            CommissionLedgerEntry.entry_kind == "PAYMENT_RULE",
             CommissionLedgerEntry.reversal_of_ledger_entry_id.is_(None),
             CommissionLedgerEntry.status.in_(("EARNED", "APPROVED", "PAID")),
         )
@@ -235,7 +313,34 @@ def reverse_commissions_for_refund(
         remaining = entry.commission_amount - _already_reversed_amount(entry)
         reversal_amount = (remaining * proportion).quantize(Decimal("0.01"))
         if reversal_amount > 0:
-            reversals.append(reverse_commission_entry(entry, reversal_amount=reversal_amount, reason=reason, actor_staff_user_id=actor_staff_user_id))
+            reversals.append(reverse_commission_entry(entry, reversal_amount=reversal_amount, reason=reason,
+                                                      actor_staff_user_id=actor_staff_user_id, commit=commit))
+    return reversals
+
+
+def reverse_commissions_for_allocation(
+    allocation: PaymentAllocation, *, reason: str, actor_staff_user_id: uuid.UUID
+) -> list[CommissionLedgerEntry]:
+    """Step 0 ladder (2026-10-24) -- the gap 7571c3df reported: reversing an
+    allocation left its commission EARNED (measured: reverse the finished
+    sale's allocation -> commission still EARNED 10.00). The percentage row
+    earned FROM this allocation is taken back in full (what remains of it),
+    flush only: allocation.py::reverse_allocation commits the reversal and
+    this together. The ladder side is re-derived by ladder.evaluate_sale."""
+    entries = db_session.execute(
+        select(CommissionLedgerEntry).where(
+            CommissionLedgerEntry.source_payment_allocation_id == allocation.id,
+            CommissionLedgerEntry.entry_kind == "PAYMENT_RULE",
+            CommissionLedgerEntry.reversal_of_ledger_entry_id.is_(None),
+            CommissionLedgerEntry.status.in_(("EARNED", "APPROVED", "PAID")),
+        )
+    ).scalars().all()
+    reversals = []
+    for entry in entries:
+        remaining = entry.commission_amount - _already_reversed_amount(entry)
+        if remaining > 0:
+            reversals.append(reverse_commission_entry(entry, reversal_amount=remaining, reason=reason,
+                                                      actor_staff_user_id=actor_staff_user_id, commit=False))
     return reversals
 
 

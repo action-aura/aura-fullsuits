@@ -304,7 +304,22 @@ def correct_payment(payment: PaymentRecord, new_status: str, note: str, actor_st
             corrected_by_staff_user_id=actor_staff_user_id,
         )
     )
-    db_session.commit()
+    # Step 0 ladder (2026-10-24): a later payment of a subscription can count
+    # its monthly sale on the seller's ladder (Package 2's 3rd payment) or
+    # earn the 10 JOD renewal -- and a correction that takes such a payment
+    # back must take that back. Decided here, in the one writer of payment
+    # status, INSIDE this transaction (flush only), under the payment row
+    # lock already held; the ladder takes its seller lock last (lock order:
+    # lock_payment_for_update). The payment's new status and its commission
+    # commit together or not at all.
+    from app.commissions import ladder
+
+    try:
+        ladder.on_payment_status_written(payment)
+        db_session.commit()
+    except BaseException:
+        db_session.rollback()
+        raise
     audit_record(
         actor_staff_user_id=actor_staff_user_id,
         actor_role_snapshot=None,
@@ -315,3 +330,4 @@ def correct_payment(payment: PaymentRecord, new_status: str, note: str, actor_st
         after_state={"status": new_status},
         reason=note,
     )
+    ladder.write_pending_audit(actor_staff_user_id)

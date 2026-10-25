@@ -61,6 +61,8 @@ def preview_commission(employee_profile_id: uuid.UUID, base_amount: Decimal, as_
     contract.md). Returns None when the employee has no active commission
     plan assignment or rule (nothing to preview, not an error)."""
     rule = resolve_active_rule(employee_profile_id, as_of)
-    if rule is None:
+    if rule is None or rule.rule_type == "MONTHLY_LADDER":
+        # A ladder sale is worth its place in the month, not a share of one
+        # payment: there is no per-payment amount to preview.
         return None
     return calculate_commission(rule, base_amount)

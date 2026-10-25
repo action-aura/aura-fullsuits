@@ -45,7 +45,11 @@ from app.models.audit import DatabaseBackupRecord
 from app.operational_reports.dashboards import OVERDUE_INVOICE_EXCLUDED_STATUSES
 from app.models.commercial_ops import InternalNotification
 from app.models.commercial_sales import CommercialApproval, CommercialInvoice, PaymentAllocation, Quote, QuoteLine
-from app.models.commissions import COMMISSION_AWAITING_APPROVAL_STATUS, CommissionLedgerEntry
+from app.models.commissions import (
+    COMMISSION_AWAITING_APPROVAL_STATUS,
+    CommissionLedgerEntry,
+    commission_awaiting_approval_clause,
+)
 from app.models.customers import Customer
 from app.models.employees import EmployeeProfile
 from app.models.expenses import Expense, ExpenseApproval
@@ -456,7 +460,7 @@ def _pending_commission_items() -> list[AttentionItem]:
     rows = db_session.execute(
         select(CommissionLedgerEntry, EmployeeProfile)
         .join(EmployeeProfile, EmployeeProfile.id == CommissionLedgerEntry.employee_profile_id)
-        .where(CommissionLedgerEntry.status == COMMISSION_AWAITING_APPROVAL_STATUS)
+        .where(commission_awaiting_approval_clause(utcnow()))
         .order_by(CommissionLedgerEntry.created_at)
         .limit(100)
     ).all()

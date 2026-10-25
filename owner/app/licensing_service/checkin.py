@@ -95,6 +95,16 @@ def process_checkin(body: dict, *, source_ip: str | None, config: dict) -> dict:
     if installation.status == "REPLACED":
         raise CheckInRejected("INSTALLATION_REPLACED")
 
+    # Step 0 (2026-10-24): a refunded licence keeps working 2 days, then
+    # stops. The stop is a stored moment (licensing/scheduled_stops.py);
+    # applied HERE, before the status is read, so the shop learns at its
+    # first check-in after that moment even if no scheduled job ran.
+    if installation.license_id is not None:
+        from app.licensing.scheduled_stops import apply_due_licence_stops
+
+        if apply_due_licence_stops(license_id=installation.license_id):
+            db_session.expire_all()
+
     license_row = installation.license
     if license_row is None:
         raise CheckInRejected("INSTALLATION_NOT_FOUND")

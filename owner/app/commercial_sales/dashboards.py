@@ -30,10 +30,11 @@ from app.models.commercial_sales import (
     Quote,
     SalesOrder,
 )
+from app.models.base import utcnow
 from app.models.commissions import (
-    COMMISSION_AWAITING_APPROVAL_STATUS,
     CommissionLedgerEntry,
     CommissionPayoutBatch,
+    commission_awaiting_approval_clause,
 )
 from app.operational_reports.aggregation import outstanding_receivables_total
 
@@ -155,9 +156,7 @@ def finance_commercial_dashboard() -> dict:
     # the literal, so this figure, the Attention Center's badge count and the
     # deep link that badge points at can never name three different statuses.
     commissions_pending_approval = db_session.execute(
-        select(func.count(CommissionLedgerEntry.id)).where(
-            CommissionLedgerEntry.status == COMMISSION_AWAITING_APPROVAL_STATUS
-        )
+        select(func.count(CommissionLedgerEntry.id)).where(commission_awaiting_approval_clause(utcnow()))
     ).scalar_one()
     commissions_approved_unpaid = db_session.execute(
         select(func.count(CommissionLedgerEntry.id)).where(CommissionLedgerEntry.status == "APPROVED")

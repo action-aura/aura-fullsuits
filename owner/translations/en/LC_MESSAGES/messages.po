@@ -8868,3 +8868,99 @@ msgstr "+ 1 extra pair"
 #: app/templates/licensing/sales_pending.html
 msgid "+ %(count)d extra pairs"
 msgstr "+ %(count)d extra pairs"
+
+#: app/i18n_labels.py
+msgid "Sale counted on the commission ladder"
+msgstr "Sale counted on the commission ladder"
+
+#: app/i18n_labels.py
+msgid "Sale removed from the commission ladder"
+msgstr "Sale removed from the commission ladder"
+
+#: app/i18n_labels.py
+msgid "Commission ladder month recalculated"
+msgstr "Commission ladder month recalculated"
+
+#: app/i18n_labels.py
+msgid "Refund after the commission hold"
+msgstr "Refund after the commission hold"
+
+#: app/i18n_labels.py
+msgid "Renewal commission earned"
+msgstr "Renewal commission earned"
+
+#: app/i18n_labels.py
+msgid "Renewal commission taken back"
+msgstr "Renewal commission taken back"
+
+#: app/i18n_labels.py
+msgid "Licence stop scheduled after a refund"
+msgstr "Licence stop scheduled after a refund"
+
+#: app/i18n_labels.py
+msgid "Licence stopped after a refund"
+msgstr "Licence stopped after a refund"
+
+#: app/i18n_labels.py
+msgid "This commission is still inside its 30-day hold and cannot be approved yet."
+msgstr "This commission is still inside its 30-day hold and cannot be approved yet."
+
+#: app/i18n_labels.py
+msgid "The monthly ladder rule is in JOD and takes no rate or fixed amount."
+msgstr "The monthly ladder rule is in JOD and takes no rate or fixed amount."
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Monthly commission ladder"
+msgstr "Monthly commission ladder"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "1 sale = 20, 2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD in a month; each sale after the 5th adds 30. Each sale is payable 30 days after its payment is confirmed. Extra devices never count."
+msgstr "1 sale = 20, 2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD in a month; each sale after the 5th adds 30. Each sale is payable 30 days after its payment is confirmed. Extra devices never count."
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Month"
+msgstr "Month"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Sales counted"
+msgstr "Sales counted"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Ladder total"
+msgstr "Ladder total"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Held"
+msgstr "Held"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Payable"
+msgstr "Payable"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "No sales on your ladder yet."
+msgstr "No sales on your ladder yet."
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Refunded after the hold"
+msgstr "Refunded after the hold"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "This month, every seller"
+msgstr "This month, every seller"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "No ladder sales this month yet."
+msgstr "No ladder sales this month yet."
+
+#: app/i18n_labels.py
+msgid "Share of a payment"
+msgstr "Share of a payment"
+
+#: app/i18n_labels.py
+msgid "Monthly ladder"
+msgstr "Monthly ladder"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "On hold until"
+msgstr "On hold until"

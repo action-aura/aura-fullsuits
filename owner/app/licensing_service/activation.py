@@ -127,6 +127,16 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         if channel is None or channel.id != license_row.allowed_release_channel_id:
             raise ActivationRejected("RELEASE_CHANNEL_NOT_ALLOWED")
 
+    # Step 0 (2026-10-24): a refunded licence stops 2 days after the refund
+    # (licensing/scheduled_stops.py) -- applied before its status is read,
+    # exactly as check-in does, so a stopped licence cannot be activated on a
+    # new device just because no scheduled job ran yet.
+    from app.licensing.scheduled_stops import apply_due_licence_stops
+
+    if apply_due_licence_stops(license_id=license_row.id):
+        db_session.expire_all()
+        license_row = db_session.get(License, license_row.id)
+
     # Step 12: license status
     if license_row.status in ("DRAFT",):
         raise ActivationRejected("LICENSE_NOT_ISSUED")

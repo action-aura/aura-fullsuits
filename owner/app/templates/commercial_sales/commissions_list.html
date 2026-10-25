@@ -2,6 +2,58 @@
 {% import "components/table.html" as table with context %}
 {% block title %}{{ _("Commissions") }}{% endblock %}
 {% block content %}
+{# Step 0 ladder (2026-10-24): the owner's monthly ladder, per month. The
+   data-ladder-* attributes carry the exact amounts for tests and tools. #}
+<section class="card" aria-labelledby="ladder-heading">
+  <h2 id="ladder-heading">{{ _("Monthly commission ladder") }}</h2>
+  <p class="muted">{{ _("1 sale = 20, 2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD in a month; each sale after the 5th adds 30. Each sale is payable 30 days after its payment is confirmed. Extra devices never count.") }}</p>
+  {% call table.table(
+      columns=[
+        {"label": _("Month")},
+        {"label": _("Sales counted"), "align": "end"},
+        {"label": _("Ladder total"), "align": "end"},
+        {"label": _("Held"), "align": "end"},
+        {"label": _("Payable"), "align": "end"},
+        {"label": _("Renewals"), "align": "end"},
+      ],
+      has_rows=ladder_months|length > 0, empty_message=_("No sales on your ladder yet."), caption=_("Monthly commission ladder")
+  ) %}
+    {% for m in ladder_months %}
+    <tr data-ladder-month="{{ m.month.isoformat() }}" data-ladder-count="{{ m.count }}" data-ladder-total="{{ m.total }}"
+        data-ladder-held="{{ m.held }}" data-ladder-payable="{{ m.payable }}">
+      <td>{{ m.month.strftime("%Y-%m") }}</td>
+      <td class="num">{{ m.count }}{% if m.refunded_after_hold %} <span class="badge pending">{{ _("Refunded after the hold") }}: {{ m.refunded_after_hold }}</span>{% endif %}</td>
+      <td class="num">{{ format_owner_number(m.total) }} {{ m.currency }}</td>
+      <td class="num">{{ format_owner_number(m.held) }} {{ m.currency }}</td>
+      <td class="num">{{ format_owner_number(m.payable) }} {{ m.currency }}</td>
+      <td class="num">{{ m.renewals }} &middot; {{ format_owner_number(m.renewals_total) }} {{ m.currency }}</td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {% if ladder_overview is not none %}
+  <h3>{{ _("This month, every seller") }}</h3>
+  {% call table.table(
+      columns=[
+        {"label": _("Seller")},
+        {"label": _("Sales counted"), "align": "end"},
+        {"label": _("Ladder total"), "align": "end"},
+        {"label": _("Held"), "align": "end"},
+        {"label": _("Payable"), "align": "end"},
+      ],
+      has_rows=ladder_overview|length > 0, empty_message=_("No ladder sales this month yet."), caption=_("This month, every seller")
+  ) %}
+    {% for s in ladder_overview %}
+    <tr data-ladder-seller-total="{{ s.total }}">
+      <td>{{ s.employee_name }}</td>
+      <td class="num">{{ s.count }}</td>
+      <td class="num">{{ format_owner_number(s.total) }} {{ s.currency }}</td>
+      <td class="num">{{ format_owner_number(s.held) }} {{ s.currency }}</td>
+      <td class="num">{{ format_owner_number(s.payable) }} {{ s.currency }}</td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {% endif %}
+</section>
 <div class="card">
   {{ table.toolbar(_("Commissions")) }}
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
@@ -11,6 +63,7 @@
   {% call table.table(
       columns=[
         {"label": _("Amount"), "sort_key": "commission_amount", "align": "end"},
+        {"label": _("Kind")},
         {"label": _("Status"), "sort_key": "status"},
         {"label": _("Earned"), "sort_key": "earned_at"},
         {"label": ""},
@@ -20,10 +73,13 @@
     {% for e in result.rows %}
     <tr>
       <td class="num">{{ format_owner_number(e.commission_amount) }} {{ e.currency }}</td>
+      <td>{{ commission_entry_kind_label(e.entry_kind) }}{% if e.ladder_month %} &middot; {{ e.ladder_month.strftime("%Y-%m") }}{% endif %}</td>
       <td><span class="badge {{ commission_entry_badge_class(e.status) }}">{{ commission_entry_status_label(e.status) }}</span></td>
       <td>{{ format_owner_datetime(e.earned_at) if e.earned_at else "-" }}</td>
       <td>
-        {% if e.status == "EARNED" and can_approve %}
+        {% if e.status == "EARNED" and e.payable_after and e.payable_after > now %}
+        <span class="badge pending" data-on-hold="{{ e.id }}">{{ _("On hold until") }} {{ format_owner_date(e.payable_after.date()) }}</span>
+        {% elif e.status == "EARNED" and can_approve %}
         <form method="post" action="{{ url_for('commercial_sales_web.approve_commission_route', entry_id=e.id) }}" class="inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn">{{ _("Approve") }}</button>

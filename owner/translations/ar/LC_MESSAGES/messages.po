@@ -8827,3 +8827,99 @@ msgstr "+ زوج أجهزة إضافي واحد"
 #: app/templates/licensing/sales_pending.html
 msgid "+ %(count)d extra pairs"
 msgstr "+ %(count)d أزواج أجهزة إضافية"
+
+#: app/i18n_labels.py
+msgid "Sale counted on the commission ladder"
+msgstr "احتُسب البيع على سلم العمولة"
+
+#: app/i18n_labels.py
+msgid "Sale removed from the commission ladder"
+msgstr "أُزيل البيع من سلم العمولة"
+
+#: app/i18n_labels.py
+msgid "Commission ladder month recalculated"
+msgstr "أُعيد حساب شهر سلم العمولة"
+
+#: app/i18n_labels.py
+msgid "Refund after the commission hold"
+msgstr "استرداد بعد فترة حجز العمولة"
+
+#: app/i18n_labels.py
+msgid "Renewal commission earned"
+msgstr "استُحقت عمولة التجديد"
+
+#: app/i18n_labels.py
+msgid "Renewal commission taken back"
+msgstr "سُحبت عمولة التجديد"
+
+#: app/i18n_labels.py
+msgid "Licence stop scheduled after a refund"
+msgstr "جُدول إيقاف الترخيص بعد الاسترداد"
+
+#: app/i18n_labels.py
+msgid "Licence stopped after a refund"
+msgstr "أُوقف الترخيص بعد الاسترداد"
+
+#: app/i18n_labels.py
+msgid "This commission is still inside its 30-day hold and cannot be approved yet."
+msgstr "هذه العمولة ما زالت ضمن فترة الحجز البالغة 30 يومًا ولا يمكن اعتمادها بعد."
+
+#: app/i18n_labels.py
+msgid "The monthly ladder rule is in JOD and takes no rate or fixed amount."
+msgstr "قاعدة سلم العمولة الشهري بالدينار الأردني ولا تأخذ نسبة ولا مبلغًا ثابتًا."
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Monthly commission ladder"
+msgstr "سلم العمولة الشهري"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "1 sale = 20, 2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD in a month; each sale after the 5th adds 30. Each sale is payable 30 days after its payment is confirmed. Extra devices never count."
+msgstr "بيع واحد = 20، بيعتان = 50، 3 = 100، 4 = 200، 5 = 350 دينارًا أردنيًا في الشهر؛ كل بيع بعد الخامس يضيف 30. تُستحق عمولة كل بيع بعد 30 يومًا من تأكيد دفعته. الأجهزة الإضافية لا تُحتسب أبدًا."
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Month"
+msgstr "الشهر"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Sales counted"
+msgstr "المبيعات المحتسبة"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Ladder total"
+msgstr "مجموع السلم"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Held"
+msgstr "محجوزة"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Payable"
+msgstr "مستحقة الدفع"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "No sales on your ladder yet."
+msgstr "لا توجد مبيعات على سلمك بعد."
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Refunded after the hold"
+msgstr "مستردة بعد فترة الحجز"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "This month, every seller"
+msgstr "هذا الشهر، كل البائعين"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "No ladder sales this month yet."
+msgstr "لا توجد مبيعات على السلم هذا الشهر بعد."
+
+#: app/i18n_labels.py
+msgid "Share of a payment"
+msgstr "حصة من دفعة"
+
+#: app/i18n_labels.py
+msgid "Monthly ladder"
+msgstr "السلم الشهري"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "On hold until"
+msgstr "محجوزة حتى"

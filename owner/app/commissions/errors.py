@@ -35,4 +35,8 @@ class CommissionError(StableCodeError):
         "COMMISSION_PAYOUT_REFERENCE_REQUIRED": "An external payout reference is required to record a commission payout.",
         "COMMISSION_REASON_REQUIRED": "A reason is required for this commission action.",
         "COMMISSION_ALREADY_IN_PAYOUT_BATCH": "This commission entry is already included in a payout batch.",
+        # Step 0 ladder (2026-10-24): the owner's 30-day hold, and the ladder
+        # rule's own shape (amounts are the owner's, in JOD; no rate).
+        "COMMISSION_ON_HOLD": "This commission is still inside its 30-day hold and cannot be approved yet.",
+        "INVALID_LADDER_RULE": "The monthly ladder rule is in JOD and takes no rate or fixed amount.",
     }

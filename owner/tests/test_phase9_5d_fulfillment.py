@@ -503,8 +503,27 @@ def test_item7_refund_after_fulfillment_invokes_entitlement_consequence(app, see
         approve_refund(refund, actor_staff_user_id=finance_id)
         confirm_refund(refund, actor_staff_user_id=finance_id)
 
+        # Step 0 (2026-10-24), the owner's rule: the licence keeps working 2
+        # days after a refund, then stops. The consequence is still invoked
+        # -- now SCHEDULED at the refund (a stored stop) and applied when its
+        # moment passes, to the licence and the subscription. This test used
+        # to assert SUSPENDED right after confirm_refund; it can no longer
+        # catch "the subscription is suspended at the moment of the refund"
+        # because that is exactly what the owner ruled out.
+        from datetime import timedelta
+
+        from sqlalchemy import select
+
+        from app.licensing.scheduled_stops import apply_due_licence_stops
+        from app.models.licensing import LicenseScheduledStop
+
         db_session.refresh(subscription)
-        assert subscription.status == "SUSPENDED"
+        assert subscription.status == "ACTIVE"
+        [stop] = db_session.execute(select(LicenseScheduledStop)).scalars().all()
+        assert stop.subscription_id == subscription.id
+        assert apply_due_licence_stops(now=stop.effective_at + timedelta(seconds=1)) == 1
+        db_session.expire_all()
+        assert db_session.get(Subscription, subscription.id).status == "SUSPENDED"
 
 
 def test_item8_no_direct_write_to_licensing_or_installation_tables(app, seeded):

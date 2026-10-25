@@ -69,6 +69,16 @@ def _validate_rule_fields(
         if not currency:
             raise CommissionError("INVALID_COMMISSION_FIXED_AMOUNT")
         validate_currency(currency)
+    elif rule_type == "MONTHLY_LADDER":
+        # Step 0 (2026-10-24): the owner's ladder. Its amounts are the
+        # owner's own numbers in JOD (app/commissions/ladder.py), not
+        # something an employee types -- so a rate or a fixed amount here
+        # would be a number nothing reads, and another currency a ladder
+        # nobody priced.
+        from app.commissions.ladder import LADDER_CURRENCY
+
+        if rate_percentage is not None or fixed_amount is not None or currency != LADDER_CURRENCY:
+            raise CommissionError("INVALID_LADDER_RULE")
 
 
 def create_commission_rule_version(

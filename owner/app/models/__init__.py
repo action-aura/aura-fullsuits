@@ -69,6 +69,7 @@ from app.models.licensing import (  # noqa: F401
     LicenseStatusHistory,
     LicenseEntitlement,
     LicenseKeyIssuanceEvent,
+    LicenseScheduledStop,
 )
 from app.models.installations import (  # noqa: F401
     Installation,
@@ -140,6 +141,7 @@ from app.models.commissions import (  # noqa: F401
     CommissionLedgerEntry,
     CommissionPayoutBatch,
     CommissionPayoutLine,
+    CommissionLadderSale,
 )
 from app.models.expenses import (  # noqa: F401
     ExpenseCategory,

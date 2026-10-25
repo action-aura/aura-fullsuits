@@ -418,6 +418,70 @@ def register_cli(app: Flask) -> None:
             )
         )
 
+    @commercial_group.command("apply-licence-stops")
+    @click.option("--apply", "apply_", is_flag=True, default=False, help="Actually stop the licences. Default is dry-run (count only).")
+    def apply_licence_stops_cmd(apply_: bool):
+        """Step 0 (2026-10-24): stop every licence whose refund's 2 days are
+        over (licensing/scheduled_stops.py). The product's check-in and
+        activation already apply a licence's own stop before reading it; this
+        job brings the Owner screens in line for the rest. Safe to run as
+        often as wanted: each stop is applied once."""
+        from app.licensing.scheduled_stops import apply_due_licence_stops, count_due_licence_stops
+
+        if apply_:
+            # No scheduler-owner gate (unlike reports): each stop is applied
+            # once under a row lock, so two hosts running it at once is safe.
+            click.echo(json.dumps({"dry_run": False, "stops_applied": apply_due_licence_stops()}, indent=2))
+        else:
+            click.echo(json.dumps({"dry_run": True, "stops_due": count_due_licence_stops()}, indent=2))
+
+    @app.cli.group("commissions")
+    def commissions_group():
+        """Step 0 commission ladder: put sellers on the owner's monthly ladder."""
+
+    @commissions_group.command("seed-ladder-plan")
+    @click.option("--actor-email", required=True, help="The Super Admin recording this.")
+    def seed_ladder_plan_cmd(actor_email: str):
+        """Creates the commission plan SALES_LADDER (rule MONTHLY_LADDER, JOD)
+        if it does not exist. Never changes an existing one."""
+        from app.commissions.ladder_setup import seed_ladder_plan
+
+        actor = _staff_by_email(actor_email, require_super_admin=True)
+        plan, created = seed_ladder_plan(actor_staff_user_id=actor.id)
+        click.echo(json.dumps({"plan_code": plan.plan_code, "created": created}, indent=2))
+
+    @commissions_group.command("assign-ladder")
+    @click.argument("seller_email")
+    @click.option("--actor-email", required=True, help="The Super Admin recording this.")
+    @click.option("--from", "effective_from", default=None, help="ISO date the seller moves to the ladder (default: today).")
+    def assign_ladder_cmd(seller_email: str, actor_email: str, effective_from: str | None):
+        """Moves one seller onto the SALES_LADDER plan from a date (closing
+        their current plan the day before it applies, like every plan
+        assignment). Sales qualifying from that date count on the ladder;
+        earlier ones keep the rule they were paid under."""
+        from app.commissions.ladder_setup import assign_seller_to_ladder
+
+        actor = _staff_by_email(actor_email, require_super_admin=True)
+        seller = _staff_by_email(seller_email)
+        start = date.fromisoformat(effective_from) if effective_from else date.today()
+        try:
+            assignment = assign_seller_to_ladder(seller.id, effective_from=start, actor_staff_user_id=actor.id)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
+        click.echo(json.dumps({"seller": seller_email, "effective_from": assignment.effective_from.isoformat()}, indent=2))
+
+    def _staff_by_email(email: str, *, require_super_admin: bool = False):
+        from app.models.staff import StaffUser
+
+        from sqlalchemy import func
+
+        staff = db_session.query(StaffUser).filter(func.lower(StaffUser.email) == email.strip().lower()).first()
+        if staff is None:
+            raise click.ClickException(f"No staff user {email}.")
+        if require_super_admin and not getattr(staff, "is_super_admin", False):
+            raise click.ClickException(f"{email} is not a Super Admin.")
+        return staff
+
     @commercial_group.command("preflight")
     def commercial_preflight_cmd():
         """Phase 8V-P2 Part C: deterministic trust-anchor + permission-seed

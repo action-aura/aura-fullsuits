@@ -669,6 +669,16 @@ def generic_audit_action_label(code: str) -> str:
         "DIRECT_SALE_RECORDED": _("Sale recorded from the sale form"),
         "DIRECT_SALE_CONFIRMED": _("Sale confirmed and licence issued"),
         "PACKAGES_SEEDED": _("Packages put in the price list"),
+        # Step 0 ladder (2026-10-24): the monthly commission ladder, the
+        # renewal commission and the refund's licence stop.
+        "COMMISSION_LADDER_SALE_COUNTED": _("Sale counted on the commission ladder"),
+        "COMMISSION_LADDER_SALE_UNCOUNTED": _("Sale removed from the commission ladder"),
+        "COMMISSION_LADDER_MONTH_RECOMPUTED": _("Commission ladder month recalculated"),
+        "COMMISSION_LADDER_REFUND_AFTER_HOLD": _("Refund after the commission hold"),
+        "COMMISSION_RENEWAL_EARNED": _("Renewal commission earned"),
+        "COMMISSION_RENEWAL_TAKEN_BACK": _("Renewal commission taken back"),
+        "ENTITLEMENT_CONSEQUENCE_SCHEDULED": _("Licence stop scheduled after a refund"),
+        "LICENSE_SCHEDULED_STOP_APPLIED": _("Licence stopped after a refund"),
         "LICENSE_STATUS_CHANGED": _("License status changed"),
         "LICENSE_REPLACED": _("License replaced"),
         "LICENSE_CREATED": _("License created"),
@@ -881,6 +891,16 @@ def commission_entry_status_label(code: str) -> str:
     return labels.get(code, code)
 
 
+def commission_entry_kind_label(code: str) -> str:
+    """Step 0 ladder -- app.models.commissions.COMMISSION_ENTRY_KINDS."""
+    labels = {
+        "PAYMENT_RULE": _("Share of a payment"),
+        "LADDER": _("Monthly ladder"),
+        "RENEWAL": _("Renewal"),
+    }
+    return labels.get(code, code)
+
+
 def commission_payout_batch_status_label(code: str) -> str:
     """Phase 9.5D -- real values from app.models.commissions.PAYOUT_BATCH_STATUSES."""
     labels = {
@@ -1049,6 +1069,8 @@ def localize_commission_error(code: str, **params) -> str:
         "COMMISSION_PAYOUT_REFERENCE_REQUIRED": _("An external payout reference is required to record a commission payout."),
         "COMMISSION_REASON_REQUIRED": _("A reason is required for this commission action."),
         "COMMISSION_ALREADY_IN_PAYOUT_BATCH": _("This commission entry is already included in a payout batch."),
+        "COMMISSION_ON_HOLD": _("This commission is still inside its 30-day hold and cannot be approved yet."),
+        "INVALID_LADDER_RULE": _("The monthly ladder rule is in JOD and takes no rate or fixed amount."),
     }
     template = messages.get(code)
     if template is None:

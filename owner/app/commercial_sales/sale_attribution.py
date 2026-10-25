@@ -66,9 +66,22 @@ def sale_owner_profile_id_for_payment(payment) -> uuid.UUID | None:
 
 def sale_owner_staff_user_id_for_payment(payment) -> uuid.UUID | None:
     """The staff account of the payment's seller, or None when the payment
-    belongs to no sale (a legacy subscription payment)."""
+    belongs to no sale and to no subscription with a sales owner.
+
+    Step 0 ladder (2026-10-24): a later payment of a subscription -- a
+    monthly package's 2nd, 3rd... payment, or a renewal -- belongs to the
+    subscription's sales owner. It is what counts their monthly sale on the
+    ladder (the 3rd payment of Package 2) or earns their 10 JOD renewal, so
+    "nobody confirms their own sale" covers it too. Measured on 1025d626:
+    such a payment had no seller, and the seller could confirm it."""
     profile_id = sale_owner_profile_id_for_payment(payment)
     if profile_id is None:
-        return None
+        subscription_id = getattr(payment, "subscription_id", None)
+        if subscription_id is None:
+            return None
+        from app.models.subscriptions import Subscription
+
+        subscription = db_session.get(Subscription, subscription_id)
+        return subscription.sales_owner_staff_user_id if subscription is not None else None
     profile = db_session.get(EmployeeProfile, profile_id)
     return profile.staff_user_id if profile is not None else None

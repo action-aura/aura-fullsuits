@@ -17,7 +17,13 @@ from app.commercial_sales.calculator import resolve_invoice_status, validate_all
 from app.commercial_sales.errors import CommercialSalesError
 from app.commercial_sales.invoices import confirmed_allocated_amount
 from app.commercial_sales.sale_attribution import direct_sale_order_id_for_payment
-from app.commissions.ledger import audit_earning, post_earning_for_allocation
+from app.commissions import ladder
+from app.commissions.ledger import (
+    audit_earning,
+    audit_reversal,
+    post_earning_for_allocation,
+    reverse_commissions_for_allocation,
+)
 from app.extensions import db_session
 from app.models.base import utcnow
 from app.models.commercial_sales import CommercialInvoice, PaymentAllocation
@@ -151,6 +157,7 @@ def allocate_payment(
 
     if entry is not None:
         audit_earning(entry, actor_staff_user_id=actor_staff_user_id)
+    ladder.write_pending_audit(actor_staff_user_id)
 
     return allocation
 
@@ -158,32 +165,66 @@ def allocate_payment(
 def reverse_allocation(
     allocation: PaymentAllocation, *, reason: str, actor_staff_user_id: uuid.UUID
 ) -> PaymentAllocation:
-    if allocation.reversed_at is not None:
-        raise CommercialSalesError("INVALID_INVOICE_TRANSITION", from_status="REVERSED", to_status="REVERSED")
     if not reason or not reason.strip():
         raise CommercialSalesError("REASON_REQUIRED")
 
-    invoice = db_session.get(CommercialInvoice, allocation.commercial_invoice_id)
-    db_session.execute(select(CommercialInvoice).where(CommercialInvoice.id == invoice.id).with_for_update())
+    # Step 0 ladder (2026-10-24) -- the gap 7571c3df reported: this reversed
+    # the allocation and left the commission it had posted EARNED (measured:
+    # reverse a finished sale's allocation -> commission still EARNED 10.00),
+    # so the seller kept money for a sale whose money had been taken off it.
+    # Now the reversal, the percentage commission it takes back
+    # (ledger.reverse_commissions_for_allocation) and the ladder re-derived
+    # (ladder.evaluate_sale: the sale stops counting -- a correction, so
+    # whatever the hold) are ONE transaction; a crash leaves none of them.
+    # Locked in the documented order (subscriptions/services.py::
+    # lock_payment_for_update): the payment row first -- correct_payment
+    # decides "is this payment allocated?" under that same lock -- then the
+    # invoice row; the ladder's seller lock last.
+    try:
+        lock_payment_for_update(db_session.get(PaymentRecord, allocation.payment_record_id))
+        db_session.execute(select(CommercialInvoice).where(CommercialInvoice.id == allocation.commercial_invoice_id)
+                           .with_for_update().execution_options(populate_existing=True))
+        allocation = db_session.execute(
+            select(PaymentAllocation).where(PaymentAllocation.id == allocation.id)
+            .execution_options(populate_existing=True)
+        ).scalars().one()
+        if allocation.reversed_at is not None:
+            raise CommercialSalesError("INVALID_INVOICE_TRANSITION", from_status="REVERSED", to_status="REVERSED")
+        invoice = db_session.get(CommercialInvoice, allocation.commercial_invoice_id)
 
-    allocation.reversed_at = utcnow()
-    allocation.reversed_by_staff_user_id = actor_staff_user_id
-    allocation.reversal_reason = reason
-    allocation.version += 1
-    db_session.flush()
+        allocation.reversed_at = utcnow()
+        allocation.reversed_by_staff_user_id = actor_staff_user_id
+        allocation.reversal_reason = reason
+        allocation.version += 1
+        db_session.flush()
 
-    new_status = resolve_invoice_status(
-        current_status=invoice.status, invoice_total=invoice.total, allocated_payment_sum=confirmed_allocated_amount(invoice)
-    )
-    # Reversal can only ever reduce the allocated sum, never increase it --
-    # so it can only move status "backwards" (PAID -> PARTIALLY_PAID ->
-    # ISSUED), never re-trigger a VOID/DRAFT override (resolve_invoice_status
-    # itself already guards VOID/DRAFT as never overridden by a payment-sum
-    # computation).
-    before_status = invoice.status
-    invoice.status = new_status
-    invoice.version += 1
-    db_session.commit()
+        new_status = resolve_invoice_status(
+            current_status=invoice.status, invoice_total=invoice.total, allocated_payment_sum=confirmed_allocated_amount(invoice)
+        )
+        # Reversal can only ever reduce the allocated sum, never increase it --
+        # so it can only move status "backwards" (PAID -> PARTIALLY_PAID ->
+        # ISSUED), never re-trigger a VOID/DRAFT override (resolve_invoice_status
+        # itself already guards VOID/DRAFT as never overridden by a payment-sum
+        # computation).
+        before_status = invoice.status
+        invoice.status = new_status
+        invoice.version += 1
+        db_session.flush()
+
+        reversals = reverse_commissions_for_allocation(
+            allocation, reason=f"Allocation {allocation.id} reversed: {reason}", actor_staff_user_id=actor_staff_user_id,
+        )
+        if invoice.sales_order_id is not None:
+            ladder.evaluate_sale(invoice.sales_order_id)
+        db_session.commit()
+    except BaseException:
+        db_session.rollback()
+        raise
+
+    for reversal in reversals:
+        audit_reversal(reversal, reason=f"Allocation {allocation.id} reversed: {reason}",
+                       actor_staff_user_id=actor_staff_user_id)
+    ladder.write_pending_audit(actor_staff_user_id)
 
     audit_record(
         actor_staff_user_id=actor_staff_user_id,
