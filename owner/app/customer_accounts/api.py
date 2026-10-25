@@ -21,6 +21,7 @@ because step 2 passed. Nothing here logs an email, a password or a token.
 """
 from __future__ import annotations
 
+import functools
 import logging
 
 from flask import Blueprint, abort, current_app, jsonify, request
@@ -98,19 +99,21 @@ def _locked(exc: service.SignInLocked):
     return response
 
 
-def _route(path: str):
-    def decorator(handler):
-        @bp.route(path, methods=["GET", "POST"], endpoint=handler.__name__)
-        def view():
-            body, early = _gate()
-            if early is not None:
-                return early
-            return handler(body)
-        return view
-    return decorator
+def _gated(handler):
+    """Runs the gate (404 / signature / nonce / JSON) and hands the parsed body to
+    the handler. Each handler sits under a literal `@bp.route(...)` so the route
+    table is readable (and tests/test_route_reachability.py can see it)."""
+    @functools.wraps(handler)
+    def view():
+        body, early = _gate()
+        if early is not None:
+            return early
+        return handler(body)
+    return view
 
 
-@_route("/sign-in")
+@bp.route("/sign-in", methods=["GET", "POST"])
+@_gated
 def sign_in(body):
     try:
         token, account = service.sign_in(_text(body, "email", 320), _text(body, "password", 256), _ip(body),
@@ -124,13 +127,15 @@ def sign_in(body):
                   "absolute_seconds": int(service.SESSION_ABSOLUTE.total_seconds())})
 
 
-@_route("/sign-out")
+@bp.route("/sign-out", methods=["GET", "POST"])
+@_gated
 def sign_out(body):
     service.sign_out(_text(body, "session_token", 256))
     return _json({"ok": True})
 
 
-@_route("/me")
+@bp.route("/me", methods=["GET", "POST"])
+@_gated
 def me(body):
     found = service.get_session(_text(body, "session_token", 256))
     if found is None:
@@ -138,7 +143,8 @@ def me(body):
     return _json({"ok": True, "account": _account_view(found[1])})
 
 
-@_route("/password/forgot")
+@bp.route("/password/forgot", methods=["GET", "POST"])
+@_gated
 def password_forgot(body):
     try:
         service.forgot_password(_text(body, "email", 320), _ip(body), _text(body, "lang", 8))
@@ -147,7 +153,8 @@ def password_forgot(body):
     return _json({"ok": True}, 202)  # the same answer whatever the address was
 
 
-@_route("/password/set")
+@bp.route("/password/set", methods=["GET", "POST"])
+@_gated
 def password_set(body):
     try:
         account = service.set_password_with_token(_text(body, "token", 256), _text(body, "password", 256), _ip(body))
@@ -160,7 +167,8 @@ def password_set(body):
     return _json({"ok": True, "account": _account_view(account)})
 
 
-@_route("/password/change")
+@bp.route("/password/change", methods=["GET", "POST"])
+@_gated
 def password_change(body):
     try:
         token, account = service.change_password(
@@ -177,7 +185,8 @@ def password_change(body):
     return _json({"ok": True, "session_token": token, "account": _account_view(account)})
 
 
-@_route("/email/confirm")
+@bp.route("/email/confirm", methods=["GET", "POST"])
+@_gated
 def email_confirm(body):
     try:
         account = service.confirm_email_change(_text(body, "token", 256), _ip(body))

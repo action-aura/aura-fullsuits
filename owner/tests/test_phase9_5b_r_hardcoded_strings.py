@@ -42,6 +42,10 @@ GATED_DIRS = (
     # on it arrives pre-translated in both languages, so it is scanned like
     # any other template.
     "pwa",
+    # Step 2 CA1 (customer website accounts): the show-once link page. Registered
+    # so it is scanned like every other template (and so the all-directories
+    # guard below stays green).
+    "customer_accounts",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form
