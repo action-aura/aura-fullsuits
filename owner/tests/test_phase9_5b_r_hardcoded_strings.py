@@ -38,6 +38,10 @@ GATED_DIRS = (
     # here, so this guard was red from its commit onward; registered now,
     # which also puts those two templates under the hardcoded-string scan.
     "crash_reports",
+    # Step 1 installable web app (app/pwa/): the offline page. Every string
+    # on it arrives pre-translated in both languages, so it is scanned like
+    # any other template.
+    "pwa",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form

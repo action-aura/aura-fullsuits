@@ -143,6 +143,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.crash_reports.routes import bp as crash_reports_bp
     from app.leads.intake_routes import bp as website_intake_bp
     from app.leads.intake_routes import warn_if_intake_secret_unusable
+    from app.pwa import bp as pwa_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(staff_bp)
@@ -176,6 +177,9 @@ def create_app(config_name: str | None = None) -> Flask:
     app.register_blueprint(command_palette_bp)
     app.register_blueprint(crash_reports_bp)
     app.register_blueprint(website_intake_bp)
+    # Installable web app: /manifest.webmanifest, /sw.js, /offline -- public,
+    # GET-only, no database. Its cache-safety policy is in app/pwa/routes.py.
+    app.register_blueprint(pwa_bp)
     # Website demo-request intake: server-to-server from the actionaura.me
     # Pages Function, authenticated by a bearer secret (no browser session, so
     # no CSRF token to carry; the bearer check is its CSRF-equivalent).

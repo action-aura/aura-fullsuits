@@ -6376,6 +6376,42 @@ msgstr "الذهاب إلى لوحة التحكم"
 msgid "Aura Owner Control Center"
 msgstr "مركز تحكم Aura Owner"
 
+#: app/pwa/routes.py
+msgid "You are offline"
+msgstr "أنت غير متصل بالإنترنت"
+
+#: app/pwa/routes.py
+msgid "Aura Owner needs the internet to show live information. Check your connection, then try again."
+msgstr "يحتاج Aura Owner إلى الإنترنت لعرض المعلومات الحية. تحقّق من اتصالك ثم حاول مرة أخرى."
+
+#: app/pwa/routes.py
+msgid "Try again"
+msgstr "حاول مرة أخرى"
+
+#: app/pwa/routes.py
+msgid "The Action Aura staff console: sales, customers and licences."
+msgstr "لوحة عمل فريق Action Aura: المبيعات والعملاء والتراخيص."
+
+#: app/templates/layout/base.html
+msgid "Install Aura Owner"
+msgstr "تثبيت Aura Owner"
+
+#: app/templates/layout/base.html
+msgid "Install Aura Owner on this phone to open it with one tap."
+msgstr "ثبّت Aura Owner على هذا الهاتف لتفتحه بلمسة واحدة."
+
+#: app/templates/layout/base.html
+msgid "To install on iPhone: tap Share, then Add to Home Screen."
+msgstr "للتثبيت على iPhone: اضغط «مشاركة»، ثم «إضافة إلى الشاشة الرئيسية»."
+
+#: app/templates/layout/base.html
+msgid "Install"
+msgstr "تثبيت"
+
+#: app/templates/layout/base.html
+msgid "Hide this tip"
+msgstr "إخفاء هذه النصيحة"
+
 #: app/templates/layout/base.html:28
 msgid "Skip to content"
 msgstr "تخطَّ إلى المحتوى"

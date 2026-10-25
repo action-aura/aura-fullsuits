@@ -645,3 +645,52 @@ summary:focus-visible {
   .aura-topbar__stub kbd { display: none; }
   .aura-profile-menu__name { max-inline-size: 90px; }
 }
+
+/* ---------- "Add to home screen" hint (static/js/pwa.js) ----------
+   Ships [hidden]; pwa.js reveals it on a phone that can install the app.
+   The display rule would otherwise beat the UA's [hidden] { display: none }
+   -- same trap as .aura-topbar__website-leads[hidden] above. The
+   display-mode block is the second, CSS-only guarantee that the hint never
+   appears inside the installed app, even if the script misjudges. */
+.aura-install-hint {
+  position: fixed;
+  inset-inline: var(--aura-space-3);
+  inset-block-end: calc(var(--aura-space-3) + env(safe-area-inset-bottom, 0px));
+  z-index: var(--aura-z-toast);
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-3);
+  max-inline-size: 32rem;
+  margin-inline: auto;
+  padding: var(--aura-space-3) var(--aura-space-4);
+  background: var(--aura-color-surface-overlay);
+  color: var(--aura-color-text-primary);
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: var(--aura-radius-lg);
+  box-shadow: var(--aura-shadow-lg);
+  font-size: var(--aura-font-size-base);
+}
+.aura-install-hint[hidden],
+.aura-install-hint [hidden] { display: none; }
+.aura-install-hint__text { flex: 1 1 auto; margin: 0; }
+.aura-install-hint__install { flex: 0 0 auto; white-space: nowrap; }
+.aura-install-hint__dismiss {
+  flex: 0 0 auto;
+  inline-size: var(--aura-target-comfortable);
+  block-size: var(--aura-target-comfortable);
+  border: 0;
+  border-radius: var(--aura-radius-full);
+  background: transparent;
+  color: var(--aura-color-text-secondary);
+  font-size: var(--aura-font-size-xl);
+  line-height: 1;
+  cursor: pointer;
+}
+.aura-install-hint__dismiss:hover { background: var(--aura-color-surface-muted); }
+.aura-install-hint__dismiss:focus-visible {
+  outline: 2px solid var(--aura-color-focus-ring);
+  outline-offset: 2px;
+}
+@media (display-mode: standalone), (display-mode: fullscreen), (display-mode: minimal-ui) {
+  .aura-install-hint { display: none !important; }
+}

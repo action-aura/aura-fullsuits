@@ -1,0 +1,64 @@
+<!doctype html>
+{#- The installed app's "no connection" page (app/pwa/routes.py). Cached by
+    the service worker at install and shown when a page cannot load, so:
+    - it is rendered WITHOUT context processors (no `staff`, no `_`, no
+      csrf_token in scope -- every string arrives pre-translated in `copy`);
+    - it is self-contained: inline CSS only (style-src allows
+      'unsafe-inline'; script-src does not, so there is no script at all --
+      "Try again" is a plain link that makes a fresh navigation);
+    - both languages are on the page, Arabic first, because one cached copy
+      serves the phone whatever language it is switched to later. -#}
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>{{ copy.ar.title }} -- {{ copy.en.title }}</title>
+  <link rel="icon" type="image/svg+xml" href="{{ mark_url }}">
+  <style>
+    :root { color-scheme: light dark; --bg: #F6F8FA; --card: #FFFFFF; --text: #12151C; --muted: #47505C; --border: #D8DEE4; --accent: #2D5FE0; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #12151C; --card: #1B1F29; --text: #F3F5F8; --muted: #B8C0CC; --border: #2A2F3B; --accent: #5B84EE; }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; min-height: 100dvh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 1.5rem 1rem;
+      background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Arabic", "Noto Sans", sans-serif;
+      line-height: 1.5;
+    }
+    main {
+      width: 100%; max-width: 28rem; padding: 2rem 1.5rem;
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+      text-align: center;
+    }
+    img { display: block; margin: 0 auto 1rem; }
+    section + section { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
+    h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
+    p { margin: 0 0 1rem; color: var(--muted); }
+    a.retry {
+      display: inline-block; min-height: 44px; padding: 0.625rem 1.25rem;
+      border-radius: 8px; background: var(--accent); color: #FFFFFF;
+      font-weight: 600; text-decoration: none;
+    }
+    a.retry:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
+  </style>
+</head>
+<body>
+  <main>
+    <img src="{{ mark_url }}" alt="" width="56" height="56">
+    <section lang="ar" dir="{{ copy.ar.dir }}">
+      <h1>{{ copy.ar.title }}</h1>
+      <p>{{ copy.ar.body }}</p>
+      <a class="retry" href="{{ retry_url }}">{{ copy.ar.retry }}</a>
+    </section>
+    <section lang="en" dir="{{ copy.en.dir }}">
+      <h1>{{ copy.en.title }}</h1>
+      <p>{{ copy.en.body }}</p>
+      <a class="retry" href="{{ retry_url }}">{{ copy.en.retry }}</a>
+    </section>
+  </main>
+</body>
+</html>
