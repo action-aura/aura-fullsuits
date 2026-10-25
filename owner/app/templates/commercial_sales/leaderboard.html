@@ -1,0 +1,59 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Sales leaderboard") }}{% endblock %}
+{% block content %}
+{# Step 1 (2026-10-25): the sales leaderboard. Every number is the ladder's
+   own month summary (app/commissions/leaderboard.py). A row carries money
+   only when the service sent it (a manager, or the viewer's own row) -- this
+   template never decides who may see money, it only shows what it was given.
+   The data-board-* attributes carry the exact values for tests and tools.
+   A list of cards, not a table: it is read on a phone inside the installed
+   web app, where a seven-column table would scroll sideways. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/leaderboard.css') }}">
+<section class="card aura-board" aria-labelledby="board-heading" data-board-month="{{ month.isoformat() }}">
+  <header class="aura-board__head">
+    {# The shell already shows the page title ("Sales leaderboard") as its
+       heading; the card names the month on show. #}
+    <h2 id="board-heading">{{ _("This month") if period == "this" else _("Last month") }} <bdi dir="ltr" class="muted">{{ month.strftime("%Y-%m") }}</bdi></h2>
+    <nav class="aura-board__periods" aria-label="{{ _('Sales leaderboard periods') }}">
+      <a href="{{ url_for('leaderboard.index') }}" class="aura-board__period"{% if period == "this" %} aria-current="page"{% endif %}>{{ _("This month") }}</a>
+      <a href="{{ url_for('leaderboard.index', period='last') }}" class="aura-board__period"{% if period == "last" %} aria-current="page"{% endif %}>{{ _("Last month") }}</a>
+    </nav>
+  </header>
+  <p class="muted aura-board__note">
+    {{ _("Ranked by sales counted on the ladder, then by ladder total. Months are Jordan calendar months.") }}
+    {% if not show_all_money %}{{ _("Only your own money is shown. Other sellers' earnings are private.") }}{% endif %}
+  </p>
+  {% if rows %}
+  <ol class="aura-board__list">
+    {% for r in rows %}
+    {% set has_money = r.total is defined %}
+    <li class="aura-board__row{% if r.is_viewer %} aura-board__row--me{% endif %}{% if r.rank == 1 and r.count > 0 %} aura-board__row--lead{% endif %}"
+        data-board-seller="{{ r.employee_name }}" data-board-rank="{{ r.rank }}" data-board-count="{{ r.count }}"
+        data-board-renewals="{{ r.renewals }}" data-board-viewer="{{ 'true' if r.is_viewer else 'false' }}"
+        {% if has_money %}data-board-total="{{ r.total }}" data-board-held="{{ r.held }}" data-board-payable="{{ r.payable }}" data-board-renewals-total="{{ r.renewals_total }}"{% endif %}>
+      <span class="aura-board__rank" aria-label="{{ _('Rank') }} {{ r.rank }}">{{ r.rank }}</span>
+      <div class="aura-board__body">
+        <p class="aura-board__name">
+          <bdi>{{ r.employee_name }}</bdi>
+          {% if r.is_viewer %}<span class="badge active">{{ _("You") }}</span>{% endif %}
+        </p>
+        <dl class="aura-board__stats">
+          <div class="aura-board__stat aura-board__stat--key"><dt>{{ _("Sales counted") }}</dt><dd>{{ r.count }}</dd></div>
+          <div class="aura-board__stat"><dt>{{ _("Renewals") }}</dt><dd>{{ r.renewals }}</dd></div>
+          {% if has_money %}
+          <div class="aura-board__stat"><dt>{{ _("Ladder total") }}</dt><dd>{{ format_owner_number(r.total) }} {{ r.currency }}</dd></div>
+          <div class="aura-board__stat"><dt>{{ _("Held") }}</dt><dd>{{ format_owner_number(r.held) }} {{ r.currency }}</dd></div>
+          <div class="aura-board__stat"><dt>{{ _("Payable") }}</dt><dd>{{ format_owner_number(r.payable) }} {{ r.currency }}</dd></div>
+          <div class="aura-board__stat"><dt>{{ _("Renewal commission") }}</dt><dd>{{ format_owner_number(r.renewals_total) }} {{ r.currency }}</dd></div>
+          {% endif %}
+        </dl>
+        {% if r.refunded_after_hold %}<p class="aura-board__flag"><span class="badge pending">{{ _("Refunded after the hold") }}: {{ r.refunded_after_hold }}</span></p>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty">{{ _("No sellers on the ladder yet.") }}</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,76 @@
+/* Step 1 (2026-10-25) -- the sales leaderboard (commercial_sales/leaderboard.html).
+   Mobile first: one card per seller, stats wrap; logical properties only
+   (inline-start/end), so the same rules read right-to-left in Arabic. */
+.aura-board__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aura-space-3);
+}
+.aura-board__head h2 { margin: 0; font-size: var(--aura-font-size-lg); }
+.aura-board__periods {
+  display: inline-flex;
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: var(--aura-radius-full);
+  padding: 2px;
+}
+.aura-board__period {
+  min-height: var(--aura-target-comfortable);
+  display: inline-flex;
+  align-items: center;
+  padding-inline: var(--aura-space-4);
+  border-radius: var(--aura-radius-full);
+  color: var(--aura-color-text-secondary);
+  text-decoration: none;
+  font-weight: var(--aura-font-weight-medium);
+}
+.aura-board__period[aria-current="page"] {
+  background: var(--aura-color-brand-primary);
+  color: var(--aura-color-surface-raised);
+}
+.aura-board__period:focus-visible { outline: 2px solid var(--aura-color-focus-ring); outline-offset: 2px; }
+.aura-board__note { margin-block: var(--aura-space-3) var(--aura-space-4); }
+.aura-board__list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--aura-space-3); }
+.aura-board__row {
+  display: flex;
+  gap: var(--aura-space-3);
+  align-items: flex-start;
+  padding: var(--aura-space-3) var(--aura-space-4);
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: var(--aura-radius-md);
+  background: var(--aura-color-surface-base);
+}
+.aura-board__row--lead { border-color: var(--aura-color-warning); background: var(--aura-color-warning-soft); }
+.aura-board__row--me { border-inline-start: 4px solid var(--aura-color-brand-primary); }
+.aura-board__rank {
+  flex: 0 0 auto;
+  inline-size: 2.5rem;
+  block-size: 2.5rem;
+  display: grid;
+  place-items: center;
+  border-radius: var(--aura-radius-full);
+  background: var(--aura-color-surface-muted);
+  font-weight: var(--aura-font-weight-bold);
+  font-size: var(--aura-font-size-lg);
+  font-variant-numeric: tabular-nums;
+}
+.aura-board__row--lead .aura-board__rank { background: var(--aura-color-warning); color: var(--aura-color-surface-raised); }
+.aura-board__body { flex: 1 1 auto; min-inline-size: 0; }
+.aura-board__name {
+  margin: 0 0 var(--aura-space-2);
+  font-weight: var(--aura-font-weight-semibold);
+  font-size: var(--aura-font-size-md);
+  overflow-wrap: anywhere;
+}
+.aura-board__stats {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(6rem, 1fr));
+  gap: var(--aura-space-2) var(--aura-space-4);
+}
+.aura-board__stat { min-inline-size: 0; }
+.aura-board__stat dt { font-size: var(--aura-font-size-xs); color: var(--aura-color-text-muted); }
+.aura-board__stat dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: var(--aura-font-weight-medium); }
+.aura-board__stat--key dd { font-size: var(--aura-font-size-xl); font-weight: var(--aura-font-weight-bold); }
+.aura-board__flag { margin: var(--aura-space-2) 0 0; }

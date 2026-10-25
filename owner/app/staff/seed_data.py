@@ -225,6 +225,60 @@ ROLES: dict[str, dict] = {
             "management_notes.view",
         ],
     },
+    # Step 1 (2026-10-25) -- the owner's Sales Manager (Aura Growth Plan:
+    # "confirms payments, resets lost phones, hands out leads, sees the
+    # team"; managers confirm payments, the first one wins, never their own
+    # sale). Every code below already exists -- seeded by `flask seed-rbac`
+    # (app/staff/services.py::seed_rbac, idempotent), so no migration.
+    #
+    # The CHECKER of a sale, never its maker: it holds what the sale-confirm
+    # screen (licensing/issuance_routes.py: payments.confirm + orders.approve
+    # + invoices.issue + recent MFA) and the payments screen need, and none
+    # of quotes.create/orders.create/invoices.create -- so
+    # test_phase9_5d_commercial_sales_rbac.py's "no role both creates and
+    # approves an order" keeps holding. A manager who also sells is given
+    # SALES as well; the services still refuse them their own sale (the
+    # recorder and the seller checks in direct_sale.py::_guard_confirmer and
+    # payments.py) whatever roles they hold.
+    #
+    # Deliberately NOT here: catalog.manage_* / pricing.override /
+    # quotes.approve (prices and price exceptions), licenses.issue (the
+    # no-charge path is Super-Admin-only anyway), staff.* / employees.*
+    # writes (staff and roles), refunds.* (Finance), commissions.pay /
+    # commissions.reverse / payments.correct (money out stays with Finance:
+    # the manager APPROVES a seller's commission, Finance PAYS it -- two
+    # people), system.*, audit.*, device/activation policy, signing keys.
+    # commissions.approve is safe to hold: approve_commission_entry refuses
+    # the beneficiary (COMMISSION_SELF_APPROVAL_FORBIDDEN) and anything
+    # still inside the 30-day hold (COMMISSION_ON_HOLD), regardless of role.
+    # "Resets lost phones" is not granted yet: the reset-after-ID-check flow
+    # does not exist; granting installations.replace_device would hand over
+    # SUPPORT's whole device toolbox instead.
+    # MFA: payments.confirm makes this role MFA-mandatory at login
+    # (auth/services.py::MFA_MANDATORY_PERMISSION_CODES).
+    "SALES_MANAGER": {
+        "name": "Sales Manager",
+        "description": "Confirms other sellers' payments and sales, hands out leads, sees the whole sales team.",
+        "permissions": [
+            "catalog.view", "pricing.view",
+            # the team's customers and leads, not own-only
+            "customers.view", "customers.create", "customers.update", "customers.manage_contacts",
+            "customers.manage_notes", "customers.view_own", "customers.view_all", "customers.update_own",
+            "customers.update_all", "customers.assign", "customers.capture_location", "customers.verify_location",
+            "leads.create", "leads.discover", "leads.view_own", "leads.view_all", "leads.update_own",
+            "leads.update_all", "leads.assign", "leads.convert", "leads.archive",
+            "subscriptions.view", "licenses.view", "installations.view", "pilots.view",
+            "employees.view_own", "employees.view_all", "employees.view_presence",
+            # confirming: the sale-confirm screen and the payments screen
+            "payments.view", "payments.confirm", "orders.approve", "invoices.issue",
+            # the team's commissions and the leaderboard (commissions.view_all)
+            "commissions.view_own", "commissions.view_all", "commissions.approve",
+            "expenses.create", "expenses.view_own",
+            "device_policy.view",
+            "dashboard.view_own", "dashboard.view_all", "reports.view_own", "reports.view_all",
+            "management_notes.view",
+        ],
+    },
     "SUPPORT": {
         "name": "Support",
         "description": "Customer/subscription/license read, installation and device management.",

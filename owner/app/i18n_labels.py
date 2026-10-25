@@ -43,6 +43,7 @@ def role_label(code: str) -> str:
     labels = {
         "SUPER_ADMIN": _("Super Administrator"),
         "SALES": _("Sales"),
+        "SALES_MANAGER": _("Sales Manager"),
         "SUPPORT": _("Support"),
         "FINANCE": _("Finance"),
         "VIEWER": _("Viewer"),

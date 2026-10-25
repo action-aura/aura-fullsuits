@@ -43,7 +43,7 @@
     <label for="email">{{ _("Email") }}</label>
     <input id="email" type="email" name="email" required>
     <label>{{ _("Roles") }}</label>
-    {% for code in ["SUPER_ADMIN","SALES","SUPPORT","FINANCE","VIEWER"] %}
+    {% for code in ["SUPER_ADMIN","SALES","SALES_MANAGER","SUPPORT","FINANCE","VIEWER"] %}
       <label style="display:inline-block;margin-right:1rem;font-weight:normal;color:inherit;">
         <input type="checkbox" name="role_codes" value="{{ code }}" style="width:auto;"> {{ role_label(code) }}
       </label>

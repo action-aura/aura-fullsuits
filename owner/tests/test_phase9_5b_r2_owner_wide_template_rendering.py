@@ -81,6 +81,7 @@ NO_FIXTURE_ROUTES = [
     "/payments",
     "/refunds",
     "/commissions",
+    "/leaderboard",  # Step 1: the sales leaderboard (a SUPER_ADMIN with no profile sees every row)
     "/commission-payouts",
     "/commercial-dashboard",
     "/commercial-dashboard/finance",

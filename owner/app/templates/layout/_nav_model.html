@@ -97,6 +97,11 @@
 {% if has_any_permission('commissions.view_own', 'commissions.view_all') %}
   {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.list_commissions', 'label': _('Commissions')}) %}
 {% endif %}
+{# Step 1: the sales leaderboard -- the same permission pair as Commissions;
+   how much money each viewer sees is decided in app/commissions/leaderboard.py. #}
+{% if has_any_permission('commissions.view_own', 'commissions.view_all') %}
+  {% set _unused = sales_links.append({'endpoint': 'leaderboard.index', 'label': _('Sales leaderboard')}) %}
+{% endif %}
 {% if has_permission('commissions.pay') %}
   {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.list_payout_batches', 'label': _('Commission Payouts')}) %}
 {% endif %}
