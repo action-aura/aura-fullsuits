@@ -589,8 +589,9 @@ def test_email_change_keeps_the_old_address_until_the_new_one_confirms(app):
         service.confirm_email_change(token_of(issued), IP)
         assert account.email == "new@shop.example"
         assert service.get_session(session_token) is None  # the sign-in email changed: sign in again
-        with pytest.raises(service.AccountError):
+        with pytest.raises(service.AccountError) as reused:
             service.confirm_email_change(token_of(issued), IP)  # single use
+        assert reused.value.code == "token_invalid"  # refused as a used link, not by a side effect
         assert service.sign_in("new@shop.example", GOOD, "198.51.100.2", None)[0]
         with pytest.raises(service.SignInFailed):
             service.sign_in(old, GOOD, "198.51.100.3", None)
