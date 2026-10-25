@@ -37,6 +37,10 @@ REAL_TEMPLATE_DIRS = (
     # here, so this guard was red from its commit onward; registered now,
     # which also puts those two templates under the hardcoded-string scan.
     "crash_reports",
+    # Step 1 installable web app (app/pwa/): the offline page, bilingual on
+    # one page by design -- its rendering in both languages (Arabic section
+    # lang="ar" dir="rtl") is covered by tests/test_pwa.py.
+    "pwa",
 )
 
 # No-fixture-required GET routes: real, reachable, list/index/status pages.

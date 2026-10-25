@@ -24,6 +24,21 @@
      this comment used to describe (docs/owner/ui-modernization/
      logo-brand-audit.md §7). #}
   <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/brand/action-aura-mark.svg') }}">
+  {# Installable web app (app/pwa/routes.py). The manifest URL carries the
+     page language because browsers fetch it without cookies. iPhone Safari
+     ignores the manifest for most of this, hence the apple-* tags:
+     status-bar "default" (not black-translucent) because the shell has no
+     safe-area padding, so translucent would slide the top bar under the
+     notch. theme-color follows --aura-color-surface-raised (the top bar) in
+     each system colour scheme. #}
+  <link rel="manifest" href="{{ url_for('pwa.manifest', lang=current_locale) }}">
+  <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1B1F29" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="{{ _('Aura Owner') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/brand/apple-touch-icon.png') }}">
 </head>
 <body>
   <a class="aura-sr-only" href="#main-content">{{ _('Skip to content') }}</a>
@@ -166,6 +181,16 @@
   {% include "layout/_command_palette.html" %}
   {% include "layout/_shortcuts_cheatsheet.html" %}
   {% endif %}
+  {# "Add to home screen" hint -- static/js/pwa.js decides whether to show it
+     (never inside the installed app; never again once dismissed on this
+     device). Ships [hidden] so a browser with no JS never sees it. #}
+  <div class="aura-install-hint" id="aura-install-hint" role="region" aria-label="{{ _('Install Aura Owner') }}" hidden>
+    <p class="aura-install-hint__text" data-install-variant="android" hidden>{{ _('Install Aura Owner on this phone to open it with one tap.') }}</p>
+    <p class="aura-install-hint__text" data-install-variant="ios" hidden>{{ _('To install on iPhone: tap Share, then Add to Home Screen.') }}</p>
+    <button type="button" class="btn aura-install-hint__install" data-install-action="install" hidden>{{ _('Install') }}</button>
+    <button type="button" class="aura-install-hint__dismiss" data-install-action="dismiss" aria-label="{{ _('Hide this tip') }}"><span aria-hidden="true">&times;</span></button>
+  </div>
+  <script src="{{ url_for('static', filename='js/pwa.js') }}" data-sw-url="{{ url_for('pwa.service_worker') }}" data-sw-scope="/"></script>
   <script src="{{ url_for('static', filename='js/confirm.js') }}"></script>
   {# Must load after confirm.js: auto-submit.js uses requestSubmit(), which
      fires a real submit event, so a data-auto-submit control on a form that
