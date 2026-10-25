@@ -9,9 +9,17 @@
 
   {% if not enabled %}
   <p class="empty">
-    {{ _("Map-based lead discovery is not configured for this install. An administrator must set OWNER_LEAD_DISCOVERY_PROVIDER=google_places and OWNER_GOOGLE_PLACES_API_KEY before it can be used here.") }}
+    {{ _("Map-based lead discovery is switched off for this install. An administrator must set OWNER_LEAD_DISCOVERY_PROVIDER=google_places and OWNER_GOOGLE_PLACES_API_KEY, and keep OWNER_LEAD_DISCOVERY_DAILY_CAP and OWNER_LEAD_DISCOVERY_MONTHLY_CAP above zero, before it can be used here.") }}
   </p>
   {% else %}
+  {# Each search is one paid Google request; the budget is counted per
+     Jordan day and month (app/leads/discovery_budget.py). #}
+  {% if budget %}
+  <p class="small" id="leads-discover-budget">{{ _("Searches left today: %(day_left)s of %(day_cap)s · this month: %(month_left)s of %(month_cap)s", day_left=budget.day_left, day_cap=budget.day_cap, month_left=budget.month_left, month_cap=budget.month_cap) }}</p>
+  {% if budget.remaining == 0 and not error %}
+  <p class="error">{% if budget.month_left == 0 %}{{ _("This month's limit of map searches has been reached. It resets on the 1st of next month, Jordan time.") }}{% else %}{{ _("Today's limit of map searches has been reached. It resets at midnight, Jordan time.") }}{% endif %}</p>
+  {% endif %}
+  {% endif %}
   <form method="post" action="{{ url_for('leads.discover_search') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="leads-discover-segment">{{ _("Target segment") }}</label>
@@ -26,7 +34,7 @@
     </select>
     <label for="leads-discover-assigned-employee-profile-id">{{ _("Assign to (employee profile UUID)") }}</label>
     <input id="leads-discover-assigned-employee-profile-id" name="assigned_employee_profile_id" value="{{ assigned_employee_profile_id or '' }}">
-    <div style="margin-top:0.75rem;"><button type="submit">{{ _("Search Google Places") }}</button></div>
+    <div style="margin-top:0.75rem;"><button type="submit"{% if budget and budget.remaining == 0 %} disabled{% endif %}>{{ _("Search Google Places") }}</button></div>
   </form>
   {% endif %}
 </div>

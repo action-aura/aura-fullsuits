@@ -6594,13 +6594,31 @@ msgstr ""
 
 #: app/templates/leads/discover.html:12
 msgid ""
-"Map-based lead discovery is not configured for this install. An "
+"Map-based lead discovery is switched off for this install. An "
 "administrator must set OWNER_LEAD_DISCOVERY_PROVIDER=google_places and "
-"OWNER_GOOGLE_PLACES_API_KEY before it can be used here."
+"OWNER_GOOGLE_PLACES_API_KEY, and keep OWNER_LEAD_DISCOVERY_DAILY_CAP and "
+"OWNER_LEAD_DISCOVERY_MONTHLY_CAP above zero, before it can be used here."
 msgstr ""
-"Map-based lead discovery is not configured for this install. An "
+"Map-based lead discovery is switched off for this install. An "
 "administrator must set OWNER_LEAD_DISCOVERY_PROVIDER=google_places and "
-"OWNER_GOOGLE_PLACES_API_KEY before it can be used here."
+"OWNER_GOOGLE_PLACES_API_KEY, and keep OWNER_LEAD_DISCOVERY_DAILY_CAP and "
+"OWNER_LEAD_DISCOVERY_MONTHLY_CAP above zero, before it can be used here."
+
+#: app/templates/leads/discover.html:19
+msgid "Searches left today: %(day_left)s of %(day_cap)s · this month: %(month_left)s of %(month_cap)s"
+msgstr "Searches left today: %(day_left)s of %(day_cap)s · this month: %(month_left)s of %(month_cap)s"
+
+#: app/leads/routes.py:78 app/templates/leads/discover.html:21
+msgid "Today's limit of map searches has been reached. It resets at midnight, Jordan time."
+msgstr "Today's limit of map searches has been reached. It resets at midnight, Jordan time."
+
+#: app/leads/routes.py:80 app/templates/leads/discover.html:21
+msgid "This month's limit of map searches has been reached. It resets on the 1st of next month, Jordan time."
+msgstr "This month's limit of map searches has been reached. It resets on the 1st of next month, Jordan time."
+
+#: app/i18n_labels.py:646
+msgid "Map search limit reached"
+msgstr "Map search limit reached"
 
 #: app/templates/leads/discover.html:17
 msgid "Target segment"

@@ -125,7 +125,7 @@ def test_discover_search_renders_results_and_disables_no_phone_row(app, client, 
         _make_profile(app, staff_id, "EMP-D4")
     force_login(client, app, staff_id)
     _enable_discovery(app)
-    monkeypatch.setattr("app.leads.routes.build_provider", lambda config: FakeProvider([PLACE_WITH_PHONE, PLACE_NO_PHONE]))
+    monkeypatch.setattr("app.leads.routes.build_provider", lambda config, **_kw: FakeProvider([PLACE_WITH_PHONE, PLACE_NO_PHONE]))
 
     csrf = _csrf(client, "/leads/discover")
     resp = client.post(
@@ -160,7 +160,7 @@ def test_discover_search_empty_area_is_400(app, client, seeded, monkeypatch):
         _make_profile(app, staff_id, "EMP-D5")
     force_login(client, app, staff_id)
     _enable_discovery(app)
-    monkeypatch.setattr("app.leads.routes.build_provider", lambda config: FakeProvider([PLACE_WITH_PHONE]))
+    monkeypatch.setattr("app.leads.routes.build_provider", lambda config, **_kw: FakeProvider([PLACE_WITH_PHONE]))
 
     csrf = _csrf(client, "/leads/discover")
     resp = client.post(
@@ -184,7 +184,7 @@ def test_discover_search_rate_limited_returns_502_without_leaking_key(app, clien
         def search(self, segment, area, *, limit=20):
             raise LeadDiscoveryError("RATE_LIMITED", detail="quota exceeded for super-secret-test-key")
 
-    monkeypatch.setattr("app.leads.routes.build_provider", lambda config: RaisingProvider())
+    monkeypatch.setattr("app.leads.routes.build_provider", lambda config, **_kw: RaisingProvider())
 
     csrf = _csrf(client, "/leads/discover")
     resp = client.post(
@@ -211,7 +211,7 @@ def test_discover_import_creates_lead_and_skips_no_phone_row(app, client, seeded
         target_profile_id = target_profile.id
     force_login(client, app, sales_staff_id)
     _enable_discovery(app)
-    monkeypatch.setattr("app.leads.routes.build_provider", lambda config: FakeProvider([PLACE_WITH_PHONE, PLACE_NO_PHONE]))
+    monkeypatch.setattr("app.leads.routes.build_provider", lambda config, **_kw: FakeProvider([PLACE_WITH_PHONE, PLACE_NO_PHONE]))
 
     csrf = _csrf(client, "/leads/discover")
     import_data = {
@@ -250,7 +250,7 @@ def test_discover_import_same_place_twice_creates_one_lead(app, client, seeded, 
         _make_profile(app, staff_id, "EMP-D8")
     force_login(client, app, staff_id)
     _enable_discovery(app)
-    monkeypatch.setattr("app.leads.routes.build_provider", lambda config: FakeProvider([PLACE_WITH_PHONE]))
+    monkeypatch.setattr("app.leads.routes.build_provider", lambda config, **_kw: FakeProvider([PLACE_WITH_PHONE]))
 
     def _import_once():
         csrf = _csrf(client, "/leads/discover")
@@ -284,7 +284,7 @@ def test_discover_search_without_employee_profile_is_400(app, client, seeded, mo
     staff_id = make_staff(app, "disc9@example.com", role_codes=["SALES"])
     force_login(client, app, staff_id)
     _enable_discovery(app)
-    monkeypatch.setattr("app.leads.routes.build_provider", lambda config: FakeProvider([PLACE_WITH_PHONE]))
+    monkeypatch.setattr("app.leads.routes.build_provider", lambda config, **_kw: FakeProvider([PLACE_WITH_PHONE]))
 
     csrf = _csrf(client, "/leads/discover")
     resp = client.post(
@@ -325,7 +325,7 @@ def test_import_refuses_rows_without_a_place_id_instead_of_colliding_them(app, c
     or truncated POST omits it, and each such row must be refused, not
     merged. The one well-formed row in the batch must still import."""
     _sales_actor(app, client, "disc10@example.com", "EMP-D10")
-    monkeypatch.setattr("app.leads.routes.build_provider", lambda config: FakeProvider([PLACE_WITH_PHONE]))
+    monkeypatch.setattr("app.leads.routes.build_provider", lambda config, **_kw: FakeProvider([PLACE_WITH_PHONE]))
 
     rows = [
         {"place_id": "", "name": "Ghost Pharmacy A", "phone": "+962 7 1111 1111", "address": "x", "website": ""},
@@ -354,7 +354,7 @@ def test_import_clamps_a_hostile_count_to_the_search_page_size(app, client, seed
     from app.leads.discovery import MAX_RESULTS
 
     _sales_actor(app, client, "disc11@example.com", "EMP-D11")
-    monkeypatch.setattr("app.leads.routes.build_provider", lambda config: FakeProvider([PLACE_WITH_PHONE]))
+    monkeypatch.setattr("app.leads.routes.build_provider", lambda config, **_kw: FakeProvider([PLACE_WITH_PHONE]))
 
     # Prove the clamp by placing a second valid row at an index beyond the
     # ceiling: if the loop ran to `count`, it would be imported too.
@@ -388,7 +388,7 @@ def test_results_never_link_a_non_http_website(app, client, seeded, monkeypatch)
                               phone="+962 7 3333 3333", website="javascript:alert(1)")
     benign = DiscoveredPlace(place_id="p-ok", name="Benign Site", address=None,
                              phone="+962 7 4444 4444", website="https://example.com/shop")
-    monkeypatch.setattr("app.leads.routes.build_provider", lambda config: FakeProvider([hostile, benign]))
+    monkeypatch.setattr("app.leads.routes.build_provider", lambda config, **_kw: FakeProvider([hostile, benign]))
 
     csrf = _csrf(client, "/leads/discover")
     resp = client.post("/leads/discover/search", data={"csrf_token": csrf, "segment": "shops", "area": "Amman",
