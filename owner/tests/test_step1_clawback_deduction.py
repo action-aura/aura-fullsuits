@@ -217,7 +217,8 @@ def test_several_debts_are_taken_oldest_first(app, seeded):
 
     assert _pay(app, w, approved, _batch(app, w)) == D("0.00")
 
-    assert [(d, a) for d, a, _k, _l in _deductions(app)] == [(older, D("3.00")), (newer, D("3.00"))]
+    # one transaction => equal created_at; compare as a mapping, not a sequence
+    assert {d: a for d, a, _k, _l in _deductions(app)} == {older: D("3.00"), newer: D("3.00")}
     assert _remaining(app, older) == D("0.00") and _remaining(app, newer) == D("2.00")
 
 
