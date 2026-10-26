@@ -9279,3 +9279,12 @@ msgstr "الموظف على خطتي السلّم بالفعل."
 #: app/templates/employees/detail.html
 msgid "Assign both ladder plans"
 msgstr "تعيين خطتي السلّم"
+
+msgid "Package 1: 1 sale = 20, 2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD in a month; each sale after the 5th adds 30."
+msgstr "الباقة 1: بيع واحد = 20، بيعتان = 50، 3 = 100، 4 = 200، 5 = 350 دينارًا في الشهر؛ كل بيع بعد الخامس يضيف 30."
+
+msgid "Monthly packages (2 and 3 together): 1 = 5, 2 = 10, 3 = 20, 4 = 30, 5 = 55, 6 = 65, 7 = 90, 8 = 100, 9 = 115, 10 = 130 JOD in a month; each sale after the 10th adds 10."
+msgstr "الباقات الشهرية (2 و3 معًا): 1 = 5، 2 = 10، 3 = 20، 4 = 30، 5 = 55، 6 = 65، 7 = 90، 8 = 100، 9 = 115، 10 = 130 دينارًا في الشهر؛ كل بيع بعد العاشر يضيف 10."
+
+msgid "Each sale is payable 30 days after its payment is confirmed. Extra devices never count."
+msgstr "كل بيع يُصرف بعد 30 يومًا من تأكيد دفعته. الأجهزة الإضافية لا تُحتسب أبدًا."
