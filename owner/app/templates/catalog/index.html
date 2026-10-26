@@ -22,7 +22,7 @@
     <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Name") }}</th><th>{{ _("Billing model") }}</th><th>{{ _("Status") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for p in plans %}
-    <tr><td><bdi dir="ltr">{{ p.plan_code }}</bdi></td><td>{{ p.name }}</td><td><bdi dir="ltr">{{ p.billing_model }}</bdi></td><td><span class="badge">{{ plan_lifecycle_status_label(p.lifecycle_status) }}</span></td>
+    <tr><td><bdi dir="ltr">{{ p.plan_code }}</bdi></td><td>{{ catalog_label(p.name) }}</td><td><bdi dir="ltr">{{ p.billing_model }}</bdi></td><td><span class="badge">{{ plan_lifecycle_status_label(p.lifecycle_status) }}</span></td>
       <td><a href="{{ url_for('catalog.plan_detail', plan_id=p.id) }}">{{ _("View") }}</a></td></tr>
     {% else %}<tr><td colspan="5" class="empty">{{ _("No plans yet.") }}</td></tr>
     {% endfor %}
@@ -37,7 +37,7 @@
     <tbody>
     {% for a in addons %}
     <tr>
-      <td><bdi dir="ltr">{{ a.addon_code }}</bdi></td><td>{{ a.name }}</td>
+      <td><bdi dir="ltr">{{ a.addon_code }}</bdi></td><td>{{ catalog_label(a.name) }}</td>
       {# ONE control, not two. This column used to hold a colour-coded badge
          and the next column a select whose selected option rendered the same
          label from the same value -- "Draft" sitting next to "Draft" on every

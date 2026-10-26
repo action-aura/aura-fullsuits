@@ -41,6 +41,8 @@ from app.commercial_sales.catalog_for_sales import (
     EXTRA_DEVICE_PAIR_ADDON_CODE,
     describe_plan_for_sale,
 )
+from flask_babel import lazy_gettext as _l
+
 from app.extensions import db_session
 from app.models.base import utcnow
 from app.models.catalog import Addon, Plan, PlanPrice, Product
@@ -59,6 +61,15 @@ PACKAGES = (
      Decimal("35.00"), Decimal("0.00")),
     ("AURA_RETAIL_P3_MONTHLY_24", "Aura Retail - Package 3 (monthly, 24-month contract)", "MONTHLY", 1, 24,
      Decimal("20.00"), Decimal("0.00")),
+)
+# Msgids for the Arabic UI (see i18n_format.catalog_label). Never read at
+# runtime -- they exist so `pybabel extract` keeps these strings in the
+# catalogs; the stored plan names above stay English.
+_PACKAGE_DISPLAY_MSGIDS = (
+    _l("Aura Retail - Package 1 (yearly)"),
+    _l("Aura Retail - Package 2 (monthly, 12-month contract)"),
+    _l("Aura Retail - Package 3 (monthly, 24-month contract)"),
+    _l("Extra device pair (1 desktop + 1 phone)"),
 )
 PACKAGE_CODES = tuple(p[0] for p in PACKAGES)
 

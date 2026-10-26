@@ -9,7 +9,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
     <p>{{ _("Customer:") }} <strong>{{ subscription.customer.legal_name }}</strong> {{ _("-- current plan") }}
-      <strong>{{ subscription.plan.name }}</strong>, {{ _("current end date") }}
+      <strong>{{ catalog_label(subscription.plan.name) }}</strong>, {{ _("current end date") }}
       <strong>{{ format_owner_date(subscription.end_date) if subscription.end_date else "-" }}</strong>.</p>
     <label for="commercial-ops-renewals-new-date-rule">{{ _("Date rule") }}</label>
     <select id="commercial-ops-renewals-new-date-rule" name="date_rule">

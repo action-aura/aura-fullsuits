@@ -88,6 +88,7 @@ def audit_action_label(code: str) -> str:
         "EMPLOYEE_PROFILE_CREATED": _("Employee profile created"),
         "EMPLOYEE_PROFILE_UPDATED": _("Employee profile updated"),
         "EMPLOYEE_ACTIVATED": _("Employee activated"),
+        "EMPLOYEE_COMMISSION_PLAN_ASSIGNED": _("Commission plan assigned"),
         "EMPLOYEE_SUSPENDED": _("Employee suspended"),
         "EMPLOYEE_REACTIVATED": _("Employee reactivated"),
         "EMPLOYEE_TERMINATED": _("Employee terminated"),

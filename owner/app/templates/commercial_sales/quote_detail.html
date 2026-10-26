@@ -92,7 +92,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="commercial-sales-quote-detail-plan-id">{{ _("Plan") }}</label>
     <select id="commercial-sales-quote-detail-plan-id" name="plan_id" required>
-      {% for p in plans %}<option value="{{ p.plan_id }}">{{ p.name }} ({{ p.plan_code }})</option>{% endfor %}
+      {% for p in plans %}<option value="{{ p.plan_id }}">{{ catalog_label(p.name) }} ({{ p.plan_code }})</option>{% endfor %}
     </select>
     <label for="commercial-sales-quote-detail-quantity">{{ _("Quantity") }}</label>
     <input id="commercial-sales-quote-detail-quantity" type="number" name="quantity" value="1" min="1" required>

@@ -24,18 +24,29 @@
 
     var storageKey = root.dataset.tourStorageKey;
 
+    /* Seen-marker lives in BOTH localStorage and a one-year cookie. Why
+     * two: field report -- the tour came back on every visit for sellers
+     * on phones, where localStorage is wiped (Safari storage pruning,
+     * private tabs, home-screen app vs browser) while a cookie of the
+     * same origin survives. Either one being present means "seen". */
+    var cookieName = storageKey;
+    function cookieSeen() {
+      return document.cookie.split("; ").indexOf(cookieName + "=1") !== -1;
+    }
+
     function alreadySeen() {
+      var local = false;
       try {
-        return window.localStorage.getItem(storageKey) === "1";
-      } catch (e) {
-        return false;
-      }
+        local = window.localStorage.getItem(storageKey) === "1";
+      } catch (e) { /* storage blocked -- the cookie still counts */ }
+      return local || cookieSeen();
     }
 
     function markSeen() {
       try {
         window.localStorage.setItem(storageKey, "1");
-      } catch (e) { /* localStorage unavailable -- tour will simply reappear next load */ }
+      } catch (e) { /* localStorage unavailable -- cookie below still sticks */ }
+      document.cookie = cookieName + "=1; max-age=31536000; path=/; SameSite=Lax";
     }
 
     var overlay = null;
@@ -125,6 +136,11 @@
         window.history.replaceState(null, "", window.location.pathname);
       }
     } else if (!alreadySeen()) {
+      // Marked on OPEN, not only on dismiss: a seller who navigates away
+      // (taps the menu, a link behind the overlay, back) without pressing
+      // Finish used to get the tour again on every page. Showing it once
+      // is enough; "Show welcome tour" in the profile menu replays it.
+      markSeen();
       open();
     }
   });

@@ -63,7 +63,7 @@
     <label for="issuance-plan-id">{{ _("Package") }}</label>
     <select id="issuance-plan-id" name="plan_id" required>
       {% for pkg in packages %}
-      <option value="{{ pkg.plan_id }}" {% if fv.get("plan_id") == pkg.plan_id|string %}selected{% endif %}>{{ pkg.name }} -- {{ pkg.billing_model }} -- {{ pkg.unit_price }} {{ pkg.currency }} ({{ pkg.included_device_count }} {{ _("devices included") }})</option>
+      <option value="{{ pkg.plan_id }}" {% if fv.get("plan_id") == pkg.plan_id|string %}selected{% endif %}>{{ catalog_label(pkg.name) }} -- {{ pkg.billing_model }} -- {{ pkg.unit_price }} {{ pkg.currency }} ({{ pkg.included_device_count }} {{ _("devices included") }})</option>
       {% else %}
       <option value="" disabled>{{ _("No sellable packages yet -- set an effective date and current price on a plan first.") }}</option>
       {% endfor %}

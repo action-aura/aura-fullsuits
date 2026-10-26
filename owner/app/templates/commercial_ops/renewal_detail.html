@@ -7,8 +7,8 @@
   <dl class="kv">
     <dt>{{ _("Subscription") }}</dt><dd><a href="{{ url_for('subscriptions.detail', subscription_id=renewal.subscription_id) }}"><bdi dir="ltr">{{ renewal.subscription_id }}</bdi></a></dd>
     <dt>{{ _("Product") }}</dt><dd>{{ renewal.product.name }}</dd>
-    <dt>{{ _("Current plan") }}</dt><dd>{{ renewal.current_plan.name }}</dd>
-    <dt>{{ _("Proposed plan") }}</dt><dd>{{ renewal.requested_plan.name if renewal.requested_plan else _("(unchanged)") }}</dd>
+    <dt>{{ _("Current plan") }}</dt><dd>{{ catalog_label(renewal.current_plan.name) }}</dd>
+    <dt>{{ _("Proposed plan") }}</dt><dd>{{ catalog_label(renewal.requested_plan.name) if renewal.requested_plan else _("(unchanged)") }}</dd>
     <dt>{{ _("Current term") }}</dt><dd>{{ format_owner_date(renewal.current_term_start) if renewal.current_term_start else "-" }} &rarr; {{ format_owner_date(renewal.current_term_end) if renewal.current_term_end else "-" }}</dd>
     <dt>{{ _("Proposed term") }}</dt><dd>{{ format_owner_date(renewal.proposed_term_start) if renewal.proposed_term_start else "-" }} &rarr; {{ format_owner_date(renewal.proposed_term_end) if renewal.proposed_term_end else "-" }}</dd>
     <dt>{{ _("Device allowance") }}</dt><dd>{{ format_owner_number(renewal.device_allowance_before) if renewal.device_allowance_before else "-" }} &rarr; {{ format_owner_number(renewal.device_allowance_after) if renewal.device_allowance_after else _("(unchanged)") }}</dd>

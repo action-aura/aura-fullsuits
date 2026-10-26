@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import uuid
 
-from flask import Blueprint, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from flask_babel import gettext as _
 from sqlalchemy import select
 
 from app.audit.services import record as audit_record
@@ -145,11 +146,40 @@ def detail(employee_id):
         .order_by(AuditLog.created_at.desc())
         .limit(50)
     ).scalars().all()
+    from app.commissions.ladder_setup import LADDER_PLAN_CODE, current_plan_assignment
+    from app.operational_reports.periods import jordan_today
+
+    _assignment, current_plan = current_plan_assignment(profile.id, jordan_today())
     return render_template(
-        "employees/detail.html", profile=profile, staff=staff, presence=presence, sessions=sessions,
+        "employees/detail.html", current_plan=current_plan, ladder_plan_code=LADDER_PLAN_CODE, profile=profile, staff=staff, presence=presence, sessions=sessions,
         roles=_role_options(), managers=[m for m in _manager_options() if m.id != profile.id], plans=_commission_plan_options(),
         audit_events=audit_events,
     )
+
+
+@bp.route("/<uuid:employee_id>/commission-ladder", methods=["POST"])
+@require_permission("employees.manage_commission_plan")
+@require_recent_auth
+def assign_commission_ladder(employee_id):
+    """"Assign monthly ladder plan" button on the employee page -- the screen
+    twin of `flask commissions assign-ladder`. Server-side permission is the
+    real control (Super Admin only; SALES / SALES_MANAGER get 403)."""
+    from app.commissions.ladder_setup import assign_profile_to_ladder
+    from app.operational_reports.periods import jordan_today
+
+    actor = load_current_staff()
+    profile, err = _get_profile_or_404(employee_id)
+    if err:
+        return err
+    try:
+        _assignment, created = assign_profile_to_ladder(
+            profile, effective_from=jordan_today(), actor_staff_user_id=actor.id)
+    except ValueError as exc:
+        # e.g. the SALES_LADDER plan was never seeded: say what to run.
+        flash(str(exc), "error")
+    else:
+        flash(_("Moved to the monthly ladder plan.") if created else _("Already on the monthly ladder plan."), "info")
+    return redirect(url_for("employees.detail", employee_id=employee_id))
 
 
 @bp.route("/<uuid:employee_id>/edit", methods=["POST"])

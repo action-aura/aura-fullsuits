@@ -17,6 +17,7 @@ from datetime import date
 
 from sqlalchemy import select
 
+from app.audit.services import record as audit_record
 from app.commissions.ladder import LADDER_CURRENCY, LADDER_RULE_TYPE
 from app.commissions.management import (
     assign_employee_commission_plan,
@@ -66,3 +67,41 @@ def assign_seller_to_ladder(staff_user_id: uuid.UUID, *, effective_from: date, a
         raise ValueError("That staff user has no employee profile; sellers are employees.")
     return assign_employee_commission_plan(profile.id, plan, effective_from=effective_from,
                                            actor_staff_user_id=actor_staff_user_id)
+
+
+def current_plan_assignment(employee_profile_id: uuid.UUID, on: date):
+    """(assignment, plan) in force for the employee on `on`, or (None, None)."""
+    row = db_session.execute(
+        select(EmployeeCommissionPlanAssignment, CommissionPlan)
+        .join(CommissionPlan, CommissionPlan.id == EmployeeCommissionPlanAssignment.commission_plan_id)
+        .where(
+            EmployeeCommissionPlanAssignment.employee_profile_id == employee_profile_id,
+            EmployeeCommissionPlanAssignment.effective_from <= on,
+            (EmployeeCommissionPlanAssignment.effective_until.is_(None))
+            | (EmployeeCommissionPlanAssignment.effective_until > on),
+        )
+        .order_by(EmployeeCommissionPlanAssignment.effective_from.desc())
+    ).first()
+    return (row[0], row[1]) if row else (None, None)
+
+
+def assign_profile_to_ladder(profile: EmployeeProfile, *, effective_from: date, actor_staff_user_id: uuid.UUID
+                             ) -> tuple[EmployeeCommissionPlanAssignment, bool]:
+    """(assignment, created). Idempotent for the screen: a second press while
+    the employee is already on the ladder returns the existing assignment
+    instead of closing it and opening an identical one (which the CLI would
+    do, and which would reset the start date of a seller already earning)."""
+    assignment, plan = current_plan_assignment(profile.id, effective_from)
+    if plan is not None and plan.plan_code == LADDER_PLAN_CODE:
+        return assignment, False
+    created = assign_seller_to_ladder(profile.staff_user_id, effective_from=effective_from,
+                                      actor_staff_user_id=actor_staff_user_id)
+    # Also on the employee's own audit timeline (the assignment row's audit
+    # entry, written by management.py, is filed under the assignment).
+    audit_record(
+        actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None,
+        action_code="EMPLOYEE_COMMISSION_PLAN_ASSIGNED", entity_type="employee_profile",
+        entity_public_id=str(profile.id), after_state={"commission_plan_code": LADDER_PLAN_CODE,
+                                                       "effective_from": effective_from.isoformat()},
+    )
+    return created, True

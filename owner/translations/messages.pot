@@ -7871,3 +7871,35 @@ msgstr ""
 #: app/templates/crash_reports/list.html
 msgid "Support code"
 msgstr ""
+
+#: app/catalog/package_seed.py
+msgid "Aura Retail - Package 1 (yearly)"
+msgstr ""
+
+#: app/catalog/package_seed.py
+msgid "Aura Retail - Package 2 (monthly, 12-month contract)"
+msgstr ""
+
+#: app/catalog/package_seed.py
+msgid "Aura Retail - Package 3 (monthly, 24-month contract)"
+msgstr ""
+
+#: app/catalog/package_seed.py
+msgid "Extra device pair (1 desktop + 1 phone)"
+msgstr ""
+
+#: app/employees/routes.py
+msgid "Assign monthly ladder plan"
+msgstr ""
+
+#: app/employees/routes.py
+msgid "Already on the monthly ladder plan."
+msgstr ""
+
+#: app/employees/routes.py
+msgid "Moved to the monthly ladder plan."
+msgstr ""
+
+#: app/employees/routes.py
+msgid "Commission plan assigned"
+msgstr ""

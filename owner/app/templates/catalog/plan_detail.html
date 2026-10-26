@@ -1,8 +1,8 @@
 {% extends "layout/base.html" %}
-{% block title %}{{ plan.name }}{% endblock %}
+{% block title %}{{ catalog_label(plan.name) }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ plan.name }} ({{ plan.plan_code }})</h2>
+  <h2>{{ catalog_label(plan.name) }} ({{ plan.plan_code }})</h2>
   <dl class="kv">
     <dt>{{ _("Billing model") }}</dt><dd>{{ billing_model_label(plan.billing_model) }}</dd>
     <dt>{{ _("Status") }}</dt><dd><span class="badge">{{ plan_lifecycle_status_label(plan.lifecycle_status) }}</span></dd>

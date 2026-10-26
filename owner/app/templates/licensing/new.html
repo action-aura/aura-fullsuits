@@ -7,7 +7,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="subscription_id">{{ _("Subscription") }}</label>
     <select id="subscription_id" name="subscription_id" required>
-      {% for s in subscriptions %}<option value="{{ s.id }}">{{ s.customer.legal_name }} -- {{ s.plan.name }}</option>{% endfor %}
+      {% for s in subscriptions %}<option value="{{ s.id }}">{{ s.customer.legal_name }} -- {{ catalog_label(s.plan.name) }}</option>{% endfor %}
     </select>
     <label for="allowed_platforms">{{ _("Allowed platforms (comma-separated)") }}</label>
     <input id="allowed_platforms" name="allowed_platforms" value="WINDOWS,ANDROID" required>

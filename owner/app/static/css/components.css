@@ -208,6 +208,14 @@ button:disabled, .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .kv { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr); max-inline-size: 720px; gap: 0.3rem 1rem; font-size: 0.9rem; }
 .kv dt { color: var(--muted); }
+.kv dd { margin: 0; min-inline-size: 0; overflow-wrap: anywhere; }
+/* Phone: label above value. Two columns (140px+) left an email address ~110px
+   wider than the screen on the employee page (measured: scrollWidth 501 on a
+   393px viewport). */
+@media (max-width: 640px) {
+  .kv { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .kv dd { margin-block-end: 0.5rem; }
+}
 
 code.masked {
   background: var(--aura-color-surface-muted);
@@ -832,15 +840,23 @@ table.aura-table td.aura-table__wrap { white-space: normal; }
 
 table.aura-table thead th {
   position: sticky;
-  top: 0;
+  top: 56px; /* = .aura-topbar min-block-size */
   background: var(--aura-color-surface-raised);
   color: var(--muted);
   font-weight: 600;
   font-size: 0.78rem;
   text-transform: uppercase;
-  z-index: var(--aura-z-sticky);
+  /* Field report: the sticky head painted over the side panel and other
+     chrome while scrolling. It shared --aura-z-sticky (10) with the sidebar
+     and top bar and, being later in the DOM, won every tie. It only has to
+     beat the table's own cells, so it takes 1 -- below every shell layer --
+     and parks under the top bar instead of sliding beneath it. */
+  z-index: 1;
   box-shadow: inset 0 -1px 0 var(--border);
 }
+/* Inside the scroll wrapper the head sticks to the wrapper's own top edge,
+   not the page's: the 56px top-bar offset above would push it down a row. */
+.aura-table-scroll table.aura-table thead th { top: 0; }
 table.aura-table th[aria-sort] { padding: 0; }
 .aura-table__sort-link {
   display: flex;

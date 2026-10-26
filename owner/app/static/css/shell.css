@@ -318,8 +318,19 @@ summary:focus-visible {
     box-shadow: var(--aura-shadow-lg);
   }
   :root[dir="rtl"] .aura-sidebar { transform: translateX(100%); }
-  .aura-sidebar.aura-sidebar--open { transform: translateX(0); }
+  .aura-sidebar.aura-sidebar--open,
+  /* Must restate the open rule for RTL: the closed rule above is
+     :root[dir="rtl"] .aura-sidebar (specificity 0,3,0) and so beat the
+     plain open rule (0,2,0) -- in Arabic the panel could never slide in
+     or out ("the side panel does not fold in Arabic"). */
+  :root[dir="rtl"] .aura-sidebar.aura-sidebar--open { transform: translateX(0); }
   .aura-sidebar__toggle { display: none; }
+  /* Stacking: the off-canvas panel is an overlay, so it sits on the overlay
+     layer (above sticky table heads, which share --aura-z-sticky and, being
+     later in the DOM, used to paint over it). The top bar goes one step
+     higher so its menu button stays reachable to close the panel. Modals
+     (300) and the toast/palette layers remain above both. */
+  .aura-sidebar { z-index: var(--aura-z-overlay); }
 }
 @media (min-width: 1025px) {
   .aura-topbar__menu-btn { display: none; }
@@ -346,6 +357,13 @@ summary:focus-visible {
   background: var(--aura-color-surface-raised);
   border-block-end: 1px solid var(--aura-color-border-default);
   min-block-size: 56px;
+}
+
+/* Phone/tablet: one step above the off-canvas panel (z-overlay) so its menu
+   button stays tappable to close the panel. Declared after the base rule on
+   purpose -- equal specificity, later wins. */
+@media (max-width: 1024px) {
+  .aura-topbar { z-index: calc(var(--aura-z-overlay) + 1); }
 }
 
 .aura-topbar__start {
@@ -684,6 +702,36 @@ tr.is-highlighted > td { background: var(--aura-color-brand-primary-soft); }
 .aura-main--unauthenticated {
   max-width: var(--aura-content-narrow);
   margin-block-start: var(--aura-space-8);
+}
+
+/* Phone (<= 640px): the top bar keeps only the menu button + page title.
+   sidebar.js reparents .aura-topbar__end (theme, counters, language, role
+   chip, profile menu) into .aura-sidebar__tools inside the menu, so the one
+   element and its handlers/ids are reused, not duplicated. */
+.aura-sidebar__tools { display: none; }
+@media (max-width: 640px) {
+  .aura-topbar__brand { display: none; }
+  .aura-sidebar__tools {
+    display: block;
+    padding: var(--aura-space-3);
+    border-block-start: 1px solid var(--aura-color-border-default);
+    margin-block-start: auto;
+  }
+  .aura-sidebar__tools .aura-topbar__end {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--aura-space-3);
+  }
+  .aura-sidebar__tools .aura-topbar__end > * { justify-content: center; }
+  .aura-sidebar__tools .aura-topbar__stub-label { display: inline; }
+  .aura-sidebar__tools .aura-topbar__stub kbd { display: none; }
+  .aura-sidebar__tools .aura-profile-menu__name { max-inline-size: none; }
+  /* Inside the scrolling menu a floating panel would be clipped: flow it. */
+  .aura-sidebar__tools .aura-profile-menu__panel {
+    position: static;
+    margin-block-start: var(--aura-space-2);
+    box-shadow: none;
+  }
 }
 
 @media (max-width: 720px) {

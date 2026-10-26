@@ -109,6 +109,24 @@
       });
     });
 
+    // Phone: move the top bar's controls into the menu (see shell.css
+    // .aura-sidebar__tools). Reparent the single element rather than clone
+    // it, so ids, the theme/count-badge/palette handlers keep working.
+    var topEnd = document.querySelector(".aura-topbar__end");
+    var topbar = document.querySelector(".aura-topbar");
+    if (topEnd && topbar && window.matchMedia) {
+      var tools = document.createElement("div");
+      tools.className = "aura-sidebar__tools";
+      sidebar.appendChild(tools);
+      var phone = window.matchMedia("(max-width: 640px)");
+      var placeTools = function () {
+        if (phone.matches) tools.appendChild(topEnd);
+        else topbar.appendChild(topEnd);
+      };
+      placeTools();
+      if (phone.addEventListener) phone.addEventListener("change", placeTools);
+    }
+
     // Mobile: off-canvas open/close, independent of the collapsed/expanded
     // preference above (small viewports always start closed).
     if (mobileToggle) {
@@ -125,6 +143,15 @@
           sidebar.classList.remove("aura-sidebar--open");
           mobileToggle.setAttribute("aria-expanded", "false");
         });
+      });
+
+      // Tap outside the panel (and not on its toggle) closes it, so the
+      // panel is dismissible however it covers the screen.
+      document.addEventListener("click", function (event) {
+        if (!sidebar.classList.contains("aura-sidebar--open")) return;
+        if (sidebar.contains(event.target) || mobileToggle.contains(event.target)) return;
+        sidebar.classList.remove("aura-sidebar--open");
+        mobileToggle.setAttribute("aria-expanded", "false");
       });
 
       document.addEventListener("keydown", function (event) {

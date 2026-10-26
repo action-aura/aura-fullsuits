@@ -27,20 +27,66 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from flask_babel import format_date as _babel_format_date
+from flask_babel import get_locale as _get_locale
 from flask_babel import format_datetime as _babel_format_datetime
 from flask_babel import format_decimal as _babel_format_decimal
+
+
+# Bidi isolation for numeric dates. Field report: Arabic dates rendered as
+# "262026/10/" (26/10/2026 scrambled) on /licenses/issuance/sales. Cause:
+# Babel's Arabic "medium" date puts a right-to-left mark (U+200F) after each
+# number; inside an RTL page those marks make the digit groups and slashes
+# reorder. So for RTL locales the date uses a plain dd/MM/yyyy pattern (no
+# marks) and the whole value is wrapped in an LTR isolate (U+2066 .. U+2069),
+# which keeps it reading 26/10/2026 wherever it is dropped -- table cell,
+# attribute, plain text -- without every template needing a <bdi>. Western
+# digits are unchanged (see module docstring). English output is untouched.
+_LRI, _PDI = "⁦", "⁩"
+
+
+def _is_rtl() -> bool:
+    locale = _get_locale()
+    return bool(locale) and locale.language == "ar"
+
+
+def _isolate(text: str) -> str:
+    return _LRI + text + _PDI
 
 
 def format_owner_date(value: date | None) -> str:
     if value is None:
         return "-"
+    if _is_rtl():
+        return _isolate(_babel_format_date(value, format="dd/MM/yyyy"))
     return _babel_format_date(value, format="medium")
 
 
 def format_owner_datetime(value: datetime | None) -> str:
     if value is None:
         return "-"
+    if _is_rtl():
+        return _isolate(_babel_format_datetime(value, format="dd/MM/yyyy HH:mm"))
     return _babel_format_datetime(value, format="medium")
+
+
+def catalog_label(name):
+    """Display name of a catalog row (plan / add-on) in the page language.
+
+    The seeded names are English data ("Aura Retail - Package 1 (yearly)") and
+    stay that way in the database -- they are plan identity for the CLI and
+    reports. The Arabic UI looks the stored text up as a message id, so a
+    seller sees "الباقة 1 (سنوية)". Text with no translation (a custom plan the
+    owner typed) comes back unchanged. Msgids are declared in
+    catalog/package_seed.py so extraction keeps them in the catalogs."""
+    # Display-only: services and tests call the sale catalog outside a
+    # request, and the stored English name must stay the data there.
+    from flask import has_request_context
+
+    if not name or not has_request_context():
+        return name
+    from flask_babel import gettext as _gettext
+
+    return _gettext(name)
 
 
 def format_owner_number(value) -> str:

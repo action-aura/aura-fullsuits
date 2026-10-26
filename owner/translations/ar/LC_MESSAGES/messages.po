@@ -9227,3 +9227,35 @@ msgstr "إيقافها على هذا الجهاز"
 #, python-format
 msgid "Sales waiting for your confirmation: %(count)s"
 msgstr "مبيعات بانتظار تأكيدك: %(count)s"
+
+#: app/catalog/package_seed.py
+msgid "Aura Retail - Package 1 (yearly)"
+msgstr "الباقة 1 (سنوية)"
+
+#: app/catalog/package_seed.py
+msgid "Aura Retail - Package 2 (monthly, 12-month contract)"
+msgstr "الباقة 2 (شهرية)"
+
+#: app/catalog/package_seed.py
+msgid "Aura Retail - Package 3 (monthly, 24-month contract)"
+msgstr "الباقة 3 (شهرية)"
+
+#: app/catalog/package_seed.py
+msgid "Extra device pair (1 desktop + 1 phone)"
+msgstr "زوج أجهزة إضافي (جهاز مكتبي + هاتف)"
+
+#: app/employees/routes.py
+msgid "Assign monthly ladder plan"
+msgstr "تعيين خطة السلّم الشهري"
+
+#: app/employees/routes.py
+msgid "Already on the monthly ladder plan."
+msgstr "الموظف على خطة السلّم الشهري بالفعل."
+
+#: app/employees/routes.py
+msgid "Moved to the monthly ladder plan."
+msgstr "تم نقل الموظف إلى خطة السلّم الشهري."
+
+#: app/employees/routes.py
+msgid "Commission plan assigned"
+msgstr "تم تعيين خطة عمولة"

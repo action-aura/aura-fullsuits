@@ -22,7 +22,7 @@
     {% for s in result.rows %}
     <tr>
       <td>{{ s.customer.legal_name }}</td>
-      <td>{{ s.plan.name }}</td>
+      <td>{{ catalog_label(s.plan.name) }}</td>
       <td><span class="badge {{ subscription_badge_class(s.status) }}">{{ subscription_status_label(s.status) }}</span></td>
       <td>{{ format_owner_date(s.end_date) if s.end_date else "-" }}</td>
       <td><a href="{{ url_for('subscriptions.detail', subscription_id=s.id) }}">{{ _("View") }}</a></td>
