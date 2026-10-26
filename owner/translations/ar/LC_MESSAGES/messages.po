@@ -9259,3 +9259,23 @@ msgstr "تم نقل الموظف إلى خطة السلّم الشهري."
 #: app/employees/routes.py
 msgid "Commission plan assigned"
 msgstr "تم تعيين خطة عمولة"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Package 1"
+msgstr "الباقة 1"
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Monthly packages"
+msgstr "الباقات الشهرية"
+
+#: app/employees/routes.py
+msgid "Moved to both ladder plans (Package 1 and monthly packages)."
+msgstr "تم نقل الموظف إلى خطتي السلّم (الباقة 1 والباقات الشهرية)."
+
+#: app/employees/routes.py
+msgid "Already on both ladder plans."
+msgstr "الموظف على خطتي السلّم بالفعل."
+
+#: app/templates/employees/detail.html
+msgid "Assign both ladder plans"
+msgstr "تعيين خطتي السلّم"

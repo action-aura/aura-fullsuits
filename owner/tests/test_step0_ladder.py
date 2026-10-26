@@ -34,6 +34,7 @@ from tests.test_step0_packages import _make_plan
 
 JOD = "JOD"
 LADDER = "MONTHLY_LADDER"
+MONTHLY_LADDER = "MONTHLY_PKG_LADDER"
 
 
 # ------------------------------------------------------------------ setup --
@@ -85,14 +86,22 @@ def _assign(app, w, profiles, *, rule, rate=Decimal("10.0"), since):
         )
 
         plan = create_commission_plan({"plan_code": f"C_{uuid.uuid4().hex[:6]}", "name": f"Sellers {rule}"}, w["admin"])
+        monthly_plan = None
         if rule == LADDER:
             create_commission_rule_version(plan, rule_type=LADDER, currency=JOD, effective_from=since,
+                                           actor_staff_user_id=w["admin"])
+            monthly_plan = create_commission_plan(
+                {"plan_code": f"M_{uuid.uuid4().hex[:6]}", "name": "Sellers monthly packages"}, w["admin"])
+            create_commission_rule_version(monthly_plan, rule_type=MONTHLY_LADDER, currency=JOD, effective_from=since,
                                            actor_staff_user_id=w["admin"])
         else:
             create_commission_rule_version(plan, rule_type="PERCENTAGE_OF_PAYMENT", rate_percentage=rate,
                                            effective_from=since, actor_staff_user_id=w["admin"])
         for profile_id in profiles:
             assign_employee_commission_plan(profile_id, plan, effective_from=since, actor_staff_user_id=w["admin"])
+            if monthly_plan is not None:  # the second ladder never closes the first
+                assign_employee_commission_plan(profile_id, monthly_plan, effective_from=since,
+                                                actor_staff_user_id=w["admin"], close_prior=False)
         return plan.id
 
 
@@ -339,61 +348,47 @@ def test_percentage_seller_earns_nothing_on_the_pair_part_and_never_gets_ladder_
 
 # ------------------------------------------------------- monthly packages --
 
-def test_p2_counts_only_at_its_third_payment_in_the_month_that_payment_is_confirmed(app, seeded):
+def test_p2_counts_at_its_first_confirmed_payment_in_the_month_that_payment_is_confirmed(app, seeded):
+    """Owner, 2026-10-26: a monthly package counts when the manager confirms
+    the FIRST payment (which carries the activation), not at the 3rd."""
     w = _world(app)
     last_month = datetime.now(timezone.utc) - timedelta(days=40)
     sale = _sell(app, w, "p2", confirmed_at=last_month)
-    sub = _rows(app, sale["order_id"])["subscription_id"]
-    _pay_month(app, w, sub, "35.00", confirmed_at=last_month + timedelta(days=1))
-    assert _ladder_sales(app, w["seller_profile"]) == []  # 70 JOD paid: not yet
-    third = _pay_month(app, w, sub, "35.00")
     [counted] = _ladder_sales(app, w["seller_profile"])
-    assert (counted["status"], counted["payment_id"], counted["month"]) == ("COUNTED", third, _this_month())
-    assert _summary(app, w["seller_profile"])["total"] == Decimal("20.00")
+    assert (counted["status"], counted["payment_id"]) == ("COUNTED", sale["payment_id"])
     with app.app_context():
         from app.commissions.ladder import ladder_month_of
 
-        assert _summary(app, w["seller_profile"], month=ladder_month_of(last_month))["count"] == 0
-    # a 4th payment never counts the same sale again
+        assert counted["month"] == ladder_month_of(last_month)
+        last = _summary(app, w["seller_profile"], month=ladder_month_of(last_month))
+    assert (last["monthly_count"], last["monthly_total"], last["yearly_count"]) == (1, Decimal("5.00"), 0)
+    assert _summary(app, w["seller_profile"])["count"] == 0
+    # later months never count the same sale again
+    sub = _rows(app, sale["order_id"])["subscription_id"]
+    _pay_month(app, w, sub, "35.00")
     _pay_month(app, w, sub, "35.00")
     assert len(_ladder_sales(app, w["seller_profile"])) == 1
-    assert _summary(app, w["seller_profile"])["total"] == Decimal("20.00")
+    with app.app_context():
+        assert _summary(app, w["seller_profile"], month=ladder_month_of(last_month))["monthly_total"] == Decimal("5.00")
 
 
-def test_p2_sold_with_a_pair_still_counts_at_its_third_payment(app, seeded):
-    """The pair's 50 is not package money: 85 + 35 = 120 must NOT count the
-    sale at its 2nd payment."""
+def test_p2_sold_with_a_pair_counts_once_at_its_first_payment(app, seeded):
     w = _world(app)
     sale = _sell(app, w, "p2", pairs=1)
-    sub = _rows(app, sale["order_id"])["subscription_id"]
-    _pay_month(app, w, sub, "35.00")
-    assert _ladder_sales(app, w["seller_profile"]) == []
-    third = _pay_month(app, w, sub, "35.00")
-    assert [s["payment_id"] for s in _ladder_sales(app, w["seller_profile"])] == [third]
-
-
-def test_p3_counts_at_its_fifth_payment(app, seeded):
-    w = _world(app)
-    sale = _sell(app, w, "p3")
-    sub = _rows(app, sale["order_id"])["subscription_id"]
-    for _ in range(3):
-        _pay_month(app, w, sub, "20.00")
-    assert _ladder_sales(app, w["seller_profile"]) == []  # 4 payments, 80 JOD
-    fifth = _pay_month(app, w, sub, "20.00")
     [counted] = _ladder_sales(app, w["seller_profile"])
-    assert counted["payment_id"] == fifth
-    assert _summary(app, w["seller_profile"])["total"] == Decimal("20.00")
-
-
-def test_p2_customer_who_stops_after_two_payments_never_counts(app, seeded):
-    w = _world(app)
-    sale = _sell(app, w, "p2")
-    _pay_month(app, w, _rows(app, sale["order_id"])["subscription_id"], "35.00")
-    assert _ladder_sales(app, w["seller_profile"]) == []
+    assert counted["payment_id"] == sale["payment_id"]
     summary = _summary(app, w["seller_profile"])
-    assert (summary["count"], summary["total"]) == (0, Decimal("0.00"))
-    assert _entries(app, w["seller_profile"]) == []
-    assert _entries(app, w["seller_profile"], kind="PAYMENT_RULE") == []
+    assert (summary["monthly_count"], summary["monthly_total"]) == (1, Decimal("5.00"))
+
+
+def test_p3_counts_at_its_first_payment_and_p2_p3_share_one_monthly_ladder(app, seeded):
+    w = _world(app)
+    _sell(app, w, "p3")
+    _sell(app, w, "p2")
+    summary = _summary(app, w["seller_profile"])
+    assert (summary["monthly_count"], summary["monthly_total"], summary["yearly_count"]) == (2, Decimal("10.00"), 0)
+    net = _net_by_order(app, w["seller_profile"])
+    assert sorted(net.values()) == [Decimal("5.00"), Decimal("5.00")]
 
 
 def test_the_seller_cannot_confirm_a_later_payment_of_their_own_sale(app, seeded):
@@ -884,66 +879,6 @@ def test_a_crash_while_posting_the_ladder_writes_nothing_and_the_retry_counts_on
     assert [r[1] for r in _entries(app, w["seller_profile"])] == [Decimal("20.00")]
 
 
-def test_two_managers_confirming_qualifying_payments_at_once_count_the_sale_once(app, seeded, monkeypatch):
-    """Payments 3 and 4 of one Package 2 sale, confirmed by two managers at
-    the same moment: both cross the 100 JOD line. The second waits for the
-    first (a per-seller lock), sees the counted sale, and counts nothing."""
-    from tests.test_issuance_sale_hardening import _OtherManager
-
-    w = _world(app)
-    sale = _sell(app, w, "p2")
-    sub = _rows(app, sale["order_id"])["subscription_id"]
-    _pay_month(app, w, sub, "35.00")
-    with app.app_context():
-        from app.extensions import db_session
-        from app.models.subscriptions import Subscription
-        from app.subscriptions.services import record_payment
-
-        s = db_session.get(Subscription, sub)
-        ids = []
-        for _ in range(2):
-            ids.append(record_payment(
-                {"customer_id": s.customer_id, "subscription_id": s.id, "amount": Decimal("35.00"), "currency": JOD,
-                 "method": "BANK_TRANSFER", "payment_date": date.today(), "reference": uuid.uuid4().hex[:8],
-                 "status": "PENDING"}, w["seller"]).id)
-
-    def _load():
-        from app.extensions import db_session as s2
-        from app.models.subscriptions import PaymentRecord
-
-        return s2.get(PaymentRecord, ids[1])
-
-    def _act(row):
-        from app.commercial_sales.payments import confirm_payment
-
-        return confirm_payment(row, actor_staff_user_id=w["admin"])
-
-    other = _OtherManager(app, load=_load, act=_act).start()
-    import app.commissions.ladder as ladder_module
-
-    real = ladder_module._recompute_months
-    seen = {}
-
-    def _while_counting(*args, **kwargs):
-        if "other" not in seen:
-            seen["other"] = other.fire()  # the other manager presses Confirm now
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(ladder_module, "_recompute_months", _while_counting)
-    with app.app_context():
-        from app.commercial_sales.payments import confirm_payment
-        from app.extensions import db_session
-        from app.models.subscriptions import PaymentRecord
-
-        confirm_payment(db_session.get(PaymentRecord, ids[0]), actor_staff_user_id=w["manager"])
-    other.finish()
-    assert seen["other"] == "blocked"
-    assert other.error is None, other.error
-    [counted] = _ladder_sales(app, w["seller_profile"])
-    assert counted["payment_id"] == ids[0]
-    assert _summary(app, w["seller_profile"])["total"] == Decimal("20.00")
-
-
 def test_switching_from_percentage_to_ladder_mid_sale_never_pays_both(app, seeded):
     w = _world(app, rule="PERCENT")
     sale = _sell(app, w, "p2")
@@ -993,12 +928,17 @@ def test_seed_and_assign_put_a_seller_on_the_ladder(app, seeded):
     assert refused.exit_code != 0 and "seed-ladder-plan" in refused.output  # no plan yet
     first = _cli(app, "commissions", "seed-ladder-plan", "--actor-email", admin_email)
     again = _cli(app, "commissions", "seed-ladder-plan", "--actor-email", admin_email)
-    assert (json.loads(first.output)["created"], json.loads(again.output)["created"]) == (True, False)
+    # one command seeds BOTH ladder plans (Package 1, then monthly packages)
+    assert [(r["plan_code"], r["created"]) for r in json.loads(first.output)] == [
+        ("SALES_LADDER", True), ("SALES_LADDER_MONTHLY_PKGS", True)]
+    assert [r["created"] for r in json.loads(again.output)] == [False, False]
     assert _cli(app, "commissions", "seed-ladder-plan", "--actor-email", seller_email).exit_code != 0  # not a Super Admin
     done = _cli(app, "commissions", "assign-ladder", seller_email, "--actor-email", admin_email)
     assert done.exit_code == 0, done.output
     _sell(app, w, "p1")
-    assert _summary(app, w["seller_profile"])["total"] == Decimal("20.00")
+    _sell(app, w, "p3")  # the same one command put the seller on the monthly-packages ladder too
+    summary = _summary(app, w["seller_profile"])
+    assert (summary["yearly_total"], summary["monthly_total"]) == (Decimal("20.00"), Decimal("5.00"))
     assert _entries(app, w["seller_profile"], kind="PAYMENT_RULE") == []
 
 

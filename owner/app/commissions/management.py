@@ -69,7 +69,7 @@ def _validate_rule_fields(
         if not currency:
             raise CommissionError("INVALID_COMMISSION_FIXED_AMOUNT")
         validate_currency(currency)
-    elif rule_type == "MONTHLY_LADDER":
+    elif rule_type in ("MONTHLY_LADDER", "MONTHLY_PKG_LADDER"):
         # Step 0 (2026-10-24): the owner's ladder. Its amounts are the
         # owner's own numbers in JOD (app/commissions/ladder.py), not
         # something an employee types -- so a rate or a fixed amount here
@@ -140,19 +140,23 @@ def assign_employee_commission_plan(
     *,
     effective_from: date,
     actor_staff_user_id: uuid.UUID,
+    close_prior: bool = True,
 ) -> EmployeeCommissionPlanAssignment:
     """Closes any prior open assignment for this employee before opening
     the new one -- an employee has at most one active commission plan
     assignment at any given date (mirrors CommissionRuleVersion's own
-    append-only pattern)."""
-    current = db_session.execute(
-        select(EmployeeCommissionPlanAssignment).where(
-            EmployeeCommissionPlanAssignment.employee_profile_id == employee_profile_id,
-            EmployeeCommissionPlanAssignment.effective_until.is_(None),
-        )
-    ).scalars().first()
-    if current is not None:
-        current.effective_until = effective_from
+    append-only pattern). The one exception is the owner's second ladder
+    (2026-10-26): ladder_setup opens it with close_prior=False, because a
+    seller holds the Package 1 ladder and the monthly-packages ladder at
+    once."""
+    if close_prior:
+        for current in db_session.execute(
+            select(EmployeeCommissionPlanAssignment).where(
+                EmployeeCommissionPlanAssignment.employee_profile_id == employee_profile_id,
+                EmployeeCommissionPlanAssignment.effective_until.is_(None),
+            )
+        ).scalars().all():
+            current.effective_until = effective_from
 
     assignment = EmployeeCommissionPlanAssignment(
         employee_profile_id=employee_profile_id,

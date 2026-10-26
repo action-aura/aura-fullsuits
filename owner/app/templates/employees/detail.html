@@ -142,14 +142,14 @@
 
 <div class="card" id="commission-plan">
   <h3>{{ _('Commission plan') }}</h3>
-  <p>{{ _('Current plan') }}: <strong>{{ current_plan.name if current_plan else _('None') }}</strong></p>
+  <p>{{ _('Current plan') }}: <strong>{{ held_plan_codes|join(', ') if held_plan_codes else _('None') }}</strong></p>
   {% if has_permission('employees.manage_commission_plan') %}
-  {% if current_plan and current_plan.plan_code == ladder_plan_code %}
-  <p class="empty">{{ _('Already on the monthly ladder plan.') }}</p>
+  {% if both_ladders %}
+  <p class="empty">{{ _('Already on both ladder plans.') }}</p>
   {% else %}
   <form method="post" action="{{ url_for('employees.assign_commission_ladder', employee_id=profile.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="btn">{{ _('Assign monthly ladder plan') }}</button>
+    <button type="submit" class="btn">{{ _('Assign both ladder plans') }}</button>
   </form>
   {% endif %}
   {% endif %}

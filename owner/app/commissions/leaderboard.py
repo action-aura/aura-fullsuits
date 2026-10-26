@@ -42,7 +42,7 @@ from app.operational_reports.periods import jordan_today
 
 # The summary's money fields: present on a row only for a viewer who may see them.
 MONEY_KEYS = ("total", "held", "payable", "renewals_total", "renewals_held")
-_COUNT_KEYS = ("count", "renewals", "refunded_after_hold")
+_COUNT_KEYS = ("count", "yearly_count", "monthly_count", "renewals", "refunded_after_hold")
 
 
 def board_months(now: datetime | None = None) -> tuple[date, date]:

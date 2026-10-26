@@ -25,6 +25,8 @@ from app.models.base import Base, TimestampMixin, UUIDPKMixin
 # force on the day a sale qualifies decides which rule pays it -- never both.
 COMMISSION_RULE_TYPES = (
     "PERCENTAGE_OF_PAYMENT", "FIXED_AMOUNT", "PERCENTAGE_FIRST_SALE", "PERCENTAGE_RENEWAL", "MONTHLY_LADDER",
+    # 2026-10-26: the owner's second ladder, for Packages 2 and 3 together.
+    "MONTHLY_PKG_LADDER",
 )
 COMMISSION_ENTRY_STATUSES = ("PENDING", "EARNED", "APPROVED", "PAID", "REVERSED", "CANCELLED", "DISPUTED")
 PAYOUT_BATCH_STATUSES = ("DRAFT", "APPROVED", "PAID")

@@ -11,10 +11,12 @@ additions):
     line is never a sale);
   - Package 1 (no contract) counts when its money is in: the invoice fully
     allocated, i.e. the 250 confirmed;
-  - a monthly package (one with a contract) counts once about 100 JOD of
-    package money is paid: monthly price x ceil(100 / monthly price) -- 105
-    for Package 2 (its 3rd payment), 100 for Package 3 (its 5th) -- in the
-    month the payment that crosses that line is confirmed; never before;
+  - a monthly package (one with a contract) counts when its FIRST payment
+    (which carries the 100 JOD activation) is confirmed, like Package 1 --
+    owner decision 2026-10-26, replacing "about 100 JOD paid". Packages 2
+    and 3 count TOGETHER on a SECOND ladder (totals 5/10/20/30/55/65/90/100/
+    115/130, +10 after the 10th); Package 1 keeps the first and counts
+    only itself. A seller holds both ladder plans at once;
   - 10 JOD to the subscription's sales owner for each renewal;
   - commission is payable 30 days after the confirming date;
   - a refund inside those 30 days: the sale does not count -- since
@@ -97,7 +99,6 @@ path posts nothing for an order already counted on a ladder.
 from __future__ import annotations
 
 import hashlib
-import math
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -106,7 +107,7 @@ from decimal import Decimal
 from sqlalchemy import event, select, text
 from sqlalchemy.orm import Session
 
-from app.commissions.services import resolve_active_rule
+from app.commissions.services import resolve_active_rule, resolve_active_rules
 from app.extensions import db_session
 from app.models.base import utcnow
 from app.models.catalog import Plan
@@ -119,20 +120,33 @@ from app.models.commercial_sales import (
     SalesOrder,
     SalesOrderLine,
 )
-from app.models.commissions import CommissionLadderSale, CommissionLedgerEntry
+from app.models.commissions import CommissionLadderSale, CommissionLedgerEntry, CommissionRuleVersion
 from app.models.employees import EmployeeProfile
 from app.models.subscriptions import PaymentRecord, Subscription
 from app.operational_reports.periods import OWNER_TIMEZONE, jordan_date
 
+# Two ladders (owner, 2026-10-26), told apart by the rule type of the rule a
+# sale was counted under -- no new column: the sale row already stores its
+# rule version. LADDER_RULE_TYPE keeps its old name and meaning: Package 1
+# (yearly). The monthly ladder counts Packages 2 and 3 TOGETHER.
 LADDER_RULE_TYPE = "MONTHLY_LADDER"
+MONTHLY_PACKAGES_RULE_TYPE = "MONTHLY_PKG_LADDER"
+LADDER_RULE_TYPES = (LADDER_RULE_TYPE, MONTHLY_PACKAGES_RULE_TYPE)
 LADDER_CURRENCY = "JOD"
 # Cumulative month totals for 0..5 sales; each sale after the 5th adds 30.
 LADDER_TOTALS = (Decimal("0.00"), Decimal("20.00"), Decimal("50.00"), Decimal("100.00"), Decimal("200.00"),
                  Decimal("350.00"))
 STEP_AFTER_FIFTH = Decimal("30.00")
+# Monthly-packages ladder: totals for 0..10 sales, then +10 per sale.
+MONTHLY_LADDER_TOTALS = tuple(Decimal(n).quantize(Decimal("0.00")) for n in
+                              (0, 5, 10, 20, 30, 55, 65, 90, 100, 115, 130))
+MONTHLY_STEP_AFTER_TENTH = Decimal("10.00")
+_LADDER_TABLES = {
+    LADDER_RULE_TYPE: (LADDER_TOTALS, STEP_AFTER_FIFTH),
+    MONTHLY_PACKAGES_RULE_TYPE: (MONTHLY_LADDER_TOTALS, MONTHLY_STEP_AFTER_TENTH),
+}
 RENEWAL_COMMISSION = Decimal("10.00")
 HOLD_PERIOD = timedelta(days=30)
-MONTHLY_QUALIFYING_AMOUNT = Decimal("100.00")
 
 _ZERO = Decimal("0.00")
 _SELLER_LOCK_NAMESPACE = "commissions.ladder.seller"
@@ -141,18 +155,20 @@ _PENDING_AUDIT_KEY = "commission_ladder_pending_audit"
 
 # ------------------------------------------------------------ the numbers --
 
-def ladder_total(sales: int) -> Decimal:
-    """The month's ladder TOTAL for this many counted sales."""
+def ladder_total(sales: int, rule_type: str = LADDER_RULE_TYPE) -> Decimal:
+    """The month's ladder TOTAL for this many counted sales on this ladder."""
+    totals, step = _LADDER_TABLES[rule_type]
     if sales <= 0:
         return _ZERO
-    if sales < len(LADDER_TOTALS):
-        return LADDER_TOTALS[sales]
-    return LADDER_TOTALS[-1] + STEP_AFTER_FIFTH * (sales - (len(LADDER_TOTALS) - 1))
+    if sales < len(totals):
+        return totals[sales]
+    return totals[-1] + step * (sales - (len(totals) - 1))
 
 
-def ladder_share(position: int) -> Decimal:
-    """What the position-th sale of a month adds: 20, 30, 50, 100, 150, 30, 30..."""
-    return ladder_total(position) - ladder_total(position - 1)
+def ladder_share(position: int, rule_type: str = LADDER_RULE_TYPE) -> Decimal:
+    """What the position-th sale of a month adds: Package 1 ladder 20, 30, 50,
+    100, 150, 30, 30...; monthly ladder 5, 5, 10, 10, 25, 10, 25, 10, 15, 15, 10..."""
+    return ladder_total(position, rule_type) - ladder_total(position - 1, rule_type)
 
 
 def ladder_month_of(moment: datetime) -> date:
@@ -190,13 +206,33 @@ def payment_confirmed_at(payment_id: uuid.UUID) -> datetime | None:
     return _utc(moment) if moment is not None else None
 
 
-def ladder_rule_for(employee_profile_id: uuid.UUID, moment: datetime):
-    """The seller's rule in force on that moment's Jordan date, or None."""
-    return resolve_active_rule(employee_profile_id, jordan_date(moment))
+def ladder_rule_for(employee_profile_id: uuid.UUID, moment: datetime, rule_type: str | None = None):
+    """The seller's rule in force on that moment's Jordan date, or None.
+    With rule_type (a package sale's ladder), the seller's rule OF THAT
+    LADDER if they hold it; else a non-ladder (percentage) rule if that is
+    what they are on; else None -- a seller on the Package 1 ladder only
+    earns nothing from a monthly package, and never a wrong ladder's money."""
+    as_of = jordan_date(moment)
+    if rule_type is None:
+        return resolve_active_rule(employee_profile_id, as_of)
+    rules = resolve_active_rules(employee_profile_id, as_of)
+    for rule in rules:
+        if rule.rule_type == rule_type:
+            return rule
+    for rule in rules:
+        if rule.rule_type not in LADDER_RULE_TYPES:
+            return rule
+    return None
 
 
 def is_ladder_rule(rule) -> bool:
-    return rule is not None and rule.rule_type == LADDER_RULE_TYPE
+    return rule is not None and rule.rule_type in LADDER_RULE_TYPES
+
+
+def sale_ladder_type(sale) -> str:
+    """Which ladder a package sale belongs to: monthly packages (those with a
+    contract) count together on the monthly ladder, Package 1 on its own."""
+    return MONTHLY_PACKAGES_RULE_TYPE if sale.is_monthly else LADDER_RULE_TYPE
 
 
 @dataclass
@@ -271,12 +307,6 @@ def _live_allocations(invoice: CommercialInvoice) -> list[PaymentAllocation]:
     ).scalars().all()
 
 
-def required_monthly_amount(monthly_price: Decimal) -> Decimal:
-    """'About 100 JOD': whole months until 100 is reached -- 3 x 35 = 105
-    (Package 2's 3rd payment), 5 x 20 = 100 (Package 3's 5th)."""
-    return monthly_price * math.ceil(MONTHLY_QUALIFYING_AMOUNT / monthly_price)
-
-
 def _sale_payment_ids(sale: _Sale) -> set[uuid.UUID]:
     return {a.payment_record_id for a in db_session.execute(
         select(PaymentAllocation).where(PaymentAllocation.commercial_invoice_id == sale.invoice.id)
@@ -294,31 +324,14 @@ def _qualifying(sale: _Sale) -> _Qualifying | None:
             break
     if completing is None:
         return None  # the sale's own invoice is not fully paid (yet, or any more)
-    first = _Qualifying(
+    # Owner decision (2026-10-26): a monthly package, like Package 1, counts
+    # when its FIRST payment (the one that pays the sale's own invoice, with
+    # the 100 JOD activation) is confirmed -- no longer after ~100 JOD of
+    # monthly payments (Package 2's 3rd, Package 3's 5th).
+    return _Qualifying(
         payment_id=completing.payment_record_id, allocation_id=completing.id,
         countable_at=_countable_at(completing),
     )
-    if not sale.is_monthly:
-        return first
-    monthly_price = sale.package_amount
-    if monthly_price <= 0:
-        return None
-    required = required_monthly_amount(monthly_price)
-    events: list[tuple[datetime, str, Decimal, _Qualifying]] = [
-        (first.countable_at, str(first.payment_id), sale.package_amount, first)
-    ]
-    for at, payment in later_package_payments(sale):
-        events.append((at, str(payment.id), Decimal(payment.amount),
-                       _Qualifying(payment_id=payment.id, allocation_id=None, countable_at=at)))
-    paid = _ZERO
-    for _at, _id, amount, qualifying in sorted(events, key=lambda e: (e[0], e[1])):
-        paid += amount
-        if paid >= required:
-            # A later payment exists only once the sale was finished (its
-            # subscription is made at fulfilment), so it is never earlier
-            # than the sale's own countable moment.
-            return qualifying
-    return None
 
 
 def later_package_payments(sale: _Sale) -> list[tuple[datetime, PaymentRecord]]:
@@ -380,7 +393,7 @@ def _governing_rule(sale: _Sale):
     the Jordan date its first package payment was confirmed (module
     docstring, fix round probe v8). None while nothing is paid."""
     first = _first_package_payment_at(sale)
-    return ladder_rule_for(sale.seller_profile_id, first) if first is not None else None
+    return ladder_rule_for(sale.seller_profile_id, first, sale_ladder_type(sale)) if first is not None else None
 
 
 def rule_governing_payment(invoice: CommercialInvoice, payment_id: uuid.UUID, fallback_moment: datetime):
@@ -397,7 +410,7 @@ def rule_governing_payment(invoice: CommercialInvoice, payment_id: uuid.UUID, fa
             if first is not None:
                 # None here is a real answer (no plan in force then): the
                 # sale earns nothing, it does not fall back to a later rule.
-                return ladder_rule_for(sale.seller_profile_id, first)
+                return ladder_rule_for(sale.seller_profile_id, first, sale_ladder_type(sale))
     moment = payment_confirmed_at(payment_id) or _utc(fallback_moment)
     return ladder_rule_for(invoice.created_by_employee_profile_id, moment)
 
@@ -575,7 +588,12 @@ def evaluate_sale(order_id: uuid.UUID, *, now: datetime | None = None) -> None:
             _uncount(counted, "CORRECTION", "The money that made this sale count is no longer on it.", now)
             touched.add(counted.ladder_month)
     if touched:
-        _recompute_months(sale.seller_profile_id, touched, now=now)
+        # The ladder the sale was (or is being) counted under decides which
+        # sales share the month; a counted row remembers its own rule.
+        ladder_type = sale_ladder_type(sale)
+        if counted is not None:
+            ladder_type = db_session.get(CommissionRuleVersion, counted.commission_rule_version_id).rule_type
+        _recompute_months(sale.seller_profile_id, touched, now=now, rule_type=ladder_type)
 
 
 def _uncount(row: CommissionLadderSale, cause: str, reason: str, now: datetime, *, refund_id=None) -> None:
@@ -602,20 +620,24 @@ def _ladder_rows(ladder_sale_id: uuid.UUID) -> list[CommissionLedgerEntry]:
     ).scalars().all()
 
 
-def _recompute_months(employee_profile_id: uuid.UUID, months: set[date], *, now: datetime) -> None:
-    """Re-derive each month from its counted sales and post only the
-    differences (see the module docstring). Runs under the seller lock."""
+def _recompute_months(employee_profile_id: uuid.UUID, months: set[date], *, now: datetime,
+                      rule_type: str = LADDER_RULE_TYPE) -> None:
+    """Re-derive each month of ONE ladder from its counted sales and post
+    only the differences (see the module docstring). Runs under the seller
+    lock. The other ladder's sales are never read: each ladder has its own
+    positions and totals."""
     for month in sorted(months):
         sales = db_session.execute(
             select(CommissionLadderSale)
+            .join(CommissionRuleVersion, CommissionRuleVersion.id == CommissionLadderSale.commission_rule_version_id)
             .where(CommissionLadderSale.employee_profile_id == employee_profile_id,
-                   CommissionLadderSale.ladder_month == month)
+                   CommissionLadderSale.ladder_month == month, CommissionRuleVersion.rule_type == rule_type)
             .order_by(CommissionLadderSale.qualified_at, CommissionLadderSale.id)
             .execution_options(populate_existing=True)
         ).scalars().all()
         counted = [s for s in sales if s.status == "COUNTED"]
-        month_total = ladder_total(len(counted))
-        wanted = {s.id: (ladder_share(i + 1), i + 1) for i, s in enumerate(counted)}
+        month_total = ladder_total(len(counted), rule_type)
+        wanted = {s.id: (ladder_share(i + 1, rule_type), i + 1) for i, s in enumerate(counted)}
         for sale in sales:
             share, position = wanted.get(sale.id, (_ZERO, None))
             rows = _ladder_rows(sale.id)
@@ -884,6 +906,18 @@ def on_payment_status_written(payment: PaymentRecord, *, now: datetime | None = 
 
 # ------------------------------------------------------- what people see --
 
+def _ladder_type_by_sale(sale_ids: set) -> dict:
+    """{ladder sale id: its ladder's rule type} -- from the rule version the
+    sale was counted under."""
+    if not sale_ids:
+        return {}
+    return {sale_id: rule_type for sale_id, rule_type in db_session.execute(
+        select(CommissionLadderSale.id, CommissionRuleVersion.rule_type)
+        .join(CommissionRuleVersion, CommissionRuleVersion.id == CommissionLadderSale.commission_rule_version_id)
+        .where(CommissionLadderSale.id.in_(sale_ids))
+    ).all()}
+
+
 def ladder_month_summary(employee_profile_id: uuid.UUID, month: date, *, now: datetime | None = None) -> dict:
     """One seller's month: sales counted, the ladder total, how much of it
     is still held and how much is payable, and the renewals."""
@@ -902,13 +936,20 @@ def ladder_month_summary(employee_profile_id: uuid.UUID, month: date, *, now: da
     ).scalars().all()
     ladder = [r for r in rows if r.entry_kind == "LADDER"]
     renewals = [r for r in rows if r.entry_kind == "RENEWAL"]
+    kind_of = _ladder_type_by_sale(
+        {s.id for s in counted} | {r.ladder_sale_id for r in ladder if r.ladder_sale_id is not None})
+    counts = {t: len([s for s in counted if kind_of.get(s.id) == t]) for t in LADDER_RULE_TYPES}
+    totals = {t: sum((Decimal(r.commission_amount) for r in ladder if kind_of.get(r.ladder_sale_id) == t), _ZERO)
+              for t in LADDER_RULE_TYPES}
     total = sum((Decimal(r.commission_amount) for r in ladder), _ZERO)
     held = sum((Decimal(r.commission_amount) for r in ladder if r.payable_after and r.payable_after > now), _ZERO)
     renewals_total = sum((Decimal(r.commission_amount) for r in renewals), _ZERO)
     renewals_held = sum((Decimal(r.commission_amount) for r in renewals if r.payable_after and r.payable_after > now),
                         _ZERO)
     return {
-        "month": month, "count": len(counted), "total": total, "held": held, "payable": total - held,
+        "month": month, "count": len(counted), "total": total,
+        "yearly_count": counts[LADDER_RULE_TYPE], "yearly_total": totals[LADDER_RULE_TYPE],
+        "monthly_count": counts[MONTHLY_PACKAGES_RULE_TYPE], "monthly_total": totals[MONTHLY_PACKAGES_RULE_TYPE], "held": held, "payable": total - held,
         "renewals": len([r for r in renewals if r.reversal_of_ledger_entry_id is None]), "renewals_total": renewals_total,
         "renewals_held": renewals_held, "currency": LADDER_CURRENCY,
         "refunded_after_hold": len([s for s in counted if s.refunded_after_hold_at is not None]),

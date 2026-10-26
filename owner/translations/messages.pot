@@ -7903,3 +7903,23 @@ msgstr ""
 #: app/employees/routes.py
 msgid "Commission plan assigned"
 msgstr ""
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Package 1"
+msgstr ""
+
+#: app/templates/commercial_sales/commissions_list.html
+msgid "Monthly packages"
+msgstr ""
+
+#: app/employees/routes.py
+msgid "Moved to both ladder plans (Package 1 and monthly packages)."
+msgstr ""
+
+#: app/employees/routes.py
+msgid "Already on both ladder plans."
+msgstr ""
+
+#: app/templates/employees/detail.html
+msgid "Assign both ladder plans"
+msgstr ""

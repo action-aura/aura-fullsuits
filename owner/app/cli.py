@@ -443,23 +443,25 @@ def register_cli(app: Flask) -> None:
     @commissions_group.command("seed-ladder-plan")
     @click.option("--actor-email", required=True, help="The Super Admin recording this.")
     def seed_ladder_plan_cmd(actor_email: str):
-        """Creates the commission plan SALES_LADDER (rule MONTHLY_LADDER, JOD)
-        if it does not exist. Never changes an existing one."""
-        from app.commissions.ladder_setup import seed_ladder_plan
+        """Creates the two ladder plans if missing: SALES_LADDER (Package 1,
+        rule MONTHLY_LADDER) and SALES_LADDER_MONTHLY_PKGS (Packages 2 + 3,
+        rule MONTHLY_PKG_LADDER), both JOD. Never changes an existing one."""
+        from app.commissions.ladder_setup import seed_ladder_plans
 
         actor = _staff_by_email(actor_email, require_super_admin=True)
-        plan, created = seed_ladder_plan(actor_staff_user_id=actor.id)
-        click.echo(json.dumps({"plan_code": plan.plan_code, "created": created}, indent=2))
+        results = seed_ladder_plans(actor_staff_user_id=actor.id)
+        click.echo(json.dumps([{"plan_code": plan.plan_code, "created": created} for plan, created in results],
+                              indent=2))
 
     @commissions_group.command("assign-ladder")
     @click.argument("seller_email")
     @click.option("--actor-email", required=True, help="The Super Admin recording this.")
     @click.option("--from", "effective_from", default=None, help="ISO date the seller moves to the ladder (default: today).")
     def assign_ladder_cmd(seller_email: str, actor_email: str, effective_from: str | None):
-        """Moves one seller onto the SALES_LADDER plan from a date (closing
-        their current plan the day before it applies, like every plan
-        assignment). Sales qualifying from that date count on the ladder;
-        earlier ones keep the rule they were paid under."""
+        """Moves one seller onto BOTH ladder plans from a date (closing
+        their current non-ladder plan, like every plan assignment). Sales
+        qualifying from that date count on the ladder of their package
+        family; earlier ones keep the rule they were paid under."""
         from app.commissions.ladder_setup import assign_seller_to_ladder
 
         actor = _staff_by_email(actor_email, require_super_admin=True)

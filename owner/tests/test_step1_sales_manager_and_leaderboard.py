@@ -386,7 +386,8 @@ def _jordan_moment(day: date, hour=12) -> datetime:
 def _seeded_month(app, w):
     """This month: Sami sells three Package 1s and one is refunded inside
     its hold (2 counted = 50) and earns a renewal (10); Tala's Package 2 --
-    sold LAST month -- counts THIS month at its third payment (1 = 20).
+    sold this month -- counts at its first payment on the monthly-packages
+    ladder (1 = 5; owner, 2026-10-26: no longer at its 3rd payment).
     Last month: Sami's one Package 1 (counted then) -- the one renewed now."""
     from app.commissions.leaderboard import board_months
 
@@ -398,10 +399,7 @@ def _seeded_month(app, w):
     first, _second, _third = (_sell(app, w, "p1")["order_id"] for _ in range(3))
     _refund(app, w, first, "250.00")
     _pay_month(app, w, _rows(app, renewed["order_id"])["subscription_id"], "100.00")
-    p2 = _sell(app, w, "p2", seller="seller2", confirmed_at=last)
-    sub = _rows(app, p2["order_id"])["subscription_id"]
-    _pay_month(app, w, sub, "35.00", confirmed_at=last + timedelta(hours=1))
-    _pay_month(app, w, sub, "35.00")
+    _sell(app, w, "p2", seller="seller2")
     w["customer_names"] = []
     with app.app_context():
         from sqlalchemy import select
@@ -445,8 +443,9 @@ def test_the_board_numbers_are_the_ladders_own_summaries_with_a_refund_and_a_p2_
     # the facts the scenario was built to produce (read from the ladder above)
     assert (this["Sami Seller"]["count"], this["Sami Seller"]["total"], this["Sami Seller"]["renewals"]) == (
         2, Decimal("50.00"), 1)
-    assert (this["Tala Seller"]["count"], this["Tala Seller"]["total"]) == (1, Decimal("20.00"))
-    assert (last["Sami Seller"]["count"], last["Tala Seller"]["count"]) == (1, 0)  # the P2 did NOT count last month
+    assert (this["Tala Seller"]["count"], this["Tala Seller"]["total"]) == (1, Decimal("5.00"))
+    assert (this["Tala Seller"]["yearly_count"], this["Tala Seller"]["monthly_count"]) == (0, 1)
+    assert (last["Sami Seller"]["count"], last["Tala Seller"]["count"]) == (1, 0)  # the P2 was not sold last month
     # ranked by counted sales, then total
     assert (this["Sami Seller"]["rank"], this["Tala Seller"]["rank"]) == (1, 2)
     assert (last["Sami Seller"]["rank"], last["Tala Seller"]["rank"]) == (1, 2)
@@ -510,7 +509,7 @@ def test_a_seller_gets_every_name_and_count_but_only_their_own_money(app, seeded
     assert board["Sami Seller"]["count"] == 2 and board["Sami Seller"]["renewals"] == 1
     for key in MONEY_KEYS:
         assert key not in board["Sami Seller"], key  # not hidden: never sent to the page
-    assert board["Tala Seller"]["total"] == Decimal("20.00")  # their own
+    assert board["Tala Seller"]["total"] == Decimal("5.00")  # their own
     assert board["Tala Seller"]["is_viewer"] is True
 
 
@@ -538,7 +537,7 @@ def test_the_sellers_page_shows_others_names_and_counts_and_no_money_but_their_o
     assert "data-board-total" not in sami and "data-board-held" not in sami and "data-board-payable" not in sami
     assert "50.00" not in html and "10.00" not in html  # Sami's ladder total and renewal money, nowhere
     tala = _row(html, "Tala Seller")
-    assert 'data-board-total="20.00"' in tala and 'data-board-viewer="true"' in tala
+    assert 'data-board-total="5.00"' in tala and 'data-board-viewer="true"' in tala
 
 
 def test_a_sales_manager_and_the_super_admin_see_every_sellers_money(app, seeded):
@@ -549,7 +548,7 @@ def test_a_sales_manager_and_the_super_admin_see_every_sellers_money(app, seeded
         sami = _row(html, "Sami Seller")
         assert 'data-board-total="50.00"' in sami and 'data-board-renewals-total="10.00"' in sami
         assert 'data-board-held="50.00"' in sami and 'data-board-payable="0.00"' in sami
-        assert 'data-board-total="20.00"' in _row(html, "Tala Seller")
+        assert 'data-board-total="5.00"' in _row(html, "Tala Seller")
 
 
 def test_last_months_board_is_one_click_away(app, seeded):

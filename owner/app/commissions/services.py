@@ -25,6 +25,39 @@ def calculate_commission(rule: CommissionRuleVersion, base_amount: Decimal) -> D
     raise NotImplementedError(f"rule_type {rule.rule_type} not implemented this phase")
 
 
+def resolve_active_rules(employee_profile_id: uuid.UUID, as_of: date | None = None) -> list[CommissionRuleVersion]:
+    """Every rule in force: one per open plan assignment. Normally one; a
+    seller on the owner's two ladders (Package 1 and monthly packages) holds
+    two plans at once (owner, 2026-10-26). Newest assignment first."""
+    as_of = as_of or date.today()
+    assignments = db_session.execute(
+        select(EmployeeCommissionPlanAssignment)
+        .where(
+            EmployeeCommissionPlanAssignment.employee_profile_id == employee_profile_id,
+            EmployeeCommissionPlanAssignment.effective_from <= as_of,
+        )
+        .where(
+            (EmployeeCommissionPlanAssignment.effective_until.is_(None))
+            | (EmployeeCommissionPlanAssignment.effective_until > as_of)
+        )
+        .order_by(EmployeeCommissionPlanAssignment.effective_from.desc(), EmployeeCommissionPlanAssignment.id)
+    ).scalars().all()
+    rules = []
+    for assignment in assignments:
+        rule = db_session.execute(
+            select(CommissionRuleVersion)
+            .where(
+                CommissionRuleVersion.commission_plan_id == assignment.commission_plan_id,
+                CommissionRuleVersion.effective_from <= as_of,
+            )
+            .where((CommissionRuleVersion.effective_until.is_(None)) | (CommissionRuleVersion.effective_until > as_of))
+            .order_by(CommissionRuleVersion.effective_from.desc())
+        ).scalars().first()
+        if rule is not None:
+            rules.append(rule)
+    return rules
+
+
 def resolve_active_rule(employee_profile_id: uuid.UUID, as_of: date | None = None) -> CommissionRuleVersion | None:
     as_of = as_of or date.today()
     assignment = db_session.execute(
@@ -61,7 +94,7 @@ def preview_commission(employee_profile_id: uuid.UUID, base_amount: Decimal, as_
     contract.md). Returns None when the employee has no active commission
     plan assignment or rule (nothing to preview, not an error)."""
     rule = resolve_active_rule(employee_profile_id, as_of)
-    if rule is None or rule.rule_type == "MONTHLY_LADDER":
+    if rule is None or rule.rule_type in ("MONTHLY_LADDER", "MONTHLY_PKG_LADDER"):
         # A ladder sale is worth its place in the month, not a share of one
         # payment: there is no per-payment amount to preview.
         return None

@@ -39,6 +39,8 @@
         </p>
         <dl class="aura-board__stats">
           <div class="aura-board__stat aura-board__stat--key"><dt>{{ _("Sales counted") }}</dt><dd>{{ r.count }}</dd></div>
+          <div class="aura-board__stat"><dt>{{ _("Package 1") }}</dt><dd>{{ r.yearly_count }}</dd></div>
+          <div class="aura-board__stat"><dt>{{ _("Monthly packages") }}</dt><dd>{{ r.monthly_count }}</dd></div>
           <div class="aura-board__stat"><dt>{{ _("Renewals") }}</dt><dd>{{ r.renewals }}</dd></div>
           {% if has_money %}
           <div class="aura-board__stat"><dt>{{ _("Ladder total") }}</dt><dd>{{ format_owner_number(r.total) }} {{ r.currency }}</dd></div>

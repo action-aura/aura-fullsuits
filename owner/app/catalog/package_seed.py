@@ -4,16 +4,22 @@ Step 0 (2026-10-24). The owner decided (Aura Growth Plan, "Your answers" and
 the 2026-10-24 additions), prices PER BRANCH, each package including 1
 desktop + 1 phone:
   Package 1  250 JOD the first year, then 100 JOD a year   -> ANNUAL, 100 + 150 setup fee
-  Package 2  35 JOD a month, 12-month contract              -> MONTHLY, contract 12
-  Package 3  20 JOD a month, 24-month contract              -> MONTHLY, contract 24
+  Package 2  35 JOD a month + 100 activation every year, 12-month contract -> MONTHLY, contract 12
+  Package 3  25 JOD a month + 100 activation every year, 24-month contract -> MONTHLY, contract 24
+  (2026-10-26: Package 3 went 20 -> 25 and both monthly packages gained the
+  100 JOD activation, held as the plan price's setup fee.)
   extra devices only as a pair (1 desktop + 1 phone), 50 JOD once -> EXTRA_DEVICE_PAIR
 
 Prices are data in this product (catalog/services.py), so this is an
 explicit, idempotent release step like `seed-plans` -- never folded into
 `seed-catalog`, whose rows every test fixture gets and which must stay inert.
-It CREATES what is missing and never changes what exists: a package or a
-price someone already changed is reported, not overwritten (the catalog
-screen is where a price is changed, with its own history).
+It CREATES what is missing. Since 2026-10-26 it also moves a package price
+that is EXACTLY the owner's previous number (LEGACY_PRICES: the 2026-10-24
+list) to the new one -- the old row is closed and a new one opened, history
+kept -- so re-running it on a database seeded with the earlier list updates
+Package 3 to 25 and the activation to 100 without duplicating a plan or a
+price. Any other price (one someone changed on the catalog screen) is
+reported under "differs", never overwritten.
 
 Aura Retail only. Aura Clinic is a separate product with its own licensing
 (owner, 2026-10-18) and no prices were decided for it; its placeholder plan
@@ -58,9 +64,9 @@ PACKAGES = (
     ("AURA_RETAIL_P1_YEARLY", "Aura Retail - Package 1 (yearly)", "ANNUAL", 12, None,
      Decimal("100.00"), Decimal("150.00")),
     ("AURA_RETAIL_P2_MONTHLY_12", "Aura Retail - Package 2 (monthly, 12-month contract)", "MONTHLY", 1, 12,
-     Decimal("35.00"), Decimal("0.00")),
+     Decimal("35.00"), Decimal("100.00")),
     ("AURA_RETAIL_P3_MONTHLY_24", "Aura Retail - Package 3 (monthly, 24-month contract)", "MONTHLY", 1, 24,
-     Decimal("20.00"), Decimal("0.00")),
+     Decimal("25.00"), Decimal("100.00")),
 )
 # Msgids for the Arabic UI (see i18n_format.catalog_label). Never read at
 # runtime -- they exist so `pybabel extract` keeps these strings in the
@@ -72,6 +78,12 @@ _PACKAGE_DISPLAY_MSGIDS = (
     _l("Extra device pair (1 desktop + 1 phone)"),
 )
 PACKAGE_CODES = tuple(p[0] for p in PACKAGES)
+# The owner's 2026-10-24 monthly prices (base, setup fee): the only values the
+# seed will replace on its own.
+LEGACY_PRICES = {
+    "AURA_RETAIL_P2_MONTHLY_12": (Decimal("35.00"), Decimal("0.00")),
+    "AURA_RETAIL_P3_MONTHLY_24": (Decimal("20.00"), Decimal("0.00")),
+}
 
 _OPEN_ORDER_STATUSES = ("DRAFT", "CONFIRMED")
 
@@ -110,6 +122,19 @@ def _seed_package(product: Product, spec: tuple, today: date, report: dict) -> N
         db_session.add(PlanPrice(plan_id=plan.id, base_price=base, setup_fee=setup, currency=CURRENCY,
                                  effective_from=today))
         report["prices_added"].append(code)
+    elif ((Decimal(price.base_price), Decimal(price.setup_fee)) == LEGACY_PRICES.get(code)
+          and price.currency == CURRENCY):
+        was = {"base_price": str(price.base_price), "setup_fee": str(price.setup_fee), "currency": price.currency}
+        if price.effective_from >= today:
+            # Seeded today already: a second price row for the same day would
+            # overlap it, so the row is corrected in place.
+            price.base_price, price.setup_fee, price.currency = base, setup, CURRENCY
+        else:
+            price.effective_until = today
+            db_session.add(PlanPrice(plan_id=plan.id, base_price=base, setup_fee=setup, currency=CURRENCY,
+                                     effective_from=today))
+        report["prices_updated"].append({"plan_code": code, "was": was,
+                                         "now": {"base_price": str(base), "setup_fee": str(setup)}})
     elif (Decimal(price.base_price), Decimal(price.setup_fee), price.currency) != (base, setup, CURRENCY):
         report["differs"].append({
             "plan_code": code,
@@ -163,7 +188,7 @@ def seed_packages(*, retire_other_retail_plans: bool = False, actor_staff_user_i
     if product is None:
         raise ValueError("Aura Retail is not in the catalog -- run 'flask seed-catalog' first.")
     today = utcnow().date()
-    report = {"created": [], "prices_added": [], "differs": [], "pair": "unchanged",
+    report = {"created": [], "prices_added": [], "prices_updated": [], "differs": [], "pair": "unchanged",
               "other_sellable_retail_plans": [], "retired": [], "kept_for_open_sales": [],
               "single_extra_device_on_sale": False}
     for spec in PACKAGES:

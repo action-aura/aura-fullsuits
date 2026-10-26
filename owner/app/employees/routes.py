@@ -146,12 +146,14 @@ def detail(employee_id):
         .order_by(AuditLog.created_at.desc())
         .limit(50)
     ).scalars().all()
-    from app.commissions.ladder_setup import LADDER_PLAN_CODE, current_plan_assignment
+    from app.commissions.ladder_setup import LADDER_PLAN_CODES, current_plan_assignment, current_plan_codes
     from app.operational_reports.periods import jordan_today
 
     _assignment, current_plan = current_plan_assignment(profile.id, jordan_today())
+    held_codes = current_plan_codes(profile.id, jordan_today())
     return render_template(
-        "employees/detail.html", current_plan=current_plan, ladder_plan_code=LADDER_PLAN_CODE, profile=profile, staff=staff, presence=presence, sessions=sessions,
+        "employees/detail.html", current_plan=current_plan, held_plan_codes=held_codes,
+        both_ladders=all(code in held_codes for code in LADDER_PLAN_CODES), profile=profile, staff=staff, presence=presence, sessions=sessions,
         roles=_role_options(), managers=[m for m in _manager_options() if m.id != profile.id], plans=_commission_plan_options(),
         audit_events=audit_events,
     )
@@ -178,7 +180,8 @@ def assign_commission_ladder(employee_id):
         # e.g. the SALES_LADDER plan was never seeded: say what to run.
         flash(str(exc), "error")
     else:
-        flash(_("Moved to the monthly ladder plan.") if created else _("Already on the monthly ladder plan."), "info")
+        flash(_("Moved to both ladder plans (Package 1 and monthly packages).") if created
+              else _("Already on both ladder plans."), "info")
     return redirect(url_for("employees.detail", employee_id=employee_id))
 
 

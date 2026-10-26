@@ -571,8 +571,8 @@ def test_seed_packages_puts_the_owners_three_packages_and_the_pair_on_sale(app, 
     _seed_packages(app)
     assert _retail_packages(app) == {
         "AURA_RETAIL_P1_YEARLY": ("ANNUAL", 12, None, 2, Decimal("100.00"), Decimal("150.00"), JOD),
-        "AURA_RETAIL_P2_MONTHLY_12": ("MONTHLY", 1, 12, 2, Decimal("35.00"), Decimal("0.00"), JOD),
-        "AURA_RETAIL_P3_MONTHLY_24": ("MONTHLY", 1, 24, 2, Decimal("20.00"), Decimal("0.00"), JOD),
+        "AURA_RETAIL_P2_MONTHLY_12": ("MONTHLY", 1, 12, 2, Decimal("35.00"), Decimal("100.00"), JOD),
+        "AURA_RETAIL_P3_MONTHLY_24": ("MONTHLY", 1, 24, 2, Decimal("25.00"), Decimal("100.00"), JOD),
     }
     with app.app_context():
         from sqlalchemy import func, select
@@ -593,6 +593,56 @@ def test_seed_packages_puts_the_owners_three_packages_and_the_pair_on_sale(app, 
 
         assert (db_session.execute(select(func.count()).select_from(Plan)).scalar_one(),
                 db_session.execute(select(func.count()).select_from(PlanPrice)).scalar_one()) == counts
+
+
+def test_seed_packages_rerun_moves_the_2026_10_24_monthly_prices_to_the_new_list(app, seeded):
+    """Owner, 2026-10-26: P3 went 20 -> 25 and both monthly packages gained
+    the 100 activation. A database seeded with the OLD list is updated by a
+    re-run, with the old price kept as history and no plan or price row
+    duplicated; a price someone else changed (next test) is left alone."""
+    _seed_packages(app)
+    with app.app_context():
+        from datetime import timedelta
+
+        from sqlalchemy import select
+
+        from app.extensions import db_session
+        from app.models.catalog import Plan, PlanPrice
+
+        for code, (base, setup) in (("AURA_RETAIL_P2_MONTHLY_12", ("35.00", "0.00")),
+                                    ("AURA_RETAIL_P3_MONTHLY_24", ("20.00", "0.00"))):
+            plan = db_session.execute(select(Plan).where(Plan.plan_code == code)).scalars().one()
+            price = db_session.execute(select(PlanPrice).where(PlanPrice.plan_id == plan.id)).scalars().one()
+            price.base_price, price.setup_fee = Decimal(base), Decimal(setup)
+            price.effective_from = date.today() - timedelta(days=2)  # seeded two days ago
+        db_session.commit()
+    assert _retail_packages(app)["AURA_RETAIL_P3_MONTHLY_24"][4:6] == (Decimal("20.00"), Decimal("0.00"))
+    output = _seed_packages(app)
+    assert _retail_packages(app)["AURA_RETAIL_P3_MONTHLY_24"][4:6] == (Decimal("25.00"), Decimal("100.00"))
+    assert _retail_packages(app)["AURA_RETAIL_P2_MONTHLY_12"][4:6] == (Decimal("35.00"), Decimal("100.00"))
+    assert "prices_updated" in output
+    with app.app_context():
+        from sqlalchemy import func, select
+
+        from app.extensions import db_session
+        from app.models.catalog import Plan, PlanPrice
+
+        plan = db_session.execute(select(Plan).where(Plan.plan_code == "AURA_RETAIL_P3_MONTHLY_24")).scalars().one()
+        rows = db_session.execute(select(PlanPrice).where(PlanPrice.plan_id == plan.id)
+                                  .order_by(PlanPrice.effective_from)).scalars().all()
+        assert [(Decimal(r.base_price), r.effective_until is None) for r in rows] == [
+            (Decimal("20.00"), False), (Decimal("25.00"), True)]
+        assert db_session.execute(select(func.count()).select_from(Plan).where(
+            Plan.plan_code == "AURA_RETAIL_P3_MONTHLY_24")).scalar_one() == 1
+    _seed_packages(app)  # and again: nothing more changes
+    with app.app_context():
+        from sqlalchemy import func, select
+
+        from app.extensions import db_session
+        from app.models.catalog import PlanPrice
+
+        assert db_session.execute(select(func.count()).select_from(PlanPrice).where(
+            PlanPrice.plan_id == plan.id)).scalar_one() == 2
 
 
 def test_seed_packages_never_overwrites_a_price_someone_changed(app, seeded):
@@ -643,7 +693,7 @@ def test_seeded_p1_with_a_pair_and_seeded_p3_sell_end_to_end(app, client, seeded
         w["sp1"] = db_session.execute(select(Plan).where(Plan.plan_code == "AURA_RETAIL_P1_YEARLY")).scalars().one().id
         w["sp3"] = db_session.execute(select(Plan).where(Plan.plan_code == "AURA_RETAIL_P3_MONTHLY_24")).scalars().one().id
     assert _post_sale(client, app, w, "sp1", amount="300.00", pairs=1).status_code == 200
-    assert _post_sale(client, app, w, "sp3", amount="20.00").status_code == 200
+    assert _post_sale(client, app, w, "sp3", amount="125.00").status_code == 200  # 25 a month + 100 activation
     with app.app_context():
         from sqlalchemy import select
 
@@ -663,4 +713,4 @@ def test_seeded_p1_with_a_pair_and_seeded_p3_sell_end_to_end(app, client, seeded
     assert (p1["invoice_total"], p1["device_limit"], p1["valid_until"], p1["contract_term_months"]) == (
         Decimal("300.00"), 4, _months(12), None)
     assert (p3["invoice_total"], p3["device_limit"], p3["valid_until"], p3["contract_term_months"],
-            p3["contract_ends_on"]) == (Decimal("20.00"), 2, _months(1), 24, _months(24))
+            p3["contract_ends_on"]) == (Decimal("125.00"), 2, _months(1), 24, _months(24))  # 25 a month + 100 activation

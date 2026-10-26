@@ -22,7 +22,7 @@
     <tr data-ladder-month="{{ m.month.isoformat() }}" data-ladder-count="{{ m.count }}" data-ladder-total="{{ m.total }}"
         data-ladder-held="{{ m.held }}" data-ladder-payable="{{ m.payable }}">
       <td>{{ m.month.strftime("%Y-%m") }}</td>
-      <td class="num">{{ m.count }}{% if m.refunded_after_hold %} <span class="badge pending">{{ _("Refunded after the hold") }}: {{ m.refunded_after_hold }}</span>{% endif %}</td>
+      <td class="num" data-ladder-yearly="{{ m.yearly_count }}" data-ladder-monthly="{{ m.monthly_count }}">{{ m.count }}<br><small class="muted"><span>{{ _("Package 1") }} {{ m.yearly_count }}</span> <span>{{ _("Monthly packages") }} {{ m.monthly_count }}</span></small>{% if m.refunded_after_hold %} <span class="badge pending">{{ _("Refunded after the hold") }}: {{ m.refunded_after_hold }}</span>{% endif %}</td>
       <td class="num">{{ format_owner_number(m.total) }} {{ m.currency }}</td>
       <td class="num">{{ format_owner_number(m.held) }} {{ m.currency }}</td>
       <td class="num">{{ format_owner_number(m.payable) }} {{ m.currency }}</td>
@@ -45,7 +45,7 @@
     {% for s in ladder_overview %}
     <tr data-ladder-seller-total="{{ s.total }}">
       <td>{{ s.employee_name }}</td>
-      <td class="num">{{ s.count }}</td>
+      <td class="num">{{ s.count }}<br><small class="muted"><span>{{ _("Package 1") }} {{ s.yearly_count }}</span> <span>{{ _("Monthly packages") }} {{ s.monthly_count }}</span></small></td>
       <td class="num">{{ format_owner_number(s.total) }} {{ s.currency }}</td>
       <td class="num">{{ format_owner_number(s.held) }} {{ s.currency }}</td>
       <td class="num">{{ format_owner_number(s.payable) }} {{ s.currency }}</td>

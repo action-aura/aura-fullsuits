@@ -67,14 +67,16 @@ def test_super_admin_assigns_ladder_and_second_press_is_a_noop(app, client, seed
     assert _assignments(app, profile) == []
     resp = _post(client, app, admin, profile)
     assert resp.status_code == 302
+    # One press puts the seller on BOTH ladders (Package 1; monthly packages).
     rows = _assignments(app, profile)
-    assert len(rows) == 1 and rows[0].effective_until is None
-    # Second press: no second row, the first one is not closed.
+    assert len(rows) == 2 and all(r.effective_until is None for r in rows)
+    assert len({r.commission_plan_id for r in rows}) == 2
+    # Second press: no new rows, none closed.
     assert _post(client, app, admin, profile).status_code == 302
     rows = _assignments(app, profile)
-    assert len(rows) == 1 and rows[0].effective_until is None
+    assert len(rows) == 2 and all(r.effective_until is None for r in rows)
     page = client.get(f"/employees/{profile}").get_data(as_text=True)
-    assert "commission-plan" in page and "Sales ladder (monthly)" in page
+    assert "commission-plan" in page and "SALES_LADDER_MONTHLY_PKGS" in page and "Already on both ladder plans." in page
 
 
 def test_sales_and_sales_manager_are_refused_and_nothing_changes(app, client, seeded):
