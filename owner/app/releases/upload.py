@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 UPLOAD_ENDPOINT = "releases.upload_submit"
 MAX_UPLOAD_BYTES = 250 * 1024 * 1024
 DEFAULT_CHANNEL_CODE = "RC"  # what the shipped clients ask for (client.find_latest_release)
+RELEASE_KINDS = ("FEATURE", "SAFETY")
 MAX_NOTES_CHARS = 4000
 _CHUNK = 1024 * 1024
 _MAX_BUILD_NUMBER = 2_147_483_647  # the column is a 32-bit integer
@@ -85,6 +86,10 @@ class UploadForm:
     release_notes: str
     min_supported_version: str
     update_required: bool
+    # FEATURE (default) or SAFETY -- see ProductVersion.release_kind. Defaulted so
+    # callers that predate the field keep working and cannot make a release SAFETY
+    # by accident.
+    release_kind: str = "FEATURE"
 
 
 def form_choices() -> dict:
@@ -131,6 +136,8 @@ def _validate_fields(form: UploadForm) -> tuple[Product, Platform, ReleaseChanne
             raise UploadRejected(_("The oldest supported version must look like 1.2.3 or 1.2.3-rc.4."))
         if versioning.compare_semver(form.min_supported_version, form.version) > 0:
             raise UploadRejected(_("The oldest supported version cannot be newer than this version."))
+    if form.release_kind not in RELEASE_KINDS:
+        raise UploadRejected(_("Choose whether this is a feature update or a safety fix."))
     if len(form.release_notes) > MAX_NOTES_CHARS:
         raise UploadRejected(_("The release notes are too long."))
     duplicate = db_session.execute(
@@ -216,6 +223,7 @@ def create_draft_from_upload(form: UploadForm, file_storage, *, actor_staff_user
         # "Update required": every client older than this version is told the
         # update is mandatory (discovery.py compares against this column).
         "forced_upgrade_threshold": form.version if form.update_required else None,
+        "release_kind": form.release_kind,
     }
     key = "windows" if form.platform_code == "WINDOWS" else "android"
     try:
@@ -254,7 +262,7 @@ def create_draft_from_upload(form: UploadForm, file_storage, *, actor_staff_user
             "product_code": product.product_code, "platform": platform.platform_code,
             "channel": channel.channel_code, "version": form.version, "build_number": build_number,
             "artifact_path": final_name, "artifact_checksum_sha256": sha256_hex, "artifact_size_bytes": size,
-            "update_required": form.update_required, "publication_state": row.publication_state,
+            "update_required": form.update_required, "release_kind": form.release_kind, "publication_state": row.publication_state,
         },
     )
     return row

@@ -9329,3 +9329,24 @@ msgstr "Monthly packages (2 and 3 together): 1 = 5, 2 = 10, 3 = 20, 4 = 30, 5 = 
 
 msgid "Each sale is payable 30 days after its payment is confirmed. Extra devices never count."
 msgstr "Each sale is payable 30 days after its payment is confirmed. Extra devices never count."
+
+msgid "Kind of release"
+msgstr "Kind of release"
+
+msgid "Feature update (paid shops only)"
+msgstr "Feature update (paid shops only)"
+
+msgid "Safety fix (also reaches shops that have not paid)"
+msgstr "Safety fix (also reaches shops that have not paid)"
+
+msgid "Safety fix"
+msgstr "Safety fix"
+
+msgid "Feature update"
+msgstr "Feature update"
+
+msgid "Choose whether this is a feature update or a safety fix."
+msgstr "Choose whether this is a feature update or a safety fix."
+
+msgid "activation every year"
+msgstr "activation every year"

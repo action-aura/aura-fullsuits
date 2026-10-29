@@ -88,6 +88,8 @@ INTERNAL_ONLY_REASON_CODES = frozenset(
         # Phase 9R M11
         "RELEASE_NOT_FOUND",
         "RELEASE_NOT_PUBLISHED",
+        # Keep-selling: a FEATURE release asked for by a subscription that lapsed unpaid.
+        "RELEASE_NOT_ALLOWED_UNPAID",
     }
 )
 
@@ -108,6 +110,7 @@ _PUBLIC_NORMALIZATION = {code: "ACTIVATION_REJECTED" for code in INTERNAL_ONLY_R
 # to a legitimate client trying to debug a real failure.
 _PUBLIC_NORMALIZATION["RELEASE_NOT_FOUND"] = "RELEASE_NOT_AVAILABLE"
 _PUBLIC_NORMALIZATION["RELEASE_NOT_PUBLISHED"] = "RELEASE_NOT_AVAILABLE"
+_PUBLIC_NORMALIZATION["RELEASE_NOT_ALLOWED_UNPAID"] = "RELEASE_NOT_AVAILABLE"
 
 
 def to_public_reason_code(internal_code: str) -> str:

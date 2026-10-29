@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
+from app.commercial_ops.unpaid import subscription_is_unpaid
 from app.extensions import db_session
 from app.licensing_service.canonical import canonicalize_bytes
 from app.licensing_service.signing import SigningKeyError, get_active_signing_key, load_private_key
@@ -144,7 +145,10 @@ def find_latest_release(body: dict, *, config: dict) -> dict:
     """The full 200 response body. Raises DownloadAuthorizationRejected for any
     auth/shape failure and SigningKeyError if Owner cannot sign."""
     app_version = _validate_shape(body)
-    installation, license_row = authenticate_device_request(body, nonce_scope=NONCE_SCOPE, config=config)
+    installation, license_row = authenticate_device_request(
+        body, nonce_scope=NONCE_SCOPE, config=config, allow_unpaid=True
+    )
+    unpaid = subscription_is_unpaid(license_row.subscription)
 
     current_key = versioning.parse_semver(app_version)
     channel_ids = _allowed_channel_ids(license_row, body.get("release_channel"))
@@ -161,6 +165,12 @@ def find_latest_release(body: dict, *, config: dict) -> dict:
             )
         ).scalars().all()
 
+    if unpaid:
+        # Keep-selling: filter to SAFETY BEFORE picking the highest version. Picking
+        # the newest first and then dropping it if it is a FEATURE release would
+        # hide an older SAFETY fix behind a newer feature build -- the unpaid shop
+        # would be offered nothing at all.
+        candidates = [row for row in candidates if row.release_kind == "SAFETY"]
     offered = _pick_latest(candidates, current_key)
     if offered is None:
         update_required = below_min = False

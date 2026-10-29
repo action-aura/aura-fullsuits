@@ -54,7 +54,10 @@ class ReleaseChannel(Base, UUIDPKMixin, TimestampMixin):
 
 class ProductVersion(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_product_versions"
-    __table_args__ = (UniqueConstraint("product_id", "platform_id", "version", name="uq_product_platform_version"),)
+    __table_args__ = (
+        UniqueConstraint("product_id", "platform_id", "version", name="uq_product_platform_version"),
+        CheckConstraint("release_kind IN ('FEATURE', 'SAFETY')", name="ck_owner_product_versions_release_kind"),
+    )
 
     product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_products.id"), nullable=False)
     platform_id: Mapped[uuid.UUID] = mapped_column(
@@ -72,6 +75,18 @@ class ProductVersion(Base, UUIDPKMixin, TimestampMixin):
     is_current_stable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_deprecated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Keep-selling (owner decision 2026-10-24): a subscription that lapsed UNPAID
+    # (commercial_ops/unpaid.py) is still offered / may still download SAFETY
+    # releases (a fix for something dangerous or broken that must reach every shop)
+    # but never FEATURE ones (new things, which are part of what renewal pays
+    # for). A separate column on purpose: release_channel is the STABLE/RC wave,
+    # and forced_upgrade_threshold / min_supported_version mean "mandatory", not
+    # "safety" -- reusing either would let a mandatory FEATURE release through.
+    # Existing rows become FEATURE (the safe default: nothing is newly opened to
+    # unpaid shops by this column existing). Set while the row is a DRAFT; a
+    # PUBLISHED row is immutable.
+    release_kind: Mapped[str] = mapped_column(String(16), default="FEATURE", server_default="FEATURE", nullable=False)
 
     # -- Phase 9R M10: product release authority --
     build_number: Mapped[int | None] = mapped_column()

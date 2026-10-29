@@ -7932,3 +7932,24 @@ msgstr ""
 
 msgid "Each sale is payable 30 days after its payment is confirmed. Extra devices never count."
 msgstr ""
+
+msgid "Kind of release"
+msgstr ""
+
+msgid "Feature update (paid shops only)"
+msgstr ""
+
+msgid "Safety fix (also reaches shops that have not paid)"
+msgstr ""
+
+msgid "Safety fix"
+msgstr ""
+
+msgid "Feature update"
+msgstr ""
+
+msgid "Choose whether this is a feature update or a safety fix."
+msgstr ""
+
+msgid "activation every year"
+msgstr ""

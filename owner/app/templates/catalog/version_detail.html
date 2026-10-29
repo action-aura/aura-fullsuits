@@ -9,6 +9,7 @@
       <tr><th>{{ _("Channel") }}</th><td><bdi dir="ltr">{{ v.release_channel.channel_code if v.release_channel else "-" }}</bdi></td></tr>
       <tr><th>{{ _("Status") }}</th><td><span class="badge">{{ {"DRAFT": _("Draft"), "PUBLISHED": _("Published"), "WITHDRAWN": _("Withdrawn")}.get(v.publication_state, v.publication_state) }}</span></td></tr>
       <tr><th>{{ _("Build number") }}</th><td><bdi dir="ltr">{{ v.build_number if v.build_number is not none else "-" }}</bdi></td></tr>
+      <tr><th>{{ _("Kind of release") }}</th><td>{{ _("Safety fix") if v.release_kind == "SAFETY" else _("Feature update") }}</td></tr>
       <tr><th>{{ _("Oldest supported version") }}</th><td><bdi dir="ltr">{{ v.min_supported_version or "-" }}</bdi></td></tr>
       <tr><th>{{ _("Update required below") }}</th><td><bdi dir="ltr">{{ v.forced_upgrade_threshold or "-" }}</bdi></td></tr>
       <tr><th>{{ _("Size (bytes)") }}</th><td><bdi dir="ltr">{{ v.artifact_size_bytes if v.artifact_size_bytes is not none else "-" }}</bdi></td></tr>

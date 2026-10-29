@@ -308,6 +308,9 @@ def import_release_manifest(manifest: dict, actor_staff_user_id: uuid.UUID | Non
             release_notes=entry.get("release_notes"),
             min_supported_version=entry.get("min_supported_version"),
             forced_upgrade_threshold=entry.get("forced_upgrade_threshold"),
+            # Absent in a CI manifest -> FEATURE (the safe default). An unknown
+            # value is refused by the DB CHECK rather than silently coerced.
+            release_kind=entry.get("release_kind") or "FEATURE",
             imported_at=utcnow(),
             created_by_staff_user_id=actor_staff_user_id,
             # publication_state defaults to DRAFT (Phase 9R M10) -- import is

@@ -61,6 +61,7 @@ def _default_values() -> dict:
     return {
         "product_code": "AURA_RETAIL", "platform_code": "WINDOWS", "channel_code": upload.DEFAULT_CHANNEL_CODE,
         "version": "", "build_number": "", "release_notes": "", "min_supported_version": "", "update_required": False,
+        "release_kind": "FEATURE",
     }
 
 
@@ -85,6 +86,7 @@ def upload_submit():
         release_notes=request.form.get("release_notes", ""),
         min_supported_version=request.form.get("min_supported_version", "").strip(),
         update_required=request.form.get("update_required") == "1",
+        release_kind=request.form.get("release_kind", "FEATURE").strip() or "FEATURE",
     )
     try:
         row = upload.create_draft_from_upload(form, request.files.get("artifact"), actor_staff_user_id=actor.id)

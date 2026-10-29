@@ -31,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, update
 
 from app.audit.services import record as audit_record
+from app.commercial_ops.unpaid import subscription_is_unpaid
 from app.extensions import db_session
 from app.licensing_service import device_identity, replay
 from app.licensing_service.canonical import canonicalize_bytes
@@ -67,7 +68,9 @@ def _validate_shape(body: dict) -> None:
         raise DownloadAuthorizationRejected("INVALID_REQUEST")
 
 
-def authenticate_device_request(body: dict, *, nonce_scope: str, config: dict) -> tuple[Installation, "License"]:  # noqa: F821
+def authenticate_device_request(
+    body: dict, *, nonce_scope: str, config: dict, allow_unpaid: bool = False
+) -> tuple[Installation, "License"]:  # noqa: F821
     """Proves a request really comes from a live, licensed installation.
 
     Extracted verbatim from authorize_download() so release DISCOVERY
@@ -81,6 +84,14 @@ def authenticate_device_request(body: dict, *, nonce_scope: str, config: dict) -
     `nonce_scope` keeps nonces of different endpoints in separate namespaces
     (replay.consume_nonce is keyed on scope+nonce), so a nonce spent on a
     discovery call cannot be used up -- or replayed -- against a download.
+
+    `allow_unpaid` (keep-selling, owner decision 2026-10-24): when True an EXPIRED
+    subscription is NOT refused here, because a shop that lapsed unpaid may still
+    receive SAFETY fixes. The CALLER then owns the restriction (it must offer /
+    authorize SAFETY releases only, via commercial_ops/unpaid.py). Default False
+    keeps every other caller -- crash reports, the mail relay -- refusing an
+    EXPIRED subscription exactly as before: they are online extras an unpaid shop
+    does not get. SUSPENDED and CANCELLED are refused regardless.
 
     The caller must already have checked that installation_id, timestamp, nonce
     and signature are present (each endpoint has its own required-field list).
@@ -148,7 +159,8 @@ def authenticate_device_request(body: dict, *, nonce_scope: str, config: dict) -
 
     subscription = license_row.subscription
     if subscription is not None and subscription.status in ("SUSPENDED", "EXPIRED", "CANCELLED"):
-        raise DownloadAuthorizationRejected(f"SUBSCRIPTION_{subscription.status}")
+        if not (allow_unpaid and subscription.status == "EXPIRED"):
+            raise DownloadAuthorizationRejected(f"SUBSCRIPTION_{subscription.status}")
 
     return installation, license_row
 
@@ -169,13 +181,21 @@ def authorize_download(body: dict, *, source_ip: str | None, config: dict) -> tu
     except (ValueError, TypeError):
         raise DownloadAuthorizationRejected("INVALID_REQUEST")
 
-    installation, license_row = authenticate_device_request(body, nonce_scope="release_download", config=config)
+    installation, license_row = authenticate_device_request(
+        body, nonce_scope="release_download", config=config, allow_unpaid=True
+    )
 
     release = db_session.get(ProductVersion, product_version_id)
     if release is None:
         raise DownloadAuthorizationRejected("RELEASE_NOT_FOUND")
     if release.publication_state != "PUBLISHED":
         raise DownloadAuthorizationRejected("RELEASE_NOT_PUBLISHED")
+    # Keep-selling: an unpaid shop may download SAFETY releases only. Checked on
+    # the release's own kind (not on "is it the newest"), so a hand-crafted
+    # request naming a FEATURE release id is refused too -- loosening the
+    # subscription check above alone would have opened every feature update.
+    if release.release_kind != "SAFETY" and subscription_is_unpaid(license_row.subscription):
+        raise DownloadAuthorizationRejected("RELEASE_NOT_ALLOWED_UNPAID")
     if release.product_id != license_row.product_id:
         raise DownloadAuthorizationRejected("PRODUCT_MISMATCH")
     if release.platform_id != installation.platform_id:

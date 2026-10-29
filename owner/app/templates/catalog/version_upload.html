@@ -24,6 +24,11 @@
     <input id="build_number" name="build_number" dir="ltr" inputmode="numeric" value="{{ values.build_number }}">
     <label for="min_supported_version">{{ _("Oldest supported version (optional)") }}</label>
     <input id="min_supported_version" name="min_supported_version" dir="ltr" value="{{ values.min_supported_version }}">
+    <label for="release_kind">{{ _("Kind of release") }}</label>
+    <select id="release_kind" name="release_kind">
+      <option value="FEATURE"{% if values.release_kind != "SAFETY" %} selected{% endif %}>{{ _("Feature update (paid shops only)") }}</option>
+      <option value="SAFETY"{% if values.release_kind == "SAFETY" %} selected{% endif %}>{{ _("Safety fix (also reaches shops that have not paid)") }}</option>
+    </select>
     <label for="release_notes">{{ _("Release notes") }}</label>
     <textarea id="release_notes" name="release_notes" rows="5" maxlength="4000">{{ values.release_notes }}</textarea>
     <label for="update_required"><input id="update_required" type="checkbox" name="update_required" value="1"{% if values.update_required %} checked{% endif %}> {{ _("Update required: shops on older versions must update") }}</label>

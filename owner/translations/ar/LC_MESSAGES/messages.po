@@ -9288,3 +9288,24 @@ msgstr "الباقات الشهرية (2 و3 معًا): 1 = 5، 2 = 10، 3 = 20�
 
 msgid "Each sale is payable 30 days after its payment is confirmed. Extra devices never count."
 msgstr "كل بيع يُصرف بعد 30 يومًا من تأكيد دفعته. الأجهزة الإضافية لا تُحتسب أبدًا."
+
+msgid "Kind of release"
+msgstr "نوع الإصدار"
+
+msgid "Feature update (paid shops only)"
+msgstr "تحديث ميزات (للمتاجر المدفوعة فقط)"
+
+msgid "Safety fix (also reaches shops that have not paid)"
+msgstr "إصلاح أمان (يصل أيضًا إلى المتاجر التي لم تدفع)"
+
+msgid "Safety fix"
+msgstr "إصلاح أمان"
+
+msgid "Feature update"
+msgstr "تحديث ميزات"
+
+msgid "Choose whether this is a feature update or a safety fix."
+msgstr "اختر إن كان هذا تحديث ميزات أم إصلاح أمان."
+
+msgid "activation every year"
+msgstr "تفعيل كل سنة"
