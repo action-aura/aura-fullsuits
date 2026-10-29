@@ -52,6 +52,7 @@ from flask import Blueprint, current_app, jsonify, request
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DataError, IntegrityError
 
+from app.commercial_ops.unpaid import subscription_is_unpaid
 from app.extensions import db_session
 from app.licensing_service import device_identity, replay
 from app.licensing_service.canonical import canonicalize_bytes
@@ -174,6 +175,24 @@ def _authenticate(body: dict, *, nonce_scope: str) -> tuple[Installation, uuid.U
     if installation.license_id is None:
         # Mirrors checkin.py's own handling of installation.license is None.
         raise SyncAuthError("INSTALLATION_NOT_FOUND")
+
+    # Keep-selling (owner decision 2026-10-24): a shop whose subscription lapsed
+    # UNPAID keeps selling on its own till but loses multi-device sync. This is
+    # the AUTHORITATIVE gate -- the device pauses itself too, but that probe
+    # fails open when the licence cannot be read. Same definition of "unpaid" as
+    # the update gate and the device (commercial_ops/unpaid.py).
+    #
+    # Deliberately a refusal HERE and NOT a change to installation.status:
+    # sync/pruning.py keeps the event log only above the cursors of
+    # installations in _SYNCABLE_INSTALLATION_STATUSES, so moving the
+    # installation out of that set would let the log be pruned past the device
+    # and it would get 409 RESYNC_REQUIRED after renewal instead of catching up.
+    # The consequence we accept: while the licence is unpaid its device cursor
+    # holds the prune watermark, so owner_sync_events for that licence grows (the
+    # 20,000-row alarm in sync/pruning.py will fire for a months-long lapse).
+    # No retention logic is built; staff see the alarm and decide.
+    if subscription_is_unpaid(installation.license.subscription):
+        raise SyncAuthError("SUBSCRIPTION_LAPSED")
 
     return installation, installation.license_id
 
