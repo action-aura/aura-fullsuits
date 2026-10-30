@@ -275,6 +275,37 @@ def test_locked_trial_refuses_a_sale():
     assert decision.denial_reason == DENIAL_REASON_LICENSE_INACTIVE
 
 
+# Owner decision 2026-10-30: money OUT (a return/refund) is blocked while the trial is over, money IN
+# (a customer paying down debt) is not -- and ONLY for TRIAL_ENDED: a restricted PAID shop keeps its refunds.
+RETURN_AND_PAYMENT_ALLOWLIST = RETAIL_LIKE_ALLOWLIST | frozenset({
+    "retail.return.create", "retail.customer.payment.record"})
+
+
+def _decide(capability, state):
+    return evaluate_capability(
+        capability_code=capability, current_state=state,
+        restricted_mode_allowlist=RETURN_AND_PAYMENT_ALLOWLIST)
+
+
+def test_trial_ended_blocks_a_return_but_allows_a_customer_debt_payment():
+    refused = _decide("retail.return.create", LicenseState.TRIAL_ENDED)
+    assert refused.allowed is False and refused.denial_reason == DENIAL_REASON_LICENSE_INACTIVE
+    assert _decide("retail.customer.payment.record", LicenseState.TRIAL_ENDED).allowed is True
+
+
+def test_every_other_locked_state_keeps_allowing_a_return():
+    # The twin that makes the deny above scoped: it must not leak into any other restricted state.
+    for state in (LicenseState.RESTRICTED, LicenseState.EXPIRED, LicenseState.SUSPENDED,
+                  LicenseState.REVOKED, LicenseState.CLOCK_REVIEW_REQUIRED, LicenseState.LOCAL_STATE_CORRUPT):
+        assert _decide("retail.return.create", state).allowed is True, state
+        assert _decide("retail.customer.payment.record", state).allowed is True, state
+
+
+def test_a_selling_state_still_allows_a_return():
+    assert _decide("retail.return.create", LicenseState.ACTIVE_ONLINE).allowed is True
+    assert _decide("retail.return.create", LicenseState.SUBSCRIPTION_LAPSED).allowed is True
+
+
 def test_flask_guard_returns_403_for_a_sale_post_and_200_for_backup_and_reads(tmp_path):
     app_data_dir = str(tmp_path / "appdata")
     guard = make_capability_guard(app_data_dir)

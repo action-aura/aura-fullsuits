@@ -296,7 +296,8 @@ def test_subscription_lapsed_can_create_a_product(client_and_company):
 # The mirror image of SUBSCRIPTION_LAPSED above. A lapsed PAID shop keeps selling;
 # an unpaid TRIAL does not -- but its data is never held hostage: reads, reports,
 # backup and export stay open (the existing restricted allowlist), and returns /
-# customer payments stay allowed exactly as in every other locked state.
+# customer debt payments stay allowed. Returns/refunds (money OUT) are blocked in TRIAL_ENDED ONLY
+# (owner decision 2026-10-30); every other locked state keeps them.
 
 
 def test_trial_ended_refuses_a_sale_with_license_inactive(client_and_company):
@@ -331,3 +332,25 @@ def test_trial_ended_still_refuses_new_products_and_stock_changes(client_and_com
     r = c.post('/api/sub/retail/products', json={'name': 'x', 'sku': 'TRIAL-X-1'})
     assert r.status_code == 403
     assert r.get_json()["reason_code"] == "LICENSE_INACTIVE"
+
+
+def test_trial_ended_blocks_a_return_but_allows_a_customer_debt_payment(client_and_company):
+    c, _ = client_and_company
+    pid = _seed_product(c, price=100.0, stock=10)
+    cust_id = _seed_customer(c)
+    sale = c.post('/api/sub/retail/sales', json={'items': [{'product_id': pid, 'quantity': 2}]})
+    assert sale.status_code == 200, sale.get_json()
+    sale_id = sale.get_json()['data']['id']
+
+    _set_state("TRIAL_ENDED")
+    ret = c.post('/api/sub/retail/returns', json={'sale_id': sale_id, 'items': [{'product_id': pid, 'quantity': 1}]})
+    assert ret.status_code == 403
+    assert ret.get_json()["reason_code"] == "LICENSE_INACTIVE"
+    pay = c.post(f'/api/sub/retail/customers/{cust_id}/payments', json={'amount': 10})
+    assert pay.status_code == 200, pay.get_json()
+
+    # Same return, other restricted state: unchanged behaviour (allowed) -- the deny is TRIAL_ENDED-only.
+    _set_state("RESTRICTED")
+    ret = c.post('/api/sub/retail/returns', json={'sale_id': sale_id, 'items': [{'product_id': pid, 'quantity': 1}]})
+    assert ret.status_code == 200, ret.get_json()
+

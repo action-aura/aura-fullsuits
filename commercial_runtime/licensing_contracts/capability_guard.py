@@ -19,6 +19,14 @@ from .state_machine import DATA_PRESERVED_FAMILY, SELLING_FAMILY, LicenseState
 DENIAL_REASON_LICENSE_INACTIVE = "LICENSE_INACTIVE"
 DENIAL_REASON_NOT_ENTITLED = "CAPABILITY_NOT_ENTITLED"
 
+# Owner decision 2026-10-30 (new customer flow): while a TRIAL has ended unpaid, money going OUT is
+# blocked -- a return/refund -- but money coming IN (a customer paying down their debt) stays allowed.
+# A shop that never paid should not be refunding customers out of the till. Every other locked state
+# (RESTRICTED, EXPIRED, SUSPENDED, ...) keeps its allowlist exactly as the product declares it: a
+# PAID shop that got restricted still owes its customers a lawful refund (see RETAIL_RESTRICTED_ALLOWLIST).
+# So this is a TRIAL_ENDED-only deny layered on top of the allowlist, not an allowlist edit.
+TRIAL_ENDED_DENIED_CAPABILITIES = frozenset({"retail.return.create"})
+
 
 @dataclass(frozen=True)
 class CapabilityDecision:
@@ -56,6 +64,8 @@ def evaluate_capability(
         pass  # full normal operation, subject only to the entitlement gate below
     elif current_state in DATA_PRESERVED_FAMILY:
         if capability_code not in restricted_mode_allowlist:
+            return CapabilityDecision(False, DENIAL_REASON_LICENSE_INACTIVE)
+        if current_state == LicenseState.TRIAL_ENDED and capability_code in TRIAL_ENDED_DENIED_CAPABILITIES:
             return CapabilityDecision(False, DENIAL_REASON_LICENSE_INACTIVE)
     else:
         # Not in either family (e.g. NOT_CONFIGURED reached in a state where
