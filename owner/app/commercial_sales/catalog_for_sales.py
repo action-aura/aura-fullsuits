@@ -133,7 +133,7 @@ def describe_plan_for_sale(plan_id: uuid.UUID, *, as_of: date | None = None) -> 
         "contract_term_months": plan.contract_term_months,
         # Monthly packages charge the setup fee (the 100 JOD activation) again at
         # the start of every later contract year; None for Package 1.
-        # packages.payment_due.
+        # packages.next_payment_due.
         "yearly_activation_fee": _yearly_activation_fee(plan),
         "currency": current_price.currency,
         "effective_start": plan.effective_date.isoformat() if plan.effective_date else None,

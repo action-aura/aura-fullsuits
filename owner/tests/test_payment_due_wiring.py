@@ -24,16 +24,18 @@ import pytest
 
 from tests.conftest import force_login, get_csrf
 from tests.test_step0_ladder import _pay_month, _rows, _sell
-from tests.test_yearly_activation import _owner_world, owner_prices  # noqa: F401  (fixture)
+from tests.test_yearly_activation import _months_after, _owner_world, owner_prices, rebase_contract  # noqa: F401  (fixture)
 
 JOD = "JOD"
 
 
 def _to_month_13(app, w, sub):
-    """The subscription's NEXT payment is the first of its second contract year
-    (the sale's own payment + 11 more monthly payments are behind it)."""
-    for _ in range(11):
-        _pay_month(app, w, sub, "35.00")
+    """Today is the first stretch of the subscription's SECOND contract year (it
+    began 13 months ago), with a few paid months behind it in year 1. Contract
+    years run by date, not by how many payments there are."""
+    start = rebase_contract(app, sub, 13)
+    for month in (1, 2, 3):
+        _pay_month(app, w, sub, "35.00", payment_date=_months_after(start, month))
 
 
 @pytest.fixture()
@@ -246,10 +248,14 @@ def test_the_api_reports_the_due_check_and_still_records_a_different_amount(app,
     data = resp.get_json()
     assert data["due_check"]["expected_amount"] == "135.00" and data["due_check"]["difference"] == "-100.00"
     assert data["due_check"]["matches"] is False and data["status"] == "PENDING"
-    # allow side: the next one entered exactly as due matches (the 35 just recorded now counts as a month)
-    body["amount"] = "35.00"
+    # allow side: the activation was not carried by that 35, so it is still due -- entered exactly as due it matches
+    body["amount"] = "135.00"
     again = shop["client"].post("/api/operations/v1/payments", json=body, headers={"X-CSRFToken": csrf}).get_json()
-    assert again["due_check"]["matches"] is True
+    assert again["due_check"]["matches"] is True and again["due_check"]["expected_amount"] == "135.00"
+    # ... and once carried, the next one is just the month
+    body["amount"] = "35.00"
+    after = shop["client"].post("/api/operations/v1/payments", json=body, headers={"X-CSRFToken": csrf}).get_json()
+    assert after["due_check"]["matches"] is True and after["due_check"]["expected_amount"] == "35.00"
     # and an API payment with no subscription carries no due_check at all
     del body["subscription_id"]
     plain = shop["client"].post("/api/operations/v1/payments", json=body, headers={"X-CSRFToken": csrf}).get_json()

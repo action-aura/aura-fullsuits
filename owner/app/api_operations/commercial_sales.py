@@ -525,8 +525,8 @@ def submit_payment_route():
     if subscription_id is not None:
         try:
             check = check_payment_amount(db_session.get(Subscription, subscription_id), _to_decimal(body["amount"]),
-                                         body.get("currency") or "")
-        except (ArithmeticError, KeyError):
+                                         body.get("currency") or "", payment_date=date.fromisoformat(body["payment_date"]))
+        except (ArithmeticError, KeyError, ValueError):
             check = None
     try:
         payment = submit_payment(

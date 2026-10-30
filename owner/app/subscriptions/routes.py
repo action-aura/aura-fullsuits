@@ -200,7 +200,7 @@ def create_payment():
     # A different amount from the one due is allowed (a part payment, two months
     # at once) -- never refused. It is flagged on screen and written into this
     # payment's audit entry so the gap can be found later.
-    check = check_payment_amount(subscription, amount, request.form.get("currency", "USD"))
+    check = check_payment_amount(subscription, amount, request.form.get("currency", "USD"), payment_date=payment_date)
     try:
         payment = record_payment(
             {

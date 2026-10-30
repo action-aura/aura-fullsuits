@@ -91,51 +91,54 @@ def yearly_activation_fee(plan: Plan) -> Decimal | None:
     return Decimal(price.setup_fee)
 
 
-def payment_due(subscription: Subscription, payment_number: int) -> tuple[Decimal, str] | None:
-    """(amount, currency) the subscription's `payment_number`-th monthly/periodic
-    payment should be (1 = the sale's own first payment).
-
-      - payment 1: base_price + setup_fee, same as a new sale
-        (catalog_for_sales first_sale_unit_price);
-      - a monthly package: payments 2..12 are base_price; payment 13, 25, ... (the
-        first month of each later contract year) add the yearly activation;
-      - Package 1 / any plan without a contract: base_price from payment 2 on,
-        exactly renewal_price.
-    Assumes one payment per month for a monthly package -- the 13th payment is
-    month 13. None when the plan has no current price."""
-    if payment_number < 1:
-        raise ValueError("payment_number starts at 1")
-    renewal = renewal_price(subscription)
-    if renewal is None:
+def contract_start(subscription: Subscription) -> date | None:
+    """The day the subscription's contract began: contract_ends_on minus the
+    contract term (contract_terms stored the end as start + term, and the start
+    itself is not stored -- start_date/end_date are the LICENCE term, which
+    renewals move). None for a subscription without contract dates."""
+    ends, term = subscription.contract_ends_on, subscription.contract_term_months
+    if ends is None or not term:
         return None
-    base, currency = renewal
-    plan = db_session.get(Plan, subscription.plan_id)
-    fee = yearly_activation_fee(plan)
-    if payment_number == 1:
-        price = db_session.execute(
-            select(PlanPrice).where(PlanPrice.plan_id == plan.id, PlanPrice.effective_until.is_(None))
-        ).scalars().first()
-        return base + Decimal(price.setup_fee or 0), currency
-    if fee is not None and (payment_number - 1) % CONTRACT_YEAR_MONTHS == 0:
-        return base + fee, currency
-    return base, currency
+    return add_interval(ends, months=-term)
 
 
-def next_payment_due(subscription: Subscription) -> tuple[Decimal, str] | None:
-    """payment_due() for the NEXT payment: one more than the subscription's
-    PENDING/CONFIRMED payments so far (a rejected or failed payment is not a
-    month paid). The sale's own first payment counts as #1 even though it is
-    recorded against the sale's invoice, not the subscription (measured: a
-    subscription_id-only count started one month early and quoted the
-    activation on month 12), so payments allocated to the sale's invoice are
-    counted too."""
+def contract_year_bounds(start: date, year: int) -> tuple[date, date]:
+    """[first day, first day of the next year) of contract year `year` (1-based)
+    -- start + 12*(year-1) months up to start + 12*year months. The contract
+    years keep counting after the contract ends (a Package 2 shop that carries
+    on month to month is in contract year 2, 3, ...)."""
+    return (add_interval(start, months=CONTRACT_YEAR_MONTHS * (year - 1)),
+            add_interval(start, months=CONTRACT_YEAR_MONTHS * year))
+
+
+def contract_year_of(subscription: Subscription, on: date) -> int | None:
+    """Which contract year `on` falls in (a date before the start is year 1);
+    None when the subscription has no contract dates."""
+    start = contract_start(subscription)
+    if start is None:
+        return None
+    year = 1
+    while on >= contract_year_bounds(start, year)[1]:
+        year += 1
+    return year
+
+
+_PAYING = ("PENDING", "CONFIRMED")  # a rejected, failed, voided or refunded payment is not money in
+
+
+def counted_payments(subscription: Subscription) -> list:
+    """Every PENDING/CONFIRMED payment of the subscription. The sale's own
+    payment is recorded against the sale's invoice (or the order), not the
+    subscription (measured: a subscription_id-only list missed it and quoted
+    the first-sale price again), so payments allocated to or recorded for the
+    sale's invoice are included. Status is a filter here and nowhere else: a
+    FAILED or VOIDED payment must never make a month or an activation look paid."""
     from app.models.commercial_sales import CommercialInvoice, PaymentAllocation
     from app.models.subscriptions import PaymentRecord
 
-    paying = ("PENDING", "CONFIRMED")
     ids = set(db_session.execute(
         select(PaymentRecord.id).where(PaymentRecord.subscription_id == subscription.id,
-                                       PaymentRecord.status.in_(paying))
+                                       PaymentRecord.status.in_(_PAYING))
     ).scalars().all())
     if subscription.sales_order_id is not None:
         ids |= set(db_session.execute(
@@ -143,15 +146,71 @@ def next_payment_due(subscription: Subscription) -> tuple[Decimal, str] | None:
             .join(PaymentAllocation, PaymentAllocation.payment_record_id == PaymentRecord.id)
             .join(CommercialInvoice, CommercialInvoice.id == PaymentAllocation.commercial_invoice_id)
             .where(CommercialInvoice.sales_order_id == subscription.sales_order_id,
-                   PaymentAllocation.reversed_at.is_(None), PaymentRecord.status.in_(paying))
+                   PaymentAllocation.reversed_at.is_(None), PaymentRecord.status.in_(_PAYING))
         ).scalars().all())
         ids |= set(db_session.execute(
             select(PaymentRecord.id)
             .join(CommercialInvoice, CommercialInvoice.id == PaymentRecord.commercial_invoice_id)
             .where(CommercialInvoice.sales_order_id == subscription.sales_order_id,
-                   PaymentRecord.status.in_(paying))
+                   PaymentRecord.status.in_(_PAYING))
         ).scalars().all())
-    return payment_due(subscription, len(ids) + 1)
+    if not ids:
+        return []
+    return list(db_session.execute(select(PaymentRecord).where(PaymentRecord.id.in_(ids))).scalars().all())
+
+
+def next_payment_due(subscription: Subscription, payment_date: date | None = None) -> tuple[Decimal, str] | None:
+    """(amount, currency) a payment of this subscription dated `payment_date`
+    (default: Jordan's today) should be. None when the plan has no current price.
+
+    Verifier finding (2026-10-30, MEDIUM): this used to count payment RECORDS
+    and quote the activation on "the 13th". Contract years run by DATE, so a
+    split payment (deposit + balance), a combined one (70 JOD for two months) or
+    a lapse moved the +100 to the wrong month. Now:
+
+      * first payment of a subscription (nothing counted yet): base + setup fee,
+        as a new sale costs (catalog_for_sales first_sale_unit_price);
+      * a monthly package, contract year 1: base. The sale's own payment carried
+        the setup fee, however it was split;
+      * a monthly package, contract year k >= 2 (start + 12*(k-1) months, Jordan
+        business dates): base + the yearly activation, due ONCE -- until a counted
+        payment dated in that year has "carried" it, i.e. is at least a month plus
+        the activation in the plan's currency. A payment smaller than that (a
+        month's 35, or 70 for two months) cannot contain the activation, so the
+        next one is asked for it. Worked out from payment amount, date and status
+        alone: nothing is recorded per payment to say what it was for, and no
+        schema change was made for it. A part-paid activation (say 50 then 85) is
+        therefore still quoted in full until a single payment covers it: the
+        over-quote is the safe direction, and staff can enter the real amount
+        (it is flagged and audited, never refused);
+      * Package 1 / any plan without a contract: base after the first payment;
+      * a monthly package with no contract dates stored is treated as year 1: it
+        can never quote an activation it cannot place on the calendar.
+    """
+    from app.operational_reports.periods import jordan_today
+
+    renewal = renewal_price(subscription)
+    if renewal is None:
+        return None
+    base, currency = renewal
+    plan = db_session.get(Plan, subscription.plan_id)
+    fee = yearly_activation_fee(plan)
+    on = payment_date or jordan_today()
+    year = contract_year_of(subscription, on) if fee is not None else None
+    counted = counted_payments(subscription)
+    if year is None or year == 1:
+        if counted:
+            return base, currency
+        price = db_session.execute(
+            select(PlanPrice).where(PlanPrice.plan_id == plan.id, PlanPrice.effective_until.is_(None))
+        ).scalars().first()
+        return base + Decimal(price.setup_fee or 0), currency
+    first_day, next_year_first_day = contract_year_bounds(contract_start(subscription), year)
+    carried = any(
+        first_day <= p.payment_date < next_year_first_day and p.currency == currency and Decimal(p.amount) >= base + fee
+        for p in counted
+    )
+    return (base if carried else base + fee), currency
 
 
 # ------------------------------------------ what staff are shown and warned --
@@ -178,14 +237,14 @@ class PaymentQuote:
         return self.month + self.activation
 
 
-def next_payment_quote(subscription: Subscription) -> PaymentQuote | None:
+def next_payment_quote(subscription: Subscription, payment_date: date | None = None) -> PaymentQuote | None:
     """What the NEXT payment of a monthly-package subscription should be, in
     parts. None for any plan without a yearly activation (Package 1, plans with
     no contract): their payments are left exactly as they were."""
     plan = db_session.get(Plan, subscription.plan_id)
     if plan is None or not has_yearly_activation(plan):
         return None
-    due = next_payment_due(subscription)
+    due = next_payment_due(subscription, payment_date)
     renewal = renewal_price(subscription)
     if due is None or renewal is None:
         return None
@@ -229,11 +288,12 @@ class AmountCheck:
         }
 
 
-def check_payment_amount(subscription: Subscription | None, amount: Decimal, currency: str) -> AmountCheck | None:
+def check_payment_amount(subscription: Subscription | None, amount: Decimal, currency: str,
+                         payment_date: date | None = None) -> AmountCheck | None:
     """None when the subscription has no yearly activation (nothing to compare)."""
     if subscription is None:
         return None
-    quote = next_payment_quote(subscription)
+    quote = next_payment_quote(subscription, payment_date)
     if quote is None:
         return None
     return AmountCheck(quote=quote, entered=Decimal(amount), entered_currency=currency or "")

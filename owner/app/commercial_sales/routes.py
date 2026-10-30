@@ -617,8 +617,9 @@ def submit_payment_route():
     check = None
     try:
         check = check_payment_amount(_subscription_or_none(request.form.get("subscription_id")),
-                                     Decimal(str(request.form["amount"])), request.form.get("currency", "USD"))
-    except (ArithmeticError, KeyError):  # a malformed amount is refused below, by the form's own handling
+                                     Decimal(str(request.form["amount"])), request.form.get("currency", "USD"),
+                                     payment_date=date.fromisoformat(request.form["payment_date"]))
+    except (ArithmeticError, KeyError, ValueError):  # a malformed amount is refused below, by the form's own handling
         check = None
     try:
         payment = submit_payment(
