@@ -142,7 +142,12 @@ class BuildGuardContractTest {
         // Guards the guard: the button and the sheet are two separate sites.
         assertThat(entryPoints.size).isAtLeast(2)
         for (i in entryPoints) {
-            val window = lines.subList(maxOf(0, i - 4), i + 1).joinToString(" ")
+            // Code lines only: the explanatory comment above the gate also names the
+            // flag, and a comment must not be able to satisfy a guard about code
+            // (found by mutating the gate to `if (true)`, which stayed green).
+            val window = lines.subList(maxOf(0, i - 4), i + 1)
+                .filter { !it.trimStart().startsWith("//") }
+                .joinToString(" ")
             assertThat(window).contains("BuildConfig.AI_ASSISTANT_ENABLED")
         }
         // And nothing else may call the chat endpoint around the gate.
