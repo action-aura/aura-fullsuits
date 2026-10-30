@@ -12,7 +12,7 @@ filesystem dependency.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Optional
 
 from .state_machine import LicenseState
@@ -21,6 +21,50 @@ from .trusted_time import TrustedTimeAnchor, detect_rollback, trusted_now as _tr
 
 class PolicyEvaluationError(ValueError):
     pass
+
+
+# The 7-day trial ends at the END OF THE term_end DAY IN JORDAN, not at a UTC
+# midnight: a shop in Amman that signed up on the 1st is told "7 days" and
+# expects to sell through the whole of the 8th. A UTC boundary would lock the
+# till at 03:00 local on the 8th (Jordan is UTC+3 all year since the 2022 DST
+# abolition), three hours into the shop's last trading day.
+TRIAL_TIMEZONE_NAME = "Asia/Amman"
+# Signed subscription_status values that are a trial. PILOT is a trial still
+# running (until its term_end day is over). COMPLETED is the terminal state
+# Owner puts a pilot in when it ended without converting (PILOT -> COMPLETED
+# has no way out), so it is locked from the moment it is signed.
+TRIAL_STATUSES = frozenset({"PILOT", "COMPLETED"})
+
+
+def _trial_zone() -> tzinfo:
+    """Asia/Amman via the OS/tzdata database, with a fixed UTC+3 fallback for
+    installs that ship no tz database (Windows without the tzdata package,
+    Chaquopy). Both agree on every date since October 2022, which is the only
+    range a live trial can fall in; the fallback exists so a missing database
+    can never turn the lock into an exception on the selling path."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(TRIAL_TIMEZONE_NAME)
+    except Exception:  # noqa: BLE001 -- ZoneInfoNotFoundError / ImportError / OSError
+        return timezone(timedelta(hours=3))
+
+
+def trial_cutoff(term_end: date) -> datetime:
+    """First instant AFTER the term_end day, in Amman: the moment the trial is
+    over. 23:59 on term_end is still inside the trial; 00:00 the next day is
+    not."""
+    return datetime.combine(term_end + timedelta(days=1), time.min, tzinfo=_trial_zone())
+
+
+def trial_days_left(term_end: date, as_of: datetime) -> int:
+    """Whole days of trial remaining for display, counting the term_end day
+    itself (term_end = today -> 1 day left, the last trading day). 0 once the
+    trial is over. Display only -- the lock decision is evaluate()'s."""
+    remaining = trial_cutoff(term_end) - as_of
+    if remaining <= timedelta(0):
+        return 0
+    return -(-int(remaining.total_seconds()) // 86400)  # ceiling
 
 
 @dataclass(frozen=True)
@@ -65,6 +109,23 @@ class AssertionEvidence:
     # payload from before this field was consumed client-side -- absence is always safe, never
     # a crash). Distinct from offline_policy's own technical grace fields (Part D).
     commercial_grace_end: Optional[datetime] = None
+    # New-customer flow: the lease already signs term_end (a DATE, Owner's
+    # Subscription.end_date) and pilot_status; the client allowlist already
+    # accepted them but nothing consumed them. None = absent or unparseable --
+    # absence can never lock a till (a paid shop's lease always carries one,
+    # and an Owner-side defect in a date must not stop paying customers).
+    term_end: Optional[date] = None
+    pilot_status: Optional[str] = None
+
+
+def _trial_has_ended(
+    evidence: AssertionEvidence, trial_now: datetime
+) -> bool:
+    if evidence.subscription_status == "COMPLETED":
+        return True
+    if evidence.subscription_status != "PILOT" or evidence.term_end is None:
+        return False
+    return trial_now >= trial_cutoff(evidence.term_end)
 
 
 def evaluate(
@@ -114,6 +175,29 @@ def evaluate(
     # mechanism, Part E) must never mask it (Non-Negotiable Rule 8).
     if evidence.license_status == "SUSPENDED":
         return LicenseState.SUSPENDED
+
+    # New-customer flow (owner 2026-10-30): the 7-day trial lock. Placed HERE
+    # on purpose -- after the explicit SUSPENDED/REVOKED decisions (those win)
+    # and BEFORE both the commercial block and the emergency extension: an
+    # extension is payment-timing relief for a PAID subscription and must not
+    # buy a free trial more days, and the commercial block below would
+    # otherwise fall through to keep-selling for PILOT/COMPLETED.
+    #
+    # The clock is TRUSTED time, never the raw wall clock. When the caller
+    # supplies the offline floor (a stale assertion, re-verified at its own
+    # expires_at) the trial clock is also pushed forward by it, because after
+    # a restart the anchor re-pins to the last check-in and would otherwise
+    # report "no time has passed" however long the till sat offline. The floor
+    # only ever moves the trial clock LATER (max), so rolling the wall clock
+    # back cannot extend a trial; a roll-back past the anchor is already
+    # CLOCK_REVIEW_REQUIRED above.
+    trial_now = now
+    if offline_elapsed_floor_seconds is not None:
+        trial_now = max(
+            now, last_successful_checkin_at + timedelta(seconds=offline_elapsed_floor_seconds)
+        )
+    if _trial_has_ended(evidence, trial_now):
+        return LicenseState.TRIAL_ENDED
 
     # Phase 8V-P6 (Part C/D): commercial state -- driven by Subscription.status
     # and the signed commercial_grace_end, deliberately independent of

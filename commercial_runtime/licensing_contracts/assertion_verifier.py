@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from typing import Optional
 
 # Real client devices routinely have a system clock a few seconds off from
 # Owner's (timezone database staleness, imperfect NTP sync, no NTP at all on
@@ -134,6 +135,22 @@ def _guard_payload(payload: dict) -> None:
             )
 
 
+def _parse_term_end(raw: object) -> Optional[date]:
+    """term_end is Owner's Subscription.end_date serialised with .isoformat(),
+    i.e. 'YYYY-MM-DD'. A full ISO datetime is tolerated (its date part is
+    taken) so a future Owner change cannot silently disable the trial lock.
+    Anything else is None -- deliberately NOT a verification error: term_end
+    rides on EVERY lease, and rejecting the whole assertion over a date the
+    client only uses for a trial would stop paying shops (the Phase 8 allowlist
+    outage above is what an over-strict gate costs)."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+
+
 def verify_assertion(
     envelope: dict,
     *,
@@ -241,6 +258,7 @@ def verify_assertion(
             "ASSERTION_VERIFICATION_FAILED", f"Malformed commercial_grace_end: {exc}"
         ) from exc
 
+    pilot_status = payload.get("pilot_status")
     evidence = AssertionEvidence(
         not_before=not_before,
         expires_at=expires_at,
@@ -249,6 +267,8 @@ def verify_assertion(
         subscription_status=payload.get("subscription_status", ""),
         offline_policy=offline_policy,
         commercial_grace_end=commercial_grace_end,
+        term_end=_parse_term_end(payload.get("term_end")),
+        pilot_status=pilot_status if isinstance(pilot_status, str) else None,
     )
 
     return VerifiedAssertion(payload=payload, evidence=evidence, signing_key_id=signing_key_id)

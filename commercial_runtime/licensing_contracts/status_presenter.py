@@ -7,8 +7,10 @@ each one reaching into LicenseStateRecord's raw fields directly.
 from __future__ import annotations
 
 import json
+from datetime import date, datetime, timezone
 from typing import Optional
 
+from .policy_evaluator import TRIAL_STATUSES, trial_days_left
 from .state_repository import LicenseStateRecord
 
 # User-facing copy is a product/UI concern (Part G's screen list) -- this
@@ -52,6 +54,49 @@ def _payload_of(record: LicenseStateRecord) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _present_trial(record: LicenseStateRecord, payload: dict) -> dict:
+    """What the UI needs to say "Trial: N days left" or show the lock screen.
+
+    DISPLAY ONLY -- the lock itself is policy_evaluator.evaluate()'s TRIAL_ENDED
+    verdict, which the capability guard reads from the stored state. The day
+    count is therefore allowed to be approximate, but it still must not be
+    GENEROUS: the as-of time is the later of the wall clock and the last
+    Owner-verified time, so rolling the clock back never makes a trial look
+    longer than it is.
+
+    `ended` mirrors the stored state rather than recomputing, so the banner and
+    the guard can never disagree about whether the till is locked."""
+    status = record.subscription_status
+    is_trial = status in TRIAL_STATUSES
+    ended = record.current_state == "TRIAL_ENDED"
+    term_end = None
+    raw = payload.get("term_end")
+    if isinstance(raw, str) and raw:
+        try:
+            term_end = date.fromisoformat(raw[:10])
+        except ValueError:
+            term_end = None
+    days_left = None
+    if is_trial and term_end is not None and not ended:
+        as_of = datetime.now(timezone.utc)
+        anchor = record.trusted_time_anchor_server_time
+        if anchor:
+            try:
+                parsed = datetime.fromisoformat(anchor)
+                if parsed.tzinfo is not None:
+                    as_of = max(as_of, parsed)
+            except ValueError:
+                pass
+        days_left = trial_days_left(term_end, as_of)
+    return {
+        "is_trial": is_trial,
+        "ended": ended,
+        "days_left": days_left,
+        "term_end": term_end.isoformat() if term_end else None,
+        "pilot_status": payload.get("pilot_status") if isinstance(payload.get("pilot_status"), str) else None,
+    }
+
+
 def present_status(record: Optional[LicenseStateRecord]) -> dict:
     """No seat COUNT here, on purpose. The licence store does not know how many
     computers are paired (that is the site-relay's device list), and a
@@ -79,6 +124,7 @@ def present_status(record: Optional[LicenseStateRecord]) -> dict:
     # sign shop-authority changes yet; the desktop shell uses it to ask Owner
     # again right away at boot instead of waiting for the next poll. Not
     # secret: it is a yes/no, never the id itself.
+    result["trial"] = _present_trial(record, payload)
     attested = payload.get("registry_device_id")
     result["registry_device_attested"] = isinstance(attested, str) and bool(attested)
 
