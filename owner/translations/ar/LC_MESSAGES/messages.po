@@ -346,7 +346,7 @@ msgstr "مؤكَّد"
 
 #: app/i18n_labels.py:185 app/templates/leads/dashboard.html:30
 msgid "Lost"
-msgstr "خاسر"
+msgstr "ضائع"
 
 #: app/i18n_labels.py:194 app/templates/leads/discover.html:51
 msgid "Website"
@@ -541,7 +541,7 @@ msgstr "فشل"
 #: app/templates/commercial_ops/activation_policy.html:39
 #: app/templates/licensing_admin/signing_keys.html:24
 msgid "Retired"
-msgstr "متقاعد"
+msgstr "خارج الخدمة"
 
 #: app/i18n_labels.py:365 app/i18n_labels.py:530 app/i18n_labels.py:610
 #: app/i18n_labels.py:847 app/i18n_labels.py:859 app/i18n_labels.py:973
@@ -1144,7 +1144,7 @@ msgstr "لا يمكن تغيير حالة العميل المحتمل من %(fro
 
 #: app/i18n_labels.py:723
 msgid "A reason is required to mark a lead as lost."
-msgstr "يلزم إدخال سبب لتصنيف العميل المحتمل كخاسر."
+msgstr "يلزم إدخال سبب لتصنيف العميل المحتمل كعميل ضائع."
 
 #: app/i18n_labels.py:724
 msgid "This lead was changed by someone else. Reload and try again."
@@ -1559,7 +1559,7 @@ msgstr "يوجد بالفعل قيد عمولة لتخصيص الدفعة هذا
 msgid ""
 "Cannot change commission entry status from %(from_status)s to "
 "%(to_status)s."
-msgstr "لا يمكن تغيير حالة العميل المحتمل من %(from_status)s إلى %(to_status)s."
+msgstr "لا يمكن تغيير حالة قيد العمولة من %(from_status)s إلى %(to_status)s."
 
 #: app/i18n_labels.py:945
 msgid "You cannot approve or adjust your own commission entry."
@@ -4402,7 +4402,7 @@ msgstr "طلبات المبيعات"
 
 #: app/templates/commercial_sales/employee_dashboard.html:32
 msgid "My commission earnings"
-msgstr "أرباح العمولات الخاصة بي"
+msgstr "عمولاتي"
 
 #: app/templates/commercial_sales/employee_dashboard.html:39
 #: app/templates/commercial_sales/employee_dashboard.html:51
@@ -4425,7 +4425,7 @@ msgstr "طلبات الاعتماد المعلقة"
 
 #: app/templates/commercial_sales/employee_dashboard.html:46
 msgid "My commission earnings by currency"
-msgstr "أرباح العمولات الخاصة بي حسب العملة"
+msgstr "عمولاتي حسب العملة"
 
 #: app/templates/commercial_sales/employee_dashboard.html:67
 #: app/templates/operations_ui/dashboard_management.html:20
@@ -8839,8 +8839,8 @@ msgid "No contract"
 msgstr "بدون عقد"
 
 #: app/templates/catalog/plan_detail.html
-msgid "Setup fee (first sale only)"
-msgstr "رسوم التأسيس (عند البيع الأول فقط)"
+msgid "Setup fee (first payment; monthly packages: again each contract year)"
+msgstr "رسوم التأسيس (عند الدفعة الأولى؛ وفي الباقات الشهرية تتكرر كل سنة من العقد)"
 
 #: app/templates/licensing/sale.html
 msgid "first payment"
@@ -8884,15 +8884,15 @@ msgstr "+ %(count)d أزواج أجهزة إضافية"
 
 #: app/i18n_labels.py
 msgid "Sale counted on the commission ladder"
-msgstr "احتُسب البيع على سلم العمولة"
+msgstr "احتُسب البيع على سلّم العمولة"
 
 #: app/i18n_labels.py
 msgid "Sale removed from the commission ladder"
-msgstr "أُزيل البيع من سلم العمولة"
+msgstr "أُزيل البيع من سلّم العمولة"
 
 #: app/i18n_labels.py
 msgid "Commission ladder month recalculated"
-msgstr "أُعيد حساب شهر سلم العمولة"
+msgstr "أُعيد حساب شهر سلّم العمولة"
 
 #: app/i18n_labels.py
 msgid "Refund after the commission hold"
@@ -8920,11 +8920,11 @@ msgstr "هذه العمولة ما زالت ضمن فترة الحجز البا�
 
 #: app/i18n_labels.py
 msgid "The monthly ladder rule is in JOD and takes no rate or fixed amount."
-msgstr "قاعدة سلم العمولة الشهري بالدينار الأردني ولا تأخذ نسبة ولا مبلغًا ثابتًا."
+msgstr "قاعدة سلّم العمولة الشهري بالدينار الأردني ولا تأخذ نسبة ولا مبلغًا ثابتًا."
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "Monthly commission ladder"
-msgstr "سلم العمولة الشهري"
+msgstr "سلّم العمولة الشهري"
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "1 sale = 20, 2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD in a month; each sale after the 5th adds 30. Each sale is payable 30 days after its payment is confirmed. Extra devices never count."
@@ -8940,7 +8940,7 @@ msgstr "المبيعات المحتسبة"
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "Ladder total"
-msgstr "مجموع السلم"
+msgstr "مجموع السلّم"
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "Held"
@@ -8952,7 +8952,7 @@ msgstr "مستحقة الدفع"
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "No sales on your ladder yet."
-msgstr "لا توجد مبيعات على سلمك بعد."
+msgstr "لا توجد مبيعات على سلّمك بعد."
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "Refunded after the hold"
@@ -8964,7 +8964,7 @@ msgstr "هذا الشهر، كل البائعين"
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "No ladder sales this month yet."
-msgstr "لا توجد مبيعات على السلم هذا الشهر بعد."
+msgstr "لا توجد مبيعات على السلّم هذا الشهر بعد."
 
 #: app/i18n_labels.py
 msgid "Share of a payment"
@@ -8972,7 +8972,7 @@ msgstr "حصة من دفعة"
 
 #: app/i18n_labels.py
 msgid "Monthly ladder"
-msgstr "السلم الشهري"
+msgstr "السلّم الشهري"
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "On hold until"
@@ -9033,11 +9033,11 @@ msgstr "يوقف الاسترداد ترخيص هذا العميل (بعد يو�
 
 #: app/templates
 msgid "The 30 days for refunds are over. Only a Super Admin can allow this refund, with a written reason; it is recorded in the audit log."
-msgstr "انتهت مدة الثلاثين يومًا للاسترداد. فقط المدير العام يمكنه السماح بهذا الاسترداد مع سبب مكتوب، ويُسجَّل ذلك في سجل التدقيق."
+msgstr "انتهت مدة الثلاثين يومًا للاسترداد. فقط المشرف العام يمكنه السماح بهذا الاسترداد مع سبب مكتوب، ويُسجَّل ذلك في سجل التدقيق."
 
 #: app/templates
 msgid "Allow this refund after the 30 days (Super Admin)"
-msgstr "السماح بالاسترداد بعد مرور 30 يومًا (المدير العام)"
+msgstr "السماح بالاسترداد بعد مرور 30 يومًا (المشرف العام)"
 
 #: app/templates
 msgid "Why it is allowed (at least 10 characters)"
@@ -9077,7 +9077,7 @@ msgstr "تم حفظ حد الاسترداد."
 
 #: app/i18n_labels.py
 msgid "Only a Super Admin can allow a refund after the 30 days."
-msgstr "فقط المدير العام يمكنه السماح بالاسترداد بعد مرور 30 يومًا."
+msgstr "فقط المشرف العام يمكنه السماح بالاسترداد بعد مرور 30 يومًا."
 
 #: app/i18n_labels.py
 msgid "Write why this refund is allowed after the 30 days -- at least 10 characters."
@@ -9120,11 +9120,11 @@ msgstr "الشهر الماضي"
 
 #: app/templates/commercial_sales/leaderboard.html
 msgid "Ranked by sales counted on the ladder, then by ladder total. Months are Jordan calendar months."
-msgstr "الترتيب حسب المبيعات المحتسبة على السلم، ثم حسب مجموع السلم. الأشهر أشهر تقويمية بتوقيت الأردن."
+msgstr "الترتيب حسب المبيعات المحتسبة على السلّم، ثم حسب مجموع السلّم. الأشهر أشهر تقويمية بتوقيت الأردن."
 
 #: app/templates/commercial_sales/leaderboard.html
 msgid "Only your own money is shown. Other sellers' earnings are private."
-msgstr "تظهر مبالغك أنت فقط. أرباح البائعين الآخرين خاصة بهم."
+msgstr "تظهر مبالغك أنت فقط. عمولات البائعين الآخرين خاصة بهم."
 
 #: app/templates/commercial_sales/leaderboard.html
 msgid "Rank"
@@ -9140,7 +9140,7 @@ msgstr "عمولة التجديد"
 
 #: app/templates/commercial_sales/leaderboard.html
 msgid "No sellers on the ladder yet."
-msgstr "لا يوجد بائعون على السلم بعد."
+msgstr "لا يوجد بائعون على السلّم بعد."
 
 #: app/push/worker.py
 msgid "New sale waiting for confirmation"
@@ -9234,11 +9234,11 @@ msgstr "الباقة 1 (سنوية)"
 
 #: app/catalog/package_seed.py
 msgid "Aura Retail - Package 2 (monthly, 12-month contract)"
-msgstr "الباقة 2 (شهرية)"
+msgstr "الباقة 2 (شهرية، التزام 12 شهرًا)"
 
 #: app/catalog/package_seed.py
 msgid "Aura Retail - Package 3 (monthly, 24-month contract)"
-msgstr "الباقة 3 (شهرية)"
+msgstr "الباقة 3 (شهرية، التزام 24 شهرًا)"
 
 #: app/catalog/package_seed.py
 msgid "Extra device pair (1 desktop + 1 phone)"
@@ -9283,11 +9283,11 @@ msgstr "تعيين خطتي السلّم"
 msgid "Package 1: 1 sale = 20, 2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD in a month; each sale after the 5th adds 30."
 msgstr "الباقة 1: بيع واحد = 20، بيعتان = 50، 3 = 100، 4 = 200، 5 = 350 دينارًا في الشهر؛ كل بيع بعد الخامس يضيف 30."
 
-msgid "Monthly packages (2 and 3 together): 1 = 5, 2 = 10, 3 = 20, 4 = 30, 5 = 55, 6 = 65, 7 = 90, 8 = 100, 9 = 115, 10 = 130 JOD in a month; each sale after the 10th adds 10."
-msgstr "الباقات الشهرية (2 و3 معًا): 1 = 5، 2 = 10، 3 = 20، 4 = 30، 5 = 55، 6 = 65، 7 = 90، 8 = 100، 9 = 115، 10 = 130 دينارًا في الشهر؛ كل بيع بعد العاشر يضيف 10."
+msgid "Monthly packages (2 and 3 together; a sale counts when its second payment is confirmed): 1 = 5, 2 = 10, 3 = 20, 4 = 30, 5 = 55, 6 = 65, 7 = 90, 8 = 100, 9 = 115, 10 = 130 JOD in a month; each sale after the 10th adds 10."
+msgstr "الباقات الشهرية (2 و3 معًا؛ تُحتسب البيعة عند تأكيد دفعتها الثانية): 1 = 5، 2 = 10، 3 = 20، 4 = 30، 5 = 55، 6 = 65، 7 = 90، 8 = 100، 9 = 115، 10 = 130 دينارًا في الشهر؛ كل بيع بعد العاشر يضيف 10."
 
-msgid "Each sale is payable 30 days after its payment is confirmed. Extra devices never count."
-msgstr "كل بيع يُصرف بعد 30 يومًا من تأكيد دفعته. الأجهزة الإضافية لا تُحتسب أبدًا."
+msgid "A sale's commission is payable 30 days after the payment that counts it is confirmed. Extra devices never count."
+msgstr "تُصرف عمولة كل بيعة بعد 30 يومًا من تأكيد الدفعة التي احتُسبت بها. الأجهزة الإضافية لا تُحتسب أبدًا."
 
 msgid "Kind of release"
 msgstr "نوع الإصدار"

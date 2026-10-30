@@ -610,7 +610,7 @@ def test_the_new_refusals_are_translated(app, seeded):
     expected = {
         "REFUND_OVERRIDE_SUPER_ADMIN_ONLY": (
             "Only a Super Admin can allow a refund after the 30 days.",
-            "فقط المدير العام يمكنه السماح بالاسترداد بعد مرور 30 يومًا."),
+            "فقط المشرف العام يمكنه السماح بالاسترداد بعد مرور 30 يومًا."),
         "REFUND_OVERRIDE_REASON_REQUIRED": (
             "Write why this refund is allowed after the 30 days -- at least 10 characters.",
             "اكتب سبب السماح بهذا الاسترداد بعد مرور 30 يومًا -- 10 أحرف على الأقل."),

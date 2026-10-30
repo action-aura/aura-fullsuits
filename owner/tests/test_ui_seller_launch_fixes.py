@@ -116,8 +116,8 @@ def test_package_names_translate_in_arabic_and_unknown_names_pass_through(app):
         from app.i18n_format import catalog_label
 
         assert catalog_label("Aura Retail - Package 1 (yearly)") == "الباقة 1 (سنوية)"
-        assert catalog_label("Aura Retail - Package 2 (monthly, 12-month contract)") == "الباقة 2 (شهرية)"
-        assert catalog_label("Aura Retail - Package 3 (monthly, 24-month contract)") == "الباقة 3 (شهرية)"
+        assert catalog_label("Aura Retail - Package 2 (monthly, 12-month contract)") == "الباقة 2 (شهرية، التزام 12 شهرًا)"
+        assert catalog_label("Aura Retail - Package 3 (monthly, 24-month contract)") == "الباقة 3 (شهرية، التزام 24 شهرًا)"
         assert catalog_label("Custom thing") == "Custom thing"
 
 

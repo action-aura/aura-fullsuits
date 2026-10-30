@@ -8880,8 +8880,8 @@ msgid "No contract"
 msgstr "No contract"
 
 #: app/templates/catalog/plan_detail.html
-msgid "Setup fee (first sale only)"
-msgstr "Setup fee (first sale only)"
+msgid "Setup fee (first payment; monthly packages: again each contract year)"
+msgstr "Setup fee (first payment; monthly packages: again each contract year)"
 
 #: app/templates/licensing/sale.html
 msgid "first payment"
@@ -9324,11 +9324,11 @@ msgstr "Assign both ladder plans"
 msgid "Package 1: 1 sale = 20, 2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD in a month; each sale after the 5th adds 30."
 msgstr "Package 1: 1 sale = 20, 2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD in a month; each sale after the 5th adds 30."
 
-msgid "Monthly packages (2 and 3 together): 1 = 5, 2 = 10, 3 = 20, 4 = 30, 5 = 55, 6 = 65, 7 = 90, 8 = 100, 9 = 115, 10 = 130 JOD in a month; each sale after the 10th adds 10."
-msgstr "Monthly packages (2 and 3 together): 1 = 5, 2 = 10, 3 = 20, 4 = 30, 5 = 55, 6 = 65, 7 = 90, 8 = 100, 9 = 115, 10 = 130 JOD in a month; each sale after the 10th adds 10."
+msgid "Monthly packages (2 and 3 together; a sale counts when its second payment is confirmed): 1 = 5, 2 = 10, 3 = 20, 4 = 30, 5 = 55, 6 = 65, 7 = 90, 8 = 100, 9 = 115, 10 = 130 JOD in a month; each sale after the 10th adds 10."
+msgstr "Monthly packages (2 and 3 together; a sale counts when its second payment is confirmed): 1 = 5, 2 = 10, 3 = 20, 4 = 30, 5 = 55, 6 = 65, 7 = 90, 8 = 100, 9 = 115, 10 = 130 JOD in a month; each sale after the 10th adds 10."
 
-msgid "Each sale is payable 30 days after its payment is confirmed. Extra devices never count."
-msgstr "Each sale is payable 30 days after its payment is confirmed. Extra devices never count."
+msgid "A sale's commission is payable 30 days after the payment that counts it is confirmed. Extra devices never count."
+msgstr "A sale's commission is payable 30 days after the payment that counts it is confirmed. Extra devices never count."
 
 msgid "Kind of release"
 msgstr "Kind of release"

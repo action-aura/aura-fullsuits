@@ -7,8 +7,8 @@
 <section class="card" aria-labelledby="ladder-heading">
   <h2 id="ladder-heading">{{ _("Monthly commission ladder") }}</h2>
   <p class="muted">{{ _("Package 1: 1 sale = 20, 2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD in a month; each sale after the 5th adds 30.") }}</p>
-  <p class="muted">{{ _("Monthly packages (2 and 3 together): 1 = 5, 2 = 10, 3 = 20, 4 = 30, 5 = 55, 6 = 65, 7 = 90, 8 = 100, 9 = 115, 10 = 130 JOD in a month; each sale after the 10th adds 10.") }}</p>
-  <p class="muted">{{ _("Each sale is payable 30 days after its payment is confirmed. Extra devices never count.") }}</p>
+  <p class="muted">{{ _("Monthly packages (2 and 3 together; a sale counts when its second payment is confirmed): 1 = 5, 2 = 10, 3 = 20, 4 = 30, 5 = 55, 6 = 65, 7 = 90, 8 = 100, 9 = 115, 10 = 130 JOD in a month; each sale after the 10th adds 10.") }}</p>
+  <p class="muted">{{ _("A sale's commission is payable 30 days after the payment that counts it is confirmed. Extra devices never count.") }}</p>
   {% call table.table(
       columns=[
         {"label": _("Month")},
