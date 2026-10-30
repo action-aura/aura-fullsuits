@@ -200,6 +200,16 @@ def _authenticate(body: dict, *, nonce_scope: str) -> tuple[Installation, uuid.U
     # cancellation or a security/staff suspension. (Before this decision the relay
     # never read the subscription for them, so they kept syncing even though the
     # till was locked.) Checked first so they never read as "lapsed".
+    #
+    # A refund's stored stop ("the licence keeps working 2 days, then stops",
+    # licensing/scheduled_stops.py) is applied FIRST, exactly as check-in, activation
+    # and the update gate do, before any status is read. Without it a shop past its 2
+    # days kept syncing while its subscription row still said ACTIVE (nothing had
+    # applied the stop yet) -- its till was already locked (verifier, 2026-10-30).
+    from app.licensing.scheduled_stops import apply_due_licence_stops
+
+    if apply_due_licence_stops(license_id=installation.license_id):
+        db_session.expire_all()
     subscription = installation.license.subscription
     if subscription is not None and subscription.status in ("CANCELLED", "SUSPENDED"):
         raise SyncAuthError(f"SUBSCRIPTION_{subscription.status}")
