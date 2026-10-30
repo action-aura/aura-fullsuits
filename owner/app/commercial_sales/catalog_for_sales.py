@@ -67,6 +67,12 @@ def _entitlement_summary(rows: list[tuple[EntitlementDefinition, dict]]) -> dict
     return {ed.entitlement_code: value for ed, value in rows}
 
 
+def _yearly_activation_fee(plan):
+    from app.commercial_sales.packages import yearly_activation_fee
+
+    return yearly_activation_fee(plan)
+
+
 def describe_plan_for_sale(plan_id: uuid.UUID, *, as_of: date | None = None) -> dict | None:
     """One Plan's current sellable state, or None if inactive/expired/not
     found -- callers must treat None as 'not sellable', never fall back to
@@ -125,6 +131,10 @@ def describe_plan_for_sale(plan_id: uuid.UUID, *, as_of: date | None = None) -> 
         # 100 however many pairs the shop bought). packages.renewal_price.
         "renewal_unit_price": Decimal(current_price.base_price),
         "contract_term_months": plan.contract_term_months,
+        # Monthly packages charge the setup fee (the 100 JOD activation) again at
+        # the start of every later contract year; None for Package 1.
+        # packages.payment_due.
+        "yearly_activation_fee": _yearly_activation_fee(plan),
         "currency": current_price.currency,
         "effective_start": plan.effective_date.isoformat() if plan.effective_date else None,
         "effective_end": plan.retirement_date.isoformat() if plan.retirement_date else None,

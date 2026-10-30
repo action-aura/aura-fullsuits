@@ -60,3 +60,94 @@ def renewal_price(subscription: Subscription) -> tuple[Decimal, str] | None:
     if price is None:
         return None
     return Decimal(price.base_price), price.currency
+
+
+# -------------------------------------------- yearly activation (monthly) --
+# Owner rule (2026-10-30): the monthly packages (Package 2: 35 a month, 12-month
+# contract; Package 3: 25 a month, 24-month contract) charge the 100 JOD
+# activation EVERY contract year, not only on the first sale. It needs no new
+# column: the 100 is already the plan price's setup_fee (package_seed.py), and a
+# monthly plan is recognisable by billing_model MONTHLY + a contract term.
+# Package 1 (yearly, no contract) keeps its setup fee as a first-sale-only
+# charge: its renewal is base_price alone (renewal_price above, unchanged).
+CONTRACT_YEAR_MONTHS = 12
+
+
+def has_yearly_activation(plan: Plan) -> bool:
+    return plan.billing_model == "MONTHLY" and bool(plan.contract_term_months)
+
+
+def yearly_activation_fee(plan: Plan) -> Decimal | None:
+    """The activation a monthly package charges each contract year, or None
+    (Package 1, any plan without a contract, or a zero fee)."""
+    if not has_yearly_activation(plan):
+        return None
+    price = db_session.execute(
+        select(PlanPrice).where(PlanPrice.plan_id == plan.id, PlanPrice.effective_until.is_(None))
+    ).scalars().first()
+    if price is None or not price.setup_fee or Decimal(price.setup_fee) <= 0:
+        return None
+    return Decimal(price.setup_fee)
+
+
+def payment_due(subscription: Subscription, payment_number: int) -> tuple[Decimal, str] | None:
+    """(amount, currency) the subscription's `payment_number`-th monthly/periodic
+    payment should be (1 = the sale's own first payment).
+
+      - payment 1: base_price + setup_fee, same as a new sale
+        (catalog_for_sales first_sale_unit_price);
+      - a monthly package: payments 2..12 are base_price; payment 13, 25, ... (the
+        first month of each later contract year) add the yearly activation;
+      - Package 1 / any plan without a contract: base_price from payment 2 on,
+        exactly renewal_price.
+    Assumes one payment per month for a monthly package -- the 13th payment is
+    month 13. None when the plan has no current price."""
+    if payment_number < 1:
+        raise ValueError("payment_number starts at 1")
+    renewal = renewal_price(subscription)
+    if renewal is None:
+        return None
+    base, currency = renewal
+    plan = db_session.get(Plan, subscription.plan_id)
+    fee = yearly_activation_fee(plan)
+    if payment_number == 1:
+        price = db_session.execute(
+            select(PlanPrice).where(PlanPrice.plan_id == plan.id, PlanPrice.effective_until.is_(None))
+        ).scalars().first()
+        return base + Decimal(price.setup_fee or 0), currency
+    if fee is not None and (payment_number - 1) % CONTRACT_YEAR_MONTHS == 0:
+        return base + fee, currency
+    return base, currency
+
+
+def next_payment_due(subscription: Subscription) -> tuple[Decimal, str] | None:
+    """payment_due() for the NEXT payment: one more than the subscription's
+    PENDING/CONFIRMED payments so far (a rejected or failed payment is not a
+    month paid). The sale's own first payment counts as #1 even though it is
+    recorded against the sale's invoice, not the subscription (measured: a
+    subscription_id-only count started one month early and quoted the
+    activation on month 12), so payments allocated to the sale's invoice are
+    counted too."""
+    from app.models.commercial_sales import CommercialInvoice, PaymentAllocation
+    from app.models.subscriptions import PaymentRecord
+
+    paying = ("PENDING", "CONFIRMED")
+    ids = set(db_session.execute(
+        select(PaymentRecord.id).where(PaymentRecord.subscription_id == subscription.id,
+                                       PaymentRecord.status.in_(paying))
+    ).scalars().all())
+    if subscription.sales_order_id is not None:
+        ids |= set(db_session.execute(
+            select(PaymentRecord.id)
+            .join(PaymentAllocation, PaymentAllocation.payment_record_id == PaymentRecord.id)
+            .join(CommercialInvoice, CommercialInvoice.id == PaymentAllocation.commercial_invoice_id)
+            .where(CommercialInvoice.sales_order_id == subscription.sales_order_id,
+                   PaymentAllocation.reversed_at.is_(None), PaymentRecord.status.in_(paying))
+        ).scalars().all())
+        ids |= set(db_session.execute(
+            select(PaymentRecord.id)
+            .join(CommercialInvoice, CommercialInvoice.id == PaymentRecord.commercial_invoice_id)
+            .where(CommercialInvoice.sales_order_id == subscription.sales_order_id,
+                   PaymentRecord.status.in_(paying))
+        ).scalars().all())
+    return payment_due(subscription, len(ids) + 1)
