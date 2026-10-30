@@ -11,9 +11,12 @@ additions):
     line is never a sale);
   - Package 1 (no contract) counts when its money is in: the invoice fully
     allocated, i.e. the 250 confirmed;
-  - a monthly package (one with a contract) counts when its FIRST payment
-    (which carries the 100 JOD activation) is confirmed, like Package 1 --
-    owner decision 2026-10-26, replacing "about 100 JOD paid". Packages 2
+  - a monthly package (one with a contract) counts when its SECOND confirmed
+    payment arrives, in the month that payment is confirmed -- owner decision
+    2026-10-30 (it counted at the first payment, with the 100 JOD activation,
+    from 2026-10-26; before that at "about 100 JOD paid"). It never counts if
+    the second payment never comes, and a refunded/voided second payment
+    takes it off again. Packages 2
     and 3 count TOGETHER on a SECOND ladder (totals 5/10/20/30/55/65/90/100/
     115/130, +10 after the 10th); Package 1 keeps the first and counts
     only itself. A seller holds both ladder plans at once;
@@ -324,13 +327,35 @@ def _qualifying(sale: _Sale) -> _Qualifying | None:
             break
     if completing is None:
         return None  # the sale's own invoice is not fully paid (yet, or any more)
-    # Owner decision (2026-10-26): a monthly package, like Package 1, counts
-    # when its FIRST payment (the one that pays the sale's own invoice, with
-    # the 100 JOD activation) is confirmed -- no longer after ~100 JOD of
-    # monthly payments (Package 2's 3rd, Package 3's 5th).
-    return _Qualifying(
+    own = _Qualifying(
         payment_id=completing.payment_record_id, allocation_id=completing.id,
         countable_at=_countable_at(completing),
+    )
+    if not sale.is_monthly:
+        return own
+    # Owner decision (2026-10-30), replacing the one of 2026-10-26 ("a monthly
+    # package counts at its FIRST payment"): a seller was paid 5 JOD for a
+    # shop that then never paid a second month. A monthly package (P2/P3) now
+    # counts when its SECOND confirmed payment arrives -- in the month THAT
+    # payment is confirmed, with the 30-day hold running from it -- and never
+    # if the second payment never comes. Package 1 has one payment and counts
+    # at it, unchanged.
+    # The first payment is the one above (it pays the sale's own invoice, with
+    # the 100 JOD activation); the second is the subscription's earliest other
+    # confirmed payment (later_package_payments). A second payment that is
+    # refunded/voided/failed stops being CONFIRMED, drops out of that list and
+    # the sale is un-counted by evaluate_sale's existing CORRECTION branch --
+    # no new reversal path. If a third payment is then confirmed it IS the
+    # second confirmed payment, and the sale counts again from it.
+    later = sorted(later_package_payments(sale), key=lambda moment_payment: (moment_payment[0], str(moment_payment[1].id)))
+    if not later:
+        return None
+    second_confirmed_at, second_payment = later[0]
+    return _Qualifying(
+        payment_id=second_payment.id, allocation_id=None,
+        # never earlier than the moment the sale itself became countable
+        # (module docstring, fix round probe v10)
+        countable_at=max(own.countable_at, _utc(second_confirmed_at)),
     )
 
 
@@ -338,7 +363,8 @@ def later_package_payments(sale: _Sale) -> list[tuple[datetime, PaymentRecord]]:
     """The subscription's confirmed payments after the sale's own (a monthly
     package's later months, a Package 1 renewal), in the invoice's currency,
     with the moment each was confirmed: package money paid on the sale beyond
-    its invoice. Used by _qualifying ("about 100 JOD") and by the refund
+    its invoice. Used by _qualifying (the FIRST of them is a monthly sale's
+    second payment, the one that counts it) and by the refund
     threshold (refund_policy.package_money_paid), so the two count the same
     money."""
     if sale.subscription is None:

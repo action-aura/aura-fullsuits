@@ -39,7 +39,7 @@ _PLAN_TEXT = {
                        "10 JOD per renewal; 30-day hold."),
     MONTHLY_PKGS_PLAN_CODE: ("Sales ladder (monthly packages)",
                              "Packages 2 and 3 together: 5/10/20/30/55/65/90/100/115/130 JOD totals, +10 after "
-                             "the 10th sale; counted at the first confirmed payment; 30-day hold."),
+                             "the 10th sale; counted at its second confirmed payment; 30-day hold."),
 }
 
 

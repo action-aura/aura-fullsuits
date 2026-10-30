@@ -29,7 +29,7 @@ import pytest
 
 from tests.conftest import force_login, get_csrf, login_and_verify_mfa, make_staff
 from tests.test_issuance_sale import _profile
-from tests.test_step0_ladder import _pay_month, _refund, _rows, _sell, _world
+from tests.test_step0_ladder import _pay_month, _refund, _rows, _sell, _sell_counted, _world
 
 AMMAN = ZoneInfo("Asia/Amman")
 SALES_MANAGER = "SALES_MANAGER"
@@ -386,8 +386,9 @@ def _jordan_moment(day: date, hour=12) -> datetime:
 def _seeded_month(app, w):
     """This month: Sami sells three Package 1s and one is refunded inside
     its hold (2 counted = 50) and earns a renewal (10); Tala's Package 2 --
-    sold this month -- counts at its first payment on the monthly-packages
-    ladder (1 = 5; owner, 2026-10-26: no longer at its 3rd payment).
+    sold this month -- counts at its SECOND payment on the monthly-packages
+    ladder (1 = 5; owner, 2026-10-30: it was the first payment from
+    2026-10-26 and the 3rd before that).
     Last month: Sami's one Package 1 (counted then) -- the one renewed now."""
     from app.commissions.leaderboard import board_months
 
@@ -399,7 +400,7 @@ def _seeded_month(app, w):
     first, _second, _third = (_sell(app, w, "p1")["order_id"] for _ in range(3))
     _refund(app, w, first, "250.00")
     _pay_month(app, w, _rows(app, renewed["order_id"])["subscription_id"], "100.00")
-    _sell(app, w, "p2", seller="seller2")
+    _sell_counted(app, w, "p2", seller="seller2")
     w["customer_names"] = []
     with app.app_context():
         from sqlalchemy import select

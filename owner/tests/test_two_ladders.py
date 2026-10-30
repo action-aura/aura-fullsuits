@@ -3,8 +3,9 @@
 Package 1 keeps its ladder (20/50/100/200/350, +30 after the 5th) and counts
 only itself. Packages 2 and 3 count TOGETHER on a new ladder whose month
 totals are 5/10/20/30/55/65/90/100/115/130, +10 after the 10th, and a monthly
-sale counts when its FIRST payment is confirmed (replacing "about 100 JOD
-paid"). A seller holds both ladders at once; neither moves the other.
+sale counts when its SECOND payment is confirmed (owner, 2026-10-30; it was
+the first payment from 2026-10-26 and "about 100 JOD paid" before that). A
+seller holds both ladders at once; neither moves the other.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from tests.test_step0_ladder import (
     _net_by_order,
     _refund,
     _sell,
+    _sell_counted,
     _summary,
     _world,
 )
@@ -56,7 +58,7 @@ def test_eleven_monthly_sales_through_the_real_flow_add_up_to_140_across_p2_and_
     Alternating P2 and P3 proves they share one count."""
     w = _world(app)
     for i in range(11):
-        _sell(app, w, "p2" if i % 2 == 0 else "p3")
+        _sell_counted(app, w, "p2" if i % 2 == 0 else "p3")
     summary = _summary(app, w["seller_profile"])
     assert (summary["monthly_count"], summary["monthly_total"]) == (11, D("140.00"))
     assert (summary["yearly_count"], summary["yearly_total"]) == (0, D("0.00"))
@@ -67,7 +69,7 @@ def test_eleven_monthly_sales_through_the_real_flow_add_up_to_140_across_p2_and_
 def test_a_mixed_month_two_package_1_sales_and_four_monthly_sales_pay_50_plus_30(app, seeded):
     w = _world(app)
     for plan in ("p1", "p2", "p1", "p3", "p2", "p3"):
-        _sell(app, w, plan)
+        _sell_counted(app, w, plan)
     summary = _summary(app, w["seller_profile"])
     assert (summary["yearly_count"], summary["yearly_total"]) == (2, D("50.00"))
     assert (summary["monthly_count"], summary["monthly_total"]) == (4, D("30.00"))
@@ -92,7 +94,7 @@ def test_a_package_1_sale_never_moves_the_monthly_ladder_and_vice_versa(app, see
     _sell(app, w, "p1")
     first = _summary(app, w["seller_profile"])
     assert (first["yearly_total"], first["monthly_total"], first["monthly_count"]) == (D("20.00"), D("0.00"), 0)
-    _sell(app, w, "p2")
+    _sell_counted(app, w, "p2")
     second = _summary(app, w["seller_profile"])
     assert (second["yearly_total"], second["yearly_count"]) == (D("20.00"), 1)  # unchanged by the monthly sale
     assert (second["monthly_total"], second["monthly_count"]) == (D("5.00"), 1)  # the first monthly sale is #1, not #2
@@ -104,7 +106,7 @@ def test_a_package_1_sale_never_moves_the_monthly_ladder_and_vice_versa(app, see
 def test_the_extra_pair_never_counts_on_either_ladder(app, seeded):
     w = _world(app)
     _sell(app, w, "p1", pairs=1)
-    _sell(app, w, "p2", pairs=2)
+    _sell_counted(app, w, "p2", pairs=2)
     summary = _summary(app, w["seller_profile"])
     assert (summary["yearly_count"], summary["yearly_total"]) == (1, D("20.00"))
     assert (summary["monthly_count"], summary["monthly_total"]) == (1, D("5.00"))
@@ -114,11 +116,23 @@ def test_a_refund_inside_the_hold_uncounts_in_the_right_ladder_only(app, seeded)
     w = _world(app)
     p1a = _sell(app, w, "p1")["order_id"]
     _sell(app, w, "p1")
-    m1 = _sell(app, w, "p2")["order_id"]
-    m2 = _sell(app, w, "p3")["order_id"]
+    m1_sale = _sell_counted(app, w, "p2")
+    m1 = m1_sale["order_id"]
+    m2 = _sell_counted(app, w, "p3")["order_id"]
     before = _summary(app, w["seller_profile"])
     assert (before["yearly_total"], before["monthly_total"]) == (D("50.00"), D("10.00"))
-    _refund(app, w, m1, "35.00")  # the first monthly sale, in full, inside its hold
+    # The first monthly sale loses its SECOND payment (a bounced transfer)
+    # inside its hold. (A refund of its first invoice no longer does it: with
+    # a second payment in, 35 of the 70 paid is exactly the 50% threshold,
+    # and a refund at or below it leaves a sale counted -- refund_policy.py.
+    # In the real catalogue the first payment also carries the 100 JOD
+    # activation, so there it is far above the threshold.)
+    from app.extensions import db_session
+    from app.models.subscriptions import PaymentRecord
+    from app.subscriptions.services import correct_payment
+
+    with app.app_context():
+        correct_payment(db_session.get(PaymentRecord, m1_sale["second_payment_id"]), "FAILED", "bounced", w["admin"])
     after = _summary(app, w["seller_profile"])
     assert (after["monthly_count"], after["monthly_total"]) == (1, D("5.00"))  # the remaining sale is now #1
     assert (after["yearly_count"], after["yearly_total"]) == (2, D("50.00"))  # Package 1 untouched
@@ -146,7 +160,7 @@ def test_a_seller_on_only_the_package_1_ladder_earns_nothing_for_a_monthly_sale(
                                                       A.commission_plan_id.in_(plan_ids))).scalars():
             db_session.delete(row)
         db_session.commit()
-    _sell(app, w, "p2")
+    _sell_counted(app, w, "p2")
     assert _ladder_sales(app, w["seller_profile"]) == []
     assert _entries(app, w["seller_profile"]) == []
     _sell(app, w, "p1")

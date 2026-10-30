@@ -30,7 +30,7 @@ import pytest
 
 from tests.conftest import jordan_today
 from tests.test_step0_ladder import (
-    _entries, _ladder_sales, _pay_month, _rows, _sell, _summary, _world,
+    _entries, _ladder_sales, _pay_month, _rows, _sell, _sell_counted, _summary, _world,
 )
 import tests.test_step0_ladder as ladder_tests
 
@@ -267,7 +267,9 @@ def test_the_yearly_activation_is_not_a_new_ladder_sale(app, seeded, owner_price
     counts exactly the one sale and its LADDER rows do not change; the only new
     commission row is the existing 10 JOD renewal for the new contract period."""
     w = _owner_world(app)
-    sub = _rows(app, _sell(app, w, "p2")["order_id"])["subscription_id"]
+    # 2026-10-30: a monthly sale counts at its SECOND payment, so the sale is
+    # sold with that payment in; month 13 is then the later payment under test.
+    sub = _rows(app, _sell_counted(app, w, "p2")["order_id"])["subscription_id"]
     ladder_before = _entries(app, w["seller_profile"], kind="LADDER")
     sales_before = _ladder_sales(app, w["seller_profile"])
     assert len(sales_before) == 1 and _entries(app, w["seller_profile"], kind="RENEWAL") == []

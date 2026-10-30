@@ -20,6 +20,7 @@ Every test asserts ledger AMOUNTS and ROWS, not just status codes.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -122,7 +123,7 @@ def _backdate_confirmation(payment_id, when: datetime):
 
 
 def _sell(app, w, plan_key, *, pairs=0, seller="seller", confirmed_at: datetime | None = None,
-          finished_late: bool = False):
+          finished_late: bool = False, second_payment: bool = False):
     """One sale through the one-screen sale: recorded by the seller, confirmed
     by the manager. With confirmed_at, the manager confirms the payment on
     the payments screen first, at that moment, and finishes the sale at that
@@ -132,7 +133,14 @@ def _sell(app, w, plan_key, *, pairs=0, seller="seller", confirmed_at: datetime 
     confirmation and finish the sale now -- a sale whose money was confirmed
     weeks ago but which became countable only today. That is the late-finished
     sale the verifier proved wrong (probe v10): it now counts when it is
-    finished. finished_late=True keeps that shape for the test that pins it."""
+    finished. finished_late=True keeps that shape for the test that pins it.
+
+    Owner decision 2026-10-30: a MONTHLY package (p2/p3) counts on the ladder
+    only at its SECOND confirmed payment, so a bare _sell of p2/p3 is now a
+    sale that has NOT counted yet. second_payment=True also records and
+    confirms the second monthly payment (at confirmed_at when given, else now)
+    and returns it as "second_payment_id" -- use _sell_counted for the common
+    "a monthly sale that counts" case. Package 1 is unchanged."""
     from unittest.mock import patch
 
     amount = _PRICES[plan_key] + Decimal("50.00") * pairs
@@ -159,7 +167,19 @@ def _sell(app, w, plan_key, *, pairs=0, seller="seller", confirmed_at: datetime 
         else:
             done = confirm_direct_sale(result["order_id"], actor_staff_user_id=w["manager"],
                                        license_pepper=app.config["LICENSE_PEPPER"])
-        return {"order_id": result["order_id"], "payment_id": result["payment_id"], "full_key": done["full_key"]}
+        sale = {"order_id": result["order_id"], "payment_id": result["payment_id"], "full_key": done["full_key"]}
+    if second_payment:
+        assert plan_key != "p1", "Package 1 has one payment"
+        sub = _rows(app, sale["order_id"])["subscription_id"]
+        sale["second_payment_id"] = _pay_month(
+            app, w, sub, _PRICES[plan_key], confirmed_exactly_at=confirmed_at, confirmer="manager")
+    return sale
+
+
+def _sell_counted(app, w, plan_key, **kwargs):
+    """A sale that has counted: for a monthly package, with its second payment
+    confirmed (see _sell); Package 1 is just _sell."""
+    return _sell(app, w, plan_key, second_payment=plan_key != "p1", **kwargs)
 
 
 def _rows(app, order_id):
@@ -178,9 +198,38 @@ def _rows(app, order_id):
         return {"invoice_id": inv.id, "subscription_id": sub.id, "license_id": lic.id, "customer_id": sub.customer_id}
 
 
-def _pay_month(app, w, subscription_id, amount, *, payment_date=None, confirmed_at=None, confirmer="manager"):
+@contextlib.contextmanager
+def _confirmation_stamped(when: datetime | None):
+    """Every move INTO CONFIRMED written inside this block carries `when` as
+    its time. _backdate_confirmation edits the row AFTER the confirmation has
+    already been evaluated (so a sale is counted at "now" and merely LOOKS old
+    afterwards); this stamps the row as it is written, so the ladder decides
+    with the real moment -- needed to place a monthly sale's SECOND payment in
+    a given month."""
+    if when is None:
+        yield
+        return
+    from sqlalchemy import event
+
+    from app.models.commercial_ops import PaymentCorrectionHistory
+
+    def stamp(_mapper, _connection, row):
+        if row.new_status == "CONFIRMED":
+            row.created_at = when
+
+    event.listen(PaymentCorrectionHistory, "before_insert", stamp)
+    try:
+        yield
+    finally:
+        event.remove(PaymentCorrectionHistory, "before_insert", stamp)
+
+
+def _pay_month(app, w, subscription_id, amount, *, payment_date=None, confirmed_at=None, confirmer="manager",
+               confirmed_exactly_at: datetime | None = None):
     """A later monthly (or renewal) payment: recorded by the seller against
-    the subscription (the legacy payments screen), confirmed by a manager."""
+    the subscription (the legacy payments screen), confirmed by a manager.
+    confirmed_exactly_at: confirm it AT that moment (see _confirmation_stamped)
+    rather than backdating the confirmation afterwards (confirmed_at)."""
     with app.app_context():
         from app.commercial_sales.payments import confirm_payment
         from app.extensions import db_session
@@ -195,7 +244,8 @@ def _pay_month(app, w, subscription_id, amount, *, payment_date=None, confirmed_
             w["seller"],
         )
         payment_id = payment.id
-        confirm_payment(payment, actor_staff_user_id=w[confirmer])
+        with _confirmation_stamped(confirmed_exactly_at):
+            confirm_payment(payment, actor_staff_user_id=w[confirmer])
         if confirmed_at is not None:
             _backdate_confirmation(payment_id, confirmed_at)
         return payment_id
@@ -348,19 +398,27 @@ def test_percentage_seller_earns_nothing_on_the_pair_part_and_never_gets_ladder_
 
 # ------------------------------------------------------- monthly packages --
 
-def test_p2_counts_at_its_first_confirmed_payment_in_the_month_that_payment_is_confirmed(app, seeded):
-    """Owner, 2026-10-26: a monthly package counts when the manager confirms
-    the FIRST payment (which carries the activation), not at the 3rd."""
+def test_p2_counts_at_its_second_confirmed_payment_in_the_month_that_payment_is_confirmed(app, seeded):
+    """Owner, 2026-10-30 (replacing 2026-10-26, "at the FIRST payment"): a
+    monthly package counts when its SECOND payment is confirmed, in the month
+    of THAT payment. The first month's payment is October, the second
+    November: the sale is November's. (The full matrix -- not counted at
+    payment 1, the month boundary, a refunded second payment, Package 1
+    unchanged -- is test_monthly_second_payment.py.)"""
     w = _world(app)
-    last_month = datetime.now(timezone.utc) - timedelta(days=40)
-    sale = _sell(app, w, "p2", confirmed_at=last_month)
+    first_month = datetime.now(timezone.utc) - timedelta(days=70)
+    second_month = datetime.now(timezone.utc) - timedelta(days=40)
+    sale = _sell(app, w, "p2", confirmed_at=first_month)
+    assert _ladder_sales(app, w["seller_profile"]) == []  # payment 1 alone counts nothing
+    second = _pay_month(app, w, _rows(app, sale["order_id"])["subscription_id"], "35.00",
+                        confirmed_exactly_at=second_month)
     [counted] = _ladder_sales(app, w["seller_profile"])
-    assert (counted["status"], counted["payment_id"]) == ("COUNTED", sale["payment_id"])
+    assert (counted["status"], counted["payment_id"]) == ("COUNTED", second)
     with app.app_context():
         from app.commissions.ladder import ladder_month_of
 
-        assert counted["month"] == ladder_month_of(last_month)
-        last = _summary(app, w["seller_profile"], month=ladder_month_of(last_month))
+        assert counted["month"] == ladder_month_of(second_month)
+        last = _summary(app, w["seller_profile"], month=ladder_month_of(second_month))
     assert (last["monthly_count"], last["monthly_total"], last["yearly_count"]) == (1, Decimal("5.00"), 0)
     assert _summary(app, w["seller_profile"])["count"] == 0
     # later months never count the same sale again
@@ -369,22 +427,22 @@ def test_p2_counts_at_its_first_confirmed_payment_in_the_month_that_payment_is_c
     _pay_month(app, w, sub, "35.00")
     assert len(_ladder_sales(app, w["seller_profile"])) == 1
     with app.app_context():
-        assert _summary(app, w["seller_profile"], month=ladder_month_of(last_month))["monthly_total"] == Decimal("5.00")
+        assert _summary(app, w["seller_profile"], month=ladder_month_of(second_month))["monthly_total"] == Decimal("5.00")
 
 
-def test_p2_sold_with_a_pair_counts_once_at_its_first_payment(app, seeded):
+def test_p2_sold_with_a_pair_counts_once_at_its_second_payment(app, seeded):
     w = _world(app)
-    sale = _sell(app, w, "p2", pairs=1)
+    sale = _sell_counted(app, w, "p2", pairs=1)
     [counted] = _ladder_sales(app, w["seller_profile"])
-    assert counted["payment_id"] == sale["payment_id"]
+    assert counted["payment_id"] == sale["second_payment_id"] != sale["payment_id"]
     summary = _summary(app, w["seller_profile"])
     assert (summary["monthly_count"], summary["monthly_total"]) == (1, Decimal("5.00"))
 
 
-def test_p3_counts_at_its_first_payment_and_p2_p3_share_one_monthly_ladder(app, seeded):
+def test_p3_counts_at_its_second_payment_and_p2_p3_share_one_monthly_ladder(app, seeded):
     w = _world(app)
-    _sell(app, w, "p3")
-    _sell(app, w, "p2")
+    _sell_counted(app, w, "p3")
+    _sell_counted(app, w, "p2")
     summary = _summary(app, w["seller_profile"])
     assert (summary["monthly_count"], summary["monthly_total"], summary["yearly_count"]) == (2, Decimal("10.00"), 0)
     net = _net_by_order(app, w["seller_profile"])
@@ -936,7 +994,7 @@ def test_seed_and_assign_put_a_seller_on_the_ladder(app, seeded):
     done = _cli(app, "commissions", "assign-ladder", seller_email, "--actor-email", admin_email)
     assert done.exit_code == 0, done.output
     _sell(app, w, "p1")
-    _sell(app, w, "p3")  # the same one command put the seller on the monthly-packages ladder too
+    _sell_counted(app, w, "p3")  # the same one command put the seller on the monthly-packages ladder too
     summary = _summary(app, w["seller_profile"])
     assert (summary["yearly_total"], summary["monthly_total"]) == (Decimal("20.00"), Decimal("5.00"))
     assert _entries(app, w["seller_profile"], kind="PAYMENT_RULE") == []
@@ -989,7 +1047,7 @@ def test_the_seller_sees_their_own_month_count_total_held_and_payable_in_arabic_
     assert 'data-ladder-total="20.00"' not in html  # the other seller's month is not shown
     client.get("/locale/ar?next=/")
     ar = client.get("/commissions").get_data(as_text=True)
-    for arabic in ("سلم العمولة الشهري", "المبيعات المحتسبة", "مجموع السلم", "محجوزة", "مستحقة الدفع"):
+    for arabic in ("سلّم العمولة الشهري", "المبيعات المحتسبة", "مجموع السلّم", "محجوزة", "مستحقة الدفع"):
         assert arabic in ar, arabic
     for english in ("Monthly commission ladder", "Sales counted"):
         assert english not in ar, english

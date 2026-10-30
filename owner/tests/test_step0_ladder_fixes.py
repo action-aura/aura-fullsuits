@@ -42,6 +42,7 @@ from tests.test_step0_ladder import (
     _reverse,
     _rows,
     _sell,
+    _sell_counted,
     _summary,
     _world,
 )
@@ -818,27 +819,28 @@ def test_a_pending_stop_shows_on_the_subscription_and_licence_screens_in_arabic_
 # ===================================== 6. the rule at the first payment --
 
 def test_a_ladder_to_percentage_switch_after_a_p2_first_payment_keeps_the_sale_on_the_ladder(app, seeded):
-    """Verifier probe v8 (reworked 2026-10-26: a monthly sale now counts at
-    its FIRST payment, so the mid-sale window is the later months). The rule
-    in force at the sale's first package payment governs the whole sale: a
-    seller who moves to a percentage plan afterwards still has the sale
-    counted on the ladder, paid once, and no percentage row appears for the
-    later months."""
+    """Verifier probe v8 (reworked 2026-10-26, again 2026-10-30: a monthly
+    sale now counts at its SECOND payment, so the plan change falls between
+    the payment that governs the sale and the payment that counts it). The
+    rule in force at the sale's first package payment governs the whole sale:
+    a seller who moves to a percentage plan before the second payment still
+    has the sale counted on the ladder, paid once, and no percentage row
+    appears for the later months."""
     w = _world(app)
     days_ago = datetime.now(UTC) - timedelta(days=3)  # the plan change takes effect from a later DAY
     sale = _sell(app, w, "p2", confirmed_at=days_ago)
     sub = _rows(app, sale["order_id"])["subscription_id"]
     _assign(app, w, [w["seller_profile"]], rule="PERCENT", since=date.today())
-    _pay_month(app, w, sub, "35.00")
+    second = _pay_month(app, w, sub, "35.00")
     [counted] = _ladder_sales(app, w["seller_profile"])
-    assert (counted["status"], counted["payment_id"]) == ("COUNTED", sale["payment_id"])
+    assert (counted["status"], counted["payment_id"]) == ("COUNTED", second)
     assert _net_by_order(app, w["seller_profile"]) == {sale["order_id"]: D("5.00")}
     assert _entries(app, w["seller_profile"], kind="PAYMENT_RULE") == []
 
 
 def test_a_ladder_p2_that_cannot_count_gets_no_percentage_row(app, seeded):
     """Kills V8b (the percentage path's 'is this a ladder rule?' check). A
-    monthly sale now counts at its first payment, so to keep a ladder
+    monthly sale counts at its second payment, so to keep a ladder
     seller's sale NOT counted the seller holds only the Package 1 ladder:
     the monthly sale has no ladder to count on, and the percentage path must
     still not pay it (a ladder rule is in force, just not this family's)."""
@@ -853,7 +855,7 @@ def test_a_ladder_p2_that_cannot_count_gets_no_percentage_row(app, seeded):
                                                       A.commission_plan_id.in_(plan_ids))).scalars():
             db_session.delete(row)
         db_session.commit()
-    _sell(app, w, "p2")
+    _sell_counted(app, w, "p2")  # both payments in: the ladder path ran and declined
     assert _entries(app, w["seller_profile"], kind="PAYMENT_RULE") == []
     assert _ladder_sales(app, w["seller_profile"]) == []
 
