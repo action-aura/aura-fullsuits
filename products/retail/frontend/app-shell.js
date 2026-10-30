@@ -2037,6 +2037,7 @@ const SubsystemApp = {
       // CLOCK_REVIEW_REQUIRED, LOCAL_STATE_CORRUPT -- fall through to here and
       // reach the shell with no warning today beyond a 403 the first time the
       // shopkeeper presses Charge. This is the fix for that.
+      this._licenseTrial = (lic && lic.trial) || null;
       this._renderLicenseBanner(lic && lic.current_state);
     } catch (e) {
       // Network hiccup: fail open, same as every other best-effort check in
@@ -5820,6 +5821,7 @@ const SubsystemApp = {
     // whether or not Owner is wired up -- see that list's own comment), so the
     // one call this makes before disabling itself above leaves the banner in
     // the right state rather than skipping it.
+    this._licenseTrial = (body && body.trial) || null;
     this._renderLicenseBanner(body && body.current_state);
   },
 
@@ -5840,6 +5842,9 @@ const SubsystemApp = {
   // retail_license_banner_test.js parses state_machine.py itself and fails
   // loudly the moment this list drifts from it.
   LICENSE_BANNER_BLOCKED_STATES: [
+    // TRIAL_ENDED (new-customer flow): the 7-day trial is over and unpaid. Selling is locked,
+    // the data is not; it gets its own wording in _renderLicenseBanner.
+    'TRIAL_ENDED',
     'NOT_CONFIGURED', 'ACTIVATION_REQUIRED', 'ACTIVATING', 'RESTRICTED',
     'SUSPENDED', 'REVOKED', 'EXPIRED', 'DEVICE_DEACTIVATED',
     'CLOCK_REVIEW_REQUIRED', 'LOCAL_STATE_CORRUPT',
@@ -5851,6 +5856,20 @@ const SubsystemApp = {
   // warning instead (same element, different content). Mirrors state_machine.py's
   // SUBSCRIPTION_LAPSED; retail_license_banner_test.js pins both directions.
   LICENSE_BANNER_LAPSED_STATES: ['SUBSCRIPTION_LAPSED'],
+
+  // The licence status's `trial` block (status_presenter.py::_present_trial) from the last read,
+  // kept beside the state so _renderLicenseBanner(state) can say "Trial: N days left" without a
+  // second fetch or a changed signature. Set by the two callers that learn the state.
+  _licenseTrial: null,
+
+  // "Trial: N days left". t() does not interpolate, so the number is spliced into the translated
+  // template after lookup; 1 and 2 have their own keys for the Arabic singular/dual. Keep in step
+  // with licensing.js::trialDaysLeftText.
+  _trialDaysLeftText(n) {
+    if (n === 1) return t('Trial: 1 day left');
+    if (n === 2) return t('Trial: 2 days left');
+    return t('Trial: {n} days left').replace('{n}', String(n));
+  },
 
   // Persistent, full-width, top-of-shell banner -- never a modal: the shop
   // must still reach every read-only screen (viewing, backups, exports,
@@ -6039,12 +6058,50 @@ const SubsystemApp = {
     this._guideCardObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
   },
 
+  // "Trial: N days left" -- a calm information bar while a trial is running and the till still
+  // sells normally. Same single #aura-license-banner element as _renderLicenseBanner (create once,
+  // repaint in place, removed outright when the state is healthy again).
+  _renderTrialBanner(daysLeft) {
+    if (!this._licenseBannerEl) {
+      const created = document.createElement('div');
+      created.id = 'aura-license-banner';
+      document.body.appendChild(created);
+      this._licenseBannerEl = created;
+    }
+    const el = this._licenseBannerEl;
+    el.style.cssText = 'position:sticky;top:0;inset-inline:0;background:var(--state-info-surface);'
+      + 'border-bottom:2px solid var(--state-info-border);color:var(--state-info-text);'
+      + 'padding:9px 18px;font-size:13px;line-height:1.45;text-align:center;z-index:99998;'
+      + 'display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px;';
+    el.innerHTML =
+      '<span style="font-weight:700;">' + this._trialDaysLeftText(daysLeft) + '</span>'
+      + '<span style="opacity:.85;">'
+      + t('Contact your Aura seller to keep using Aura after the trial.')
+      + '</span>'
+      + '<button type="button" onclick="SubsystemApp.openLicensing()" '
+      + 'style="min-inline-size:var(--touch-target-min);min-block-size:var(--touch-target-min);'
+      + 'padding:6px 16px;border-radius:8px;border:1px solid var(--state-info-border);'
+      + 'background:transparent;color:var(--state-info-text);font-weight:700;cursor:pointer;">'
+      + t('Trial details') + '</button>';
+    this._reflowTopBanners();
+  },
+
   _renderLicenseBanner(state) {
     this._watchGuideCard(state);
     const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state)
       && !this._setupGuideOwnsFirstRun(state);
     const lapsed = this.LICENSE_BANNER_LAPSED_STATES.includes(state);
+    // A trial still running sells normally -- the banner is information, not a block. It exists
+    // only while Python says the lease is a trial that has not ended; a paid or converted lease
+    // carries is_trial=false and gets no banner at all.
+    const trial = this._licenseTrial;
+    const trialRunning = !blocked && !lapsed && !!trial && trial.is_trial === true && trial.ended !== true
+      && typeof trial.days_left === 'number' && trial.days_left > 0;
     if (!blocked && !lapsed) {
+      if (trialRunning) {
+        this._renderTrialBanner(trial.days_left);
+        return;
+      }
       // Explicitly null, not merely "leave whatever it was" -- the very
       // first call this shell ever makes (a healthy ACTIVATE_ONLINE install,
       // no prior blocked state to have created an element) must leave
@@ -6086,6 +6143,30 @@ const SubsystemApp = {
         + 'padding:6px 16px;border-radius:8px;border:1px solid var(--state-warning-border);'
         + 'background:transparent;color:var(--state-warning-text);font-weight:700;cursor:pointer;">'
         + t('Renew subscription') + '</button>';
+      this._reflowTopBanners();
+      return;
+    }
+    if (state === 'TRIAL_ENDED') {
+      // The lock screen's front door. Says the two things that matter first -- selling is locked,
+      // the data is not -- and opens the licensing page, which has the Backup / Export buttons and
+      // the how-to-pay text. Warning triad: action needed, nothing is lost.
+      el.style.cssText = 'position:sticky;top:0;inset-inline:0;background:var(--state-warning-surface);'
+        + 'border-bottom:2px solid var(--state-warning-border);color:var(--state-warning-text);'
+        + 'padding:9px 18px;font-size:13px;line-height:1.45;text-align:center;z-index:99998;'
+        + 'display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px;'
+        + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
+      el.innerHTML =
+        '<span style="display:inline-flex;align-items:center;gap:6px;font-weight:700;color:var(--state-warning-text);">'
+        + (window.AuraIcons ? AuraIcons.render('triangle-alert', 15) : '')
+        + t('Your free trial has ended') + '</span>'
+        + '<span style="opacity:.85;">'
+        + t('Your data is safe. Selling is locked until you pay.')
+        + '</span>'
+        + '<button type="button" onclick="SubsystemApp.openLicensing()" '
+        + 'style="min-inline-size:var(--touch-target-min);min-block-size:var(--touch-target-min);'
+        + 'padding:6px 16px;border-radius:8px;border:1px solid var(--state-warning-border);'
+        + 'background:transparent;color:var(--state-warning-text);font-weight:700;cursor:pointer;">'
+        + t('How to unlock') + '</button>';
       this._reflowTopBanners();
       return;
     }

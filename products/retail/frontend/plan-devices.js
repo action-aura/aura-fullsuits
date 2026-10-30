@@ -92,6 +92,8 @@
     EXPIRED: ['Expired', 'bad'],
     // Keep-selling rule: unpaid subscription -- selling continues, sync/updates pause.
     SUBSCRIPTION_LAPSED: ['Subscription unpaid', 'warn'],
+    // New-customer flow: trial over, not paid -- selling locked, data/backup/export open.
+    TRIAL_ENDED: ['Trial ended', 'bad'],
     LOCAL_STATE_CORRUPT: ['Local state needs reset', 'bad'],
     DEVICE_DEACTIVATED: ['Computer deactivated', 'bad'],
     DEVICE_REPLACED: ['Computer replaced', 'bad'],
