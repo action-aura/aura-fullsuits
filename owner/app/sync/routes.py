@@ -191,7 +191,19 @@ def _authenticate(body: dict, *, nonce_scope: str) -> tuple[Installation, uuid.U
     # holds the prune watermark, so owner_sync_events for that licence grows (the
     # 20,000-row alarm in sync/pruning.py will fire for a months-long lapse).
     # No retention logic is built; staff see the alarm and decide.
-    if subscription_is_unpaid(installation.license.subscription, license_row=installation.license):
+    #
+    # CANCELLED and SUSPENDED are refused too (owner decision 2026-10-30), each
+    # with its own reason code, and for the same reason by refusal rather than by
+    # installation.status: a suspended shop that is re-activated must catch up with
+    # nothing pruned. Unlike the unpaid rule an emergency extension does NOT reopen
+    # them -- an extension is payment-timing relief, not a way back from a
+    # cancellation or a security/staff suspension. (Before this decision the relay
+    # never read the subscription for them, so they kept syncing even though the
+    # till was locked.) Checked first so they never read as "lapsed".
+    subscription = installation.license.subscription
+    if subscription is not None and subscription.status in ("CANCELLED", "SUSPENDED"):
+        raise SyncAuthError(f"SUBSCRIPTION_{subscription.status}")
+    if subscription_is_unpaid(subscription, license_row=installation.license):
         raise SyncAuthError("SUBSCRIPTION_LAPSED")
 
     return installation, installation.license_id

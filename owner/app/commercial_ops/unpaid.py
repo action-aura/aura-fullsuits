@@ -17,9 +17,12 @@ Deliberately NOT unpaid:
   * PAST_DUE with no grace end (no policy / no history row): the device only
     restricts when commercial_grace_end is not None, so we do the same --
     fail towards "paid", never lock a shop on a value we cannot compute;
-  * CANCELLED and SUSPENDED: owner decision, they keep today's behaviour
-    (locked till, refused sync/updates) -- they are handled by their own,
-    older checks and must not be reclassified here.
+  * CANCELLED and SUSPENDED: owner decision, they are a different thing from
+    "unpaid" and must not be reclassified here. The till locks them; the sync
+    relay refuses them with their OWN reason codes (SUBSCRIPTION_CANCELLED /
+    SUBSCRIPTION_SUSPENDED, decided 2026-10-30; sync/routes.py::_authenticate,
+    and an emergency extension does not reopen them); the update gate refuses
+    every release to them (releases/distribution.py::authenticate_device_request).
 """
 from __future__ import annotations
 

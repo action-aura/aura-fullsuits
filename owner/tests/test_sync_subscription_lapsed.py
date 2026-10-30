@@ -56,13 +56,69 @@ def test_past_due_inside_grace_still_syncs(app, client, shop):
 
 
 @pytest.mark.parametrize("status", ["CANCELLED", "SUSPENDED"])
-def test_cancelled_and_suspended_are_not_this_gate(app, client, shop, status):
-    """They keep today's behaviour: _authenticate never read the subscription for
-    them, so sync is NOT newly refused with SUBSCRIPTION_LAPSED (their lock is the
-    till's, and the licence's own status checks)."""
+def test_cancelled_and_suspended_are_refused_with_their_own_reason_code(app, client, shop, status):
+    """Owner decision 2026-10-30: the sync relay refuses CANCELLED and SUSPENDED
+    subscriptions too, each with its own code (not SUBSCRIPTION_LAPSED).
+
+    This REPLACES test_cancelled_and_suspended_are_not_this_gate, which asserted
+    HTTP 200 for both. That test can no longer pass, on purpose: it pinned the
+    old behaviour (the relay never read the subscription for them, so a shop whose
+    till was locked kept syncing) which the owner has now reversed."""
     set_subscription_state(app, shop["license_id"], status)
+    push = _push_ok(client, shop)
+    assert push.status_code == 400 and push.get_json() == {"reason_code": f"SUBSCRIPTION_{status}"}
+    pull = _pull(client, _pull_body(shop["key"], shop["installation"], since=0))
+    assert pull.status_code == 400 and pull.get_json() == {"reason_code": f"SUBSCRIPTION_{status}"}
+
+
+@pytest.mark.parametrize("status", ["CANCELLED", "SUSPENDED"])
+def test_an_emergency_extension_does_not_reopen_cancelled_or_suspended(app, client, shop, status):
+    set_subscription_state(app, shop["license_id"], status)
+    grant_emergency_extension(app, shop["license_id"], shop["staff"])
     resp = _push_ok(client, shop)
-    assert resp.status_code == 200, resp.get_json()
+    assert resp.status_code == 400 and resp.get_json()["reason_code"] == f"SUBSCRIPTION_{status}"
+
+
+def test_a_suspended_shop_that_is_reactivated_catches_up_with_nothing_pruned(app, client, shop):
+    """Re-activation after a suspension: no 409 RESYNC_REQUIRED, the pending event
+    is still there (same watermark construction as the renewal test: only the
+    suspended device's cursor protects e2)."""
+    import uuid
+
+    _, _, inst_b, key_b = _do_activation(app, client, shop["staff"], license_id=shop["license_id"],
+                                         full_key=shop["full_key"], device_limit=2)
+    e1, e2 = _make_event(), _make_event()
+    assert _push(client, _push_body(shop["key"], shop["installation"], [e1, e2])).status_code == 200
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.sync import SyncEvent
+
+        seq1 = db_session.get(SyncEvent, uuid.UUID(e1["id"])).seq
+        seq2 = db_session.get(SyncEvent, uuid.UUID(e2["id"])).seq
+    assert _pull(client, _pull_body(key_b, inst_b, since=0)).status_code == 200
+    assert _pull(client, _pull_body(key_b, inst_b, since=seq2)).status_code == 200
+    assert _pull(client, _pull_body(shop["key"], shop["installation"], since=seq1)).status_code == 200
+
+    set_subscription_state(app, shop["license_id"], "SUSPENDED")
+    refused = _pull(client, _pull_body(shop["key"], shop["installation"], since=seq1))
+    assert refused.get_json() == {"reason_code": "SUBSCRIPTION_SUSPENDED"}
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.sync import SyncEvent
+        from app.sync.pruning import prune_owner_sync_events
+
+        prune_owner_sync_events(dry_run=False)
+        db_session.expire_all()
+        assert db_session.get(SyncEvent, uuid.UUID(e1["id"])) is None
+        assert db_session.get(SyncEvent, uuid.UUID(e2["id"])) is not None
+
+    set_subscription_state(app, shop["license_id"], "ACTIVE")
+    resp = _pull(client, _pull_body(shop["key"], shop["installation"], since=seq1))
+    assert resp.status_code == 200, resp.get_json()  # not 409 RESYNC_REQUIRED
+    e3 = _make_event()
+    assert _push(client, _push_body(shop["key"], shop["installation"], [e3])).status_code == 200
+    caught_up = _pull(client, _pull_body(key_b, inst_b, since=seq2))
+    assert [e["id"] for e in caught_up.get_json()["events"]] == [e3["id"]]
 
 
 def test_renewal_catches_up_with_nothing_pruned_past(app, client, shop):
