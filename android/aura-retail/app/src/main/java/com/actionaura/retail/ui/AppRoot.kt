@@ -853,7 +853,13 @@ private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavControll
         RetailSettingsScreen(snackbar, onOpenBackup = { nav.navigate("backup") }, onOpenLicensing = { nav.navigate("licensing") })
     }
     b.composable("backup") { com.actionaura.retail.ui.screens.BackupRestoreScreen(onBack = { nav.popBackStack() }, snackbar = snackbar) }
-    b.composable("licensing") { com.actionaura.retail.ui.screens.LicensingScreen(onBack = { nav.popBackStack() }, snackbar = snackbar) }
+    b.composable("licensing") {
+        com.actionaura.retail.ui.screens.LicensingScreen(
+            onBack = { nav.popBackStack() }, snackbar = snackbar,
+            // The TRIAL_ENDED lock screen's "Back up and share my data" goes to the existing Backup screen.
+            onOpenBackup = { nav.navigate("backup") },
+        )
+    }
     b.composable("sync_status") { com.actionaura.retail.ui.screens.SyncStatusScreen() }
 }
 
