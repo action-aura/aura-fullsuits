@@ -149,8 +149,12 @@ def test_every_license_state_is_classified_by_active_family_membership():
     # silently dropping out of the start set -- the explicit hand-written
     # sibling test below pins that, and pins that every NON-selling state
     # (RESTRICTED, EXPIRED, ...) still does not start the hub.
+    # CHANGED 2026-10-30 (owner decision: sync stays on for an ended trial): TRIAL_ENDED is the ONE non-selling
+    # state that also starts the hub, so the derived expectation gains it explicitly. What this loop can no
+    # longer catch by itself: TRIAL_ENDED silently leaving the start set -- the hand-written test
+    # test_an_ended_trial_still_starts_the_hub_and_no_other_non_selling_state_does below pins that, both ways.
     for state in LicenseState:
-        expected = state in SELLING_FAMILY
+        expected = state in SELLING_FAMILY or state == LicenseState.TRIAL_ENDED
         assert config.site_relay_should_start(None, state, 'WINDOWS') is expected, (
             f"{state} should {'start' if expected else 'not start'} the "
             f"relay under automatic (unset) mode"
@@ -167,6 +171,20 @@ def test_a_lapsed_subscription_still_starts_the_hub_but_non_selling_states_do_no
         assert config.site_relay_should_start(None, state, 'WINDOWS') is False, state
     # A handset still never self-elects, lapsed or not.
     assert config.site_relay_should_start(None, LicenseState.SUBSCRIPTION_LAPSED, 'ANDROID') is False
+
+
+def test_an_ended_trial_still_starts_the_hub_and_no_other_non_selling_state_does():
+    """Hand-written so it cannot move with the family constants. Sync stays on for TRIAL_ENDED, so its hub
+    must start (else the shop's other devices lose their hub after a reboot and cannot see the paid lease);
+    every other state that cannot sell still does not."""
+    assert config.site_relay_should_start(None, LicenseState.TRIAL_ENDED, 'WINDOWS') is True
+    for state in (LicenseState.RESTRICTED, LicenseState.EXPIRED, LicenseState.SUSPENDED,
+                  LicenseState.REVOKED, LicenseState.NOT_CONFIGURED, LicenseState.LOCAL_STATE_CORRUPT,
+                  LicenseState.CLOCK_REVIEW_REQUIRED, LicenseState.DEVICE_DEACTIVATED):
+        assert config.site_relay_should_start(None, state, 'WINDOWS') is False, state
+    # A handset still never self-elects, trial or not; an explicit '0' still wins.
+    assert config.site_relay_should_start(None, LicenseState.TRIAL_ENDED, 'ANDROID') is False
+    assert config.site_relay_should_start('0', LicenseState.TRIAL_ENDED, 'WINDOWS') is False
 
 
 def test_near_miss_values_fall_back_to_automatic_not_to_a_guess():
