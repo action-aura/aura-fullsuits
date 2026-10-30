@@ -155,8 +155,16 @@ const CashDrawer = {
     if (!bar) {
       bar = document.createElement('div');
       bar.id = 'cash-drawer-bar';
+      // TILL-ROOMY: the drawer is ONE compact chip that rides in the scan bar
+      // row (after the "ready to scan" lamp), not a full-width two-line strip of
+      // its own. That strip cost ~60px of a 768px till before the first product
+      // (measured 2026-10-30) to say what four keys (Shift+F1-F4) and a menu
+      // already say. The old anchor (the zero-height .pos-pane-hdr marker) is
+      // the fallback for any harness that renders a till without a scan bar.
+      const scanbar = container.querySelector ? container.querySelector('.pos-scanbar') : null;
       const hdr = container.querySelector('.pos-pane-hdr');
-      if (hdr && hdr.parentNode) hdr.parentNode.insertBefore(bar, hdr.nextSibling);
+      if (scanbar && typeof scanbar.appendChild === 'function') scanbar.appendChild(bar);
+      else if (hdr && hdr.parentNode) hdr.parentNode.insertBefore(bar, hdr.nextSibling);
       else container.insertBefore(bar, container.firstChild);
     }
     await this.refresh();
@@ -211,31 +219,61 @@ const CashDrawer = {
     const s = document.createElement('style');
     s.id = 'cd-styles';
     s.textContent = `
-      .cd-bar { display:flex;align-items:center;justify-content:space-between;
-        gap:var(--space-base);padding:var(--space-snug) var(--space-roomy);
+      /* TILL-ROOMY: one compact chip in the scan bar row (see mount()). The
+         surface classes below (-open/-warn/-error/-info) still tint it, so the
+         four states stay four different things at a glance. position:relative
+         anchors the drawer menu; flex:0 1 auto lets a long state sentence
+         ellipsis instead of pushing the scan field off the row. */
+      .cd-bar { position:relative;display:inline-flex;align-items:center;gap:var(--space-snug);
+        flex:0 1 auto;min-inline-size:0;max-inline-size:46%;
+        padding-block:0;padding-inline:var(--space-snug);min-block-size:var(--touch-target-min, 44px);
+        border:1px solid var(--border-hairline);border-radius:var(--radius-pill, 22px);
         font-size:var(--text-size-meta);line-height:var(--text-leading-body);
-        border-bottom:1px solid var(--border-hairline);
         color:var(--text-secondary);background:var(--surface-raised); }
+      .cd-bar > .cd-chip-btn { display:inline-flex;align-items:center;gap:var(--space-snug);min-inline-size:0;
+        min-block-size:var(--touch-target-min, 44px);padding:0;border:0;background:transparent;
+        color:inherit;font:inherit;cursor:pointer; }
+      .cd-chip-text { min-inline-size:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+      /* Visually hidden, still read by a screen reader: the full sentence the chip abbreviates. */
+      .cd-sr { position:absolute;inline-size:1px;block-size:1px;margin:-1px;padding:0;border:0;overflow:hidden;
+        clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap; }
+      /* The drawer menu: everyday actions first, End Shift last and apart (it
+         is the one irreversible step -- it also keeps its own Z-report dialog
+         as the confirmation). */
+      .cd-menu { position:absolute;inset-block-start:calc(100% + 6px);inset-inline-end:0;z-index:40;
+        min-inline-size:260px;display:flex;flex-direction:column;gap:2px;padding:var(--space-snug);
+        background:var(--surface-card, var(--surface-raised));color:var(--text-primary);
+        border:1px solid var(--border-default);border-radius:12px;box-shadow:var(--elevation-panel); }
+      .cd-menu[hidden] { display:none; }
+      .cd-menu-head { padding:var(--space-snug);color:var(--text-secondary);font-size:var(--text-size-meta);
+        border-block-end:1px solid var(--border-hairline);margin-block-end:2px; }
+      .cd-menu-item { display:flex;align-items:center;justify-content:space-between;gap:var(--space-base);
+        min-block-size:var(--touch-target-min, 44px);padding-inline:var(--space-base);border:0;border-radius:8px;
+        background:transparent;color:var(--text-primary);font:inherit;font-size:var(--text-size-body);
+        cursor:pointer;text-align:start; }
+      .cd-menu-item:hover, .cd-menu-item:focus-visible { background:var(--surface-hover); }
+      .cd-menu-sep { block-size:1px;margin-block:var(--space-snug);background:var(--border-hairline); }
+      .cd-menu-danger { color:var(--state-danger-text); }
+      /* The key name is painted from data-key, not written as a text node: it is
+         a legend for a physical key, not copy to translate (and the button
+         carries aria-keyshortcuts for assistive tech). */
+      .cd-kbd { display:inline-block;padding-block:0;padding-inline:5px;border:1px solid var(--border-mid);
+        border-radius:5px;background:var(--surface-soft);color:var(--text-secondary);
+        font-size:var(--text-size-micro);font-weight:var(--text-weight-semibold);line-height:1.6;direction:ltr; }
+      .cd-kbd::before { content:attr(data-key); }
       .cd-bar-open { background:var(--state-success-surface);
-        border-bottom-color:var(--state-success-border);color:var(--text-secondary); }
+        border-color:var(--state-success-border);color:var(--text-secondary); }
       .cd-bar-warn { background:var(--state-warning-surface);
-        border-bottom-color:var(--state-warning-border);color:var(--text-secondary); }
+        border-color:var(--state-warning-border);color:var(--text-secondary); }
       .cd-bar-error { background:var(--state-danger-surface);
-        border-bottom-color:var(--state-danger-border);color:var(--text-secondary); }
+        border-color:var(--state-danger-border);color:var(--text-secondary); }
       .cd-bar-info { background:var(--state-info-surface);
-        border-bottom-color:var(--state-info-border);color:var(--text-secondary); }
+        border-color:var(--state-info-border);color:var(--text-secondary); }
       .cd-bar b, .cd-bar strong { color:var(--text-primary);
         font-weight:var(--text-weight-semibold); }
+      /* An action button INSIDE the chip (Open Shift / Retry) -- the part you
+         press never shrinks. */
       .cd-bar-actions { display:flex;gap:var(--space-snug);flex-shrink:0; }
-      /* UI-1 (review A #2b): on a 768px-tall till the bar wrapped to three
-         lines and ate the product grid. One line, ellipsis on the sentence; the
-         buttons (the part you press) never shrink. */
-      @media (min-width:900px) and (max-width:1100px) {
-        .cd-bar-actions .ret-btn { padding-inline:8px;font-size:12px; }
-      }
-      @media (max-height: 800px) {
-        .cd-bar > span:first-child { flex:1 1 0;min-inline-size:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
-      }
 
       /* WHICH TILL. A pill rather than a run of body text because it is the
          one fact on this bar that answers "is this mine?", and it is read at
@@ -316,6 +354,7 @@ const CashDrawer = {
       error: () => this._barError(),
     };
     const { cls, html } = (renderers[this._state] || renderers.error)();
+    this.closeMenu();   // a re-render replaces the menu's DOM; drop its document listeners with it
     bar.className = 'cd-bar ' + cls;
     bar.innerHTML = html;
   },
@@ -327,28 +366,105 @@ const CashDrawer = {
     return window.AuraIcons ? AuraIcons.render(name, 15, changed ? { animate: 'flip' } : undefined) : '';
   },
 
+  // "02:37" for a drawer opened today, "23/10 02:37" for an older one. It used
+  // to print the raw "2026-10-23 02:37" -- an ISO stamp in the middle of an
+  // Arabic sentence. The stamp is the SHOP's wall-clock time with no zone, so
+  // its parts are compared as plain components (never through a Date round
+  // trip, which would shift it).
+  _openedText(openedAt) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(String(openedAt || ''));
+    if (!m) return String(openedAt || '').slice(0, 16).replace('T', ' ');
+    const now = new Date();
+    const sameDay = +m[1] === now.getFullYear() && +m[2] === now.getMonth() + 1 && +m[3] === now.getDate();
+    // Digits only, deliberately: a month NAME would need a catalog entry per
+    // language, and "day/month" reads the same in both. The bdi() the caller
+    // wraps it in keeps the run in order inside an Arabic sentence.
+    return sameDay ? `${m[4]}:${m[5]}` : `${m[3]}/${m[2]} ${m[4]}:${m[5]}`;
+  },
+
   _barOpen(changed) {
     const s = this._session;
-    const opened = String(s.opened_at || '').slice(0, 16).replace('T', ' ');
-    // Two facts, in this order: WHICH till, then since when. The till comes
-    // first because on a two-device shop it is the one that decides whether
-    // the rest of the bar is about you at all.
+    const since = this._openedText(s.opened_at);
+    // The terminal comes first because on a two-device shop it is the fact
+    // that decides whether the rest of the chip is about you at all.
+    //
+    // TILL-ROOMY: everything the old four-button bar offered is still one
+    // click (or Shift+F2/F3/F4) away, inside the menu this chip opens. End Shift
+    // sits last and apart (it is the one irreversible step, and it keeps its own
+    // Z-report dialog as the confirmation) instead of beside the everyday keys.
+    const longText = `${t('Drawer open since')} ${since}`;
     return {
       cls: 'cd-bar-open',
       html: `
-        <span>
+        <button type="button" class="cd-chip-btn" id="cd-chip-btn" aria-haspopup="menu" aria-expanded="false"
+          aria-controls="cd-menu" title="${this._esc(longText)}" aria-label="${this._esc(t('Drawer menu'))}: ${this._esc(longText)}"
+          onclick="CashDrawer.toggleMenu(event)">
           ${this._stateIcon('lock-open', changed)}
           <span class="cd-terminal cd-terminal-mine">${this._terminalLabel(s)}</span>
-          ${t('Drawer open since')} <b>${this._bdi(opened)}</b>
-          &middot; ${t('Opening float')} ${this._money(s.opening_float)}
-        </span>
-        <span class="cd-bar-actions">
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="CashDrawer.openMovementModal()">${t('Cash In/Out')}</button>
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="CashDrawer.openXReportModal()">${t('X Report')}</button>
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="CashDrawer.openHistoryModal()">${t('Drawer History')}</button>
-          <button class="ret-btn ret-btn-danger ret-btn-sm" onclick="CashDrawer.openCloseModal()">${t('End Shift (Z)')}</button>
-        </span>`,
+          <span class="cd-chip-text">${t('Open since')} <b>${this._bdi(since)}</b></span>
+          <span aria-hidden="true">▾</span>
+        </button>
+        <div class="cd-menu" id="cd-menu" role="menu" hidden>
+          <div class="cd-menu-head">${t('Opening float')} ${this._money(s.opening_float)}</div>
+          <button type="button" class="cd-menu-item" role="menuitem" aria-keyshortcuts="Shift+F2" onclick="CashDrawer.menuAction('movement')"><span>${t('Cash In/Out')}</span><kbd class="cd-kbd" data-key="Shift+F2" aria-hidden="true"></kbd></button>
+          <button type="button" class="cd-menu-item" role="menuitem" aria-keyshortcuts="Shift+F3" onclick="CashDrawer.menuAction('xreport')"><span>${t('X Report')}</span><kbd class="cd-kbd" data-key="Shift+F3" aria-hidden="true"></kbd></button>
+          <button type="button" class="cd-menu-item" role="menuitem" onclick="CashDrawer.menuAction('history')"><span>${t('Drawer History')}</span></button>
+          <div class="cd-menu-sep" role="separator"></div>
+          <button type="button" class="cd-menu-item cd-menu-danger" role="menuitem" aria-keyshortcuts="Shift+F4" onclick="CashDrawer.menuAction('close')"><span>${t('End Shift (Z)')}</span><kbd class="cd-kbd" data-key="Shift+F4" aria-hidden="true"></kbd></button>
+        </div>`,
     };
+  },
+
+  // ── The drawer menu (opened from the chip) ───────────────────────────────
+  toggleMenu(ev) {
+    const menu = document.getElementById('cd-menu');
+    if (!menu) return;
+    if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+    if (menu.hidden) this._openMenu(menu); else this.closeMenu();
+  },
+
+  _openMenu(menu) {
+    menu.hidden = false;
+    const btn = document.getElementById('cd-chip-btn');
+    if (btn) btn.setAttribute('aria-expanded', 'true');
+    // Esc closes the menu FIRST (capture phase, before the till's own Esc
+    // ladder sees it); a click anywhere else closes it too.
+    this._menuKeyHandler = (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault(); e.stopPropagation();
+      this.closeMenu();
+      if (btn && typeof btn.focus === 'function') btn.focus();
+    };
+    this._menuClickHandler = (e) => {
+      const bar = document.getElementById('cash-drawer-bar');
+      if (bar && e.target && typeof bar.contains === 'function' && bar.contains(e.target)) return;
+      this.closeMenu();
+    };
+    document.addEventListener('keydown', this._menuKeyHandler, true);
+    document.addEventListener('mousedown', this._menuClickHandler, true);
+    const first = menu.querySelector ? menu.querySelector('.cd-menu-item') : null;
+    if (first && typeof first.focus === 'function') first.focus();
+  },
+
+  closeMenu() {
+    const menu = document.getElementById('cd-menu');
+    if (menu) menu.hidden = true;
+    const btn = document.getElementById('cd-chip-btn');
+    if (btn && typeof btn.setAttribute === 'function') btn.setAttribute('aria-expanded', 'false');
+    if (typeof document.removeEventListener === 'function') {
+      if (this._menuKeyHandler) document.removeEventListener('keydown', this._menuKeyHandler, true);
+      if (this._menuClickHandler) document.removeEventListener('mousedown', this._menuClickHandler, true);
+    }
+    this._menuKeyHandler = null;
+    this._menuClickHandler = null;
+  },
+
+  menuAction(which) {
+    this.closeMenu();
+    if (which === 'movement') this.openMovementModal();
+    else if (which === 'xreport') this.openXReportModal();
+    else if (which === 'history') this.openHistoryModal();
+    else if (which === 'close') this.openCloseModal();
   },
 
   _barNone(changed) {
@@ -358,14 +474,17 @@ const CashDrawer = {
     const others = this._otherTerminalsOpen > 0
       ? ` <span class="cd-note">${t('Other terminals have a drawer open on this branch.')}</span>`
       : '';
+    // The long sentence is kept whole for the tooltip and a screen reader; the
+    // visible chip is the terminal + the one action (the warning tint and the
+    // lock icon carry the "no drawer" fact).
+    const sentence = t('No cash drawer is open on this terminal. Sales still work normally, but will not be attributed to a drawer count.');
     return {
       cls: 'cd-bar-warn',
       html: `
-        <span>
+        <span class="cd-chip-btn" title="${this._esc(sentence)}">
           ${this._stateIcon('lock', changed)}
           <span class="cd-terminal">${this._thisTerminalLabel()}</span>
-          ${t('No cash drawer is open on this terminal. Sales still work normally, but will not be attributed to a drawer count.')}
-          ${others}
+          <span class="cd-sr">${sentence} ${others}</span>
         </span>
         <span class="cd-bar-actions">
           <button class="ret-btn ret-btn-primary ret-btn-sm" onclick="CashDrawer.openOpenShiftModal()">${t('Open Shift')}</button>
@@ -377,12 +496,13 @@ const CashDrawer = {
     // No action button. Offering "Open Shift" to somebody the server will
     // refuse is the interface promising something it cannot deliver, and the
     // refusal would arrive as a toast with no explanation of what to do next.
+    const sentence = t('You do not operate a cash drawer on this terminal.');
     return {
       cls: 'cd-bar-info',
       html: `
-        <span>
+        <span class="cd-chip-btn" title="${this._esc(sentence)}">
           <span class="cd-terminal">${this._thisTerminalLabel()}</span>
-          ${t('You do not operate a cash drawer on this terminal.')}
+          <span class="cd-chip-text">${sentence}</span>
         </span>`,
     };
   },
@@ -393,7 +513,9 @@ const CashDrawer = {
     return {
       cls: 'cd-bar-error',
       html: `
-        <span>${t('Could not load the cash drawer. Its state is unknown.')}</span>
+        <span class="cd-chip-btn" title="${this._esc(t('Could not load the cash drawer. Its state is unknown.'))}">
+          <span class="cd-chip-text">${t('Could not load the cash drawer. Its state is unknown.')}</span>
+        </span>
         <span class="cd-bar-actions">
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="CashDrawer.refresh()">${t('Retry')}</button>
         </span>`,

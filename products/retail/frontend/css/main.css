@@ -3276,6 +3276,23 @@ button.sub-nav-item.sub-settings-gear:focus-visible { outline: var(--focus-ring-
 .sub-content::-webkit-scrollbar { width: 5px; }
 .sub-content::-webkit-scrollbar-thumb { background: var(--surface-hover); border-radius: 4px; }
 
+/* TILL-ROOMY (owner 2026-10-30: the selling screen feels squeezed). On the till
+   -- and only there -- the shell gives its height back to the products:
+     * the header's page title is dropped (the sidebar already highlights
+       "Point of Sale"; it stays in the DOM, visually hidden, because
+       #sub-header-section is what _navigate and the e2e suites wait on), and
+       its 20px block padding becomes 8px (the header's controls are 36px, so
+       the row goes from ~76px to ~52px);
+     * the content gutter goes 20px -> 12px.
+   Measured before/after at 1366x768 and 1440x900 in retail_till_roomy_e2e.py.
+   data-screen is set on <html> by SubsystemApp._navigate. */
+html[data-screen="pos"] .sub-header { padding-block: 8px; }
+html[data-screen="pos"] .sub-header-section {
+  position: absolute; inline-size: 1px; block-size: 1px; margin: -1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+.sub-content[data-section="pos"] { padding: 12px 16px; }
+
 /* ── Loading state ── */
 .sub-loading {
   display: flex; align-items: center; justify-content: center; height: 200px;

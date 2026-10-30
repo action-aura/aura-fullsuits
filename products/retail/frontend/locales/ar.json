@@ -2936,5 +2936,18 @@
   "Only the shop's main computer can post a stock count. You can keep scanning here; post it on the main computer.": "الجهاز الرئيسي للمحل وحده يستطيع ترحيل جرد المخزون. يمكنك متابعة المسح هنا ثم ترحيله من الجهاز الرئيسي.",
   "Another computer started a count of this branch at the same time, so the two were joined into one. Use the joined count.": "بدأ جهاز آخر جردًا لهذا الفرع في الوقت نفسه، فتم دمج الجردين في واحد. استخدم الجرد المدموج.",
   "Stock moved during the count": "تحرّك المخزون أثناء الجرد",
-  "Stock moved during the count, recount recommended:": "تحرّك المخزون أثناء الجرد، يُنصح بإعادة العدّ:"
+  "Stock moved during the count, recount recommended:": "تحرّك المخزون أثناء الجرد، يُنصح بإعادة العدّ:",
+  "Open since": "مفتوح منذ",
+  "Drawer menu": "قائمة الدرج",
+  "Add / Pay": "إضافة / دفع",
+  "Unit: pcs few": "قطع",
+  "Edit quantity": "تعديل الكمية",
+  "Enter a quantity above zero (up to 3 decimals).": "أدخل كمية أكبر من صفر (حتى 3 منازل عشرية).",
+  "No receipt to reprint yet in this session": "لا يوجد إيصال لإعادة طباعته بعد في هذه الجلسة",
+  "Printing the last receipt": "جارٍ طباعة آخر إيصال",
+  "Weight or part quantity: a decimal, then *": "الوزن أو كمية جزئية: رقم عشري ثم *",
+  "Cash note received: 5, 10, 20, 50": "استلام ورقة نقدية: 5 أو 10 أو 20 أو 50",
+  "Discount and quantity of the selected line": "خصم وكمية السطر المحدد",
+  "Print the last receipt again": "إعادة طباعة آخر إيصال",
+  "Open Returns": "فتح المرتجعات"
 }

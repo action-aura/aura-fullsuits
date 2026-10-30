@@ -5257,6 +5257,12 @@ const SubsystemApp = {
     // ("Audit Log" there, "Audit log (this computer)" here).
     document.getElementById('sub-header-section')?.innerText &&
       (document.getElementById('sub-header-section').innerText = this._sectionHeaderTitle(sectionId, navItem));
+    // Which screen is showing, on <html>, so css/main.css can give the TILL
+    // (and only the till) a slimmer header -- the header is outside
+    // #sub-content, so the data-section that RetailSystem.render stamps there
+    // cannot reach it. Set here (not in RetailSystem.render) because a few
+    // screens are dispatched from this function without ever reaching it.
+    try { document.documentElement.setAttribute('data-screen', String(sectionId)); } catch (e) { /* cosmetic */ }
 
     // ── Destroy any existing Chart.js instances before replacing the DOM ──────
     const content = document.getElementById('sub-content');
