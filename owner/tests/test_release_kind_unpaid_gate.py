@@ -25,6 +25,7 @@ from app.models.catalog import ProductVersion
 from tests.conftest import make_staff
 from tests.support_unpaid import grant_emergency_extension, set_subscription_state
 from tests.test_phase9r_private_distribution import _authorize, _build_download_body
+from tests.test_release_publish_ui import admin, store  # noqa: F401  (fixtures for the upload-form tests)
 from tests.test_release_discovery import _add_release, _ask, _offered_version, _payload, device  # noqa: F401  (fixture)
 
 
@@ -116,6 +117,37 @@ class TestDownload:
         resp = _authorize_release(client, device, safety_id)
         assert resp.status_code == 400 and resp.get_json()["reason_code"] == "ACTIVATION_REJECTED"
 
+    def test_past_due_past_grace_cannot_authorize_a_feature_release(self, app, client, device):
+        """Verifier gap: only an EXPIRED shop was tried at the download level. A PAST_DUE shop
+        past its grace is unpaid too (same definition as the till), so naming a FEATURE release
+        id directly is refused; the SAFETY release is still authorized in the same state."""
+        feature_id = _add_release(app, "1.0.2", release_kind="FEATURE")
+        safety_id = _add_release(app, "1.0.1", release_kind="SAFETY")
+        _lapse(app, device, "PAST_DUE", past_due_days_ago=11, staff_id=None)
+        refused = _authorize_release(client, device, feature_id)
+        assert refused.status_code == 400 and refused.get_json()["reason_code"] == "RELEASE_NOT_AVAILABLE"
+        assert _authorize_release(client, device, safety_id).status_code == 201
+
+    def test_a_shop_on_an_emergency_extension_can_authorize_a_feature_release(self, app, client, device):
+        """Allow side of the same gate: the till treats a shop on an extension as allowed, so the
+        download gate must not refuse it either (verifier N1, at the download level)."""
+        feature_id = _add_release(app, "1.0.2", release_kind="FEATURE")
+        _lapse(app, device, "EXPIRED")
+        assert _authorize_release(client, device, feature_id).status_code == 400   # control: refused without it
+        grant_emergency_extension(app, device["license_id"], make_staff(app, "ks-ext-dl@example.com"))
+        allowed = _authorize_release(client, device, feature_id)
+        assert allowed.status_code == 201, allowed.get_json()
+
+    @pytest.mark.parametrize("flags", [{"with_policy": False}, {"with_history": False}], ids=["no-policy", "no-history-row"])
+    def test_past_due_with_no_grace_end_is_treated_as_paid(self, app, client, device, flags):
+        """PAST_DUE with no policy (or no PAST_DUE history row) has NO grace end; the device only
+        restricts when it has one, so neither gate may crash on it or refuse the shop."""
+        feature_id = _add_release(app, "1.0.2", release_kind="FEATURE")
+        _add_release(app, "1.0.1", release_kind="SAFETY")
+        _lapse(app, device, "PAST_DUE", past_due_days_ago=30, staff_id=None, **flags)
+        assert _authorize_release(client, device, feature_id).status_code == 201
+        assert _offered_version(_ask(client, device, app_version="1.0.0")) == "1.0.2"   # paid: sees the feature release
+
     def test_other_device_endpoints_still_refuse_an_expired_subscription(self, app, client, device):
         """allow_unpaid is opt-in: crash reports / the mail relay share
         authenticate_device_request and must keep refusing EXPIRED (they are online
@@ -136,6 +168,33 @@ class TestDownload:
 
 
 # ------------------------------------------------------- staff create surface
+class TestStaffUploadForm:
+    """The real web form (verifier gap): the manifest/import path was covered, the form that
+    staff actually use was not. A release uploaded as SAFETY must be STORED as SAFETY -- if the
+    field were dropped anywhere on the way, every safety fix would silently become a feature
+    update and never reach an unpaid shop."""
+
+    def test_the_form_stores_safety_and_defaults_to_feature(self, app, admin, store):
+        from tests.test_release_publish_ui import _rows as version_rows, _upload
+
+        assert _upload(admin, version="2.0.0", release_kind="SAFETY").status_code == 302
+        assert _upload(admin, version="2.0.1").status_code == 302                      # field absent -> FEATURE
+        assert _upload(admin, version="2.0.2", release_kind="FEATURE").status_code == 302
+        kinds = {r.version: r.release_kind for r in version_rows(app)}
+        assert kinds == {"2.0.0": "SAFETY", "2.0.1": "FEATURE", "2.0.2": "FEATURE"}
+
+    def test_the_form_refuses_an_unknown_kind_and_stores_nothing(self, app, admin, store):
+        from tests.test_release_publish_ui import _rows as version_rows, _upload
+
+        resp = _upload(admin, version="2.1.0", release_kind="URGENT")
+        assert resp.status_code == 400
+        assert version_rows(app) == []
+
+    def test_the_form_offers_both_kinds(self, app, admin, store):
+        html = admin.get("/releases/versions/upload").get_data(as_text=True)
+        assert 'name="release_kind"' in html and 'value="SAFETY"' in html and 'value="FEATURE"' in html
+
+
 class TestStaffSurface:
     def test_manifest_import_defaults_to_feature_and_accepts_safety(self, app, seeded):
         with app.app_context():

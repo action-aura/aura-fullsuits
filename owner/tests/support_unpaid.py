@@ -11,10 +11,15 @@ from datetime import date, datetime, timedelta, timezone
 GRACE_DAYS = 10
 
 
-def set_subscription_state(app, license_id, status, *, past_due_days_ago=None, staff_id=None):
+def set_subscription_state(app, license_id, status, *, past_due_days_ago=None, staff_id=None, with_policy=True,
+                           with_history=True):
     """status in ACTIVE/EXPIRED/CANCELLED/SUSPENDED/PAST_DUE. For PAST_DUE,
     `past_due_days_ago` is how long ago the PAST_DUE history row was written;
-    with GRACE_DAYS=10, 11 is past grace and 2 is inside it."""
+    with GRACE_DAYS=10, 11 is past grace and 2 is inside it.
+
+    with_policy=False / with_history=False leave out the policy or the PAST_DUE
+    history row: either way there is NO grace end to compare with (the device only
+    restricts when commercial_grace_end is set), which the gates must read as paid."""
     with app.app_context():
         from app.commercial_ops.commercial_policy import create_commercial_policy, resolve_policy_for_subscription
         from app.extensions import db_session
@@ -23,13 +28,13 @@ def set_subscription_state(app, license_id, status, *, past_due_days_ago=None, s
 
         lic = db_session.get(License, license_id)
         sub = lic.subscription
-        if status == "PAST_DUE" and resolve_policy_for_subscription(sub) is None:
+        if status == "PAST_DUE" and with_policy and resolve_policy_for_subscription(sub) is None:
             create_commercial_policy(
                 policy_code=f"ks-policy-{license_id}", warning_offsets_days=[7, 0], notify_role_codes=["SUPPORT"],
                 effective_date=date(2026, 1, 1), actor_staff_user_id=staff_id, payment_grace_days=GRACE_DAYS,
             )
         sub.status = status
-        if status == "PAST_DUE":
+        if status == "PAST_DUE" and with_history:
             db_session.add(SubscriptionStatusHistory(
                 subscription_id=sub.id, from_status="ACTIVE", to_status="PAST_DUE", reason="test setup",
                 created_at=datetime.now(timezone.utc) - timedelta(days=past_due_days_ago),

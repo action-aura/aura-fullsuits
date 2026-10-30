@@ -74,7 +74,7 @@ def sales(app, client, seeded):
 
 
 def _upload(client, *, content=b"MZ" + b"\x00" * 100, filename="app.exe", platform="WINDOWS", version="1.0.1",
-            build="", product="AURA_CLINIC", channel="RC", notes="", min_supported="", required=False):
+            build="", product="AURA_CLINIC", channel="RC", notes="", min_supported="", required=False, release_kind=None):
     data = {
         "csrf_token": _csrf(client), "product_code": product, "platform_code": platform, "channel_code": channel,
         "version": version, "build_number": build, "release_notes": notes, "min_supported_version": min_supported,
@@ -82,6 +82,8 @@ def _upload(client, *, content=b"MZ" + b"\x00" * 100, filename="app.exe", platfo
     }
     if required:
         data["update_required"] = "1"
+    if release_kind is not None:
+        data["release_kind"] = release_kind
     return client.post(UPLOAD, data=data, content_type="multipart/form-data")
 
 

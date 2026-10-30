@@ -195,3 +195,13 @@ def test_an_expired_offline_policy_extension_window_does_not(app, client, shop):
     assign_policy_with_extension(app, shop["license_id"], shop["staff"], until=datetime.now(timezone.utc) - timedelta(hours=1))
     resp = _push_ok(client, shop)
     assert resp.status_code == 400 and resp.get_json()["reason_code"] == "SUBSCRIPTION_LAPSED"
+
+
+@pytest.mark.parametrize("flags", [{"with_policy": False}, {"with_history": False}], ids=["no-policy", "no-history-row"])
+def test_past_due_with_no_grace_end_is_treated_as_paid_and_does_not_crash(app, client, shop, flags):
+    """PAST_DUE with no commercial policy (or no PAST_DUE history row) has no grace
+    end. The device only restricts when it has one, so the relay must read the shop as
+    paid -- and must not raise (comparing a time with None) while doing it."""
+    set_subscription_state(app, shop["license_id"], "PAST_DUE", past_due_days_ago=30, staff_id=shop["staff"], **flags)
+    assert _push_ok(client, shop).status_code == 200
+    assert _pull(client, _pull_body(shop["key"], shop["installation"], since=0)).status_code == 200
