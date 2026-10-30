@@ -195,8 +195,8 @@ android {
         // 10: the update-channel build shipped with code ten via an init script
         // (2026-10-10); the tracked value is bumped to match so a rebuild from
         // source is not older than the APK already on devices.
-        versionCode 18
-        versionName "1.0.0-rc.16"
+        versionCode 19
+        versionName "1.0.0-rc.17"
 
         // PRINT-2: androidTest/ renders the receipt on a real Android text stack.
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
