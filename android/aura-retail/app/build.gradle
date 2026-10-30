@@ -73,6 +73,15 @@ def whatsappAccessToken = resolveSecret('whatsappAccessToken', 'AURA_WHATSAPP_AC
 // unconfigured WhatsApp build is honest rather than silently broken. If that
 // ever stops being true, it belongs here.
 //
+// The AI assistant is deliberately NOT here either (owner decision 2026-10-30,
+// r17): we do not sell it yet, so a release build must not demand a token for
+// it. Its empty state is not invisible -- AI_ASSISTANT_ENABLED (below) is false
+// and the app HIDES the assistant button, so there is no dead feature on screen
+// to discover. It is the same honest-off shape as the WhatsApp pair: the thing
+// that made it release-blocking (a chat UI that renders and then 401s on every
+// question) no longer exists when the token is blank. Supplying a token turns
+// the button back on. BuildGuardContractTest pins both halves.
+//
 // Adding a new empty-by-default buildConfigField that Kotlin then treats as a
 // kill switch (`if (BuildConfig.X.isBlank()) return`) WITHOUT adding it here
 // is itself a defect, and BuildGuardContractTest fails on it.
@@ -122,17 +131,6 @@ def releaseRequiredConfig = [
    since, pinned by SyncStatusPresentationTest.)
    Release-blocking regardless: an honest 'not set up' on a device that is
    permanently alone is a diagnosis, not a working multi-device install.""",
-    ],
-    [
-        gradleProperty: 'aiBearerToken',
-        envVar: 'AURA_AI_BEARER_TOKEN',
-        value: aiBearerToken,
-        headline: 'AURA_AI_BEARER_TOKEN is not set.',
-        consequence: """\
-   The Aura AI assistant proxies to an upstream that requires this bearer
-   token. Without it the upstream answers 401 on every request and the in-app
-   assistant is dead: it renders, accepts a question, and always fails with
-   "AI assistant is temporarily unavailable.\"""",
     ],
 ]
 
@@ -256,11 +254,21 @@ android {
         // vars (see resolveSecret above) -- never hardcoded here; these are
         // real secrets and must never be committed.
         //
-        // "Empty by default" is a genuine fail-safe for WhatsApp (the feature
-        // simply stays off) but NOT for the AI assistant, which still renders
-        // a chat UI and then 401s on every question. Nothing in this build
-        // ever supplied the token, so every rebuilt APK shipped a dead
-        // assistant in silence -- hence the release-shaped build guard above.
+        // "Empty by default" used to be a trap for the AI assistant, which
+        // rendered a chat UI and then 401'd on every question -- every rebuilt
+        // APK shipped a dead assistant in silence, so the token was made
+        // release-blocking. That was the wrong cure for a product we do not
+        // sell yet (a release build could not be made at all). The cure now is
+        // AI_ASSISTANT_ENABLED below: no token, no button.
+        //
+        // AI_ASSISTANT_ENABLED is the on/off switch the UI reads. It is derived
+        // HERE, from the same resolved token, so "button visible" and "token
+        // present" can never disagree: no token -> false -> the toolbar button
+        // and the chat sheet are not composed at all (AppRoot). Default hidden.
+        // Kotlin must read THIS flag, never `AURA_AI_BEARER_TOKEN.isBlank()`:
+        // BuildGuardContractTest treats any isBlank() test on a BuildConfig
+        // string as a kill switch that must be release-blocking.
+        buildConfigField "boolean", "AI_ASSISTANT_ENABLED", aiBearerToken.isEmpty() ? "false" : "true"
         buildConfigField "String", "AURA_AI_BEARER_TOKEN", asJavaStringLiteral(aiBearerToken)
         buildConfigField "String", "AURA_WHATSAPP_PHONE_NUMBER_ID", asJavaStringLiteral(whatsappPhoneNumberId)
         buildConfigField "String", "AURA_WHATSAPP_ACCESS_TOKEN", asJavaStringLiteral(whatsappAccessToken)

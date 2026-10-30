@@ -107,6 +107,52 @@ class BuildGuardContractTest {
     }
 
     @Test
+    fun the_ai_token_is_not_release_blocking_but_licensing_and_sync_still_are() {
+        // Owner decision 2026-10-30 (r17): we do not sell the AI assistant yet,
+        // so a release build must be producible without AURA_AI_BEARER_TOKEN.
+        // The pair that STAYS blocking is asserted in the same breath, so that
+        // "remove the AI entry" can never be satisfied by emptying the list.
+        val required = releaseRequiredProperties()
+        assertThat(required).doesNotContain("aiBearerToken")
+        assertThat(required).contains("ownerLicensingBaseUrl")
+        assertThat(required).contains("ownerSyncBaseUrl")
+    }
+
+    @Test
+    fun the_ai_switch_is_derived_from_the_token_and_defaults_to_hidden() {
+        // Dropping the token from the blocking list is only honest if an empty
+        // token is VISIBLE (button gone) rather than a dead button. The UI reads
+        // one flag, and the flag is computed from the very same resolved token,
+        // so the two can never disagree.
+        val gradle = buildGradle()
+        val flag = Regex("""buildConfigField\s+"boolean",\s*"AI_ASSISTANT_ENABLED",\s*aiBearerToken\.isEmpty\(\)\s*\?\s*"false"\s*:\s*"true"""")
+        assertThat(flag.containsMatchIn(gradle)).isTrue()
+    }
+
+    @Test
+    fun every_ai_entry_point_in_the_ui_is_behind_the_switch() {
+        val appRoot = mainKotlinSources().firstOrNull { it.name == "AppRoot.kt" }
+        assumeTrue("AppRoot.kt not reachable from this run context", appRoot != null)
+        val lines = appRoot!!.readLines()
+        val entryPoints = lines.indices.filter { i ->
+            val l = lines[i]
+            !l.trimStart().startsWith("//") &&
+                (l.contains("aiOpen = true") || l.contains("AiSheet(onDismiss = "))
+        }
+        // Guards the guard: the button and the sheet are two separate sites.
+        assertThat(entryPoints.size).isAtLeast(2)
+        for (i in entryPoints) {
+            val window = lines.subList(maxOf(0, i - 4), i + 1).joinToString(" ")
+            assertThat(window).contains("BuildConfig.AI_ASSISTANT_ENABLED")
+        }
+        // And nothing else may call the chat endpoint around the gate.
+        val callers = mainKotlinSources().filter { f ->
+            f.readLines().any { !it.trimStart().startsWith("//") && it.contains(".aiChat(") }
+        }.map { it.name }
+        assertThat(callers).containsExactly("AppRoot.kt")
+    }
+
+    @Test
     fun the_guard_names_no_secret_value_anywhere() {
         // The failure text quotes KEYS and env var NAMES only. A guard that
         // echoed a resolved token into build output -- which lands in CI logs
