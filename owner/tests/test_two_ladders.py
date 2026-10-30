@@ -77,7 +77,14 @@ def test_a_mixed_month_two_package_1_sales_and_four_monthly_sales_pay_50_plus_30
     for _order, amount, status, position, _month in _entries(app, w["seller_profile"]):
         if status != "CANCELLED":
             positions.setdefault(position, []).append(amount)
-    assert sum(sum(v) for v in positions.values()) == D("80.00")
+    # Each ladder numbers its own sales from 1: Package 1 sits at 1 (20) and 2 (30),
+    # the monthly ladder at 1 (5), 2 (5), 3 (10), 4 (10). Compared as sorted lists
+    # because the order of rows within a position is not defined. (Verifier F7a:
+    # this used to assert only the sum, which a running index across BOTH ladders
+    # would also satisfy.)
+    assert {p: sorted(v) for p, v in positions.items()} == {
+        1: [D("5.00"), D("20.00")], 2: [D("5.00"), D("30.00")], 3: [D("10.00")], 4: [D("10.00")],
+    }
 
 
 def test_a_package_1_sale_never_moves_the_monthly_ladder_and_vice_versa(app, seeded):
