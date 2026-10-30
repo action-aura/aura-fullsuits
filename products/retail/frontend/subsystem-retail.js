@@ -1277,7 +1277,16 @@ const RetailSystem = {
     // t() returns its input unchanged for anything not in the catalogues, so
     // an unlisted currency degrades to its own mark rather than to blank.
     const sym = (typeof t === 'function') ? t(raw) : raw;
-    return sym.length === 1 ? sym : sym + ' ';
+    if (sym.length === 1) return sym;
+    // TILL-ROOMY (Arabic): the gap between an Arabic mark and its amount is two
+    // no-break spaces, not one. Measured in Chromium at the tile's 15px: one
+    // ordinary space is 2.8px, which reads as GLUED on every small amount (tile
+    // prices, cart lines, drawer float) while the same single space looks fine on
+    // the 32px total -- a space scales with the font and the Arabic font's is
+    // narrow. A no-break space is a neutral like the space it replaces, so the
+    // bidi order of the mark and the digits is UNCHANGED (only the gap doubles);
+    // trim() still strips it. 'JD ' and 'USD ' keep their one space.
+    return /[\u0600-\u06FF]/.test(sym) ? sym + '\u00A0\u00A0' : sym + ' ';
   },
 
   // Chart.js dataset label for a series measured in money, carrying the
@@ -4127,7 +4136,9 @@ const RetailSystem = {
   },
 
   // ── A line's own menu: item discount % and a price of its own ─────────────
-  _openLineMenu(idx) {
+  // `focus`: 'pct' (Shift+F11) or 'qty' (a click on the quantity) puts the caret
+  // there; omitted keeps the old behaviour (first of discount / price).
+  _openLineMenu(idx, focus) {
     const item = this._cart[idx]; if (!item) return;
     const cap = this._hasDiscountCap();
     const lim = this._cashierDiscountLimit || 0;
@@ -4138,6 +4149,8 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal" id="lm-dialog" style="width:360px;max-width:96vw" role="dialog" aria-modal="true" aria-labelledby="lm-title">
         <h3 id="lm-title" style="margin:0 0 10px" dir="auto">${this._esc(item.name)}</h3>
+        <label class="ds-lbl" for="lm-qty">${t('Quantity')}</label>
+        <input type="text" inputmode="decimal" autocomplete="off" id="lm-qty" class="ret-input" value="${this._esc(String(item.quantity))}" style="width:100%;margin-bottom:12px" />
         ${maxPct > 0 ? `<label class="ds-lbl" for="lm-pct">${t('Item discount (%)')}</label>
           <input type="number" id="lm-pct" class="ret-input" min="0" max="${maxPct}" step="0.5" value="${item.disc_pct != null ? item.disc_pct : ''}" style="width:100%;margin-bottom:12px" />` : ''}
         <label class="ds-lbl" for="lm-price">${t('Price')}</label>
@@ -4154,8 +4167,17 @@ const RetailSystem = {
       </div>`;
     document.body.appendChild(overlay);
     this._lmClose = this._wireModalA11y(overlay, 'lm-dialog');
-    const first = overlay.querySelector('#lm-pct') || overlay.querySelector('#lm-price');
-    if (first && first.focus) first.focus();
+    // Enter in any of the dialog's fields applies it (it used to need the Apply
+    // button, which a keyboard-only sale cannot reach without Tab).
+    overlay.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter' || !ev.target || ev.target.tagName !== 'INPUT') return;
+      ev.preventDefault(); ev.stopPropagation();
+      this._lineMenuApply(idx);
+    });
+    const first = (focus === 'qty' ? overlay.querySelector('#lm-qty') : null)
+      || (focus === 'pct' ? overlay.querySelector('#lm-pct') : null)
+      || overlay.querySelector('#lm-pct') || overlay.querySelector('#lm-price');
+    if (first && first.focus) { first.focus(); if (typeof first.select === 'function') first.select(); }
   },
 
   _lineMenuApply(idx) {
@@ -4163,8 +4185,21 @@ const RetailSystem = {
     const err = document.getElementById('lm-error');
     const pctEl = document.getElementById('lm-pct');
     const priceEl = document.getElementById('lm-price');
+    const qtyEl = document.getElementById('lm-qty');
     const cap = this._hasDiscountCap();
     const lim = this._cashierDiscountLimit || 0;
+    // Quantity first, and only VALIDATED here -- it is written below, after the
+    // discount and price checks, so a refusal further down leaves the line alone.
+    let newQty = null;
+    if (qtyEl) {
+      const rawQty = this._asciiDigits(String(qtyEl.value || '').trim());
+      if (!/^\d+(\.\d{1,3})?$/.test(rawQty) || !(parseFloat(rawQty) > 0)) {
+        if (err) err.textContent = t('Enter a quantity above zero (up to 3 decimals).');
+        return;
+      }
+      newQty = this._roundQty(parseFloat(rawQty));
+      if (newQty > item.max_stock) { if (err) err.textContent = `${t('Max stock')}: ${item.max_stock}`; return; }
+    }
     if (pctEl) {
       const raw = pctEl.value === '' ? null : parseFloat(pctEl.value);
       if (raw != null && (!(raw >= 0) || raw > (cap ? 100 : lim) + 1e-9)) {
@@ -4189,6 +4224,7 @@ const RetailSystem = {
     // An item discount cannot sit beside an amount/target discount (the server refuses
     // the pair); keep the newer intention, drop the older.
     if (this._cartDisc && (item.disc_pct || 0) > 0) this._clearCartDiscount(t('Discount cleared — it cannot be combined with an item discount or promotion'));
+    if (newQty != null) { item.quantity = newQty; item.line_total = newQty * item.unit_price; }
     if (this._lmClose) this._lmClose();
     this._renderCart();
   },
@@ -4318,7 +4354,14 @@ const RetailSystem = {
         .pos-pane-void-slot { display:flex;align-items:center; }
 
         /* ── Scan bar: the primary input, sized like it ───────────────────── */
-        .pos-scanbar { display:flex;align-items:center;gap:14px;padding-block:14px;padding-inline:16px;border-block-end:1px solid var(--border-soft);flex-shrink:0; }
+        /* TILL-ROOMY (owner 2026-10-30: "too squeezed"): padding-block 14 -> 8
+           (measured: this row alone was 84px of a 768px till), and the cash
+           drawer is now ONE chip that rides in this row (cash-drawer.js mount)
+           instead of its own two-line strip below. The lamp keeps its dot at
+           every width; its words step aside under 1500px so the scan field keeps
+           room for its placeholder. */
+        .pos-scanbar { display:flex;align-items:center;gap:12px;padding-block:8px;padding-inline:16px;border-block-end:1px solid var(--border-soft);flex-shrink:0; }
+        @media (max-width:1500px) { .pos-scan-lamp-txt { position:absolute;inline-size:1px;block-size:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap; } }
         .pos-scan-field { position:relative;flex:1;min-inline-size:0;display:flex;align-items:center; }
         .pos-scan-icon { position:absolute;inset-inline-start:16px;font-size:20px;line-height:1;pointer-events:none; }
         .pos-search { inline-size:100%;min-block-size:56px;padding-block:0;padding-inline:52px 16px;
@@ -4336,7 +4379,7 @@ const RetailSystem = {
         /* Status lamp. Signals "this till is listening" without relying on
            colour alone -- the dot changes SIZE as well as token colour, so it
            still reads on a monochrome/washed-out panel. */
-        .pos-scan-lamp { display:inline-flex;align-items:center;gap:8px;font-size:11px;font-weight:700;
+        .pos-scan-lamp { flex-shrink:0;display:inline-flex;align-items:center;gap:8px;font-size:11px;font-weight:700;
           letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);white-space:nowrap; }
         .pos-scan-lamp::before { content:'';inline-size:9px;block-size:9px;border-radius:50%;
           background:var(--border-mid);transition:transform .15s ease, background .15s ease; }
@@ -4355,8 +4398,18 @@ const RetailSystem = {
            part of reclaiming the dead 53% of a 1366x768 till screen that sat
            above the product grid (see the .pos-cat-row note below for the
            larger piece of that fix). */
-        .pos-kbd-hints { display:flex;flex-wrap:wrap;align-items:center;gap:5px 14px;
-          padding-block:4px 2px;padding-inline:16px;color:var(--text-faint);font-size:11px; }
+        /* TILL-ROOMY: ONE line. The list wraps inside a box exactly one line tall
+           with overflow hidden, so an item that does not fit drops off WHOLE (never
+           a half-clipped "F1-F6 Paym"); the items are in priority order and the
+           "F12 More" card (everything else) is its own non-shrinking child at the
+           end, so it is always there. It used to wrap to two lines on a 900px
+           till and fold to "F12 All keys" alone on a 768px one -- the strip taught
+           nothing exactly where the cheap panels are. */
+        .pos-kbd-hints { display:flex;align-items:center;gap:14px;
+          padding-block:4px;padding-inline:16px;color:var(--text-faint);font-size:11px; }
+        .pos-kbd-list { display:flex;flex-wrap:wrap;align-items:center;gap:5px 14px;flex:1;min-inline-size:0;
+          block-size:2em;overflow:hidden; }
+        .pos-kbd-more { flex-shrink:0; }
         /* A keyboard legend is worth nothing to a device with no keyboard, and on
            a phone it is worth LESS than nothing: measured at 390x844 it wraps to
            two rows and takes 49px off a till whose content is already 1,379px in
@@ -4397,7 +4450,7 @@ const RetailSystem = {
            information itself. */
         .pos-cat-row { display:flex;align-items:center;gap:12px;padding-inline:16px;
           border-block-end:1px solid var(--border-soft);flex-shrink:0; }
-        .pos-cat-bar { display:flex;gap:8px;padding-block:10px;overflow-x:auto;flex:1;min-inline-size:0; }
+        .pos-cat-bar { display:flex;gap:8px;padding-block:6px;overflow-x:auto;flex:1;min-inline-size:0; }
         .pos-held-btn { flex-shrink:0; }
         .pos-display-btn { flex-shrink:0; }
         /* P0 item #11(d): grey (no modifier class -- the resting state, a
@@ -4459,7 +4512,11 @@ const RetailSystem = {
         .pos-cat-wrap.has-more .pos-cat-more { display:flex; }
         .pos-cat-wrap.has-more .pos-cat-fade { display:block; }
         .pos-cat-more:hover, .pos-cat-more:focus-visible { color:var(--text); }
-        html[dir="rtl"] .pos-cat-more-glyph { transform:scaleX(-1); }
+        /* NO scaleX(-1) in RTL (it used to be here). The chevron is U+203A, a
+           Bidi_Mirrored character: the browser ALREADY draws it pointing left in a
+           right-to-left run, and flipping it again turned it back to point right --
+           the wrong way for "more categories this way" in Arabic (review
+           screenshot sell-ar). The e2e checks the drawn arrow, not this rule. */
         /* The Favourites pill leads the rail; the star keeps it recognisable
            when the rail is cramped, and "active" is still the same solid fill
            every pill uses (never a second selected-state language). */
@@ -4478,7 +4535,7 @@ const RetailSystem = {
            .pos-card's own min-block-size still uses it for a SHORT name. */
         .pos-product-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;
           grid-auto-rows:max-content;
-          padding-block:16px;padding-inline:16px;overflow-y:auto;flex:1;align-content:start; }
+          padding-block:12px;padding-inline:16px;overflow-y:auto;flex:1;align-content:start; }
         /* The tile is a <button> (see _renderPOSGrid). The first line is the
            button reset that makes it look exactly like the <div> it replaced:
            a UA-styled button would otherwise arrive with its own font, its own
@@ -4791,6 +4848,11 @@ const RetailSystem = {
         .pos-qty-btn:hover,
         .pos-qty-btn:focus-visible { background:var(--surface-hover); }
         .pos-qty-val { min-inline-size:34px;text-align:center;color:var(--text);font-size:15px;font-weight:700; }
+        /* The quantity is a button (a click edits it, incl. decimals for weight), but must
+           still read as the number between the steppers, not as a third stepper. */
+        button.pos-qty-edit { min-inline-size:var(--touch-target-min, 44px);min-block-size:var(--touch-target-min, 44px);
+          padding:0;border:0;background:transparent;font-family:inherit;cursor:pointer; }
+        button.pos-qty-edit:hover, button.pos-qty-edit:focus-visible { background:var(--surface-hover);border-radius:8px; }
         /* display:flex;flex-direction:column (review fix, 2026-09-27, high --
            item #7(b)/#8 regression): a promoted line used to put the struck
            original and the new total SIDE BY SIDE, inline, inside this one
@@ -4881,6 +4943,13 @@ const RetailSystem = {
           color:var(--state-danger-text, var(--text));border-color:var(--state-danger-border, var(--border-mid));
           background:var(--state-danger-surface, var(--surface-hover)); }
         .pos-clear-btn:active { transform:scale(0.97); }
+        /* TILL-ROOMY (safety): Void Sale sat directly beside Hold, the same quiet
+           button in the same row -- one mis-tap from emptying the sale mid-queue.
+           It now takes the OPPOSITE end of the header row (order:-1 puts its
+           wrapper first; the DOM order, and so the Tab order, is unchanged), with
+           the title between it and Hold. _voidSale() still asks first, and
+           Ctrl+Del still reaches the same confirmation. */
+        .pos-pane-void-slot { order:-1;margin-inline-end:8px; }
         .pos-hold-btn { min-block-size:var(--touch-target-min, 44px);padding-inline:16px;border-radius:10px;border:1px solid var(--border-mid);
           background:var(--surface-soft);color:var(--text-dim);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
           transition:background .12s ease, color .12s ease; }
@@ -4984,6 +5053,10 @@ const RetailSystem = {
            same way). */
         .pos-change-row { display:inline-flex;gap:6px;align-items:baseline;color:var(--text-money-positive, var(--text));font-weight:700; }
         .pos-change-row .pos-sum-val { color:inherit; }
+        /* TILL-ROOMY: the row is there as soon as a cash amount is, not only once it
+           covers the total. Short of the total it reads "Still to pay" (warning tone,
+           and the WORDS change, so the state is never colour-only). */
+        .pos-change-row[data-state="short"] { color:var(--state-warning-text, var(--text)); }
         /* AUDIT (Phase 0 #7d): Change Due is the figure the cashier hands
            back and says out loud -- it carried no size of its own (14px,
            inherited off .pos-sum-row like a plain label) despite being the
@@ -5204,6 +5277,9 @@ const RetailSystem = {
            rest, --text-on-accent when active) automatically, so no colour is
            restated here. */
         .pos-pay-icon { display:inline-flex;line-height:1; }
+        /* The F-key badge, plus Cash's second "X" (exact cash), on ONE line under the label. */
+        .pos-pay-keys { display:inline-flex;gap:3px;align-items:center; }
+        .pos-pay-reason:not([hidden]) + .pos-pay-keys { display:none; }
         /* white-space:nowrap + ellipsis (round 3, items #7(c)/#8 AND #7
            1280x720/800 regression, medium): this label had no wrap
            protection at all, and Arabic's tender names (e.g. 'تحويل
@@ -5291,10 +5367,12 @@ const RetailSystem = {
            content -- so the second tender row needed a scroll to reach.
            Density is taken back from DECORATION (a grand total set as large as
            56px, generous band spacing), never from touch targets: every control
-           below still clears the 44px floor, and the F-key badges stay because
-           the shortcut strip at the top of this screen teaches Enter/N/X//Del/
-           Esc but never F1-F6, so these badges are the only place a cashier
-           learns the tender shortcuts. Height-based, not width-based: this is a
+           below still clears the 44px floor, and the tender tiles keep their F-key
+           badges (until 2026-10-30 this comment said they stayed while the rule
+           below hid every .pos-pay-kbd, so on a 1366x768 till no badge ever
+           showed). The strip at the top now teaches Enter / X / F1-F6 / N* / Del /
+           Esc / F12, but the badge on the tile is still the one on the button the
+           cashier is about to press. Height-based, not width-based: this is a
            vertical-room problem, and a 1366x768 till is a wide screen.
            Round 2, till R2: 820px -> 920px. The T1 review found the SAME
            squeeze (summary down to 27-139px, #pos-total unreachable) at
@@ -5362,12 +5440,20 @@ const RetailSystem = {
              .pos-total-band's own round-3 comment above. */
           .pos-sum-row { margin-block-end:2px; }
           button.pos-pay-btn { font-size:11px; }
-          /* Hidden, not just shrunk, at short-till heights: every remaining
-             px here goes to .pos-summary/#pos-total instead. The badges
-             stay at every OTHER height -- see the base .pos-pay-kbd rule's
-             own comment on why they exist at all ("the only place a
-             cashier learns the tender shortcuts"). */
-          .pos-pay-kbd { display:none; }
+          /* TILL-ROOMY: this rule used to hide EVERY .pos-pay-kbd at <= 920px tall --
+             including the F1-F6 badges on the tender tiles, i.e. on the 1366x768 and
+             1440x900 tills most shops own, where the base rule's own comment says they
+             are "the only place a cashier learns the tender shortcuts". The tender
+             badges now stay at every height. What still steps aside here are the
+             OTHER badges (Hold's F9, Void's Ctrl+Del, Held's Shift+F9, the customer
+             F7): they sit in rows whose width is budgeted to the pixel (the pane
+             header), and the strip / F12 card teach those keys. To pay for the
+             tender badge's third row inside the tile's 44px floor, the icon steps
+             aside here (the label and the key identify the tender) and the tile's
+             own padding/gap go to the minimum -- 13px label + 14px badge + border. */
+          .pos-pane-hdr .pos-pay-kbd, .pos-held-btn .pos-pay-kbd, .pos-cust-sub .pos-pay-kbd { display:none; }
+          button.pos-pay-btn .pos-pay-icon { display:none; }
+          button.pos-pay-btn { padding-block:1px;gap:0; }
           /* Round 2, till R2: margin-block-end 6px -> 4px, gap 6px -> 4px
              (gap has no OTHER declaration at this breakpoint before this
              pass). Neither touches button.pos-pay-btn's own 44px touch
@@ -5620,11 +5706,9 @@ const RetailSystem = {
            retail_p0_till_e2e.py item #7(e) is the proof. */
         @media (max-height: 800px) {
           /* UI-1 (review A #2b): the left pane's two decoration strips cost the
-             product grid ~90px on a 768px till. The key legend folds to its last
-             chip ("F12 All keys" -- the card that lists the rest) and the drawer
-             bar to ONE line. Nothing is removed, only shortened: the F-keys all
-             still work and F12 shows the full list. */
-          .pos-kbd-hints .pos-kbd-item:not(:last-child) { display:none; }
+             product grid ~90px on a 768px till. Till-roomy: the legend is one line
+             at EVERY height now (see .pos-kbd-list) and the drawer is a chip in the
+             scan bar, so this block only trims the strip's own padding. */
           .pos-kbd-hints { padding-block:2px 0; }
 
           html.ui-large .pos-sum-row { line-height:1.2; }
@@ -5754,17 +5838,18 @@ const RetailSystem = {
                      placeholder="${this._esc(t('Scan a barcode or search'))}"
                      oninput="RetailSystem._filterPOS()" />
             </div>
-            <span class="pos-scan-lamp">${t('Ready to scan')}</span>
+            <span class="pos-scan-lamp"><span class="pos-scan-lamp-txt">${t('Ready to scan')}</span></span>
           </div>
           <div class="pos-kbd-hints" title="${this._esc(t('Keyboard shortcuts'))}" aria-label="${this._esc(t('Keyboard shortcuts'))}">
-            <span class="pos-kbd-item"><kbd class="pos-kbd">${t('Enter')}</kbd> ${t('Pay')}</span>
-            <span class="pos-kbd-item"><kbd class="pos-kbd">F10</kbd> ${t('Charge')}</span>
-            <span class="pos-kbd-item"><kbd class="pos-kbd">${t('N*')}</kbd> ${t('Quantity')}</span>
-            <span class="pos-kbd-item"><kbd class="pos-kbd">F7</kbd> ${t('Customer')}</span>
-            <span class="pos-kbd-item"><kbd class="pos-kbd">F8</kbd> ${t('Discount')}</span>
-            <span class="pos-kbd-item"><kbd class="pos-kbd">F9</kbd> ${t('Hold')}</span>
-            <span class="pos-kbd-item"><kbd class="pos-kbd">F11</kbd> ${t('Price check')}</span>
-            <span class="pos-kbd-item"><kbd class="pos-kbd">F12</kbd> ${t('All keys')}</span>
+            <span class="pos-kbd-list">
+              <span class="pos-kbd-item"><kbd class="pos-kbd">${t('Enter')}</kbd> ${t('Add / Pay')}</span>
+              <span class="pos-kbd-item"><kbd class="pos-kbd">X</kbd> ${t('Exact cash')}</span>
+              <span class="pos-kbd-item"><kbd class="pos-kbd">F1–F6</kbd> ${t('Payment')}</span>
+              <span class="pos-kbd-item"><kbd class="pos-kbd">${t('N*')}</kbd> ${t('Quantity')}</span>
+              <span class="pos-kbd-item"><kbd class="pos-kbd">${t('Del')}</kbd> ${t('Remove')}</span>
+              <span class="pos-kbd-item"><kbd class="pos-kbd">${t('Esc')}</kbd> ${t('Cancel')}</span>
+            </span>
+            <span class="pos-kbd-item pos-kbd-more"><kbd class="pos-kbd">F12</kbd> ${t('More')}</span>
           </div>
           <!-- retail-hardware-viewports: the old dedicated "Products" pane
                header (a pure label, no controls) is gone. The Held button it
@@ -6017,7 +6102,7 @@ const RetailSystem = {
                   aria-label="${this._esc(t('Cash Tendered'))}"
                   oninput="RetailSystem._onTenderedInput(this)" />
                 <span class="pos-change-row" id="pos-change-row" style="display:none">
-                  <span class="pos-change-lbl" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.03em">${t('Change Due')}</span><span class="pos-sum-val money" id="pos-change">$0.00</span>
+                  <span class="pos-change-lbl" id="pos-change-lbl" style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.03em">${t('Change Due')}</span><span class="pos-sum-val money" id="pos-change">$0.00</span>
                 </span>
               </span>
             </div>
@@ -6657,11 +6742,28 @@ const RetailSystem = {
   // every product tile read "المخزون: 12 pc". One catalogue key per CODE (not
   // per concept) so English keeps showing exactly the code that was stored.
   _UNIT_CODES: ['pc', 'pcs', 'kg', 'g', 'l', 'ml', 'm', 'cm', 'box', 'pack', 'pair', 'dozen'],
-  _unitLabel(u) {
+  // TILL-ROOMY: a unit TYPED in Arabic when the product was created ("قطعة")
+  // used to be shown as typed on an English screen ("Low stock: 4 <Arabic>"
+  // beside the English words). The common Arabic spellings of the form's own
+  // codes are mapped back to the code, so English reads "pcs" and Arabic still
+  // reads its own word. The STORED value is never touched; anything not listed
+  // is shown exactly as typed.
+  _UNIT_ALIASES: {
+    'قطعة': 'pcs', 'قطع': 'pcs', 'حبة': 'pcs', 'كغ': 'kg', 'كغم': 'kg', 'كجم': 'kg', 'كيلو': 'kg',
+    'غرام': 'g', 'غم': 'g', 'لتر': 'l', 'مل': 'ml', 'علبة': 'box', 'عبوة': 'pack', 'زوج': 'pair', 'دزينة': 'dozen',
+  },
+  // `n` (optional) is the count the label follows: Arabic counts 3-10 take the
+  // plural ("4 قطع", not "4 قطعة"); every other count keeps the singular form.
+  _unitLabel(u, n) {
     const raw = String(u == null ? '' : u);
-    if (!window.AuraI18n || AuraI18n.current === 'en') return raw;
-    const code = raw.trim().toLowerCase();
-    return this._UNIT_CODES.indexOf(code) === -1 ? raw : t('Unit: ' + code);
+    const typed = raw.trim().toLowerCase();
+    const code = this._UNIT_ALIASES[raw.trim()] || typed;
+    const isAr = !!window.AuraI18n && AuraI18n.current !== 'en';
+    if (!isAr) return this._UNIT_ALIASES[raw.trim()] ? code : raw;
+    if (this._UNIT_CODES.indexOf(code) === -1) return raw;
+    const count = Number(n);
+    if ((code === 'pc' || code === 'pcs') && Number.isInteger(count) && count >= 3 && count <= 10) return t('Unit: pcs few');
+    return t('Unit: ' + code);
   },
 
   // Corrected scope for 7b (see the doc section named above): the figure is
@@ -6672,7 +6774,7 @@ const RetailSystem = {
   // hand-typed strings.
   _staleStockLabel(p) {
     const clock = this._formatClockTime(this._mostRecentSyncSuccess(this._syncHealth));
-    const qty = `${p.total_stock} ${this._esc(this._unitLabel(p.unit))}`;
+    const qty = `${p.total_stock} ${this._esc(this._unitLabel(p.unit, p.total_stock))}`;
     return clock ? `${t('Stock at')} ${this._esc(clock)}: ${qty}` : `${t('Stock')}: ${qty}`;
   },
 
@@ -6883,7 +6985,7 @@ const RetailSystem = {
         <span class="pos-card-name" dir="auto" title="${this._esc(p.name)}">${this._esc(p.name)}</span>
         <span class="pos-card-price">${this._money(p.sell_price)}</span>
         ${variantCount ? `<span class="pos-card-stock" style="color:var(--text-muted)">${variantCount} ${t('options')}</span>` : (showStock ? `<span class="pos-card-stock${stockCls}">
-          ${outOfStock ? t('Out of stock') : (stale ? this._staleStockLabel(p) : `${t('Low stock')}: ${p.total_stock} ${this._esc(this._unitLabel(p.unit))}`)}
+          ${outOfStock ? t('Out of stock') : (stale ? this._staleStockLabel(p) : `${t('Low stock')}: ${p.total_stock} ${this._esc(this._unitLabel(p.unit, p.total_stock))}`)}
         </span>` : '')}
       </button>`;
     }).join('');
@@ -7022,7 +7124,7 @@ const RetailSystem = {
             ? `SubsystemApp.showToast('${this._esc(t('Out of stock'))}','error')`
             : `RetailSystem._addToCart('${this._esc(v.id)}');RetailSystem._closeModalOverlay(this)`}">
         <span>${this._esc(v.variant_label || v.name)}</span>
-        <span>${this._money(v.sell_price)} · ${outOfStock ? this._esc(t('Out of stock')) : `${v.total_stock} ${this._esc(this._unitLabel(v.unit))}`}</span>
+        <span>${this._money(v.sell_price)} · ${outOfStock ? this._esc(t('Out of stock')) : `${v.total_stock} ${this._esc(this._unitLabel(v.unit, v.total_stock))}`}</span>
       </button>`;
     }).join('');
   },
@@ -7213,7 +7315,7 @@ const RetailSystem = {
   _commitCartLine(p, qty, optionIds, modifierLines) {
     const key = this._cartLineKey(p.id, optionIds);
     const existing = this._cart.find(i => this._cartLineKey(i.product_id, i.modifier_option_ids) === key);
-    const newQty = existing ? existing.quantity + qty : qty;
+    const newQty = this._roundQty(existing ? existing.quantity + qty : qty);
     if (newQty > p.total_stock) {
       SubsystemApp.showToast(`${t('Only')} ${p.total_stock} ${t('in stock')}`, 'error');
       return;
@@ -7405,7 +7507,7 @@ const RetailSystem = {
 
   _updateQty(idx, delta) {
     const item = this._cart[idx];
-    const newQty = item.quantity + delta;
+    const newQty = this._roundQty(item.quantity + delta);
     if (newQty > item.max_stock) { SubsystemApp.showToast(`${t('Max stock')}: ${item.max_stock}`, 'error'); return; }
     if (newQty <= 0) { this._cart.splice(idx, 1); }
     else { item.quantity = newQty; item.line_total = newQty * item.unit_price; }
@@ -7921,7 +8023,7 @@ const RetailSystem = {
         <div class="pos-line-freq">
           <div class="pos-qty-wrap">
             <button class="pos-qty-btn" onclick="RetailSystem._updateQty(${i},-1)" title="${decLabel}" aria-label="${decLabel}">−</button>
-            <span class="pos-qty-val">${item.quantity}</span>
+            <button type="button" class="pos-qty-val pos-qty-edit" onclick="RetailSystem._openLineMenu(${i},'qty')" title="${this._esc(t('Edit quantity'))}" aria-label="${this._esc(t('Edit quantity'))}: ${item.quantity}">${item.quantity}</button>
             <button class="pos-qty-btn" onclick="RetailSystem._updateQty(${i},1)" title="${incLabel}" aria-label="${incLabel}">+</button>
           </div>
           <span class="pos-line-total">${lineTotalHTML}</span>
@@ -8407,10 +8509,18 @@ const RetailSystem = {
     amountDue = this._fromMinor(this._roundCashMinor(this._toMinor(amountDue)));   // MONEY-5: coins, not fils
     const changeRow = document.getElementById('pos-change-row');
     const changeEl  = document.getElementById('pos-change');
-    if (this._paymentMethod === 'cash' && tendered > 0 && tendered >= amountDue) {
-      const change = tendered - amountDue;
-      if (changeRow) changeRow.style.display = '';
-      if (changeEl)  this._setMoney(changeEl, change);
+    const changeLbl = document.getElementById('pos-change-lbl');
+    if (this._paymentMethod === 'cash' && tendered > 0) {
+      // TILL-ROOMY: shown for ANY cash amount. It used to appear only once the
+      // amount covered the total, so a cashier who had typed 10 against 15.150
+      // saw nothing at all where the figure to say out loud belongs.
+      const covers = tendered >= amountDue;
+      if (changeRow) {
+        changeRow.style.display = '';
+        if (typeof changeRow.setAttribute === 'function') changeRow.setAttribute('data-state', covers ? 'change' : 'short');
+      }
+      if (changeLbl) changeLbl.textContent = t(covers ? 'Change Due' : 'Still to pay');
+      if (changeEl)  this._setMoney(changeEl, covers ? tendered - amountDue : amountDue - tendered);
     } else {
       if (changeRow) changeRow.style.display = 'none';
     }
@@ -8643,9 +8753,9 @@ const RetailSystem = {
   // Credit / Voucher -- unchanged from before this pass, only now backed by
   // a real icon and a real key instead of a glyph and nothing.
   POS_PAYMENT_METHODS: [
-    { method: 'cash',     icon: 'banknote',     emoji: '💵', label: 'Cash',          fkey: 'F1' },
+    { method: 'cash',     icon: 'banknote',     emoji: '💵', label: 'Cash',          fkey: 'F1', extraKey: 'X' },
     { method: 'card',     icon: 'credit-card',  emoji: '💳', label: 'Card',          fkey: 'F2' },
-    { method: 'mobile',   icon: 'smartphone',   emoji: '📱', label: 'Mobile / CliQ', fkey: 'F3' },
+    { method: 'mobile',   icon: 'smartphone',   emoji: '📱', label: 'Mobile / CliQ', fkey: 'F3', short: 'CliQ' },
     { method: 'transfer', icon: 'landmark',     emoji: '🏦', label: 'Transfer',      fkey: 'F4' },
     { method: 'credit',   icon: 'receipt',      emoji: '📋', label: 'Credit',        fkey: 'F5' },
     { method: 'voucher',  icon: 'ticket',       emoji: '🎟', label: 'Voucher',       fkey: 'F6' },
@@ -8707,7 +8817,7 @@ const RetailSystem = {
   // The reason text REPLACES the F-key badge, not adds a fourth line --
   // the tile's footprint stays 3 rows tall either way.
   _renderPayButtons() {
-    return this.POS_PAYMENT_METHODS.map(({ method, icon, emoji, label, fkey }) => {
+    return this.POS_PAYMENT_METHODS.map(({ method, icon, emoji, label, fkey, extraKey, short }) => {
       const reason = method === 'credit'
         ? this._creditGateReason(document.getElementById('pos-customer')?.value || null)
         : null;
@@ -8722,11 +8832,11 @@ const RetailSystem = {
         : '';
       return `
       <button class="pos-pay-btn${method === 'cash' ? ' active' : ''}" data-method="${method}"
-        ${reason ? `aria-disabled="true" title="${this._esc(reason)}" data-credit-reason="${this._esc(reason)}"` : ''}
+        ${reason ? `aria-disabled="true" title="${this._esc(reason)}" data-credit-reason="${this._esc(reason)}"` : (short ? `title="${this._esc(t(label))}"` : '')}
         onclick="RetailSystem._pickTender('${method}',this)">
         <span class="pos-pay-icon" aria-hidden="true">${this._icon(icon, 16, emoji)}</span>
-        <span class="pos-pay-label">${t(label)}</span>
-        ${reasonEl}<span class="pos-pay-kbd" aria-hidden="true">${fkey}</span>
+        <span class="pos-pay-label">${t(short || label)}</span>
+        ${reasonEl}<span class="pos-pay-keys"><span class="pos-pay-kbd" aria-hidden="true">${fkey}</span>${extraKey ? `<span class="pos-pay-kbd pos-pay-kbd-x" aria-hidden="true">${extraKey}</span>` : ''}</span>
       </button>`;
     }).join('');
   },
@@ -9575,6 +9685,10 @@ const RetailSystem = {
   _onPOSShortcut(e) {
     if (!(window.SubsystemApp && SubsystemApp.active === 'retail')) return;
     if (this._section !== 'pos') return;               // this is the till, not every screen
+    // A pending X-in-the-amount-box (see _armExactCash) is cancelled by ANY
+    // later keystroke: a second key arriving inside the window means the "X"
+    // was the first character of a scanner burst or of typing, not a press.
+    if (this._exactArm) this._cancelExactArm();
     const code = this._keyCode(e);
     const ctrl = !!(e.ctrlKey || e.metaKey);
     if (e.altKey) return;                               // never shadow a browser/OS combo
@@ -9633,7 +9747,10 @@ const RetailSystem = {
       // branch below is what keeps them that way.
       const buf = this._qtyKeyBuffer;
       this._qtyKeyBuffer = '';
-      const n = parseInt(buf, 10);
+      // parseFloat, not parseInt: "1.25*" is 1.25 kg of tomatoes. The server
+      // takes a decimal quantity for any product (create_sale reads float(
+      // quantity), sale_items.quantity is REAL), so nothing here needs the unit.
+      const n = this._roundQty(parseFloat(buf));
       if (!(n > 0)) return;
       if (inSearch) {
         // The "3" the cashier typed is the multiplier, not a search term, and
@@ -9642,7 +9759,7 @@ const RetailSystem = {
         // at the end of the box ARE the run we buffered; a longer run is a
         // hand-typed barcode, not a multiplier, and is left alone.
         const v = String(el.value || '');
-        const run = /(\d+)$/.exec(this._asciiDigits(v));
+        const run = /(\d+\.?\d*)$/.exec(this._asciiDigits(v));
         if (!run || run[1] !== buf) return;
         el.value = v.slice(0, v.length - buf.length);
         this._resSel = null;
@@ -9662,6 +9779,12 @@ const RetailSystem = {
       const dm = /^(?:Digit|Numpad)(\d)$/.exec(code);
       if (dm) digit = dm[1];
     }
+    // A decimal point joins the run once it already holds digits and no point
+    // yet ("1.25*"). A bare "." (nothing buffered) is not a multiplier key and
+    // falls through to "any other key" below. Barcodes never contain ".", so it
+    // cannot be mistaken for scanner input.
+    if (digit === null && !shift && (code === 'NumpadDecimal' || code === 'Period' || e.key === '.')
+        && this._qtyKeyBuffer && this._qtyKeyBuffer.indexOf('.') === -1) digit = '.';
     if (digit !== null) {
       // The one-character ambiguity _scannerBusy() cannot resolve (see its
       // comment): the FIRST digit of a fresh scan burst and an isolated
@@ -9678,10 +9801,14 @@ const RetailSystem = {
       const gap = now - this._qtyKeyLastAt;
       this._qtyKeyLastAt = now;
       if (cfg.enabled && gap <= burstWindow) { this._qtyKeyBuffer = ''; return; }
-      // Capped at 4 digits (max 9999) -- long enough for any real
-      // hypermarket multiplier, short enough that a runaway buffer can't
-      // parse into something absurd.
-      if (this._qtyKeyBuffer.length < 4) this._qtyKeyBuffer += digit;
+      // Capped at 4 whole digits (max 9999) and 3 decimals (a weight to the
+      // gram) -- long enough for any real hypermarket multiplier or scale
+      // reading, short enough that a runaway buffer can't parse into something
+      // absurd.
+      const qb = this._qtyKeyBuffer;
+      const dotAt = qb.indexOf('.');
+      const roomLeft = dotAt === -1 ? (digit === '.' || qb.length < 4) : (qb.length - dotAt - 1 < 3);
+      if (roomLeft) this._qtyKeyBuffer = qb + digit;
       return;
     }
 
@@ -9798,6 +9925,20 @@ const RetailSystem = {
       return;
     }
 
+    // X in the EMPTY Cash Tendered box: exact cash, the key the Cash tile and the
+    // strip teach. After "go to pay" the caret is in that box, i.e. in a typing
+    // target, where every letter below is deliberately dead -- so without this the
+    // X printed on the screen did nothing at the one moment it is wanted. It is
+    // armed, not fired: if another key lands inside EXACT_ARM_MS the "X" was the
+    // first character of a scanner burst, and nothing is charged. It is NOT
+    // offered in the search box -- there an "X" is the first letter of a product
+    // ("Xbox") and a money action under a typing cashier's fingers is the thing
+    // the guard below exists to prevent.
+    if (code === 'KeyX' && !ctrl && !shift && el && el.id === 'pos-tendered' && !el.value && this._cart.length) {
+      this._armExactCash();
+      return;
+    }
+
     if (typing) return;
 
     if (code === 'KeyX') {
@@ -9857,6 +9998,14 @@ const RetailSystem = {
         else this._drawerKey(n);
         return true;
       }
+      // Till-roomy keys. Shift+F5..F8 take a cash note (5/10/20/50), Shift+F10
+      // prints the last receipt again, Shift+F11 is the discount/quantity of the
+      // selected line, Shift+F12 opens Returns. Function keys, like every key
+      // above, run before the text-field guard: they print no character.
+      if (n >= 5 && n <= 8) { e.preventDefault(); this._quickCashNote(this.POS_QUICK_NOTES[n - 5]); return true; }
+      if (n === 10) { e.preventDefault(); this._reprintLastReceipt(); return true; }
+      if (n === 11) { e.preventDefault(); this._lineDiscountKey(); return true; }
+      if (n === 12) { e.preventDefault(); this._openReturnsFromTill(); return true; }
       return false;
     }
     if (n >= 1 && n <= 12) e.preventDefault();
@@ -9888,6 +10037,76 @@ const RetailSystem = {
     if (n === 11) { this._openPriceCheck(); return true; }
     this._openShortcutHelp();   // F12
     return true;
+  },
+
+  // ── Till-roomy: the helpers behind the new keys ───────────────────────────
+  // A quantity is held to the gram (3 decimals): 1.25 + 1 must be 2.25, never
+  // 2.2500000000000004, because the line total and the server both read it.
+  _roundQty(x) { return Math.round((Number(x) || 0) * 1000) / 1000; },
+
+  // How long an "X" in the amount box waits for company before it charges.
+  EXACT_ARM_MS: 150,
+  _armExactCash() {
+    const btn = document.getElementById('pos-checkout-btn');
+    if (btn && btn.disabled) return;
+    this._cancelExactArm();
+    this._exactArm = setTimeout(() => {
+      this._exactArm = null;
+      const box = document.getElementById('pos-tendered');
+      // Still the same moment: the till, a non-empty cart, and nothing typed.
+      if (this._section !== 'pos' || !this._cart.length) return;
+      if (box && box.value) return;
+      this._exactCashCharge();
+    }, this.EXACT_ARM_MS);
+  },
+  _cancelExactArm() {
+    if (this._exactArm) clearTimeout(this._exactArm);
+    this._exactArm = null;
+  },
+
+  // The cash notes a customer hands over, one key each. Setting the amount
+  // never charges (same rule as the chips in the cash panel): the cashier still
+  // confirms with Charge / F10 / Enter, and Change Due is on screen first.
+  POS_QUICK_NOTES: [5, 10, 20, 50],
+  _quickCashNote(value) {
+    if (!this._cart.length) { SubsystemApp.showToast(t('Cart is empty'), 'error'); return; }
+    if (this._paymentMethod !== 'cash') {
+      const cashBtn = document.querySelector('.pos-pay-btn[data-method="cash"]');
+      if (cashBtn) this._setPayment('cash', cashBtn);
+    }
+    this._focusTendered();
+    const box = document.getElementById('pos-tendered');
+    if (!box) return;
+    box.value = String(value);
+    this._calcChange();
+  },
+
+  // Print the last COMPLETED sale of this session again, without opening the
+  // "Sale Complete!" dialog (which would claim a sale just finished). After a
+  // restart there is none in memory: the sale detail screen has Reprint.
+  _reprintLastReceipt() {
+    const sale = this._lastSaleData;
+    if (!sale) { SubsystemApp.showToast(t('No receipt to reprint yet in this session'), 'info'); return; }
+    SubsystemApp.showToast(t('Printing the last receipt'), 'info');
+    Promise.resolve(this._printReceipt(sale)).catch(() => { /* _printReceipt reports its own failures */ });
+  },
+
+  // Shift+F11: the item options (quantity, discount, price) of the selected
+  // line, else the last one, with the caret in Discount. The same dialog the
+  // line's "..." button opens, so the manager-PIN discount limit is the one
+  // _lineMenuApply already enforces. A person with no discount right gets the
+  // same explanation F8 gives instead of a dialog with no discount field.
+  _lineDiscountKey() {
+    if (!this._cart.length) { SubsystemApp.showToast(t('Cart is empty'), 'error'); return; }
+    if (!this._hasDiscountCap() && !((this._cashierDiscountLimit || 0) > 0)) { this._explainDiscountNeedsManager(); return; }
+    const idx = (this._selLine != null && this._cart[this._selLine]) ? this._selLine : this._cart.length - 1;
+    this._openLineMenu(idx, 'pct');
+  },
+
+  // Shift+F12: Returns, from the till. The sale in progress survives leaving
+  // the screen (see _renderPOS), so nothing is lost.
+  _openReturnsFromTill() {
+    if (window.SubsystemApp && typeof SubsystemApp._navigate === 'function') SubsystemApp._navigate('returns');
   },
 
   _drawerKey(n) {
@@ -10063,6 +10282,7 @@ const RetailSystem = {
     ['↑ ↓', 'Pick a search result, or a cart line when the search is empty'],
     ['+ −', 'One more or one fewer of the selected line'],
     ['N *', 'Quantity of the next item (type 3, then *), or of the selected line'],
+    ['1.25 *', 'Weight or part quantity: a decimal, then *'],
     ['Delete', 'Remove the selected line (or the last one)'],
     ['Ctrl+Delete', 'Void the whole sale'],
     ['F1 – F6', 'Choose how the customer pays'],
@@ -10070,6 +10290,10 @@ const RetailSystem = {
     ['Backspace', 'In an empty amount box: remove the last part payment'],
     ['F10 / Ctrl+Enter', 'Charge the sale'],
     ['X', 'Exact cash: charge at once'],
+    ['Shift+F5 – F8', 'Cash note received: 5, 10, 20, 50'],
+    ['Shift+F11', 'Discount and quantity of the selected line'],
+    ['Shift+F10', 'Print the last receipt again'],
+    ['Shift+F12', 'Open Returns'],
     ['F7', 'Choose a customer'],
     ['F8', 'Discount'],
     ['F9', 'Hold the sale'],
@@ -10317,7 +10541,7 @@ const RetailSystem = {
       if (!st.term) { box.innerHTML = ''; return; }
       if (!st.results.length) { box.innerHTML = `<div class="pk-empty">${this._esc(t('No products found.'))}</div>`; return; }
       box.innerHTML = st.results.map((p, i) => {
-        const stock = p.total_stock <= 0 ? this._esc(t('Out of stock')) : `${this._esc(t('Stock'))}: ${this._esc(String(p.total_stock))} ${this._esc(this._unitLabel(p.unit))}`;
+        const stock = p.total_stock <= 0 ? this._esc(t('Out of stock')) : `${this._esc(t('Stock'))}: ${this._esc(String(p.total_stock))} ${this._esc(this._unitLabel(p.unit, p.total_stock))}`;
         return `<div class="pk-row pk-row-static${i === st.sel ? ' pk-row-sel' : ''}" role="option" aria-selected="${i === st.sel}">
           <span class="pk-row-main" dir="auto">${this._esc(p.name)}</span>
           <span class="pk-row-price">${this._money(p.sell_price)}</span>
@@ -11971,13 +12195,18 @@ const RetailSystem = {
              keeps its ⚠ prefix so the severity is not colour-only. Above the
              threshold is unremarkable, so it is simply ordinary text. -->
         <td class="num" style="font-weight:600;color:var(--text-money)">${this._fmt(p.sell_price)}</td>
-        <td style="font-weight:700;color:${lowStock?'var(--state-warning-text)':'var(--text-primary)'}">${lowStock?this._icon('triangle-alert', 16, '⚠')+' ':''}${p.total_stock} ${this._esc(this._unitLabel(p.unit))}</td>
+        <td style="font-weight:700;color:${lowStock?'var(--state-warning-text)':'var(--text-primary)'}">${lowStock?this._icon('triangle-alert', 16, '⚠')+' ':''}${p.total_stock} ${this._esc(this._unitLabel(p.unit, p.total_stock))}</td>
         <td style="color:var(--text-muted)">${p.reorder_level||0}</td>
         <td>${this._badge('Active','green')}</td>
-        ${canAdjust ? `<td onclick="event.stopPropagation()" style="display:flex;gap:6px">
+        ${canAdjust ? `<td onclick="event.stopPropagation()" style="display:flex;gap:6px;align-items:center">
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditProduct('${this._esc(p.id)}')">Edit</button>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openStockAdjust('${this._esc(p.id)}','${this._esc(p.name).replace(/'/g,"\\'")}',${p.total_stock})">Stock</button>
-          <button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._deleteProduct('${this._esc(p.id)}','${this._esc(p.name).replace(/'/g,"\\'")}')">Delete</button>
+          <!-- TILL-ROOMY (safety): Delete is apart from the everyday pair -- its own
+               wrapper with a 28px gap, not a third identical button in the row. It
+               keeps the danger style on purpose (retail_design_render_test.js's
+               corpus must keep reaching a destructive list-row button).
+               _deleteProduct still asks first. -->
+          <span style="margin-inline-start:28px"><button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._deleteProduct('${this._esc(p.id)}','${this._esc(p.name).replace(/'/g,"\\'")}')">Delete</button></span>
         </td>` : ''}
       </tr>`;
     }).join('');

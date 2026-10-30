@@ -2960,5 +2960,18 @@
   "Another computer started a count of this branch at the same time, so the two were joined into one. Use the joined count.": "Another computer started a count of this branch at the same time, so the two were joined into one. Use the joined count.",
   "Stock moved during the count": "Stock moved during the count",
   "Stock moved during the count, recount recommended:": "Stock moved during the count, recount recommended:",
-  "This device's date or time looks wrong -- it is earlier than a time it has already recorded -- so new sales are paused to protect your records. To fix it: set the correct date and time in this device's settings (turn on automatic date and time), then restart the app. Your data is safe, and reports, returns and backups still work.": "This device's date or time looks wrong -- it is earlier than a time it has already recorded -- so new sales are paused to protect your records. To fix it: set the correct date and time in this device's settings (turn on automatic date and time), then restart the app. Your data is safe, and reports, returns and backups still work."
+  "This device's date or time looks wrong -- it is earlier than a time it has already recorded -- so new sales are paused to protect your records. To fix it: set the correct date and time in this device's settings (turn on automatic date and time), then restart the app. Your data is safe, and reports, returns and backups still work.": "This device's date or time looks wrong -- it is earlier than a time it has already recorded -- so new sales are paused to protect your records. To fix it: set the correct date and time in this device's settings (turn on automatic date and time), then restart the app. Your data is safe, and reports, returns and backups still work.",
+  "Open since": "Open since",
+  "Drawer menu": "Drawer menu",
+  "Add / Pay": "Add / Pay",
+  "Unit: pcs few": "Unit: pcs few",
+  "Edit quantity": "Edit quantity",
+  "Enter a quantity above zero (up to 3 decimals).": "Enter a quantity above zero (up to 3 decimals).",
+  "No receipt to reprint yet in this session": "No receipt to reprint yet in this session",
+  "Printing the last receipt": "Printing the last receipt",
+  "Weight or part quantity: a decimal, then *": "Weight or part quantity: a decimal, then *",
+  "Cash note received: 5, 10, 20, 50": "Cash note received: 5, 10, 20, 50",
+  "Discount and quantity of the selected line": "Discount and quantity of the selected line",
+  "Print the last receipt again": "Print the last receipt again",
+  "Open Returns": "Open Returns"
 }

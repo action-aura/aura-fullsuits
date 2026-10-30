@@ -201,6 +201,25 @@ MUTANTS = {
     "ui3b_help_cap": ("max-block-size:calc(100vh - var(--top-banner-inset, 0px) - 32px)", "max-block-size:calc(100vh - 32px)", "**/help.js*"),
     "ui3b_tabs_never": ("tabs.length < 2", "tabs.length < 99", "**/app-shell.js*"),
     "xlarge_cart_floor": ("html.ui-xlarge .pos-cart-items { min-block-size:calc(2 * var(--pos-cart-row-min) + 8px); }", "html.ui-xlarge .pos-cart-items { min-block-size:calc(5 * var(--pos-cart-row-min) + 8px); }"),
+    # till-roomy (retail_till_roomy_e2e.py): each breaks ONE guard, served in memory only
+    "tr_badges_hidden": ("          .pos-pane-hdr .pos-pay-kbd, .pos-held-btn .pos-pay-kbd, .pos-cust-sub .pos-pay-kbd { display:none; }", "          .pos-pay-kbd { display:none; }"),
+    "tr_strip_wraps": ("          block-size:2em;overflow:hidden; }", "          overflow:visible; }"),
+    "tr_arrow_flip": ("        /* NO scaleX(-1) in RTL (it used to be here).", "        html[dir=\"rtl\"] .pos-cat-more-glyph { transform:scaleX(-1); }\n        /* NO scaleX(-1) in RTL (it used to be here)."),
+    "tr_currency_gap": ("sym + '\\u00A0\\u00A0' : sym + ' ';", "sym + ' ' : sym + ' ';"),
+    "tr_header_full": ("html[data-screen=\"pos\"] .sub-header { padding-block: 8px; }", "", "**/main.css*"),
+    "tr_notes_removed": ("if (n >= 5 && n <= 8) { e.preventDefault(); this._quickCashNote(", "if (false) { e.preventDefault(); this._quickCashNote("),
+    "tr_decimal_dropped": ("&& this._qtyKeyBuffer.indexOf('.') === -1) digit = '.';", "&& this._qtyKeyBuffer.indexOf('.') === -1) digit = null;"),
+    "tr_x_in_search": ("el && el.id === 'pos-tendered' && !el.value && this._cart.length) {\n      this._armExactCash();", "el && (el.id === 'pos-tendered' || el.id === 'pos-search') && !el.value && this._cart.length) {\n      this._armExactCash();"),
+    "tr_reprint_removed": ("if (n === 10) { e.preventDefault(); this._reprintLastReceipt(); return true; }", ""),
+    "tr_returns_removed": ("if (n === 12) { e.preventDefault(); this._openReturnsFromTill(); return true; }", ""),
+    "tr_linedisc_removed": ("if (n === 11) { e.preventDefault(); this._lineDiscountKey(); return true; }", ""),
+    "tr_change_covered_only": ("if (this._paymentMethod === 'cash' && tendered > 0) {\n      // TILL-ROOMY", "if (this._paymentMethod === 'cash' && tendered > 0 && tendered >= amountDue) {\n      // TILL-ROOMY"),
+    "tr_void_beside_hold": (".pos-pane-void-slot { order:-1;margin-inline-end:8px; }", ".pos-pane-void-slot { margin-inline-end:8px; }"),
+    "tr_delete_adjacent": ("<span style=\"margin-inline-start:28px\">", "<span style=\"margin-inline-start:0px\">"),
+    "tr_unit_leak": ("if (!isAr) return this._UNIT_ALIASES[raw.trim()] ? code : raw;", "if (!isAr) return raw;"),
+    "tr_plural_removed": ("if ((code === 'pc' || code === 'pcs') && Number.isInteger(count) && count >= 3 && count <= 10) return t('Unit: pcs few');", ""),
+    "tr_chip_iso": ("    return sameDay ? `${m[4]}:${m[5]}` : `${m[3]}/${m[2]} ${m[4]}:${m[5]}`;", "    return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}`;", "**/cash-drawer.js*"),
+    "tr_end_shift_on_row": ("<div class=\"cd-menu\" id=\"cd-menu\" role=\"menu\" hidden>", "<div class=\"cd-menu\" id=\"cd-menu\" role=\"menu\">", "**/cash-drawer.js*"),
 }
 
 
