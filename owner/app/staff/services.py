@@ -16,7 +16,7 @@ from app.models.staff import Permission, Role, RolePermission, StaffInvitation, 
 from app.security.passwords import hash_password
 from app.security.super_admin_guard import assert_can_remove_super_admin_status
 from app.security.tokens import generate_token, hash_token
-from app.staff.seed_data import PERMISSIONS, ROLES
+from app.staff.seed_data import PERMISSIONS, REVOKED_ROLE_PERMISSIONS, ROLES
 
 INVITATION_TTL_SECONDS = 60 * 60 * 24 * 3  # 3 days
 
@@ -53,6 +53,22 @@ def seed_rbac() -> dict:
         }
         for missing_code in wanted_codes - have_codes:
             db_session.add(RolePermission(role_id=role.id, permission_id=existing_perms[missing_code].id))
+
+        # WHY: the loop above only ever adds. A grant removed from ROLES (the
+        # SALES free buttons, 2026-10-31) would otherwise survive on every
+        # database seeded before the change -- including the live Owner
+        # server -- and the fix would only exist on fresh installs. Revoke
+        # exactly the listed pairs; never anything the role still wants.
+        for revoked_code in REVOKED_ROLE_PERMISSIONS.get(code, ()):
+            if revoked_code in wanted_codes:
+                continue
+            stale = db_session.execute(
+                select(RolePermission)
+                .join(Permission, Permission.id == RolePermission.permission_id)
+                .where(RolePermission.role_id == role.id, Permission.code == revoked_code)
+            ).scalars().all()
+            for row in stale:
+                db_session.delete(row)
     db_session.commit()
     return {"permissions": len(existing_perms), "roles": len(existing_roles)}
 

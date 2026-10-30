@@ -169,6 +169,16 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("report_snapshots.regenerate", "REPORTS", "Manually regenerate a report snapshot"),
 ]
 
+# role code -> permission codes that role must NOT hold any more. seed_rbac()
+# only ever ADDS grants, so removing a code from ROLES above changes a fresh
+# database but leaves every already-seeded one (the live Owner server) with the
+# old grant for ever. seed_rbac() deletes exactly these rows, idempotently.
+# Only list a grant here once ROLES no longer carries it (a unit test checks
+# the two never overlap).
+REVOKED_ROLE_PERMISSIONS: dict[str, tuple[str, ...]] = {
+    "SALES": ("pilots.manage", "subscriptions.update", "subscriptions.renew"),
+}
+
 # code -> permission codes. SUPER_ADMIN gets every permission automatically
 # (StaffUser.is_super_admin bypass in rbac.get_staff_permission_codes) and is
 # NOT listed explicitly here to avoid the list silently drifting out of sync
@@ -185,10 +195,18 @@ ROLES: dict[str, dict] = {
         "permissions": [
             "catalog.view", "pricing.view",
             "customers.view", "customers.create", "customers.update", "customers.archive", "customers.manage_contacts", "customers.manage_notes",
-            "subscriptions.view", "subscriptions.create", "subscriptions.update", "subscriptions.renew",
+            # 2026-10-31 (owner decision before the seller presentation): a
+            # seller sells through the one-screen "Sell a licence" sale
+            # (orders.create + payments.create below); they do NOT hold the
+            # free buttons -- subscriptions.update (un-suspend / state
+            # changes), subscriptions.renew (extend a shop, add devices) and
+            # pilots.manage (extend/approve a pilot). Those moved to
+            # SALES_MANAGER. REVOKED_ROLE_PERMISSIONS below makes seed-rbac
+            # strip them from a database that already has the old grants.
+            "subscriptions.view", "subscriptions.create",
             "licenses.view", "licenses.create",
             "installations.view",
-            "pilots.view", "pilots.manage",
+            "pilots.view",
             # Phase 9.5A -- a SALES employee works their own leads/customers/
             # sales documents and sees their own commission/dashboard/report
             # data; deliberately NOT granted leads.view_all/update_all,
@@ -268,6 +286,12 @@ ROLES: dict[str, dict] = {
             "leads.create", "leads.discover", "leads.view_own", "leads.view_all", "leads.update_own",
             "leads.update_all", "leads.assign", "leads.convert", "leads.archive",
             "subscriptions.view", "licenses.view", "installations.view", "pilots.view",
+            # The free buttons the SALES role lost on 2026-10-31: extend a
+            # shop / add devices (subscriptions.renew), un-suspend and other
+            # state changes (subscriptions.update), pilot extension
+            # (pilots.manage). Suspend/cancel still need their own dedicated
+            # capability + recent MFA (subscriptions/routes.py).
+            "subscriptions.update", "subscriptions.renew", "pilots.manage",
             "employees.view_own", "employees.view_all", "employees.view_presence",
             # confirming: the sale-confirm screen and the payments screen
             "payments.view", "payments.confirm", "orders.approve", "invoices.issue",

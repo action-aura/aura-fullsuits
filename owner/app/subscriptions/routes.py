@@ -32,8 +32,11 @@ from app.subscriptions.services import (
 
 bp = Blueprint("subscriptions", __name__, url_prefix="/subscriptions")
 
-# OWNER-SEC item 3 (review D SEC-03): subscriptions.update -- which SALES holds
-# so it can sell -- was enough to push a paying shop's subscription into a
+# 2026-10-31: SALES no longer holds subscriptions.update at all (it moved to
+# SALES_MANAGER -- seed_data.py); the restriction below still matters because
+# the manager and any custom role holding it are not meant to suspend/cancel.
+# OWNER-SEC item 3 (review D SEC-03): subscriptions.update -- which SALES held
+# so it could sell -- was enough to push a paying shop's subscription into a
 # state that makes its till read-only at the next check-in. Transitions INTO
 # these states now need the dedicated capability (held only by SUPER_ADMIN
 # today) AND recent MFA, the same shape as licensing.transition's

@@ -75,7 +75,7 @@ def test_create_renewal_requires_authentication(client, seeded):
 
 
 def test_full_renewal_workflow_via_http(app, client, seeded):
-    creator_id = make_staff(app, "route2@example.com", role_codes=["SALES"], mfa=True)
+    creator_id = make_staff(app, "route2@example.com", role_codes=["SALES_MANAGER"], mfa=True)  # was SALES; it lost renew/pilot buttons 2026-10-31
     approver_id = make_staff(app, "route2b@example.com", role_codes=["FINANCE"], mfa=True)
     sub_id = _make_subscription_via_app(app, creator_id, end_date="2026-08-01")
 
@@ -137,7 +137,7 @@ def test_full_renewal_workflow_via_http(app, client, seeded):
 
 
 def test_self_approval_rejected_via_http(app, client, seeded):
-    staff_id = make_staff(app, "route3@example.com", role_codes=["SALES"], mfa=True)
+    staff_id = make_staff(app, "route3@example.com", role_codes=["SALES_MANAGER"], mfa=True)  # was SALES; it lost renew/pilot buttons 2026-10-31
     sub_id = _make_subscription_via_app(app, staff_id, end_date="2026-08-01")
 
     login_and_verify_mfa(client, "route3@example.com")

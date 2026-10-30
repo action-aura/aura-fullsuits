@@ -1,6 +1,12 @@
 """OWNER-SEC item 3 (review D SEC-03): the generic subscription transition
-route must not let a SALES account (subscriptions.update only, password-only
-login) suspend/cancel/expire a live subscription. Deny and allow both ways."""
+route must not let an account that holds subscriptions.update but not the
+dedicated suspend/cancel capability (and has no recent MFA) suspend/cancel/
+expire a live subscription. Deny and allow both ways.
+
+2026-10-31: SALES no longer holds subscriptions.update at all (the sellers'
+free buttons moved to SALES_MANAGER), so the actor here is the Sales Manager
+-- the role that now holds exactly that capability. A plain SALES account is
+refused outright (test_seller_free_buttons_locked.py)."""
 from __future__ import annotations
 
 import uuid
@@ -46,8 +52,8 @@ def _post(client, sub_id, to_status):
 
 
 @pytest.mark.parametrize("target", ["SUSPENDED", "CANCELLED", "EXPIRED"])
-def test_sales_cannot_push_active_subscription_into_restricting_state(app, client, seeded, target):
-    sales = make_staff(app, "os3-sales@example.com", role_codes=["SALES"])
+def test_sales_manager_cannot_push_active_subscription_into_restricting_state(app, client, seeded, target):
+    sales = make_staff(app, "os3-sales@example.com", role_codes=["SALES_MANAGER"])
     sub_id = _subscription(app, sales)
     force_login(client, app, sales)
     resp = _post(client, sub_id, target)
@@ -55,8 +61,8 @@ def test_sales_cannot_push_active_subscription_into_restricting_state(app, clien
     assert _status(app, sub_id) == "ACTIVE"
 
 
-def test_sales_keeps_the_transitions_needed_to_sell(app, client, seeded):
-    sales = make_staff(app, "os3-sales2@example.com", role_codes=["SALES"])
+def test_sales_manager_keeps_the_ordinary_transitions(app, client, seeded):
+    sales = make_staff(app, "os3-sales2@example.com", role_codes=["SALES_MANAGER"])
     force_login(client, app, sales)
     # DRAFT -> ACTIVE, ACTIVE -> PAST_DUE -> ACTIVE, DRAFT -> CANCELLED stay open.
     draft = _subscription(app, sales, status="DRAFT")
@@ -70,8 +76,8 @@ def test_sales_keeps_the_transitions_needed_to_sell(app, client, seeded):
     assert _status(app, draft2) == "CANCELLED"
 
 
-def test_sales_detail_page_does_not_offer_restricted_buttons(app, client, seeded):
-    sales = make_staff(app, "os3-sales3@example.com", role_codes=["SALES"])
+def test_sales_manager_detail_page_does_not_offer_restricted_buttons(app, client, seeded):
+    sales = make_staff(app, "os3-sales3@example.com", role_codes=["SALES_MANAGER"])
     sub_id = _subscription(app, sales)
     force_login(client, app, sales)
     html = client.get(f"/subscriptions/{sub_id}").get_data(as_text=True)

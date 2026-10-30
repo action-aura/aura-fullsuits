@@ -77,7 +77,7 @@ def test_create_renewal_requires_csrf(app, client, seeded):
 # -- renewal workflow ---------------------------------------------------------
 
 def test_full_renewal_workflow_via_ui(app, client, seeded):
-    creator_id = make_staff(app, "8v-ren-creator@example.com", role_codes=["SALES"], mfa=True)
+    creator_id = make_staff(app, "8v-ren-creator@example.com", role_codes=["SALES_MANAGER"], mfa=True)  # was SALES; it lost renew/pilot buttons 2026-10-31
     approver_id = make_staff(app, "8v-ren-approver@example.com", role_codes=["FINANCE"], mfa=True)
     sub_id, *_ = _make_subscription(app, creator_id, end_date="2026-08-01")
 
@@ -165,7 +165,7 @@ def _make_pilot_subscription(app, staff_id, *, end_date="2026-09-01"):
 
 
 def test_pilot_create_approve_activate_extend_via_ui(app, client, seeded):
-    staff_id = make_staff(app, "8v-pilot1@example.com", role_codes=["SALES"])
+    staff_id = make_staff(app, "8v-pilot1@example.com", role_codes=["SALES_MANAGER"])  # was SALES; it lost renew/pilot buttons 2026-10-31
     sub_id = _make_pilot_subscription(app, staff_id)
     force_login(client, app, staff_id)
 
@@ -197,7 +197,7 @@ def test_pilot_create_approve_activate_extend_via_ui(app, client, seeded):
 
 
 def test_pilot_extend_requires_reason(app, client, seeded):
-    staff_id = make_staff(app, "8v-pilot2@example.com", role_codes=["SALES"])
+    staff_id = make_staff(app, "8v-pilot2@example.com", role_codes=["SALES_MANAGER"])  # was SALES; it lost renew/pilot buttons 2026-10-31
     sub_id = _make_pilot_subscription(app, staff_id)
     force_login(client, app, staff_id)
     csrf = _csrf(client, f"/commercial-ops/ui/pilots/new?subscription_id={sub_id}")
@@ -214,7 +214,7 @@ def test_pilot_extend_requires_reason(app, client, seeded):
 
 
 def test_pilot_cancel_requires_reason_via_ui(app, client, seeded):
-    staff_id = make_staff(app, "8v-pilot3@example.com", role_codes=["SALES"])
+    staff_id = make_staff(app, "8v-pilot3@example.com", role_codes=["SALES_MANAGER"])  # was SALES; it lost renew/pilot buttons 2026-10-31
     sub_id = _make_pilot_subscription(app, staff_id)
     force_login(client, app, staff_id)
     csrf = _csrf(client, f"/commercial-ops/ui/pilots/new?subscription_id={sub_id}")
@@ -234,7 +234,7 @@ def test_pilot_cancel_requires_reason_via_ui(app, client, seeded):
 
 
 def test_pilot_conversion_guided_flow_via_ui(app, client, seeded):
-    creator_id = make_staff(app, "8v-pconv-creator@example.com", role_codes=["SALES"], mfa=True)
+    creator_id = make_staff(app, "8v-pconv-creator@example.com", role_codes=["SALES_MANAGER"], mfa=True)  # was SALES; it lost renew/pilot buttons 2026-10-31
     approver_id = make_staff(app, "8v-pconv-approver@example.com", role_codes=["FINANCE"], mfa=True)
     sub_id = _make_pilot_subscription(app, creator_id, end_date="2026-09-01")
     force_login(client, app, creator_id)
