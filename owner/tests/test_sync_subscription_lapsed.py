@@ -15,7 +15,9 @@ from __future__ import annotations
 import pytest
 
 from tests.conftest import make_staff
-from tests.support_unpaid import set_subscription_state
+from datetime import datetime, timedelta, timezone
+
+from tests.support_unpaid import assign_policy_with_extension, grant_emergency_extension, set_subscription_state
 from tests.test_sync_routes import _do_activation, _make_event, _pull, _pull_body, _push, _push_body
 
 
@@ -95,3 +97,25 @@ def test_renewal_catches_up_with_nothing_pruned_past(app, client, shop):
     resp = _pull(client, _pull_body(key_b, inst_b, since=cursor))
     assert resp.status_code == 200, resp.get_json()
     assert [e["id"] for e in resp.get_json()["events"]] == [e2["id"]]
+
+
+def test_an_active_emergency_extension_keeps_an_expired_shop_syncing(app, client, shop):
+    """The device skips every commercial restriction while an emergency extension
+    is in force (policy_evaluator.py), so the server must too (verifier N1)."""
+    set_subscription_state(app, shop["license_id"], "EXPIRED")
+    assert _push_ok(client, shop).status_code == 400  # control: refused without the extension
+    grant_emergency_extension(app, shop["license_id"], shop["staff"])
+    assert _push_ok(client, shop).status_code == 200
+
+
+def test_the_offline_policy_extension_window_also_keeps_an_expired_shop_syncing(app, client, shop):
+    set_subscription_state(app, shop["license_id"], "EXPIRED")
+    assign_policy_with_extension(app, shop["license_id"], shop["staff"], until=datetime.now(timezone.utc) + timedelta(hours=6))
+    assert _push_ok(client, shop).status_code == 200
+
+
+def test_an_expired_offline_policy_extension_window_does_not(app, client, shop):
+    set_subscription_state(app, shop["license_id"], "EXPIRED")
+    assign_policy_with_extension(app, shop["license_id"], shop["staff"], until=datetime.now(timezone.utc) - timedelta(hours=1))
+    resp = _push_ok(client, shop)
+    assert resp.status_code == 400 and resp.get_json()["reason_code"] == "SUBSCRIPTION_LAPSED"

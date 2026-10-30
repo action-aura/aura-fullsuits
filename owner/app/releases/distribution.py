@@ -194,7 +194,7 @@ def authorize_download(body: dict, *, source_ip: str | None, config: dict) -> tu
     # the release's own kind (not on "is it the newest"), so a hand-crafted
     # request naming a FEATURE release id is refused too -- loosening the
     # subscription check above alone would have opened every feature update.
-    if release.release_kind != "SAFETY" and subscription_is_unpaid(license_row.subscription):
+    if release.release_kind != "SAFETY" and subscription_is_unpaid(license_row.subscription, license_row=license_row):
         raise DownloadAuthorizationRejected("RELEASE_NOT_ALLOWED_UNPAID")
     if release.product_id != license_row.product_id:
         raise DownloadAuthorizationRejected("PRODUCT_MISMATCH")

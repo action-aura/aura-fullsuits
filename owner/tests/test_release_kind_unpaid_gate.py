@@ -22,7 +22,8 @@ import pytest
 
 from app.extensions import db_session
 from app.models.catalog import ProductVersion
-from tests.support_unpaid import set_subscription_state
+from tests.conftest import make_staff
+from tests.support_unpaid import grant_emergency_extension, set_subscription_state
 from tests.test_phase9r_private_distribution import _authorize, _build_download_body
 from tests.test_release_discovery import _add_release, _ask, _offered_version, _payload, device  # noqa: F401  (fixture)
 
@@ -59,6 +60,16 @@ class TestDiscovery:
         _add_release(app, "1.0.1", release_kind="SAFETY")
         _add_release(app, "1.0.2", release_kind="FEATURE")
         _lapse(app, device, "PAST_DUE", past_due_days_ago=2, staff_id=None)
+        assert _offered_version(_ask(client, device, app_version="1.0.0")) == "1.0.2"
+
+    def test_an_emergency_extension_means_the_shop_is_not_unpaid_and_sees_feature(self, app, client, device):
+        """Verifier N1: the till treats a shop on an extension as allowed, so the
+        SAFETY-only filter must not apply to it either."""
+        _add_release(app, "1.0.1", release_kind="SAFETY")
+        _add_release(app, "1.0.2", release_kind="FEATURE")
+        _lapse(app, device, "EXPIRED")
+        assert _offered_version(_ask(client, device, app_version="1.0.0")) == "1.0.1"  # control: filtered without it
+        grant_emergency_extension(app, device["license_id"], make_staff(app, "ks-ext@example.com"))
         assert _offered_version(_ask(client, device, app_version="1.0.0")) == "1.0.2"
 
     def test_unpaid_with_only_feature_releases_is_offered_nothing_not_an_error(self, app, client, device):

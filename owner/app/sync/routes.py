@@ -191,7 +191,7 @@ def _authenticate(body: dict, *, nonce_scope: str) -> tuple[Installation, uuid.U
     # holds the prune watermark, so owner_sync_events for that licence grows (the
     # 20,000-row alarm in sync/pruning.py will fire for a months-long lapse).
     # No retention logic is built; staff see the alarm and decide.
-    if subscription_is_unpaid(installation.license.subscription):
+    if subscription_is_unpaid(installation.license.subscription, license_row=installation.license):
         raise SyncAuthError("SUBSCRIPTION_LAPSED")
 
     return installation, installation.license_id

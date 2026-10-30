@@ -148,7 +148,7 @@ def find_latest_release(body: dict, *, config: dict) -> dict:
     installation, license_row = authenticate_device_request(
         body, nonce_scope=NONCE_SCOPE, config=config, allow_unpaid=True
     )
-    unpaid = subscription_is_unpaid(license_row.subscription)
+    unpaid = subscription_is_unpaid(license_row.subscription, license_row=license_row)
 
     current_key = versioning.parse_semver(app_version)
     channel_ids = _allowed_channel_ids(license_row, body.get("release_channel"))
