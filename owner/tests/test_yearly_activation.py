@@ -282,3 +282,67 @@ def test_the_yearly_activation_is_not_a_new_ladder_sale(app, seeded, owner_price
     assert _ladder_sales(app, w["seller_profile"]) == sales_before
     assert [(r[1], r[2]) for r in _entries(app, w["seller_profile"], kind="RENEWAL")] == [(Decimal("10.00"), "EARNED")]
     assert _summary(app, w["seller_profile"])["count"] == 1
+
+
+# ---------------------------------------------- only money that came in counts
+# Verifier gap (3a): the status filter (PENDING/CONFIRMED only) in counted_payments was
+# never tested with a payment that is NOT money in. Each of the three ways a payment
+# reaches a subscription (its own subscription_id, an allocation to the sale's invoice,
+# the sale invoice id on the payment itself) has its own query and its own filter, so
+# each is exercised here with the status that must not count.
+NOT_MONEY_IN = ["FAILED", "VOIDED", "REFUNDED"]
+
+
+@pytest.mark.parametrize("status", NOT_MONEY_IN)
+def test_a_year_2_payment_that_is_not_money_in_does_not_carry_the_activation(app, seeded, owner_prices, status):
+    w = _owner_world(app)
+    sub = _rows(app, _sell(app, w, "p2")["order_id"])["subscription_id"]
+    rebase_contract(app, sub, 13)
+    pid = _pay(app, w, sub, "135.00", jordan_today())
+    assert _quote(app, sub) == (Decimal("35.00"), JOD)                     # control: it counts while pending/confirmed
+    _set_status(app, w, pid, status)
+    assert _quote(app, sub) == (Decimal("135.00"), JOD)                    # the activation is still owed
+
+
+@pytest.mark.parametrize("status", NOT_MONEY_IN)
+def test_a_sale_payment_that_is_not_money_in_leaves_the_first_sale_price_due(app, seeded, owner_prices, status):
+    """The sale's own payment reaches the subscription through the sale's invoice (an
+    allocation). If it bounced, nothing has been paid: the next payment is the first-sale
+    price (month + activation), not just a month."""
+    w = _owner_world(app)
+    sold = _sell(app, w, "p2")
+    sub = _rows(app, sold["order_id"])["subscription_id"]
+    assert _quote(app, sub) == (Decimal("35.00"), JOD)                     # control: paid sale -> just the month
+    with app.app_context():
+        from sqlalchemy import text
+
+        from app.extensions import db_session
+
+        db_session.execute(text("UPDATE owner_payment_records SET status = :s WHERE id = :p"),
+                           {"s": status, "p": sold["payment_id"]})
+        db_session.commit()
+    assert _quote(app, sub) == (Decimal("135.00"), JOD)
+
+
+@pytest.mark.parametrize("status", NOT_MONEY_IN)
+def test_a_payment_recorded_for_the_sale_invoice_counts_only_while_it_is_money_in(app, seeded, owner_prices, status):
+    """A payment that names the sale's invoice but no subscription (the commercial-sales
+    payment screen's invoice field) reaches the subscription by its own query."""
+    w = _owner_world(app)
+    order_id = _sell(app, w, "p2")["order_id"]
+    rows = _rows(app, order_id)
+    sub = rows["subscription_id"]
+    rebase_contract(app, sub, 13)
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.subscriptions import PaymentRecord
+        from app.subscriptions.services import record_payment
+
+        payment = record_payment({"customer_id": rows["customer_id"], "commercial_invoice_id": rows["invoice_id"],
+                                  "amount": Decimal("135.00"), "currency": JOD, "payment_date": jordan_today(),
+                                  "status": "PENDING"}, w["seller"])
+        pid = payment.id
+        assert db_session.get(PaymentRecord, pid).subscription_id is None
+    assert _quote(app, sub) == (Decimal("35.00"), JOD)
+    _set_status(app, w, pid, status)
+    assert _quote(app, sub) == (Decimal("135.00"), JOD)
