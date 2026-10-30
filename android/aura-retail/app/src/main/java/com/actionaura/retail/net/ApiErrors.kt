@@ -73,7 +73,11 @@ fun apiErrorMessage(e: Throwable): String = when (e) {
                     // clear the block is the subscription, not the network; the
                     // server's own message is appended so the user sees exactly
                     // what the backend refused and why.
-                    tr("Blocked by your subscription/license:") + " " +
+                    // r17: the clock-moved-back stop is not a subscription problem and
+                    // carries its own how-to-fix sentence, so it goes out without the
+                    // subscription prefix (which would send the owner to the wrong place).
+                    if (body.message == CLOCK_REVIEW_GUIDANCE) tr(CLOCK_REVIEW_GUIDANCE)
+                    else tr("Blocked by your subscription/license:") + " " +
                         tr(body.message ?: "This action is not available in the current licensing state.")
                 } else {
                     tr("You don't have permission to do this.")
@@ -253,3 +257,8 @@ private fun parseErrorBody(e: HttpException): ErrorBody = try {
         )
     }
 } catch (_: Exception) { NO_ERROR_BODY }
+
+/** The server's plain how-to-fix sentence for CLOCK_REVIEW_REQUIRED, verbatim from
+ *  commercial_runtime/licensing_contracts/state_guidance.py (also the key in Strings.kt). */
+internal const val CLOCK_REVIEW_GUIDANCE =
+    "This device's date or time looks wrong -- it is earlier than a time it has already recorded -- so new sales are paused to protect your records. To fix it: set the correct date and time in this device's settings (turn on automatic date and time), then restart the app. Your data is safe, and reports, returns and backups still work."
