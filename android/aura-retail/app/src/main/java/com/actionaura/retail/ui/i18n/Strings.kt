@@ -1018,6 +1018,28 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Subscription unpaid — you can keep selling. Sync and updates are paused until you renew." to
         "الاشتراك غير مدفوع — يمكنك متابعة البيع. المزامنة والتحديثات متوقفة مؤقتاً حتى تجدّد الاشتراك.",
     "Subscription unpaid" to "الاشتراك غير مدفوع",
+    "Trial ended" to
+        "انتهت التجربة",
+    "Free trial" to
+        "التجربة المجانية",
+    "Trial: 1 day left" to
+        "التجربة: متبقي يوم واحد",
+    "Trial: 2 days left" to
+        "التجربة: متبقي يومان",
+    "Trial: %s days left" to
+        "التجربة: متبقي %s أيام",
+    "Your free trial has ended" to
+        "انتهت تجربتك المجانية",
+    "Your data is safe. You can still look at your records and reports, and make a backup or an export. Selling is locked until you pay." to
+        "بياناتك آمنة. لا يزال بإمكانك الاطلاع على سجلاتك وتقاريرك، وإنشاء نسخة احتياطية أو تصدير. البيع مقفل حتى تقوم بالدفع.",
+    "Back up and share my data" to
+        "انسخ بياناتي احتياطياً وشاركها",
+    "How to unlock" to
+        "كيفية فتح القفل",
+    "Contact your Aura seller, or pay by reference number when available." to
+        "تواصل مع بائع Aura الخاص بك، أو ادفع برقم مرجعي عند توفر ذلك.",
+    "After paying, connect to the internet and the app unlocks automatically." to
+        "بعد الدفع، اتصل بالإنترنت وسيُفتح التطبيق تلقائياً.",
     "Sync paused — subscription unpaid" to "المزامنة متوقفة — الاشتراك غير مدفوع",
     "You can keep selling. Sales are saved on this device and will sync after you renew." to
         "يمكنك متابعة البيع. تُحفظ المبيعات على هذا الجهاز وستتم مزامنتها بعد تجديد الاشتراك.",

@@ -290,3 +290,67 @@ def test_subscription_lapsed_can_create_a_product(client_and_company):
     })
     assert r.status_code == 200, r.get_json()
     assert _row_count("SELECT COUNT(*) FROM products WHERE sku = ?", (sku,)) == 1
+
+
+# ── TRIAL_ENDED (new customer flow: the 7-day trial is over and unpaid) ────────
+# The mirror image of SUBSCRIPTION_LAPSED above. A lapsed PAID shop keeps selling;
+# an unpaid TRIAL does not -- but its data is never held hostage: reads, reports,
+# backup and export stay open (the existing restricted allowlist), and returns /
+# customer debt payments stay allowed. Returns/refunds (money OUT) are blocked in TRIAL_ENDED ONLY
+# (owner decision 2026-10-30); every other locked state keeps them.
+
+
+def test_trial_ended_refuses_a_sale_with_license_inactive(client_and_company):
+    c, _ = client_and_company
+    pid = _seed_product(c, price=100.0, stock=10)
+    _set_state("TRIAL_ENDED")
+    r = c.post('/api/sub/retail/sales', json={'items': [{'product_id': pid, 'quantity': 1}]})
+    assert r.status_code == 403
+    assert r.get_json()["reason_code"] == "LICENSE_INACTIVE"
+    # The same call succeeds on a selling state, so the 403 is the trial lock and not an unrelated refusal.
+    _set_state("ACTIVE_ONLINE")
+    assert c.post('/api/sub/retail/sales', json={'items': [{'product_id': pid, 'quantity': 1}]}).status_code == 200
+
+
+def test_trial_ended_keeps_reads_backup_and_export_open(client_and_company):
+    c, _ = client_and_company
+    _seed_product(c)
+    _set_state("TRIAL_ENDED")
+    assert c.get('/api/sub/retail/products').status_code == 200
+    created = c.post('/api/backup/create', json={})
+    assert created.status_code == 200, created.get_json()
+    assert created.get_json()['status'] == 'ok'
+    assert c.get('/api/backup/list').status_code == 200
+    exported = c.get('/api/sub/retail/reports/export/sales?date_from=2000-01-01&date_to=2099-12-31')
+    assert exported.status_code == 200
+    assert 'text/csv' in exported.headers.get('Content-Type', '')
+
+
+def test_trial_ended_still_refuses_new_products_and_stock_changes(client_and_company):
+    c, _ = client_and_company
+    _set_state("TRIAL_ENDED")
+    r = c.post('/api/sub/retail/products', json={'name': 'x', 'sku': 'TRIAL-X-1'})
+    assert r.status_code == 403
+    assert r.get_json()["reason_code"] == "LICENSE_INACTIVE"
+
+
+def test_trial_ended_blocks_a_return_but_allows_a_customer_debt_payment(client_and_company):
+    c, _ = client_and_company
+    pid = _seed_product(c, price=100.0, stock=10)
+    cust_id = _seed_customer(c)
+    sale = c.post('/api/sub/retail/sales', json={'items': [{'product_id': pid, 'quantity': 2}]})
+    assert sale.status_code == 200, sale.get_json()
+    sale_id = sale.get_json()['data']['id']
+
+    _set_state("TRIAL_ENDED")
+    ret = c.post('/api/sub/retail/returns', json={'sale_id': sale_id, 'items': [{'product_id': pid, 'quantity': 1}]})
+    assert ret.status_code == 403
+    assert ret.get_json()["reason_code"] == "LICENSE_INACTIVE"
+    pay = c.post(f'/api/sub/retail/customers/{cust_id}/payments', json={'amount': 10})
+    assert pay.status_code == 200, pay.get_json()
+
+    # Same return, other restricted state: unchanged behaviour (allowed) -- the deny is TRIAL_ENDED-only.
+    _set_state("RESTRICTED")
+    ret = c.post('/api/sub/retail/returns', json={'sale_id': sale_id, 'items': [{'product_id': pid, 'quantity': 1}]})
+    assert ret.status_code == 200, ret.get_json()
+

@@ -34,6 +34,16 @@ class LicenseState(str, Enum):
     # (refund/cancel/offline hard-expiry), and folding the unpaid case into
     # it is exactly what used to stop an unpaid shop's till.
     SUBSCRIPTION_LAPSED = "SUBSCRIPTION_LAPSED"
+    # New-customer flow (owner voice note 2026-10-30): the 7-day trial is a
+    # signed PILOT subscription, and once its term_end day is over the till
+    # LOCKS until the shop pays. Unlike SUBSCRIPTION_LAPSED (a PAID shop that
+    # stopped paying -- keeps selling) a trial was never paid for, so selling
+    # stops. The data is not held hostage: this state is in
+    # DATA_PRESERVED_FAMILY, so read, reports, backup and export keep working
+    # through the existing restricted allowlist. Deliberately NOT in
+    # SELLING_FAMILY and NOT in SYNC_PAUSED_STATES: sync stays on so the
+    # device sees the paid lease the moment it reconnects and unlocks itself.
+    TRIAL_ENDED = "TRIAL_ENDED"
     DEVICE_DEACTIVATED = "DEVICE_DEACTIVATED"
     DEVICE_REPLACED = "DEVICE_REPLACED"
     CLOCK_REVIEW_REQUIRED = "CLOCK_REVIEW_REQUIRED"
@@ -74,6 +84,7 @@ DATA_PRESERVED_FAMILY = ACTIVE_FAMILY | frozenset(
         LicenseState.REVOKED,
         LicenseState.EXPIRED,
         LicenseState.SUBSCRIPTION_LAPSED,
+        LicenseState.TRIAL_ENDED,
         LicenseState.DEVICE_DEACTIVATED,
         LicenseState.CLOCK_REVIEW_REQUIRED,
         LicenseState.LOCAL_STATE_CORRUPT,
@@ -149,6 +160,10 @@ _TRANSITIONS: dict[LicenseState, dict[str, LicenseState]] = {
         "grace_exhausted": LicenseState.RESTRICTED,
     },
     LicenseState.RESTRICTED: {
+        "checkin_succeeded": LicenseState.ACTIVE_ONLINE,
+    },
+    LicenseState.TRIAL_ENDED: {
+        # Payment lands in Owner -> the next check-in carries an ACTIVE lease.
         "checkin_succeeded": LicenseState.ACTIVE_ONLINE,
     },
     LicenseState.SUSPENDED: {

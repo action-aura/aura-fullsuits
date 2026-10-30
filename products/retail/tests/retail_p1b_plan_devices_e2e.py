@@ -618,6 +618,8 @@ def _scenario_standalone_variants(results: Results, browser, shots: Path) -> Non
             ("LOCAL_STATE_CORRUPT", "Local state needs reset", "bad"),
             ("DEVICE_DEACTIVATED", "Computer deactivated", "bad"),
             ("DEVICE_REPLACED", "Computer replaced", "bad"),
+            # New-customer flow: trial over and unpaid (hand-written here, not read back from plan-devices.js).
+            ("TRIAL_ENDED", "Trial ended", "bad"),
             ("NOT_CONFIGURED", "Not configured", "neutral"),
             ("ACTIVATION_REQUIRED", "Activation required", "neutral"),
             ("ACTIVATING", "Activating…", "neutral"),

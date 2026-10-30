@@ -24,6 +24,7 @@ import com.actionaura.retail.licensing.LicensingCoordinator
 import com.actionaura.retail.licensing.LicensingMessages
 import com.actionaura.retail.licensing.PendingActivationRecord
 import com.actionaura.retail.licensing.PendingActivationStore
+import com.actionaura.retail.licensing.TrialStatus
 import com.actionaura.retail.licensing.classifyActivationResult
 import com.actionaura.retail.licensing.reachedOwner
 import com.actionaura.retail.ui.i18n.tr
@@ -89,6 +90,8 @@ private fun stateLabel(state: String): Pair<String, Color> = when (state) {
     "GRACE_PERIOD" -> "Offline grace period" to Warning
     // Keep-selling rule: an unpaid subscription never stops selling; it pauses sync and updates.
     "SUBSCRIPTION_LAPSED" -> "Subscription unpaid" to Warning
+    // New-customer flow: the 7-day trial is over and unpaid. Selling is locked; data and backup are not.
+    "TRIAL_ENDED" -> "Trial ended" to Danger
     "RESTRICTED" -> "Restricted" to Danger
     "SUSPENDED" -> "Suspended" to Danger
     "REVOKED" -> "Revoked" to Danger
@@ -115,10 +118,47 @@ private fun reasonText(reason: String?): String =
 // commerce timestamp. Jordan uses Western digits in commerce; see Num.kt's file header and
 // BackupRestoreScreen.kt's SimpleDateFormat(..., Locale.US) for the same pin applied
 // elsewhere in this app.
+/** "Trial: N days left". 1 and 2 have their own catalogue entries for the Arabic singular / dual. */
+internal fun trialDaysLeftText(days: Int): String = when (days) {
+    1 -> tr("Trial: 1 day left")
+    2 -> tr("Trial: 2 days left")
+    else -> tr("Trial: %s days left").format(days.toString())
+}
+
+/**
+ * The lock screen for TRIAL_ENDED: the data is safe, how to get it out, how to unlock. Android has no
+ * sales-CSV screen, so "back up" (which the Backup screen lets the shop save or share) is its export.
+ * Unlocking needs no key: once Owner has the payment, the next check-in carries the paid lease.
+ */
+@Composable
+private fun TrialEndedPanel(onOpenBackup: (() -> Unit)?) {
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(tr("Your free trial has ended"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                tr("Your data is safe. You can still look at your records and reports, and make a backup or an export. Selling is locked until you pay."),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (onOpenBackup != null) {
+                Button(onClick = onOpenBackup, modifier = Modifier.fillMaxWidth()) { Text(tr("Back up and share my data")) }
+            }
+            Text(tr("How to unlock"), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(tr("Contact your Aura seller, or pay by reference number when available."))
+            Text(tr("After paying, connect to the internet and the app unlocks automatically."))
+        }
+    }
+}
+
 private fun nowTimeLabel(): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.US).format(Date())
 
 @Composable
-fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated: (() -> Unit)? = null) {
+fun LicensingScreen(
+    onBack: () -> Unit,
+    snackbar: SnackbarHostState,
+    onActivated: (() -> Unit)? = null,
+    // Opens the Backup screen. Null on the first-run activation gate, where there is no data to back up yet.
+    onOpenBackup: (() -> Unit)? = null,
+) {
     val ctx = LocalContext.current
     val coordinator = remember { LicensingCoordinator(ctx) }
     val pendingStore = remember { PendingActivationStore(ctx) }
@@ -493,7 +533,14 @@ fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated
                     (status["installation_id"] as? String)?.let { StatusRow(tr("Installation"), it) }
                     (status["license_status"] as? String)?.let { StatusRow(tr("License status"), it) }
                     (status["last_successful_checkin_at"] as? String)?.let { StatusRow(tr("Last check-in"), it) }
+                    TrialStatus.from(status)?.takeIf { it.isRunning }?.let {
+                        StatusRow(tr("Free trial"), trialDaysLeftText(it.daysLeft ?: 0))
+                    }
                 }
+            }
+
+            if (state == "TRIAL_ENDED") {
+                TrialEndedPanel(onOpenBackup)
             }
 
             if (state in setOf("RESTRICTED", "GRACE_PERIOD", "WARNING")) {

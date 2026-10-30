@@ -67,6 +67,15 @@
      after .secondary so the danger colour wins when a button carries both. */
   button.danger { background: transparent; color: var(--state-danger-text); border: 1px solid var(--state-danger-text); }
   .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+  /* TRIAL_ENDED lock screen. Logical properties so the Arabic (RTL) page mirrors it. */
+  .trial-ended-panel {
+    margin-top: 18px; padding: 18px 20px; border-radius: 10px;
+    border: 1px solid var(--state-warning-border); background: var(--state-warning-surface);
+    color: var(--state-warning-text);
+  }
+  .trial-ended-panel h2 { margin: 0 0 8px; font-size: 1.15rem; }
+  .trial-ended-panel h3 { margin: 18px 0 6px; font-size: 0.95rem; }
+  .trial-ended-panel p { margin: 6px 0; font-size: 0.92rem; line-height: 1.5; }
   .message { padding: 10px 12px; border-radius: 6px; font-size: 0.88rem; margin-bottom: 14px; }
   .message-error { background: var(--state-danger-surface); color: var(--state-danger-text); }
   .message-info { background: var(--state-info-surface); color: var(--state-info-text); }

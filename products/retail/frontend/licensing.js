@@ -47,6 +47,9 @@
     EXPIRED: { text: 'Expired', cls: 'state-restricted' },
     // Keep-selling rule: unpaid subscription. The shop KEEPS SELLING; only sync/updates pause.
     SUBSCRIPTION_LAPSED: { text: 'Subscription unpaid', cls: 'state-warning' },
+    // New-customer flow: the 7-day trial is over and the shop has not paid. Selling is locked;
+    // data, backup and export are not (see appendTrialEndedPanel).
+    TRIAL_ENDED: { text: 'Trial ended', cls: 'state-restricted' },
     DEVICE_DEACTIVATED: { text: 'Computer deactivated', cls: 'state-neutral' },
     CLOCK_REVIEW_REQUIRED: { text: 'Clock review required', cls: 'state-warning' },
     LOCAL_STATE_CORRUPT: { text: 'Local state needs reset', cls: 'state-restricted' },
@@ -942,6 +945,108 @@
     content.appendChild(details);
   }
 
+  // "Trial: N days left". t() has no interpolation, so the number is spliced into the
+  // translated template after lookup. 1 and 2 get their own keys because Arabic has a dual
+  // ("يومان") and a singular -- "{n}" cannot express either. Keep in step with
+  // app-shell.js::_trialDaysLeftText.
+  function trialDaysLeftText(n) {
+    if (n === 1) return t('Trial: 1 day left');
+    if (n === 2) return t('Trial: 2 days left');
+    return t('Trial: {n} days left').replace('{n}', String(n));
+  }
+
+  // Download through fetch, not a bare <a href>: on a locked trial the server may still answer
+  // 401/403 (signed out, not the owner), and a plain link would then "download" the JSON error as
+  // a file and tell the shop nothing. Returns {ok, status}; the caller owns the message.
+  async function downloadViaFetch(url, fallbackName) {
+    const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
+    if (!res.ok) return { ok: false, status: res.status };
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const named = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+    const a = document.createElement('a');
+    const objectUrl = URL.createObjectURL(blob);
+    a.href = objectUrl;
+    a.download = named ? decodeURIComponent(named[1]) : fallbackName;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 10000);
+    return { ok: true, status: res.status };
+  }
+
+  async function onTrialBackupClicked(btn) {
+    clearMessage();
+    btn.disabled = true;
+    try {
+      showMessage(t('Creating your backup…'), 'info');
+      const { status, body } = await apiPost('/api/backup/create', {});
+      if (status === 200 && body.status === 'ok' && body.filename) {
+        const dl = await downloadViaFetch('/api/backup/download/' + encodeURIComponent(body.filename), body.filename);
+        showMessage(
+          dl.ok ? t('Backup created. Your download is starting.')
+            : t('Backup created and kept on this computer, but the download could not start. Open Settings > Backup to get it.'),
+          dl.ok ? 'info' : 'error'
+        );
+      } else if (status === 401 || status === 403) {
+        showMessage(t('Only the shop owner can make a backup. Sign in as the owner and try again.'), 'error');
+      } else {
+        showMessage(t('The backup could not be created. Please try again.'), 'error');
+      }
+    } catch (e) {
+      showMessage(t('The backup could not be created. Please try again.'), 'error');
+    }
+    btn.disabled = false;
+  }
+
+  async function onTrialExportClicked(btn) {
+    clearMessage();
+    btn.disabled = true;
+    try {
+      // The export route requires a date range; a range wider than any shop's history is "everything".
+      const dl = await downloadViaFetch(
+        '/api/sub/retail/reports/export/sales?date_from=2000-01-01&date_to=2099-12-31', 'sales_export_all.csv');
+      if (dl.ok) {
+        showMessage(t('Export ready. Your download is starting.'), 'info');
+      } else if (dl.status === 401 || dl.status === 403) {
+        showMessage(t('Sign in to the till first, then try the export again.'), 'error');
+      } else {
+        showMessage(t('The export could not be created. Please try again.'), 'error');
+      }
+    } catch (e) {
+      showMessage(t('The export could not be created. Please try again.'), 'error');
+    }
+    btn.disabled = false;
+  }
+
+  // The lock screen for TRIAL_ENDED. Says the three things the shop needs: the data is safe (and
+  // the two buttons that prove it), how to unlock, and that unlocking is automatic once Owner has
+  // the payment -- there is no key to type, so "Check Now" below is the only action after paying.
+  function appendTrialEndedPanel() {
+    const panel = el('section', { id: 'trial-ended-panel', className: 'trial-ended-panel' });
+    panel.appendChild(el('h2', { text: t('Your free trial has ended') }));
+    panel.appendChild(el('p', {
+      text: t('Your data is safe. You can still look at your records and reports, and make a backup or an export. Selling is locked until you pay.'),
+    }));
+    const row = el('div', { className: 'row' });
+    const backupBtn = el('button', { id: 'trial-backup-btn', text: t('Back up my data') });
+    backupBtn.addEventListener('click', () => onTrialBackupClicked(backupBtn));
+    const exportBtn = el('button', { id: 'trial-export-btn', className: 'secondary', text: t('Export my sales (CSV)') });
+    exportBtn.addEventListener('click', () => onTrialExportClicked(exportBtn));
+    row.appendChild(backupBtn);
+    row.appendChild(exportBtn);
+    panel.appendChild(row);
+    panel.appendChild(el('h3', { text: t('How to unlock') }));
+    panel.appendChild(el('p', {
+      text: t('Contact your Aura seller, or pay by reference number when available.'),
+    }));
+    panel.appendChild(el('p', {
+      text: t('After paying, connect to the internet and the app unlocks automatically.'),
+    }));
+    content.appendChild(panel);
+  }
+
   function renderLicenseStatus(status) {
     stopAwaitingPoll();   // screen entry point: never leave a timer behind
     const state = status.current_state;
@@ -954,6 +1059,10 @@
     addStatusRow(dl, t('Product'), productName(status.product_code));
     addStatusRow(dl, t('Used on'), t('This computer'));
     addStatusRow(dl, t('Last check-in'), formatWhen(status.last_successful_checkin_at));
+    const trial = status.trial;
+    if (trial && trial.is_trial && !trial.ended && typeof trial.days_left === 'number' && trial.days_left > 0) {
+      addStatusRow(dl, t('Free trial'), trialDaysLeftText(trial.days_left));
+    }
     content.appendChild(dl);
 
     if (state === 'RESTRICTED' || state === 'GRACE_PERIOD' || state === 'WARNING') {
@@ -966,6 +1075,9 @@
       content.appendChild(el('p', {
         text: t('Subscription unpaid — you can keep selling. Sync and updates are paused until you renew.'),
       }));
+    }
+    if (state === 'TRIAL_ENDED') {
+      appendTrialEndedPanel();
     }
     if (state === 'SUSPENDED' || state === 'REVOKED' || state === 'EXPIRED') {
       content.appendChild(el('p', {
