@@ -66,37 +66,57 @@ def test_cancelled_and_suspended_are_not_this_gate(app, client, shop, status):
 
 
 def test_renewal_catches_up_with_nothing_pruned_past(app, client, shop):
-    # Second device on the same licence so there is something to pull.
+    """Only the LAPSED device's cursor protects e2 from the prune, so this fails
+    if lapsing ever moves the installation out of the syncable set (the design
+    the routes.py comment rules out).
+
+    A pushes e1 and e2. B has acknowledged both (cursor = e2.seq); A has
+    acknowledged only e1 (cursor = e1.seq). The prune watermark is the MINIMUM
+    acknowledged seq, so with A counted it is e1.seq: e1 goes, e2 stays. If A were
+    dropped from the syncable set the watermark would jump to e2.seq and e2 would
+    be pruned -- the device would get 409 RESYNC_REQUIRED after renewal instead
+    of catching up (verifier F8: the earlier version of this check could never
+    fail, because nobody had acknowledged past e2)."""
+    import uuid
+
     _, _, inst_b, key_b = _do_activation(app, client, shop["staff"], license_id=shop["license_id"],
                                          full_key=shop["full_key"], device_limit=2)
     e1, e2 = _make_event(), _make_event()
-    assert _push(client, _push_body(shop["key"], shop["installation"], [e1])).status_code == 200
+    assert _push(client, _push_body(shop["key"], shop["installation"], [e1, e2])).status_code == 200
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.sync import SyncEvent
+
+        seq1 = db_session.get(SyncEvent, uuid.UUID(e1["id"])).seq
+        seq2 = db_session.get(SyncEvent, uuid.UUID(e2["id"])).seq
+    assert seq1 < seq2
+    # B pulls everything and acknowledges up to e2; A acknowledges only up to e1.
     pulled = _pull(client, _pull_body(key_b, inst_b, since=0)).get_json()
-    cursor = pulled["cursor"]
-    # Both devices acknowledge e1, so e1 is legitimately prunable.
-    assert _pull(client, _pull_body(key_b, inst_b, since=cursor)).status_code == 200
-    assert _pull(client, _pull_body(shop["key"], shop["installation"], since=cursor)).status_code == 200
-    assert _push(client, _push_body(shop["key"], shop["installation"], [e2])).status_code == 200
+    assert [e["id"] for e in pulled["events"]] == [e1["id"], e2["id"]]
+    assert _pull(client, _pull_body(key_b, inst_b, since=seq2)).status_code == 200
+    assert _pull(client, _pull_body(shop["key"], shop["installation"], since=seq1)).status_code == 200
 
     set_subscription_state(app, shop["license_id"], "EXPIRED")
-    assert _pull(client, _pull_body(key_b, inst_b, since=cursor)).get_json() == {"reason_code": "SUBSCRIPTION_LAPSED"}
+    refused = _pull(client, _pull_body(shop["key"], shop["installation"], since=seq1))
+    assert refused.get_json() == {"reason_code": "SUBSCRIPTION_LAPSED"}
 
-    # A real prune run while the licence is lapsed must keep e2: the installations
-    # are still in the syncable set, so their cursors still hold the watermark.
     with app.app_context():
+        from app.extensions import db_session
+        from app.models.sync import SyncEvent
         from app.sync.pruning import prune_owner_sync_events
 
         prune_owner_sync_events(dry_run=False)
-        from app.extensions import db_session
-        from app.models.sync import SyncEvent
-        import uuid
-
-        assert db_session.get(SyncEvent, uuid.UUID(e2["id"])) is not None
+        db_session.expire_all()
+        assert db_session.get(SyncEvent, uuid.UUID(e1["id"])) is None  # the prune really ran and deleted what both acked
+        assert db_session.get(SyncEvent, uuid.UUID(e2["id"])) is not None  # held by the lapsed device's cursor
 
     set_subscription_state(app, shop["license_id"], "ACTIVE")
-    resp = _pull(client, _pull_body(key_b, inst_b, since=cursor))
-    assert resp.status_code == 200, resp.get_json()
-    assert [e["id"] for e in resp.get_json()["events"]] == [e2["id"]]
+    resp = _pull(client, _pull_body(shop["key"], shop["installation"], since=seq1))
+    assert resp.status_code == 200, resp.get_json()  # not 409 RESYNC_REQUIRED
+    assert resp.get_json().get("reason_code") is None
+    assert [e["id"] for e in resp.get_json()["events"]] == []  # A's own e2 is excluded from its pull
+    # B can still pull what is after its cursor and nothing is lost: push after renewal works too
+    assert _push(client, _push_body(shop["key"], shop["installation"], [_make_event()])).status_code == 200
 
 
 def test_an_active_emergency_extension_keeps_an_expired_shop_syncing(app, client, shop):
