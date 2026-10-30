@@ -267,3 +267,16 @@ def test_a_gap_between_versions_is_refused_but_each_version_is_accepted(app, see
     assert _in_force(app, date(2026, 3, 1)) == "SALES_LADDER"       # the OLD version still covers March
     assert _in_force(app, date(2026, 11, 1)) is None                  # nothing covers November
     assert _in_force(app, date(2026, 12, 15)) == "SALES_LADDER"
+
+
+def test_a_rule_closing_exactly_on_the_assignment_date_is_not_in_force_that_day(app, seeded):
+    """The window is [effective_from, effective_until): closing on 1 July means 1 July
+    itself is NOT covered (a seller assigned that day would earn 0). Kills
+    `effective_until > on` -> `>=`. The allow side pins the other edge too: the day
+    before the close and the very day a version starts are both covered (kills
+    `effective_from <= on` -> `<`)."""
+    w = _world(app, rule="PERCENT")
+    _ladder_versions(app, w, [(date(2026, 1, 1), date(2026, 7, 1))])
+    assert _in_force(app, date(2026, 6, 30)) == "SALES_LADDER"      # last covered day
+    assert _in_force(app, date(2026, 7, 1)) is None                   # the closing day itself
+    assert _in_force(app, date(2026, 1, 1)) == "SALES_LADDER"       # the first day is covered

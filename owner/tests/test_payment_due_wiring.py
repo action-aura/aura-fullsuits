@@ -285,3 +285,36 @@ def test_the_renewal_form_is_pre_filled_and_a_different_commercial_amount_is_fla
 
         row = db_session.execute(select(AuditLog).where(AuditLog.action_code == "RENEWAL_REQUEST_CREATED")).scalars().one()
         assert row.after_state_redacted["due_check"]["difference"] == "-100.00"
+
+
+# ------------------------------------------- a back-dated payment is judged by ITS date
+def test_a_back_dated_payment_is_audited_against_its_own_contract_year(app, shop):
+    """payments.submit_payment used to call check_payment_amount without the payment
+    date, so the audit entry judged a payment dated in year 1 by TODAY (year 2) and
+    recorded 135 as the amount due, while the screen (which passes the date) said 35.
+    The two must agree: both here for a year-1 date (35) and a year-2 date (135)."""
+    from tests.conftest import jordan_today
+
+    w, sub = shop["w"], shop["sub"]
+    start = rebase_contract(app, sub, 13)                           # today is in contract year 2
+    cid = _customer_of(app, sub)
+
+    def submit(on):
+        with app.app_context():
+            from app.commercial_sales.packages import next_payment_quote
+            from app.commercial_sales.payments import submit_payment
+            from app.extensions import db_session
+            from app.models.subscriptions import Subscription
+
+            screen = next_payment_quote(db_session.get(Subscription, sub), on).total
+            payment = submit_payment(customer_id=cid, amount=Decimal("35.00"), currency=JOD, method="BANK_TRANSFER",
+                                     payment_date=on, subscription_id=sub, actor_staff_user_id=w["seller"])
+            db_session.commit()
+            return payment.id, screen
+
+    year_1_id, year_1_screen = submit(_months_after(start, 3))
+    assert year_1_screen == Decimal("35.00")
+    assert _audit_due_check(app, year_1_id)["due_check"]["expected_amount"] == "35.00"      # not today's 135
+    year_2_id, year_2_screen = submit(jordan_today())
+    assert year_2_screen == Decimal("135.00")
+    assert _audit_due_check(app, year_2_id)["due_check"]["expected_amount"] == "135.00"     # allow side: today still owes it

@@ -205,3 +205,85 @@ def test_past_due_with_no_grace_end_is_treated_as_paid_and_does_not_crash(app, c
     set_subscription_state(app, shop["license_id"], "PAST_DUE", past_due_days_ago=30, staff_id=shop["staff"], **flags)
     assert _push_ok(client, shop).status_code == 200
     assert _pull(client, _pull_body(shop["key"], shop["installation"], since=0)).status_code == 200
+
+
+# ------------------------------------------------- the LICENCE itself (not its subscription)
+# Pre-existing gap found 2026-10-30: the relay never read license.status, so a
+# SUSPENDED or REVOKED licence under a still-ACTIVE subscription kept syncing while
+# its update gate and check-in already refused it. Same deny list as
+# releases/distribution.LICENSE_REFUSED_STATUSES; reason code LICENSE_INACTIVE.
+def _set_licence_status(app, license_id, status):
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.licensing import License
+
+        db_session.get(License, license_id).status = status
+        db_session.commit()
+
+
+def _installation_status(app, installation_id):
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.installations import Installation
+
+        return db_session.get(Installation, installation_id).status
+
+
+@pytest.mark.parametrize("status", ["SUSPENDED", "REVOKED"])
+def test_a_suspended_or_revoked_licence_under_an_active_subscription_is_refused(app, client, shop, status):
+    before = _installation_status(app, shop["installation"])
+    _set_licence_status(app, shop["license_id"], status)
+    push = _push_ok(client, shop)
+    assert push.status_code == 400 and push.get_json() == {"reason_code": "LICENSE_INACTIVE"}
+    pull = _pull(client, _pull_body(shop["key"], shop["installation"], since=0))
+    assert pull.status_code == 400 and pull.get_json() == {"reason_code": "LICENSE_INACTIVE"}
+    assert _installation_status(app, shop["installation"]) == before     # a refusal, never a status change
+
+
+def test_an_issued_licence_still_syncs_after_the_licence_gate(app, client, shop):
+    """Allow side: the licence's normal status (ISSUED) is not on the deny list."""
+    _set_licence_status(app, shop["license_id"], "ISSUED")
+    assert _push_ok(client, shop).status_code == 200
+    assert _pull(client, _pull_body(shop["key"], shop["installation"], since=0)).status_code == 200
+
+
+def test_a_reactivated_licence_catches_up_with_no_409(app, client, shop):
+    """Same watermark construction as the subscription tests: only the refused device's
+    cursor protects e2 from the prune, so this goes red (409 RESYNC_REQUIRED) if the
+    licence refusal ever moved the installation out of the syncable set."""
+    import uuid
+
+    _, _, inst_b, key_b = _do_activation(app, client, shop["staff"], license_id=shop["license_id"],
+                                         full_key=shop["full_key"], device_limit=2)
+    e1, e2 = _make_event(), _make_event()
+    assert _push(client, _push_body(shop["key"], shop["installation"], [e1, e2])).status_code == 200
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.sync import SyncEvent
+
+        seq1 = db_session.get(SyncEvent, uuid.UUID(e1["id"])).seq
+        seq2 = db_session.get(SyncEvent, uuid.UUID(e2["id"])).seq
+    assert _pull(client, _pull_body(key_b, inst_b, since=0)).status_code == 200
+    assert _pull(client, _pull_body(key_b, inst_b, since=seq2)).status_code == 200
+    assert _pull(client, _pull_body(shop["key"], shop["installation"], since=seq1)).status_code == 200
+
+    _set_licence_status(app, shop["license_id"], "SUSPENDED")
+    refused = _pull(client, _pull_body(shop["key"], shop["installation"], since=seq1))
+    assert refused.get_json() == {"reason_code": "LICENSE_INACTIVE"}
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.sync import SyncEvent
+        from app.sync.pruning import prune_owner_sync_events
+
+        prune_owner_sync_events(dry_run=False)
+        db_session.expire_all()
+        assert db_session.get(SyncEvent, uuid.UUID(e1["id"])) is None
+        assert db_session.get(SyncEvent, uuid.UUID(e2["id"])) is not None
+
+    _set_licence_status(app, shop["license_id"], "ISSUED")
+    resp = _pull(client, _pull_body(shop["key"], shop["installation"], since=seq1))
+    assert resp.status_code == 200, resp.get_json()                      # not 409 RESYNC_REQUIRED
+    e3 = _make_event()
+    assert _push(client, _push_body(shop["key"], shop["installation"], [e3])).status_code == 200
+    caught_up = _pull(client, _pull_body(key_b, inst_b, since=seq2))
+    assert [e["id"] for e in caught_up.get_json()["events"]] == [e3["id"]]

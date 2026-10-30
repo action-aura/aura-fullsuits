@@ -5,7 +5,7 @@ each including 1 desktop + 1 phone (Aura Growth Plan, "Your answers" and the
 2026-10-24 additions):
   Package 1  250 JOD the first year (100 a year + 150 first time), then 100 a year
   Package 2  35 JOD a month, 12-month contract
-  Package 3  20 JOD a month, 24-month contract
+  Package 3  25 JOD a month, 24-month contract
   extra devices ONLY as a pair (1 desktop + 1 phone), 50 JOD once, every
   package, never on the renewal.
 
@@ -159,6 +159,36 @@ def counted_payments(subscription: Subscription) -> list:
     return list(db_session.execute(select(PaymentRecord).where(PaymentRecord.id.in_(ids))).scalars().all())
 
 
+def activation_carried(year_amounts: list[Decimal], base: Decimal, fee: Decimal) -> bool:
+    """Has the yearly activation been paid, given every counted payment of ONE
+    contract year in the plan's currency?
+
+    WHY a SUM that must split exactly, and not one payment at a time (verifier
+    findings, 2026-10-30). The old test asked "is any single payment >= month +
+    activation?". It failed both ways: a shop that pays 140 for four months at the
+    start of year 2 (4 x 35, no activation in it) looked as if it had paid the
+    100; and a shop that paid the activation as 100 and then 35 was never
+    recognised, so 135 was quoted all year.
+
+    Nothing records what a payment was FOR, so the rule is worked from the money:
+    the year's payments carry the activation when their total is the activation
+    plus a whole number of months -- total = fee + m x base, m >= 0 (m is the
+    months covered). 140 is not (40 left over: it is four months, so the 100 is
+    still owed); 100 + 35 and a single 135 both are; so are 170 (the activation +
+    two months) and any split of those. A total that does not split exactly (a
+    part-paid activation such as 100 then 40) is NOT taken as carried: quoting the
+    activation again is the safe direction, and staff can enter the real amount (a
+    different amount is flagged and audited, never refused). The one case the
+    money cannot separate is a plan whose fee is itself a whole number of months
+    (Package 3: 100 = 4 x 25, so 125 is both "5 months" and "activation + 1");
+    there the quote itself (125) must count as carried, so it does.
+    """
+    total = sum(year_amounts, Decimal(0))
+    if base <= 0 or total < fee:
+        return False
+    return (total - fee) % base == 0
+
+
 def next_payment_due(subscription: Subscription, payment_date: date | None = None) -> tuple[Decimal, str] | None:
     """(amount, currency) a payment of this subscription dated `payment_date`
     (default: Jordan's today) should be. None when the plan has no current price.
@@ -174,15 +204,12 @@ def next_payment_due(subscription: Subscription, payment_date: date | None = Non
         the setup fee, however it was split;
       * a monthly package, contract year k >= 2 (start + 12*(k-1) months, Jordan
         business dates): base + the yearly activation, due ONCE -- until a counted
-        payment dated in that year has "carried" it, i.e. is at least a month plus
-        the activation in the plan's currency. A payment smaller than that (a
-        month's 35, or 70 for two months) cannot contain the activation, so the
-        next one is asked for it. Worked out from payment amount, date and status
-        alone: nothing is recorded per payment to say what it was for, and no
-        schema change was made for it. A part-paid activation (say 50 then 85) is
-        therefore still quoted in full until a single payment covers it: the
-        over-quote is the safe direction, and staff can enter the real amount
-        (it is flagged and audited, never refused);
+        payments dated in that year have "carried" it (the plan's currency). A
+        month's 35, or 70 for two months, cannot contain the activation, so the
+        next payment is asked for it. Worked out from payment amount, date and
+        status alone (nothing is recorded per payment to say what it was for): see
+        activation_carried -- the year's SUM must be the activation plus a whole
+        number of months, so 100 then 35 carries it and 140 (four months) does not;
       * Package 1 / any plan without a contract: base after the first payment;
       * a monthly package with no contract dates stored is treated as year 1: it
         can never quote an activation it cannot place on the calendar.
@@ -206,10 +233,10 @@ def next_payment_due(subscription: Subscription, payment_date: date | None = Non
         ).scalars().first()
         return base + Decimal(price.setup_fee or 0), currency
     first_day, next_year_first_day = contract_year_bounds(contract_start(subscription), year)
-    carried = any(
-        first_day <= p.payment_date < next_year_first_day and p.currency == currency and Decimal(p.amount) >= base + fee
-        for p in counted
-    )
+    carried = activation_carried(
+        [Decimal(p.amount) for p in counted
+         if first_day <= p.payment_date < next_year_first_day and p.currency == currency],
+        base, fee)
     return (base if carried else base + fee), currency
 
 

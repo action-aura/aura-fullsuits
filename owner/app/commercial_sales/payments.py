@@ -71,7 +71,10 @@ def submit_payment(
             raise CommercialSalesError("SUBSCRIPTION_NOT_FOUND")
         if subscription.customer_id != customer_id:
             raise CommercialSalesError("SUBSCRIPTION_CUSTOMER_MISMATCH")
-    check = check_payment_amount(subscription, amount, currency)
+    # payment_date matters: contract years run by DATE, so a back-dated payment
+    # (say, last year's month 13) must be judged against ITS year's activation
+    # -- not today's -- or the screen and this audit entry would disagree.
+    check = check_payment_amount(subscription, amount, currency, payment_date=payment_date)
 
     return record_payment(
         {

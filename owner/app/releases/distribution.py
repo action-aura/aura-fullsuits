@@ -42,6 +42,12 @@ from app.releases import storage
 from app.security.tokens import generate_token, hash_token
 
 
+# Licence statuses a device request is refused for, whatever else is true. The
+# multi-device sync relay (sync/routes.py) reuses this list so the two cannot drift.
+# EXPIRED is deliberately NOT here: it is refused separately below, and the sync
+# relay handles a lapsed licence through the keep-selling "unpaid" rule instead.
+LICENSE_REFUSED_STATUSES = ("SUSPENDED", "REVOKED")
+
 _NOT_FOUND_CODES = frozenset({"TOKEN_NOT_FOUND"})
 _EXPIRED_OR_USED_CODES = frozenset({"TOKEN_EXPIRED", "TOKEN_ALREADY_USED", "TOKEN_REVOKED"})
 # RELEASE_NOT_FOUND deliberately shares its HTTP status (400, the default
@@ -150,10 +156,8 @@ def authenticate_device_request(
     # after issuance is "ISSUED", not "ACTIVE" ("ACTIVE" is a Subscription
     # status, not a License one); checkin.py correctly rejects only the
     # known-bad statuses rather than requiring an exact good one.
-    if license_row.status == "SUSPENDED":
-        raise DownloadAuthorizationRejected("LICENSE_SUSPENDED")
-    if license_row.status == "REVOKED":
-        raise DownloadAuthorizationRejected("LICENSE_REVOKED")
+    if license_row.status in LICENSE_REFUSED_STATUSES:
+        raise DownloadAuthorizationRejected(f"LICENSE_{license_row.status}")
     if license_row.status == "EXPIRED":
         raise DownloadAuthorizationRejected("LICENSE_EXPIRED")
 

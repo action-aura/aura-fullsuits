@@ -346,3 +346,78 @@ def test_a_payment_recorded_for_the_sale_invoice_counts_only_while_it_is_money_i
     assert _quote(app, sub) == (Decimal("35.00"), JOD)
     _set_status(app, w, pid, status)
     assert _quote(app, sub) == (Decimal("135.00"), JOD)
+
+
+# --------------------------------- the activation is judged on the year's SUM
+# Verifier findings (2026-10-30, MEDIUM): the old test asked whether any ONE payment
+# was >= month + activation. (a) 140 paid for four months at the start of year 2
+# (4 x 35, no activation in it) looked like it carried the 100; (b) the activation
+# paid as 100 then 35 was never recognised, so 135 was quoted all year.
+# See packages.activation_carried for the rule and why.
+def test_140_for_four_months_at_the_start_of_year_2_does_not_carry_the_activation(app, seeded, owner_prices):
+    w = _owner_world(app)
+    sub = _rows(app, _sell(app, w, "p2")["order_id"])["subscription_id"]
+    start = rebase_contract(app, sub, 13)
+    _pay(app, w, sub, "140.00", _months_after(start, 12))                  # 4 x 35 on the first day of year 2
+    assert _quote(app, sub) == (Decimal("135.00"), JOD)                    # the 100 is still owed
+
+
+def test_the_activation_paid_as_100_then_35_is_carried_and_the_next_quote_is_35(app, seeded, owner_prices):
+    w = _owner_world(app)
+    sub = _rows(app, _sell(app, w, "p2")["order_id"])["subscription_id"]
+    rebase_contract(app, sub, 13)
+    _pay(app, w, sub, "100.00", jordan_today())
+    assert _quote(app, sub) == (Decimal("35.00"), JOD)                     # the activation alone is paid: a month is next
+    _pay(app, w, sub, "35.00", jordan_today())
+    assert _quote(app, sub) == (Decimal("35.00"), JOD)                     # 135 all year was the bug
+
+
+def test_a_single_135_is_carried(app, seeded, owner_prices):
+    w = _owner_world(app)
+    sub = _rows(app, _sell(app, w, "p2")["order_id"])["subscription_id"]
+    rebase_contract(app, sub, 13)
+    assert _quote(app, sub) == (Decimal("135.00"), JOD)
+    _pay(app, w, sub, "135.00", jordan_today())
+    assert _quote(app, sub) == (Decimal("35.00"), JOD)
+
+
+def test_a_part_paid_activation_that_does_not_split_exactly_is_still_quoted_in_full(app, seeded, owner_prices):
+    """The safe direction: 100 then 40 leaves 40 over, which is not a whole month."""
+    w = _owner_world(app)
+    sub = _rows(app, _sell(app, w, "p2")["order_id"])["subscription_id"]
+    rebase_contract(app, sub, 13)
+    _pay(app, w, sub, "50.00", jordan_today())
+    assert _quote(app, sub) == (Decimal("135.00"), JOD)                    # 50 < 100: not carried
+    _pay(app, w, sub, "50.00", jordan_today())
+    assert _quote(app, sub) == (Decimal("35.00"), JOD)                     # exactly 100 between them: carried
+
+
+def test_the_year_1_sale_is_unchanged_by_the_sum_rule(app, seeded, owner_prices):
+    w = _owner_world(app)
+    sub = _rows(app, _sell(app, w, "p2")["order_id"])["subscription_id"]
+    start = rebase_contract(app, sub, 5)                                   # still inside year 1
+    assert _quote(app, sub) == (Decimal("35.00"), JOD)                     # the sale carried the first activation
+    _pay(app, w, sub, "140.00", _months_after(start, 1))
+    assert _quote(app, sub) == (Decimal("35.00"), JOD)
+
+
+# ------------------------------------------------- the year window's two edges
+def test_a_payment_on_the_first_day_of_year_2_belongs_to_year_2(app, seeded, owner_prices):
+    """Kills `first_day <= date` -> `first_day < date`: a 135 dated exactly on the first
+    day of year 2 must carry year 2's activation."""
+    w = _owner_world(app)
+    sub = _rows(app, _sell(app, w, "p2")["order_id"])["subscription_id"]
+    start = rebase_contract(app, sub, 13)
+    _pay(app, w, sub, "135.00", _months_after(start, 12))
+    assert _quote(app, sub, _months_after(start, 12) + timedelta(days=1)) == (Decimal("35.00"), JOD)
+
+
+def test_a_payment_on_the_first_day_of_year_3_does_not_count_in_year_2(app, seeded, owner_prices):
+    """Kills `date < next_year_first_day` -> `<=`: the 135 dated on year 3's first day is
+    year 3's money; year 2 still owes its own activation."""
+    w = _owner_world(app)
+    sub = _rows(app, _sell(app, w, "p2")["order_id"])["subscription_id"]
+    start = rebase_contract(app, sub, 25)
+    _pay(app, w, sub, "135.00", _months_after(start, 24))
+    assert _quote(app, sub, _months_after(start, 13)) == (Decimal("135.00"), JOD)          # year 2
+    assert _quote(app, sub, _months_after(start, 24)) == (Decimal("35.00"), JOD)           # year 3 has it
