@@ -27,11 +27,12 @@ sdk.dir=C\:\\Users\\YOURNAME\\AppData\\Local\\Android\\Sdk
 # ownerSyncBaseUrl=...           [AURA_SYNC_RELAY_URL]
 #     Blank means SyncCoordinator never schedules a tick — the device silently
 #     never agrees with the customer's other devices, with no error anywhere.
-# aiBearerToken=...              [AURA_AI_BEARER_TOKEN]
-#     Blank does not hide the AI assistant — it still renders, then fails with
-#     401 from the upstream on every question.
 
 # ── Optional (blank is honest here, so it is only a warning) ─────────────────
+# aiBearerToken=...              [AURA_AI_BEARER_TOKEN]
+#     We do not sell the AI assistant yet. Blank = the assistant button is HIDDEN
+#     (BuildConfig.AI_ASSISTANT_ENABLED is false), so a release build no longer
+#     needs it. Set it only to turn the assistant back on.
 # Unset WhatsApp credentials are reported in plain words on the app's own
 # WhatsApp screen instead of silently pretending to send, which is why these
 # are not release-blocking.

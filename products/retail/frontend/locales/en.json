@@ -2936,5 +2936,6 @@
   "Only the shop's main computer can post a stock count. You can keep scanning here; post it on the main computer.": "Only the shop's main computer can post a stock count. You can keep scanning here; post it on the main computer.",
   "Another computer started a count of this branch at the same time, so the two were joined into one. Use the joined count.": "Another computer started a count of this branch at the same time, so the two were joined into one. Use the joined count.",
   "Stock moved during the count": "Stock moved during the count",
-  "Stock moved during the count, recount recommended:": "Stock moved during the count, recount recommended:"
+  "Stock moved during the count, recount recommended:": "Stock moved during the count, recount recommended:",
+  "This device's date or time looks wrong -- it is earlier than a time it has already recorded -- so new sales are paused to protect your records. To fix it: set the correct date and time in this device's settings (turn on automatic date and time), then restart the app. Your data is safe, and reports, returns and backups still work.": "This device's date or time looks wrong -- it is earlier than a time it has already recorded -- so new sales are paused to protect your records. To fix it: set the correct date and time in this device's settings (turn on automatic date and time), then restart the app. Your data is safe, and reports, returns and backups still work."
 }

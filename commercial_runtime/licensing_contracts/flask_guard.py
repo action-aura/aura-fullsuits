@@ -24,6 +24,7 @@ from flask import jsonify
 
 from .capability_guard import evaluate_capability
 from .events import LicensingEventRecorder
+from .state_guidance import guidance_for
 from .state_machine import LicenseState
 from .state_repository import LicenseStateRecord, LicenseStateRepository
 
@@ -133,16 +134,21 @@ def make_capability_guard(app_data_dir: str) -> Callable:
                         {"capability_code": capability_code},
                         trusted_keys=frozenset({"capability_code"}),
                     )
-                    return (
-                        jsonify(
-                            {
-                                "status": "error",
-                                "reason_code": decision.denial_reason,
-                                "message": "This action is not available in the current licensing state.",
-                            }
-                        ),
-                        403,
-                    )
+                    body = {
+                        "status": "error",
+                        "reason_code": decision.denial_reason,
+                        "message": "This action is not available in the current licensing state.",
+                    }
+                    # r17: a state the shopkeeper can fix himself (the clock moved
+                    # back) gets plain how-to-fix text instead of only a refusal.
+                    # `message` carries it too (not just a new field) because the
+                    # tills show `message` verbatim; `message_ar` is for any client
+                    # that picks its language by field. reason_code is unchanged.
+                    guidance = guidance_for(current_state)
+                    if guidance is not None:
+                        body["message"] = guidance["en"]
+                        body["message_ar"] = guidance["ar"]
+                    return jsonify(body), 403
 
                 return view_func(*args, **kwargs)
 

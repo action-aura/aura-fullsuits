@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from .state_guidance import guidance_for
 from .state_repository import LicenseStateRecord
 
 # User-facing copy is a product/UI concern (Part G's screen list) -- this
@@ -63,6 +64,13 @@ def present_status(record: Optional[LicenseStateRecord]) -> dict:
         return {"current_state": "NOT_CONFIGURED"}
 
     result = {field: getattr(record, field) for field in _SAFE_TOP_LEVEL_FIELDS}
+    # r17: plain how-to-fix text (en + ar) for a state the shopkeeper can fix by
+    # himself -- today only CLOCK_REVIEW_REQUIRED. Absent for every other state,
+    # so no other response changes shape.
+    guidance = guidance_for(record.current_state)
+    if guidance is not None:
+        result["guidance"] = guidance["en"]
+        result["guidance_ar"] = guidance["ar"]
     result["entitlements"] = json.loads(record.entitlements_json) if record.entitlements_json else {}
 
     payload = _payload_of(record)

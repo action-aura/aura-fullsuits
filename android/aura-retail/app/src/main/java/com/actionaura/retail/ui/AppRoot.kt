@@ -573,8 +573,15 @@ private fun MainShell(onLogout: () -> Unit) {
                         }
                     },
                     actions = {
-                        IconButton(onClick = { aiOpen = true }) {
-                            Icon(Icons.Default.AutoAwesome, "Aura AI", tint = MaterialTheme.colorScheme.primary)
+                        // We do not sell the AI assistant yet, so the button is
+                        // simply not there unless the build was given a token
+                        // (BuildConfig.AI_ASSISTANT_ENABLED, derived from it in
+                        // build.gradle). A visible button that always answers
+                        // "temporarily unavailable" is worse than no button.
+                        if (com.actionaura.retail.BuildConfig.AI_ASSISTANT_ENABLED) {
+                            IconButton(onClick = { aiOpen = true }) {
+                                Icon(Icons.Default.AutoAwesome, "Aura AI", tint = MaterialTheme.colorScheme.primary)
+                            }
                         }
                     },
                 )
@@ -647,7 +654,7 @@ private fun MainShell(onLogout: () -> Unit) {
             }
         }
 
-        if (aiOpen) AiSheet(onDismiss = { aiOpen = false })
+        if (com.actionaura.retail.BuildConfig.AI_ASSISTANT_ENABLED && aiOpen) AiSheet(onDismiss = { aiOpen = false })
     }
 }
 

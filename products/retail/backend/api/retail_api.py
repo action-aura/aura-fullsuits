@@ -5201,6 +5201,79 @@ def _sync_seconds_behind_for_guards(health):
     return health.get('seconds_since_last_success')
 
 
+def _shop_has_only_one_device():
+    """True only when this shop's OWN local records prove that no second
+    computer or phone has ever joined it (r17, owner decision 10A, 2026-10-30).
+
+    WHY. The 72-hour sales stop and the 30-minute behind-on-sync guard exist
+    because a second device can be out of step with this one (stale stock,
+    a purchase order received twice). A shop with ONE device has nothing to be
+    out of step with, so stopping its till after three quiet days only punishes
+    it -- worse, the same rule fires if OUR relay is down for three days, which
+    would stop every one-device shop at once.
+
+    HOW IT DECIDES (authoritative local data, never a guess; every uncertain
+    branch answers False, i.e. the stop still applies):
+      * the device registry (`devices`, registry.db) lists NO row for this
+        company except this computer's own. Rows of ANY status count: a
+        REVOKED row is a device that once joined. See "left device" below.
+      * this hub has never paired a LAN device (`site_paired_devices` has no
+        row, revoked or not -- a revoked pairing is likewise a device that
+        once existed).
+      * anything unreadable (registry missing/locked, no `devices` table, an
+        exception) -> False. A guard that can refuse a sale must not be
+        switched off by an error.
+
+    SCOPE, deliberately narrow: this exempts the 72-hour sales stop
+    (`_evaluate_offline_sales_stop`) and NOTHING else. `_is_device_behind_on_sync`
+    -- the 30-minute predicate -- is NOT exempted. The purchase-order receipt
+    guard it was written for no longer exists (retracted 2026-08-29, superseded by
+    W4a); what still calls it protects NUMBERING: creating or claiming a
+    document book, readable numbering, and adopting a counter after a
+    reinstall. A reinstalled one-device shop has a "peer" -- its own earlier
+    history on the relay -- that this computer cannot see until the first pull
+    completes, so its registry reads empty exactly when the guard matters most.
+    Exempting those would trade a three-day nuisance for duplicate document
+    numbers.
+
+    A SHOP THAT HAD A SECOND DEVICE THAT LEFT stays covered by the stop. Safest
+    reading: "left" is a revocation, and revocation never deletes the row (it is
+    kept as an audit trail and can be reinstated), so the shop still reads as
+    multi-device. The cost is bounded and recoverable -- a one-time manager
+    override lifts the stop -- whereas the opposite mistake (exempting a shop
+    whose old phone still holds unsynced sales) is silent stock and cash drift.
+
+    KNOWN LIMIT, stated: a device that joined elsewhere and has not yet reached
+    THIS computer's registry by sync is invisible here. That window cannot be
+    closed from local data; it is the same blind spot every local roster has.
+    """
+    try:
+        cid = _cid()
+        me = local_terminal_id()
+        rconn = _registry_conn()
+        try:
+            rows = _device_registry.list_devices(rconn, cid)
+        finally:
+            rconn.close()
+        if any(r.get('id') != me for r in rows):
+            return False
+        conn = get_retail_conn()
+        try:
+            has_pairs_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='site_paired_devices'"
+            ).fetchone()
+            if has_pairs_table and conn.execute(
+                    "SELECT 1 FROM site_paired_devices LIMIT 1").fetchone():
+                return False
+        finally:
+            conn.close()
+        return True
+    except Exception:  # noqa: BLE001 -- see docstring: unreadable => the stop still applies
+        log.warning('one-device check could not read the device records; the offline stop stays on',
+                    exc_info=True)
+        return False
+
+
 def _is_device_behind_on_sync():
     """True only when sync is CONFIGURED for this device AND this device is
     behind `_SYNC_STALE_THRESHOLD_SECONDS`. Launch-readiness Phase 7 stage
@@ -5308,6 +5381,15 @@ def _evaluate_offline_sales_stop():
     if not (isinstance(secs, (int, float)) and secs > _SYNC_SALES_STOP_THRESHOLD_SECONDS):
         return False, health
     if health.get('offline_override_valid'):
+        return False, health
+    # r17 (owner decision 10A, 2026-10-30): a shop with only ONE device has
+    # nothing to be out of step with, so the three-day stop never applies to it.
+    # Placed LAST, after every cheaper reason to allow, so the registry is read
+    # only on the rare path that would otherwise refuse a sale -- and so a
+    # two-device shop reaches the refusal unchanged. See
+    # `_shop_has_only_one_device` for how "one device" is proven and why every
+    # doubt answers "no".
+    if _shop_has_only_one_device():
         return False, health
     return True, health
 

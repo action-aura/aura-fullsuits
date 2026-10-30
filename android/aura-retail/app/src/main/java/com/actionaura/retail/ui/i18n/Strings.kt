@@ -229,6 +229,10 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     // Arabic instead of falling back to the English server string.
     "Blocked by your subscription/license:" to "محظور بسبب اشتراكك/ترخيصك:",
     "This action is not available in the current licensing state." to "هذا الإجراء غير متاح في حالة الترخيص الحالية.",
+    // r17 (owner decision 10A): the clock-moved-back stop explains how to fix it. The English key is
+    // flask_guard.py's message for CLOCK_REVIEW_REQUIRED (state_guidance.py), verbatim.
+    "This device's date or time looks wrong -- it is earlier than a time it has already recorded -- so new sales are paused to protect your records. To fix it: set the correct date and time in this device's settings (turn on automatic date and time), then restart the app. Your data is safe, and reports, returns and backups still work." to
+        "تاريخ هذا الجهاز أو وقته يبدو غير صحيح -- فهو أقدم من وقت سجّله الجهاز سابقًا -- لذلك أُوقفت المبيعات الجديدة لحماية سجلاتك. للحل: اضبط التاريخ والوقت الصحيحين من إعدادات هذا الجهاز (فعّل الضبط التلقائي للتاريخ والوقت)، ثم أعد تشغيل التطبيق. بياناتك بأمان، ويمكنك متابعة التقارير والمرتجعات والنسخ الاحتياطي.",
     // retail_api.py's BRANCH_LIMIT refusal (2026-09-06): the branch add-on is
     // enforced by the till, and apiErrorMessage() appends the server's own
     // sentence -- same key as products/retail/frontend/locales/ar.json.
