@@ -210,19 +210,23 @@ def _authenticate(body: dict, *, nonce_scope: str) -> tuple[Installation, uuid.U
 
     if apply_due_licence_stops(license_id=installation.license_id):
         db_session.expire_all()
+    subscription = installation.license.subscription
+    if subscription is not None and subscription.status in ("CANCELLED", "SUSPENDED"):
+        raise SyncAuthError(f"SUBSCRIPTION_{subscription.status}")
     # The licence itself (pre-existing gap, 2026-10-30): the relay never read
     # license.status, so a SUSPENDED or REVOKED licence under a still-ACTIVE
     # subscription kept syncing while its updates and check-in were refused. Same
     # deny list as the update gate (releases/distribution.py), reason code
     # LICENSE_INACTIVE. A refusal, never a change to installation.status, for the
     # same pruning reason as above: a re-activated licence must catch up, not 409.
+    # Placed AFTER the subscription's CANCELLED/SUSPENDED refusal on purpose: a
+    # refund's stop (and a cancellation) suspends the licence too, and clients already
+    # key on the more specific SUBSCRIPTION_* code (test_sync_refund_stop); this code
+    # is for a licence suspended/revoked under a still-live subscription.
     from app.releases.distribution import LICENSE_REFUSED_STATUSES
 
     if installation.license.status in LICENSE_REFUSED_STATUSES:
         raise SyncAuthError("LICENSE_INACTIVE")
-    subscription = installation.license.subscription
-    if subscription is not None and subscription.status in ("CANCELLED", "SUSPENDED"):
-        raise SyncAuthError(f"SUBSCRIPTION_{subscription.status}")
     if subscription_is_unpaid(subscription, license_row=installation.license):
         raise SyncAuthError("SUBSCRIPTION_LAPSED")
 
