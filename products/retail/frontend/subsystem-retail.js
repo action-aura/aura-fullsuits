@@ -1278,17 +1278,15 @@ const RetailSystem = {
     // an unlisted currency degrades to its own mark rather than to blank.
     const sym = (typeof t === 'function') ? t(raw) : raw;
     if (sym.length === 1) return sym;
-    // TILL-ROOMY (Arabic): "د.أ 1.750" rendered with the space on the WRONG side
-    // of the mark -- glued to the digits ("1.750أ.د" in the review screenshots)
-    // on every small amount (tile prices, cart lines, drawer float). Cause: in
-    // a left-to-right .money run the Arabic mark is a right-to-left sub-run,
-    // and the space after it is a neutral between R and the digits (which count
-    // as R for neutrals), so it joins the RTL run and lands at the run's far
-    // edge, away from the number. A U+200E LEFT-TO-RIGHT MARK between the mark
-    // and the space makes the space sit between an R and an L (so it takes the
-    // paragraph direction) and it stays between the mark and the number. Only a
-    // mark containing Arabic script needs it; 'JD ' and 'USD ' are unchanged.
-    return /[\u0600-\u06FF]/.test(sym) ? sym + '\u200E ' : sym + ' ';
+    // TILL-ROOMY (Arabic): the gap between an Arabic mark and its amount is two
+    // no-break spaces, not one. Measured in Chromium at the tile's 15px: one
+    // ordinary space is 2.8px, which reads as GLUED on every small amount (tile
+    // prices, cart lines, drawer float) while the same single space looks fine on
+    // the 32px total -- a space scales with the font and the Arabic font's is
+    // narrow. A no-break space is a neutral like the space it replaces, so the
+    // bidi order of the mark and the digits is UNCHANGED (only the gap doubles);
+    // trim() still strips it. 'JD ' and 'USD ' keep their one space.
+    return /[\u0600-\u06FF]/.test(sym) ? sym + '\u00A0\u00A0' : sym + ' ';
   },
 
   // Chart.js dataset label for a series measured in money, carrying the
@@ -5369,10 +5367,12 @@ const RetailSystem = {
            content -- so the second tender row needed a scroll to reach.
            Density is taken back from DECORATION (a grand total set as large as
            56px, generous band spacing), never from touch targets: every control
-           below still clears the 44px floor, and the F-key badges stay because
-           the shortcut strip at the top of this screen teaches Enter/N/X//Del/
-           Esc but never F1-F6, so these badges are the only place a cashier
-           learns the tender shortcuts. Height-based, not width-based: this is a
+           below still clears the 44px floor, and the tender tiles keep their F-key
+           badges (until 2026-10-30 this comment said they stayed while the rule
+           below hid every .pos-pay-kbd, so on a 1366x768 till no badge ever
+           showed). The strip at the top now teaches Enter / X / F1-F6 / N* / Del /
+           Esc / F12, but the badge on the tile is still the one on the button the
+           cashier is about to press. Height-based, not width-based: this is a
            vertical-room problem, and a 1366x768 till is a wide screen.
            Round 2, till R2: 820px -> 920px. The T1 review found the SAME
            squeeze (summary down to 27-139px, #pos-total unreachable) at
