@@ -212,3 +212,58 @@ def test_a_seller_already_on_package_1_gets_only_the_missing_ladder(app, seeded)
         assert current_plan_codes(profile.id, today) == [LADDER_PLAN_CODE]
         assign_seller_to_ladder(profile.staff_user_id, effective_from=today, actor_staff_user_id=w["admin"])
         assert sorted(current_plan_codes(profile.id, today)) == sorted(LADDER_PLAN_CODES)
+
+
+# ------------------------------------------- the rule-in-force check (F6) --
+
+def _ladder_versions(app, w, spec):
+    """Re-shapes the SALES_LADDER plan's rule versions to `spec`, a list of
+    (effective_from, effective_until): the seeded version is rewritten to the
+    first entry and the rest are added, so gaps the append-only writer would
+    never create can be tested directly."""
+    with app.app_context():
+        from sqlalchemy import select
+
+        from app.commissions.ladder_setup import LADDER_PLAN_CODE, seed_ladder_plans
+        from app.extensions import db_session
+        from app.models.commissions import CommissionPlan, CommissionRuleVersion
+
+        seed_ladder_plans(actor_staff_user_id=w["admin"], effective_from=date(2026, 1, 1))
+        plan = db_session.execute(select(CommissionPlan).where(CommissionPlan.plan_code == LADDER_PLAN_CODE)).scalars().one()
+        first = db_session.execute(
+            select(CommissionRuleVersion).where(CommissionRuleVersion.commission_plan_id == plan.id)
+        ).scalars().one()
+        for i, (start, until) in enumerate(spec):
+            row = first if i == 0 else CommissionRuleVersion(
+                commission_plan_id=plan.id, rule_type=first.rule_type, currency=first.currency,
+                created_by_staff_user_id=w["admin"], effective_from=start)
+            row.effective_from, row.effective_until = start, until
+            db_session.add(row)
+        db_session.commit()
+
+
+def _in_force(app, on):
+    with app.app_context():
+        from app.commissions.ladder_setup import LADDER_PLAN_CODE, _plan_with_rule
+
+        try:
+            return _plan_with_rule(LADDER_PLAN_CODE, on).plan_code
+        except ValueError:
+            return None
+
+
+def test_a_closed_rule_is_not_in_force_after_its_end(app, seeded):
+    """RED on the old query: it looked only at effective_from, so a rule closed on
+    1 July was accepted for August and the seller then earned nothing."""
+    w = _world(app, rule="PERCENT")
+    _ladder_versions(app, w, [(date(2026, 1, 1), date(2026, 7, 1))])
+    assert _in_force(app, date(2026, 3, 1)) == "SALES_LADDER"       # allow side: inside the window
+    assert _in_force(app, date(2026, 8, 1)) is None                   # deny side: after it closed
+
+
+def test_a_gap_between_versions_is_refused_but_each_version_is_accepted(app, seeded):
+    w = _world(app, rule="PERCENT")
+    _ladder_versions(app, w, [(date(2026, 1, 1), date(2026, 7, 1)), (date(2026, 12, 1), None)])
+    assert _in_force(app, date(2026, 3, 1)) == "SALES_LADDER"       # the OLD version still covers March
+    assert _in_force(app, date(2026, 11, 1)) is None                  # nothing covers November
+    assert _in_force(app, date(2026, 12, 15)) == "SALES_LADDER"

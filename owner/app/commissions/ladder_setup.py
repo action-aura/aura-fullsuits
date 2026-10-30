@@ -77,11 +77,22 @@ def _plan_with_rule(plan_code: str, effective_from: date) -> CommissionPlan:
     plan = db_session.execute(select(CommissionPlan).where(CommissionPlan.plan_code == plan_code)).scalars().first()
     if plan is None:
         raise ValueError(f"Run `flask commissions seed-ladder-plan` first: the {plan_code} plan does not exist.")
+    # The SAME predicate services.resolve_active_rules uses to find the rule a seller's
+    # sales will really be paid under: started on or before the date, not yet closed
+    # on it, newest first. The old query had no ORDER BY and only compared
+    # effective_from, so it could accept a date no version covered (a plan whose
+    # rule was closed, or a gap between versions) -- the seller would then earn 0
+    # JOD, exactly what this guard exists to stop -- or reject a date an older
+    # version did cover (verifier F6).
     rule = db_session.execute(
-        select(CommissionRuleVersion).where(CommissionRuleVersion.commission_plan_id == plan.id,
-                                            CommissionRuleVersion.rule_type == _PLAN_RULE_TYPES[plan_code])
+        select(CommissionRuleVersion)
+        .where(CommissionRuleVersion.commission_plan_id == plan.id,
+               CommissionRuleVersion.rule_type == _PLAN_RULE_TYPES[plan_code],
+               CommissionRuleVersion.effective_from <= effective_from)
+        .where((CommissionRuleVersion.effective_until.is_(None)) | (CommissionRuleVersion.effective_until > effective_from))
+        .order_by(CommissionRuleVersion.effective_from.desc())
     ).scalars().first()
-    if rule is None or rule.effective_from > effective_from:
+    if rule is None:
         raise ValueError(f"The {plan_code} plan has no ladder rule in force on that date.")
     return plan
 
