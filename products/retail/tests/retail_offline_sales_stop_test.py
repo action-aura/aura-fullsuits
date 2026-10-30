@@ -112,6 +112,7 @@ app.config['TESTING'] = True
 import database.schema as sch  # noqa: E402
 from api import retail_api  # noqa: E402
 from commercial_runtime.identity import user_accounts  # noqa: E402
+from commercial_runtime.identity import device_registry as _device_registry  # noqa: E402
 from commercial_runtime.identity.registry_db import get_conn as registry_conn  # noqa: E402
 from commercial_runtime.security.passwords import hash_password  # noqa: E402
 from commercial_runtime.sync.sync_service import (  # noqa: E402
@@ -223,10 +224,29 @@ def _make_user(role, company_id, capabilities=None, email_prefix='offstop'):
     return client, user_id
 
 
-def _new_shop(price=100.0):
+def _declare_second_device(company_id):
+    """r17 (owner decision 10A): the 72-hour stop and the 30-minute behind-on-sync
+    guard only apply to a shop that has MORE THAN ONE device -- a one-device shop
+    has nothing to be out of step with (see retail_api._shop_has_only_one_device).
+    This file tests those guards biting, so its shop must really be a multi-device
+    one: a second computer's row in the device registry, written through the same
+    function production uses. Without it the shop reads as single-device and the
+    guard under test is (correctly) switched off, which would make every deny-half
+    assertion here fail for the wrong reason -- or, worse, pass for it."""
+    conn = registry_conn()
+    try:
+        _device_registry.upsert_local_device(
+            conn, str(uuid.uuid4()), company_id, device_label='Second till', platform='ANDROID')
+    finally:
+        conn.close()
+
+
+def _new_shop(price=100.0, second_device=True):
     """A company with an admin, one product and stock. Returns (admin, cid, pid)."""
     company_id = str(uuid.uuid4())
     admin, _uid = _make_user('admin', company_id)
+    if second_device:
+        _declare_second_device(company_id)
     r = admin.post(f'{API}/products', json={
         'name': 'Offline Stop Widget', 'sku': f'OS-{uuid.uuid4().hex[:8]}',
         'cost_price': price / 2, 'sell_price': price, 'tax_rate': 0, 'initial_stock': 500})
@@ -933,3 +953,144 @@ def test_the_predicates_read_the_pause_aware_key_and_fall_back_when_it_is_absent
                         lambda: dict(base, seconds_since_last_success=60))
     assert retail_api._evaluate_offline_sales_stop()[0] is False
     assert retail_api._is_device_behind_on_sync() is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. r17 (owner decision 10A, 2026-10-30): a ONE-DEVICE shop is never stopped
+# ─────────────────────────────────────────────────────────────────────────────
+# The three-day stop exists because a SECOND device can be out of step with this
+# one. A shop with a single device has nothing to be out of step with, and the
+# same rule would also stop every such shop at once if OUR relay were down for
+# three days. So the stop (and the 30-minute behind-on-sync guard) must not apply
+# to it -- but the decision has to come from the shop's own device records, and
+# every doubt has to leave the stop ON.
+#
+# Each test pairs the one-device shop with a two-device shop under the SAME
+# offline state, so "the single shop sold" can never be a result of nothing being
+# gated at all (ENGINEERING.md failure shape 3).
+
+def _go_offline_for(hours):
+    _mark_behind(hours)
+    register_active_service(_real_sync_service())
+
+
+def _company_session_id(client):
+    with client.session_transaction() as sess:
+        return sess.get('company_id') or sess.get('mt_company_id')
+
+
+def test_a_one_device_shop_offline_five_days_keeps_selling():
+    single, single_cid, single_pid = _new_shop(second_device=False)
+    multi, multi_cid, multi_pid = _new_shop()          # two devices
+    _go_offline_for(5 * 24)
+    stock_before = _stock_on_hand(single_cid, single_pid)
+    sales_before = _sales_count(single_cid)
+
+    r = _sell(single, single_pid, qty=2)
+    assert r.status_code == 200, r.get_json()
+    # A real sale, not a silent no-op:
+    assert _sales_count(single_cid) == sales_before + 1
+    assert _stock_on_hand(single_cid, single_pid) == stock_before - 2
+
+    # CONTRAST, same offline state: the two-device shop IS stopped.
+    blocked = _sell(multi, multi_pid)
+    assert blocked.status_code == 403, blocked.get_json()
+    assert 'offline' in blocked.get_json()['message']
+
+
+def test_a_two_device_shop_offline_more_than_three_days_is_still_stopped():
+    multi, cid, pid = _new_shop()
+    _go_offline_for(73)
+    before = (_sales_count(cid), _stock_on_hand(cid, pid))
+    r = _sell(multi, pid)
+    assert r.status_code == 403, r.get_json()
+    # The refusal wrote nothing.
+    assert (_sales_count(cid), _stock_on_hand(cid, pid)) == before
+
+
+def test_a_shop_whose_second_device_left_is_still_stopped():
+    """Safest reading of "had a second device that LEFT": revocation never
+    deletes the registry row (audit trail, and it can be reinstated), and the old
+    phone may still hold unsynced sales -- so the shop still reads as multi-device
+    and the stop still applies. A manager override lifts it, which is the
+    recoverable direction to be wrong in."""
+    shop, cid, pid = _new_shop(second_device=False)
+    second_id = str(uuid.uuid4())
+    conn = registry_conn()
+    try:
+        _device_registry.upsert_local_device(conn, second_id, cid, device_label='Old phone', platform='ANDROID')
+        _device_registry.revoke_device(conn, second_id)
+        assert _device_registry.get_device(conn, second_id)['status'] == 'revoked'
+    finally:
+        conn.close()
+    _go_offline_for(5 * 24)
+    r = _sell(shop, pid)
+    assert r.status_code == 403, r.get_json()
+
+
+def test_a_shop_whose_only_registry_row_is_its_own_computer_is_one_device():
+    """The positive control for the registry arm: a registered device that is
+    THIS computer does not make a shop multi-device."""
+    from commercial_runtime.identity import device_context
+    shop, cid, pid = _new_shop(second_device=False)
+    me = device_context.local_device_uuid()
+    conn = registry_conn()
+    try:
+        _device_registry.upsert_local_device(conn, me, cid, device_label='This till', platform='WINDOWS')
+    finally:
+        conn.close()
+    assert sch.local_terminal_id() == me
+    _go_offline_for(5 * 24)
+    r = _sell(shop, pid)
+    assert r.status_code == 200, r.get_json()
+
+
+def test_a_shop_with_a_paired_lan_device_is_stopped_even_with_no_registry_row():
+    """The second arm: this computer is a LAN hub that once paired a phone. The
+    registry may not have heard of it, but the pairing row is local proof."""
+    shop, cid, pid = _new_shop(second_device=False)
+    conn = sch.get_retail_conn()
+    try:
+        conn.execute("INSERT INTO site_paired_devices (installation_id, device_public_key, label) "
+                     "VALUES (?, 'k', 'Phone')", (str(uuid.uuid4()),))
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        _go_offline_for(5 * 24)
+        r = _sell(shop, pid)
+        assert r.status_code == 403, r.get_json()
+    finally:
+        conn = sch.get_retail_conn()
+        try:
+            conn.execute('DELETE FROM site_paired_devices')
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def test_an_unreadable_device_registry_leaves_the_stop_on(monkeypatch):
+    """Fail closed: a guard that can refuse a sale is not switched off by an error."""
+    shop, cid, pid = _new_shop(second_device=False)
+    _go_offline_for(5 * 24)
+
+    def _boom():
+        raise RuntimeError('registry unreadable')
+    monkeypatch.setattr(retail_api, '_registry_conn', _boom)
+    r = _sell(shop, pid)
+    assert r.status_code == 403, r.get_json()
+
+
+def test_the_30_minute_numbering_guard_is_deliberately_not_exempted():
+    """Pins a decision, not an accident: `_is_device_behind_on_sync` (30 min) now
+    protects document-book numbering, including adoption of a counter after a
+    reinstall -- a one-device shop that was just reinstalled reads as single
+    BEFORE its first pull, exactly when the guard matters. Only the 72-hour sales
+    stop is exempt for a one-device shop. If this ever needs to change, change it
+    on purpose (see retail_api._shop_has_only_one_device's SCOPE paragraph)."""
+    single, single_cid, _p1 = _new_shop(second_device=False)
+    _go_offline_for(2)           # past 30 minutes, nowhere near 72 hours
+    with app.test_request_context():
+        from flask import session
+        session['company_id'] = single_cid
+        assert retail_api._is_device_behind_on_sync() is True
