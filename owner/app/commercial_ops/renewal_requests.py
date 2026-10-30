@@ -125,6 +125,7 @@ def create_renewal_request(
     reason: str | None = None,
     notes: str | None = None,
     idempotency_key: str | None = None,
+    audit_extra: dict | None = None,
 ) -> RenewalRequest:
     """Snapshots the subscription's CURRENT term/plan/device-allowance at
     request-creation time (Part C: the renewal record must preserve
@@ -172,7 +173,10 @@ def create_renewal_request(
         action_code="RENEWAL_REQUEST_CREATED",
         entity_type="renewal_request",
         entity_public_id=str(renewal.id),
-        after_state={"status": "DRAFT", "subscription_id": str(subscription.id)},
+        # audit_extra: the yearly-activation due check for a monthly package's
+        # commercial amount (packages.AmountCheck.audit_state), so a renewal
+        # quoted at something other than what was due leaves the gap on record.
+        after_state={**(audit_extra or {}), "status": "DRAFT", "subscription_id": str(subscription.id)},
     )
     return renewal
 

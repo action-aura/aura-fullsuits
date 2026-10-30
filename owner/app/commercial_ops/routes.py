@@ -17,6 +17,7 @@ signing-key routes).
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 
 from flask import Blueprint, jsonify, request
 from sqlalchemy import select
@@ -30,6 +31,7 @@ from app.commercial_ops.renewal_requests import (
     create_renewal_request,
     transition_renewal_request,
 )
+from app.commercial_sales.packages import check_payment_amount
 from app.extensions import db_session
 from app.models.commercial_ops import RenewalRequest
 from app.models.subscriptions import Subscription
@@ -127,6 +129,15 @@ def create_renewal():
     except ValueError:
         return jsonify({"error": "invalid_request", "detail": "Dates must be ISO format (YYYY-MM-DD)."}), 400
 
+    # Monthly packages: a commercial amount other than the one due is accepted
+    # (never refused) but reported back as "due_check" and written into the
+    # request's audit entry (packages.check_payment_amount).
+    check = None
+    if body.get("commercial_amount") is not None:
+        try:
+            check = check_payment_amount(subscription, Decimal(str(body["commercial_amount"])), body["currency"])
+        except ArithmeticError:
+            check = None
     renewal = create_renewal_request(
         subscription=subscription,
         date_rule=body["date_rule"],
@@ -143,8 +154,12 @@ def create_renewal():
         reason=body.get("reason"),
         notes=body.get("notes"),
         idempotency_key=body.get("idempotency_key"),
+        audit_extra={"due_check": check.audit_state()} if check is not None else None,
     )
-    return jsonify(_serialize(renewal)), 201
+    payload = _serialize(renewal)
+    if check is not None:
+        payload["due_check"] = check.audit_state()
+    return jsonify(payload), 201
 
 
 @bp.route("/renewals/<renewal_id>/transition", methods=["POST"])

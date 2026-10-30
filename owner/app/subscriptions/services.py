@@ -180,7 +180,7 @@ def record_renewal(
     return renewal
 
 
-def record_payment(fields: dict, actor_staff_user_id, *, in_same_transaction=None) -> PaymentRecord:
+def record_payment(fields: dict, actor_staff_user_id, *, in_same_transaction=None, audit_extra: dict | None = None) -> PaymentRecord:
     """`in_same_transaction(payment)`, when given, runs after the payment is
     added and flushed and BEFORE the one commit, so whatever it adds commits
     or rolls back together with the payment. Step 1 (2026-10-25): the
@@ -219,7 +219,11 @@ def record_payment(fields: dict, actor_staff_user_id, *, in_same_transaction=Non
         action_code="PAYMENT_RECORD_CREATED",
         entity_type="payment_record",
         entity_public_id=str(payment.id),
-        after_state={"amount": str(payment.amount), "currency": payment.currency, "status": payment.status},
+        # audit_extra: extra facts the caller wants on THIS payment's entry (the
+        # yearly-activation due check: what was asked, what was entered, the
+        # gap -- commercial_sales/packages.py::AmountCheck). Merged under their
+        # own keys, never over the three above.
+        after_state={**(audit_extra or {}), "amount": str(payment.amount), "currency": payment.currency, "status": payment.status},
     )
     return payment
 

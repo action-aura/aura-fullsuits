@@ -59,12 +59,17 @@
 
 <div class="card">
   <h3>{{ _("Record a payment") }}</h3>
+  {# Monthly packages: the amount due and what it is made of (month, plus the
+     100 JOD yearly activation in the first payment of each contract year). #}
+  {% if due %}
+  <p data-payment-due="{{ due.total }}">{{ _("Payment due:") }} <strong><bdi dir="ltr">{{ due.total }} {{ due.currency }}</bdi></strong> ({{ due_breakdown }})</p>
+  {% endif %}
   <form method="post" action="{{ url_for('subscriptions.create_payment') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="customer_id" value="{{ subscription.customer_id }}">
     <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
-    <label for="subscriptions-detail-amount">{{ _("Amount") }}</label><input id="subscriptions-detail-amount" name="amount" type="number" step="0.01" required>
-    <label for="subscriptions-detail-currency">{{ _("Currency") }}</label><input id="subscriptions-detail-currency" name="currency" value="USD" required>
+    <label for="subscriptions-detail-amount">{{ _("Amount") }}</label><input id="subscriptions-detail-amount" name="amount" type="number" step="0.01" required{% if due %} value="{{ due.total }}"{% endif %}>
+    <label for="subscriptions-detail-currency">{{ _("Currency") }}</label><input id="subscriptions-detail-currency" name="currency" value="{{ due.currency if due else 'USD' }}" required>
     <label for="subscriptions-detail-method">{{ _("Method") }}</label><input id="subscriptions-detail-method" name="method">
     <label for="subscriptions-detail-payment-date">{{ _("Payment date") }}</label><input id="subscriptions-detail-payment-date" name="payment_date" type="date" max="{{ jordan_today().isoformat() }}" required>
     <label for="subscriptions-detail-reference">{{ _("Reference") }}</label><input id="subscriptions-detail-reference" name="reference">

@@ -20,7 +20,8 @@ from app.commercial_sales.errors import CommercialSalesError
 from app.commercial_sales.calculator import validate_currency
 from app.commercial_sales.sale_attribution import sale_owner_staff_user_id_for_payment
 from app.extensions import db_session
-from app.models.subscriptions import PaymentRecord
+from app.commercial_sales.packages import check_payment_amount
+from app.models.subscriptions import PaymentRecord, Subscription
 from app.subscriptions.services import correct_payment, lock_payment_for_update, record_payment, release_lock_and_raise
 
 PAYMENT_METHODS = ("CASH", "BANK_TRANSFER", "CARD_OFFLINE", "CHEQUE", "OTHER")
@@ -34,13 +35,22 @@ def submit_payment(
     method: str,
     payment_date: date,
     commercial_invoice_id: uuid.UUID | None = None,
+    subscription_id: uuid.UUID | None = None,
     reference: str | None = None,
     actor_staff_user_id: uuid.UUID,
 ) -> PaymentRecord:
     """Sales-employee-facing 'I received this payment, please confirm it'
     action -- Non-Negotiable Rule 4: recording is not confirming. Thin
     wrapper over the existing record_payment(), never duplicating its
-    storage logic."""
+    storage logic.
+
+    `subscription_id` (optional): the payment is for that existing subscription
+    -- the same link the subscriptions screen makes, so the payment counts toward
+    it (next payment due, the renewal commission). For a monthly package the
+    amount is then set against what is due (packages.check_payment_amount): a
+    different amount is NEVER refused (part payments and several months at once
+    are legitimate) but the gap is written into this payment's audit entry.
+    Callers that want to show a warning read it with the same helper."""
     if amount <= 0:
         raise CommercialSalesError("NEGATIVE_DOCUMENT_TOTAL")
     validate_currency(currency)
@@ -54,9 +64,19 @@ def submit_payment(
     if payment_date is not None and payment_date > jordan_today():
         raise CommercialSalesError("PAYMENT_DATE_IN_FUTURE")
 
+    subscription = None
+    if subscription_id is not None:
+        subscription = db_session.get(Subscription, subscription_id)
+        if subscription is None:
+            raise CommercialSalesError("SUBSCRIPTION_NOT_FOUND")
+        if subscription.customer_id != customer_id:
+            raise CommercialSalesError("SUBSCRIPTION_CUSTOMER_MISMATCH")
+    check = check_payment_amount(subscription, amount, currency)
+
     return record_payment(
         {
             "customer_id": customer_id,
+            "subscription_id": subscription_id,
             "amount": amount,
             "currency": currency,
             "method": method,
@@ -66,6 +86,7 @@ def submit_payment(
             "status": "PENDING",
         },
         actor_staff_user_id,
+        audit_extra={"due_check": check.audit_state()} if check is not None else None,
     )
 
 

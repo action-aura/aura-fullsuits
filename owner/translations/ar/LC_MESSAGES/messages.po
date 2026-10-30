@@ -9309,3 +9309,24 @@ msgstr "اختر إن كان هذا تحديث ميزات أم إصلاح أما
 
 msgid "activation every year"
 msgstr "تفعيل كل سنة"
+
+msgid "%(month)s %(currency)s month + %(activation)s %(currency)s yearly activation"
+msgstr "%(month)s %(currency)s عن الشهر + %(activation)s %(currency)s تفعيل سنوي"
+
+msgid "%(month)s %(currency)s month"
+msgstr "%(month)s %(currency)s عن الشهر"
+
+msgid "This payment is in %(entered)s but the amount due is in %(currency)s (%(due)s %(currency)s). It was recorded as entered; please check the currency."
+msgstr "هذه الدفعة بعملة %(entered)s بينما المبلغ المستحق بعملة %(currency)s (%(due)s %(currency)s). تم تسجيلها كما أُدخلت؛ يرجى التحقق من العملة."
+
+msgid "The amount due was %(due)s %(currency)s (%(breakdown)s) but %(entered)s %(currency)s was recorded (difference %(difference)s %(currency)s). It was recorded as entered and the difference is in the audit log."
+msgstr "كان المبلغ المستحق %(due)s %(currency)s (%(breakdown)s) لكن المسجَّل %(entered)s %(currency)s (الفرق %(difference)s %(currency)s). تم تسجيله كما أُدخل، والفرق موجود في سجل التدقيق."
+
+msgid "Payment due:"
+msgstr "المبلغ المستحق:"
+
+msgid "That subscription was not found."
+msgstr "لم يتم العثور على هذا الاشتراك."
+
+msgid "That subscription belongs to a different customer than this payment."
+msgstr "هذا الاشتراك يخص عميلاً آخر غير صاحب هذه الدفعة."

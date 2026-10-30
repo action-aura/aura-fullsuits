@@ -14,7 +14,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from flask import Blueprint, current_app, redirect, render_template, request, url_for
+from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 
 from app.auth.session import load_current_staff
 from app.commercial_sales.allocation import allocate_payment, reverse_allocation, unallocated_payment_balance
@@ -50,7 +50,13 @@ from app.commissions.errors import CommissionError
 from app.commissions.ledger import approve_commission_entry, approve_payout_batch, create_payout_batch, record_payout
 from app.employees.queries import find_own_profile
 from app.extensions import db_session
-from app.i18n_labels import localize_commercial_sales_error, localize_commission_error
+from app.commercial_sales.packages import check_payment_amount, next_payment_quote
+from app.i18n_labels import (
+    localize_commercial_sales_error,
+    localize_commission_error,
+    payment_due_breakdown,
+    payment_due_warning,
+)
 from app.models.commercial_sales import (
     CommercialApproval,
     CommercialInvoice,
@@ -66,7 +72,7 @@ from app.models.commissions import CommissionLedgerEntry, CommissionPayoutBatch
 from app.models.customers import Customer
 from app.models.employees import EmployeeProfile
 from app.models.staff import StaffUser
-from app.models.subscriptions import PaymentRecord
+from app.models.subscriptions import PaymentRecord, Subscription
 from app.security.rbac import get_staff_permission_codes, require_any_permission, require_permission, require_recent_auth
 from app.services.pagination import DEFAULT_PAGE_SIZE
 from sqlalchemy import select
@@ -574,28 +580,61 @@ def list_payments():
     return render_template("commercial_sales/payments_list.html", result=result, status_filter=status_filter, search=search)
 
 
+def _subscription_or_none(value):
+    try:
+        return db_session.get(Subscription, uuid.UUID(str(value))) if value else None
+    except ValueError:
+        return None
+
+
+def _payment_form(subscription, *, error=None):
+    """The record-payment form. For an existing monthly-package subscription
+    (reached with ?subscription_id=) the customer, amount and currency are
+    pre-filled with what is due and the screen says what it is made of -- the
+    month-13 payment carries the 100 JOD yearly activation, and staff used to
+    type the amount by hand with nothing showing it (verifier, 2026-10-30)."""
+    customers = db_session.execute(select(Customer).order_by(Customer.legal_name).limit(200)).scalars().all()
+    due = next_payment_quote(subscription) if subscription is not None else None
+    return render_template(
+        "commercial_sales/payment_new.html", customers=customers, error=error, subscription=subscription,
+        due=due, due_breakdown=payment_due_breakdown(due) if due is not None else None,
+    )
+
+
 @bp.route("/payments/new", methods=["GET"])
 @require_permission("payments.create")
 def new_payment_form():
-    customers = db_session.execute(select(Customer).order_by(Customer.legal_name).limit(200)).scalars().all()
-    return render_template("commercial_sales/payment_new.html", customers=customers, error=None)
+    return _payment_form(_subscription_or_none(request.args.get("subscription_id")))
 
 
 @bp.route("/payments", methods=["POST"])
 @require_permission("payments.create")
 def submit_payment_route():
     staff, _profile = _actor()
+    # The check must be made BEFORE the payment is recorded: a recorded (pending)
+    # payment counts toward the subscription, so afterwards the "next payment
+    # due" has already moved on to the one after it.
+    check = None
+    try:
+        check = check_payment_amount(_subscription_or_none(request.form.get("subscription_id")),
+                                     Decimal(str(request.form["amount"])), request.form.get("currency", "USD"))
+    except (ArithmeticError, KeyError):  # a malformed amount is refused below, by the form's own handling
+        check = None
     try:
         payment = submit_payment(
             customer_id=uuid.UUID(request.form["customer_id"]), amount=Decimal(str(request.form["amount"])),
             currency=request.form.get("currency", "USD"), method=request.form.get("method", "CASH"),
             payment_date=date.fromisoformat(request.form["payment_date"]),
             commercial_invoice_id=uuid.UUID(request.form["commercial_invoice_id"]) if request.form.get("commercial_invoice_id") else None,
+            subscription_id=uuid.UUID(request.form["subscription_id"]) if request.form.get("subscription_id") else None,
             reference=request.form.get("reference") or None, actor_staff_user_id=staff.id,
         )
     except CommercialSalesError as exc:
-        customers = db_session.execute(select(Customer).order_by(Customer.legal_name).limit(200)).scalars().all()
-        return render_template("commercial_sales/payment_new.html", customers=customers, error=_localized_error(exc)), 400
+        return _payment_form(_subscription_or_none(request.form.get("subscription_id")), error=_localized_error(exc)), 400
+    # A different amount from the one due is recorded as entered (never
+    # refused); the gap is already in the payment's audit entry (submit_payment).
+    if check is not None and not check.matches:
+        flash(payment_due_warning(check), "error")
     return redirect(url_for("commercial_sales_web.payment_detail", payment_id=payment.id))
 
 

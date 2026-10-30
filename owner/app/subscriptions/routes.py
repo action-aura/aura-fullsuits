@@ -4,12 +4,13 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from flask import Blueprint, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
 
 from app.auth.session import has_recent_auth, load_current_staff
+from app.commercial_sales.packages import check_payment_amount, next_payment_quote
 from app.extensions import db_session
-from app.i18n_labels import localize_payment_correction_error
+from app.i18n_labels import localize_payment_correction_error, payment_due_breakdown, payment_due_warning
 from app.models.customers import Customer
 from app.models.catalog import Plan
 from app.models.subscriptions import PaymentRecord, Subscription
@@ -118,9 +119,16 @@ def detail(subscription_id):
         .where(PaymentRecord.subscription_id == subscription.id)
         .order_by(PaymentRecord.payment_date.desc(), PaymentRecord.created_at.desc())
     ).scalars().all()
+    # Verifier finding (2026-10-30, HIGH): a monthly package's month-13 payment
+    # carries the 100 JOD yearly activation, and nothing used to show staff what
+    # was due -- they typed an amount by hand and the 100 was never charged. The
+    # form below is now pre-filled with the amount due and says what it is made
+    # of (packages.next_payment_quote). None for plans without that activation.
+    due = next_payment_quote(subscription)
     return render_template(
         "subscriptions/detail.html", subscription=subscription,
         allowed_transitions=allowed_transitions, payments=payments,
+        due=due, due_breakdown=payment_due_breakdown(due) if due is not None else None,
     )
 
 
@@ -187,11 +195,17 @@ def create_payment():
         payment_date = date.fromisoformat(request.form.get("payment_date") or "")
     except ValueError:
         return jsonify({"error": "invalid_payment_date", "message": "Payment date must be a date, e.g. 2026-10-24."}), 400
+    subscription_id = request.form.get("subscription_id") or None
+    subscription = db_session.get(Subscription, subscription_id) if subscription_id else None
+    # A different amount from the one due is allowed (a part payment, two months
+    # at once) -- never refused. It is flagged on screen and written into this
+    # payment's audit entry so the gap can be found later.
+    check = check_payment_amount(subscription, amount, request.form.get("currency", "USD"))
     try:
         payment = record_payment(
             {
                 "customer_id": request.form.get("customer_id"),
-                "subscription_id": request.form.get("subscription_id") or None,
+                "subscription_id": subscription_id,
                 "amount": amount,
                 "currency": request.form.get("currency", "USD"),
                 "method": request.form.get("method") or None,
@@ -200,6 +214,7 @@ def create_payment():
                 "status": request.form.get("status", "PENDING"),
             },
             actor.id,
+            audit_extra={"due_check": check.audit_state()} if check is not None else None,
         )
     except PaymentDateInFutureError as exc:
         # Step 0 fix round: a typed future date could place a payment in a
@@ -207,6 +222,8 @@ def create_payment():
         return jsonify({"error": "payment_date_in_future", "message": str(exc)}), 400
     except ValueError as exc:  # includes PaymentSelfVerificationError
         return jsonify({"error": str(exc)}), 400
+    if check is not None and not check.matches:
+        flash(payment_due_warning(check), "error")
     return redirect(url_for("subscriptions.detail", subscription_id=payment.subscription_id) if payment.subscription_id else url_for("dashboard.index"))
 
 

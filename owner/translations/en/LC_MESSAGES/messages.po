@@ -9350,3 +9350,24 @@ msgstr "Choose whether this is a feature update or a safety fix."
 
 msgid "activation every year"
 msgstr "activation every year"
+
+msgid "%(month)s %(currency)s month + %(activation)s %(currency)s yearly activation"
+msgstr "%(month)s %(currency)s month + %(activation)s %(currency)s yearly activation"
+
+msgid "%(month)s %(currency)s month"
+msgstr "%(month)s %(currency)s month"
+
+msgid "This payment is in %(entered)s but the amount due is in %(currency)s (%(due)s %(currency)s). It was recorded as entered; please check the currency."
+msgstr "This payment is in %(entered)s but the amount due is in %(currency)s (%(due)s %(currency)s). It was recorded as entered; please check the currency."
+
+msgid "The amount due was %(due)s %(currency)s (%(breakdown)s) but %(entered)s %(currency)s was recorded (difference %(difference)s %(currency)s). It was recorded as entered and the difference is in the audit log."
+msgstr "The amount due was %(due)s %(currency)s (%(breakdown)s) but %(entered)s %(currency)s was recorded (difference %(difference)s %(currency)s). It was recorded as entered and the difference is in the audit log."
+
+msgid "Payment due:"
+msgstr "Payment due:"
+
+msgid "That subscription was not found."
+msgstr "That subscription was not found."
+
+msgid "That subscription belongs to a different customer than this payment."
+msgstr "That subscription belongs to a different customer than this payment."

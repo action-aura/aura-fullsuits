@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-from flask import Blueprint, redirect, render_template, request, url_for
+from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_babel import gettext as _
 from sqlalchemy import select
 from sqlalchemy.orm.exc import StaleDataError
@@ -32,7 +32,10 @@ from app.i18n_labels import (
     localize_pilot_lifecycle_error,
     localize_pilot_transition_error,
     localize_renewal_transition_error,
+    payment_due_breakdown,
+    payment_due_warning,
 )
+from app.commercial_sales.packages import check_payment_amount, next_payment_quote
 
 from app.auth.session import load_current_staff
 from app.commercial_ops.activation_policy import (
@@ -153,7 +156,14 @@ def new_renewal_form():
     if subscription is None:
         return render_template("commercial_ops/renewals_new.html", subscription=None, plans=[], error=_("A valid subscription_id is required.")), 400
     plans = db_session.execute(select(Plan).where(Plan.product_id == subscription.product_id)).scalars().all()
-    return render_template("commercial_ops/renewals_new.html", subscription=subscription, plans=plans, error=None)
+    # A monthly package's renewal (month 13 on) carries the 100 JOD yearly
+    # activation; the amount box is pre-filled with what is due and the screen
+    # says what it is made of (verifier, 2026-10-30).
+    due = next_payment_quote(subscription)
+    return render_template(
+        "commercial_ops/renewals_new.html", subscription=subscription, plans=plans, error=None,
+        due=due, due_breakdown=payment_due_breakdown(due) if due is not None else None,
+    )
 
 
 @bp.route("/renewals", methods=["POST"])
@@ -177,6 +187,10 @@ def create_renewal():
         except InvalidOperation:
             return render_template("commercial_ops/renewals_new.html", subscription=subscription, plans=plans, error=_("Commercial amount must be a number.")), 400
 
+    # A different amount than the one due is allowed (never refused) but flagged
+    # and written into the request's audit entry.
+    check = (check_payment_amount(subscription, commercial_amount, request.form.get("currency", "USD"))
+             if commercial_amount is not None else None)
     renewal = create_renewal_request(
         subscription=subscription,
         date_rule=request.form.get("date_rule", "EARLY_RENEWAL_FROM_CURRENT_END"),
@@ -189,7 +203,10 @@ def create_renewal():
         device_allowance_after=int(request.form["device_allowance_after"]) if request.form.get("device_allowance_after") else None,
         reason=request.form.get("reason") or None,
         notes=request.form.get("notes") or None,
+        audit_extra={"due_check": check.audit_state()} if check is not None else None,
     )
+    if check is not None and not check.matches:
+        flash(payment_due_warning(check), "error")
     return redirect(url_for("commercial_ops_ui.renewal_detail", renewal_id=renewal.id))
 
 

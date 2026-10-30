@@ -105,6 +105,10 @@ class CommercialSalesError(StableCodeError):
         # Payments
         "PAYMENT_NOT_CONFIRMED": "The payment must be confirmed before it can be allocated.",
         "PAYMENT_DATE_IN_FUTURE": "The payment date cannot be in the future.",
+        # A payment recorded for an existing subscription (submit_payment's
+        # optional subscription_id).
+        "SUBSCRIPTION_NOT_FOUND": "That subscription was not found.",
+        "SUBSCRIPTION_CUSTOMER_MISMATCH": "That subscription belongs to a different customer than this payment.",
         "PAYMENT_ALREADY_CONFIRMED": "This payment has already been confirmed.",
         "SELF_CONFIRMATION_FORBIDDEN": "You cannot confirm a payment you submitted yourself.",
         "SELLER_CONFIRMATION_FORBIDDEN": "You cannot confirm the payment for a sale you made yourself.",

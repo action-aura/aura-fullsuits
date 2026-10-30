@@ -5,6 +5,10 @@
   <h2>{{ _("Create renewal request") }}</h2>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   {% if subscription %}
+  {# Monthly packages: what the renewal should cost and what it is made of. #}
+  {% if due %}
+  <p data-payment-due="{{ due.total }}">{{ _("Payment due:") }} <strong><bdi dir="ltr">{{ due.total }} {{ due.currency }}</bdi></strong> ({{ due_breakdown }})</p>
+  {% endif %}
   <form method="post" action="{{ url_for('commercial_ops_ui.create_renewal') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
@@ -18,13 +22,13 @@
     </select>
     <label for="commercial-ops-renewals-new-proposed-term-start">{{ _("Proposed term start") }}</label><input id="commercial-ops-renewals-new-proposed-term-start" name="proposed_term_start" type="date" required>
     <label for="commercial-ops-renewals-new-proposed-term-end">{{ _("Proposed term end") }}</label><input id="commercial-ops-renewals-new-proposed-term-end" name="proposed_term_end" type="date" required>
-    <label for="commercial-ops-renewals-new-currency">{{ _("Currency") }}</label><input id="commercial-ops-renewals-new-currency" name="currency" value="USD" required>
+    <label for="commercial-ops-renewals-new-currency">{{ _("Currency") }}</label><input id="commercial-ops-renewals-new-currency" name="currency" value="{{ due.currency if due else 'USD' }}" required>
     <label for="commercial-ops-renewals-new-requested-plan-id">{{ _("Requested plan (leave blank to keep current plan)") }}</label>
     <select id="commercial-ops-renewals-new-requested-plan-id" name="requested_plan_id">
       <option value="">{{ _("-- keep current plan --") }}</option>
       {% for p in plans %}<option value="{{ p.id }}">{{ p.name }} ({{ p.plan_code }})</option>{% endfor %}
     </select>
-    <label for="commercial-ops-renewals-new-commercial-amount">{{ _("Commercial amount") }}</label><input id="commercial-ops-renewals-new-commercial-amount" name="commercial_amount" type="number" step="0.01">
+    <label for="commercial-ops-renewals-new-commercial-amount">{{ _("Commercial amount") }}</label><input id="commercial-ops-renewals-new-commercial-amount" name="commercial_amount" type="number" step="0.01"{% if due %} value="{{ due.total }}"{% endif %}>
     <label for="commercial-ops-renewals-new-device-allowance-after">{{ _("Device allowance after (leave blank to keep unchanged)") }}</label><input id="commercial-ops-renewals-new-device-allowance-after" name="device_allowance_after" type="number" min="1">
     <label for="commercial-ops-renewals-new-reason">{{ _("Reason") }}</label><input id="commercial-ops-renewals-new-reason" name="reason">
     <label>{{ _("Notes") }}</label><textarea name="notes"></textarea>

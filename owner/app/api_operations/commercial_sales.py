@@ -26,6 +26,7 @@ from app.commercial_sales.approvals import decide_approval
 from app.commercial_sales.errors import CommercialSalesError
 from app.commercial_sales.fulfillment import fulfill_order
 from app.commercial_sales.invoices import confirmed_allocated_amount, create_invoice_from_order, issue_invoice, void_invoice
+from app.commercial_sales.packages import check_payment_amount
 from app.commercial_sales.payments import confirm_payment, reject_payment, submit_payment
 from app.commercial_sales.quotes import (
     add_quote_line,
@@ -52,7 +53,7 @@ from app.models.commercial_sales import (
     SalesOrder,
 )
 from app.models.commissions import CommissionLedgerEntry, CommissionPayoutBatch
-from app.models.subscriptions import PaymentRecord
+from app.models.subscriptions import PaymentRecord, Subscription
 from app.security.rbac import get_staff_permission_codes, require_any_permission, require_permission, require_recent_auth
 
 bp = Blueprint("api_operations_commercial_sales", __name__, url_prefix="/api/operations/v1")
@@ -513,16 +514,35 @@ def _serialize_payment(p: PaymentRecord) -> dict:
 def submit_payment_route():
     staff, _profile = _actor()
     body = request.get_json(silent=True) or {}
+    subscription_id = uuid.UUID(body["subscription_id"]) if body.get("subscription_id") else None
+    # Made BEFORE the payment is recorded (a recorded payment counts toward the
+    # subscription, moving "next payment due" on). The API has no screen to
+    # pre-fill, so the answer comes back in the response: "due_check" is present
+    # for a monthly-package subscription, with what was due, what was entered
+    # and the gap (also written into the payment's audit entry). A different
+    # amount is recorded as entered, never refused.
+    check = None
+    if subscription_id is not None:
+        try:
+            check = check_payment_amount(db_session.get(Subscription, subscription_id), _to_decimal(body["amount"]),
+                                         body.get("currency") or "")
+        except (ArithmeticError, KeyError):
+            check = None
     try:
         payment = submit_payment(
             customer_id=uuid.UUID(body["customer_id"]), amount=_to_decimal(body["amount"]), currency=body.get("currency"),
             method=body.get("method"), payment_date=date.fromisoformat(body["payment_date"]),
             commercial_invoice_id=uuid.UUID(body["commercial_invoice_id"]) if body.get("commercial_invoice_id") else None,
+            subscription_id=subscription_id,
             reference=body.get("reference"), actor_staff_user_id=staff.id,
         )
     except CommercialSalesError as exc:
         return _error(exc)
-    return jsonify(_serialize_payment(payment)), 201
+    payload = _serialize_payment(payment)
+    payload["subscription_id"] = str(subscription_id) if subscription_id else None
+    if check is not None:
+        payload["due_check"] = check.audit_state()
+    return jsonify(payload), 201
 
 
 @bp.route("/payments/<uuid:payment_id>", methods=["GET"])

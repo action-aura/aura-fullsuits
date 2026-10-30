@@ -972,6 +972,8 @@ def localize_commercial_sales_error(code: str, **params) -> str:
         "PRICE_VERSION_EXPIRED": _("This price is no longer effective."),
         "PAYMENT_NOT_CONFIRMED": _("The payment must be confirmed before it can be allocated."),
         "PAYMENT_DATE_IN_FUTURE": _("The payment date cannot be in the future."),
+        "SUBSCRIPTION_NOT_FOUND": _("That subscription was not found."),
+        "SUBSCRIPTION_CUSTOMER_MISMATCH": _("That subscription belongs to a different customer than this payment."),
         "PAYMENT_ALREADY_CONFIRMED": _("This payment has already been confirmed."),
         "SELF_CONFIRMATION_FORBIDDEN": _("You cannot confirm a payment you submitted yourself."),
         "SELLER_CONFIRMATION_FORBIDDEN": _("You cannot confirm the payment for a sale you made yourself."),
@@ -1278,3 +1280,27 @@ def localize_management_note_error(code: str, **params) -> str:
     if template is None:
         return code
     return template % params if params else template
+
+
+def payment_due_breakdown(quote) -> str:
+    """Step 1 fix round (2026-10-30): the parts of the amount due on a monthly
+    package, as one sentence staff read next to the amount box -- "35.00 JOD
+    month + 100.00 JOD yearly activation". `quote` is packages.PaymentQuote."""
+    if quote.activation > 0:
+        return _("%(month)s %(currency)s month + %(activation)s %(currency)s yearly activation",
+                 month=quote.month, activation=quote.activation, currency=quote.currency)
+    return _("%(month)s %(currency)s month", month=quote.month, currency=quote.currency)
+
+
+def payment_due_warning(check) -> str:
+    """The warning shown after a payment is recorded with an amount other than
+    the one due. Never a refusal: part payments and several months at once are
+    legitimate. `check` is packages.AmountCheck."""
+    if not check.same_currency:
+        return _("This payment is in %(entered)s but the amount due is in %(currency)s (%(due)s %(currency)s). "
+                 "It was recorded as entered; please check the currency.",
+                 entered=check.entered_currency, currency=check.quote.currency, due=check.quote.total)
+    return _("The amount due was %(due)s %(currency)s (%(breakdown)s) but %(entered)s %(currency)s was recorded "
+             "(difference %(difference)s %(currency)s). It was recorded as entered and the difference is in the audit log.",
+             due=check.quote.total, currency=check.quote.currency, breakdown=payment_due_breakdown(check.quote),
+             entered=check.entered, difference=check.difference)

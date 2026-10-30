@@ -20,6 +20,7 @@ is here, in one place, so every path applies it the same way:
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
@@ -151,3 +152,88 @@ def next_payment_due(subscription: Subscription) -> tuple[Decimal, str] | None:
                    PaymentRecord.status.in_(paying))
         ).scalars().all())
     return payment_due(subscription, len(ids) + 1)
+
+
+# ------------------------------------------ what staff are shown and warned --
+# Verifier finding (2026-10-30, HIGH): payment_due / next_payment_due had NO
+# production caller. Staff record a month-13 payment by hand on the
+# subscription screen, and nothing told them the 100 JOD yearly activation was
+# part of it -- so it would simply never be charged. The three pieces below put
+# the number in front of the person recording the money, and keep a trail when
+# they enter something else:
+#   next_payment_quote  -- the number, split into "month" and "activation" so a
+#                          screen can say what it is made of;
+#   check_payment_amount -- the entered amount against it (a different amount is
+#                          legitimate -- a part payment, two months at once -- so
+#                          it is never refused, only flagged and audited);
+#   AmountCheck.audit_state -- what lands in the payment's audit entry.
+@dataclass(frozen=True)
+class PaymentQuote:
+    currency: str
+    month: Decimal        # the package's own price for a month (renewal_price)
+    activation: Decimal   # the yearly activation this payment carries, else 0
+
+    @property
+    def total(self) -> Decimal:
+        return self.month + self.activation
+
+
+def next_payment_quote(subscription: Subscription) -> PaymentQuote | None:
+    """What the NEXT payment of a monthly-package subscription should be, in
+    parts. None for any plan without a yearly activation (Package 1, plans with
+    no contract): their payments are left exactly as they were."""
+    plan = db_session.get(Plan, subscription.plan_id)
+    if plan is None or not has_yearly_activation(plan):
+        return None
+    due = next_payment_due(subscription)
+    renewal = renewal_price(subscription)
+    if due is None or renewal is None:
+        return None
+    return PaymentQuote(currency=due[1], month=renewal[0], activation=due[0] - renewal[0])
+
+
+@dataclass(frozen=True)
+class AmountCheck:
+    """The amount staff entered, set against what was due."""
+    quote: PaymentQuote
+    entered: Decimal
+    entered_currency: str
+
+    @property
+    def same_currency(self) -> bool:
+        return (self.entered_currency or "").upper() == self.quote.currency.upper()
+
+    @property
+    def matches(self) -> bool:
+        return self.same_currency and self.entered == self.quote.total
+
+    @property
+    def difference(self) -> Decimal | None:
+        """entered - due; None when the currencies differ (there is no honest
+        subtraction between JOD and USD)."""
+        return self.entered - self.quote.total if self.same_currency else None
+
+    def audit_state(self) -> dict:
+        """Goes into the payment's PAYMENT_RECORD_CREATED entry (after_state
+        -> "due_check"): the audit trail records what was asked, what was
+        entered and the gap, so a short or a combined payment is visible later."""
+        return {
+            "expected_amount": str(self.quote.total),
+            "expected_currency": self.quote.currency,
+            "month": str(self.quote.month),
+            "activation": str(self.quote.activation),
+            "entered_amount": str(self.entered),
+            "entered_currency": self.entered_currency,
+            "difference": None if self.difference is None else str(self.difference),
+            "matches": self.matches,
+        }
+
+
+def check_payment_amount(subscription: Subscription | None, amount: Decimal, currency: str) -> AmountCheck | None:
+    """None when the subscription has no yearly activation (nothing to compare)."""
+    if subscription is None:
+        return None
+    quote = next_payment_quote(subscription)
+    if quote is None:
+        return None
+    return AmountCheck(quote=quote, entered=Decimal(amount), entered_currency=currency or "")
