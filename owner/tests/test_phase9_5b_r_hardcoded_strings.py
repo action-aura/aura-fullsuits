@@ -51,6 +51,9 @@ GATED_DIRS = (
     # added without registering its directory here, so the all-directories guard was red;
     # registering them also brings their templates under the hardcoded-string scan below.
     "customer_onboarding", "contracts", "commissions",
+    # Seller ID photo (app/seller_id/): the seller's upload page. Registered so it is scanned
+    # like every other template and the all-directories guard stays green.
+    "seller_id",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form

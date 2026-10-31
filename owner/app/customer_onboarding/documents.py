@@ -290,12 +290,24 @@ def store_document(
     return document
 
 
-def _path_for(document: CustomerDocument) -> str:
+def path_for_key(storage_key: str) -> str:
+    """The absolute path of a stored blob; refuses a key that escapes the storage root.
+    Public because the seller ID photo (app/seller_id) stores its blobs in the same
+    directory with the same crypto and must not grow a second copy of this check."""
     root = os.path.realpath(_root())
-    candidate = os.path.realpath(os.path.join(root, *document.storage_key.split("/")))
+    candidate = os.path.realpath(os.path.join(root, *storage_key.split("/")))
     if os.path.commonpath([root, candidate]) != root:
         raise DocumentError("DOCUMENT_UNREADABLE")
     return candidate
+
+
+def _path_for(document: CustomerDocument) -> str:
+    return path_for_key(document.storage_key)
+
+
+def key_for(kid: str) -> bytes | None:
+    """The key-encryption key named `kid` (None when it is no longer configured)."""
+    return _load_keys().get(kid)
 
 
 def discard_blob(document: CustomerDocument) -> None:

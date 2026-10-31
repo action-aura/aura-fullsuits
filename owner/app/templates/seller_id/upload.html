@@ -1,0 +1,28 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Upload your ID photo") }}{% endblock %}
+{% block content %}
+<div class="card" style="max-width:560px;margin:0 auto;">
+  <h2>{{ _("Upload your ID photo") }}</h2>
+  {% if on_file %}
+  <p data-id-photo-on-file="1">{{ _("ID photo on file since %(date)s", date=format_owner_date(on_file.uploaded_at)) }}</p>
+  <p><a href="{{ url_for('dashboard.index') }}">{{ _("Go to the dashboard") }}</a></p>
+  {% else %}
+  {% if required %}
+  <p data-id-photo-required="1"><strong>{{ _("Before you start, upload a clear photo of your personal ID. Only the Sales Manager can see it.") }}</strong></p>
+  {% else %}
+  <p>{{ _("Before you start, upload a clear photo of your personal ID. Only the Sales Manager can see it.") }}</p>
+  {% endif %}
+  {% if error %}<p class="error" role="alert" data-id-photo-error="1">{{ error }}</p>{% endif %}
+  {% if not storage_ready %}
+  <p class="error" role="alert">{{ _("ID photos cannot be stored on this server yet (no encryption key is set). Nothing was saved. Ask the administrator.") }}</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('seller_id.upload') }}" enctype="multipart/form-data" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="id-photo">{{ _("ID photo") }}</label>
+    <input id="id-photo" type="file" name="id_photo" accept="image/jpeg,image/png" required>
+    <p class="nc-hint">{{ _("A JPEG or PNG picture, up to 10 MB. It is stored encrypted.") }}</p>
+    <button type="submit" class="btn--primary-action">{{ _("Upload") }}</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

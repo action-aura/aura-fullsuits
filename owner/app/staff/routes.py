@@ -41,7 +41,13 @@ def detail(staff_id):
     if staff is None:
         return jsonify({"error": "not_found"}), 404
     roles = db_session.execute(select(Role)).scalars().all()
-    return render_template("staff/detail.html", staff=staff, roles=roles)
+    from app.contracts.service import staff_is_bound_by_seller_agreement
+    from app.seller_id.documents import current_photo
+
+    return render_template(
+        "staff/detail.html", staff=staff, roles=roles, id_photo=current_photo(staff.id),
+        is_seller=staff_is_bound_by_seller_agreement(staff),
+    )
 
 
 @bp.route("/invite", methods=["POST"])

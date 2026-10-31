@@ -10837,3 +10837,85 @@ msgstr "الأجهزة الإضافية المشتراة"
 #: app/templates/licensing/detail.html
 msgid "Extra desktops bought: %(n)s · Extra phones bought: %(m)s"
 msgstr "أجهزة مكتبية إضافية مشتراة: %(n)s · هواتف إضافية مشتراة: %(m)s"
+
+#: app/templates/seller_id/upload.html
+msgid "Upload your ID photo"
+msgstr "ارفع صورة هويتك"
+
+#: app/templates/seller_id/upload.html
+msgid "Before you start, upload a clear photo of your personal ID. Only the Sales Manager can see it."
+msgstr "قبل البدء، ارفع صورة واضحة لهويتك الشخصية. لا يراها إلا مدير المبيعات."
+
+#: app/templates/seller_id/upload.html
+#, python-format
+msgid "ID photo on file since %(date)s"
+msgstr "صورة الهوية محفوظة منذ %(date)s"
+
+#: app/templates/seller_id/upload.html
+msgid "Go to the dashboard"
+msgstr "الذهاب إلى لوحة التحكم"
+
+#: app/templates/seller_id/upload.html
+msgid "ID photo"
+msgstr "صورة الهوية"
+
+#: app/templates/seller_id/upload.html
+msgid "A JPEG or PNG picture, up to 10 MB. It is stored encrypted."
+msgstr "صورة بصيغة JPEG أو PNG بحجم أقصاه 10 ميغابايت. تُحفظ مشفّرة."
+
+#: app/templates/seller_id/upload.html
+msgid "Upload"
+msgstr "رفع"
+
+#: app/seller_id/messages.py
+msgid "ID photos cannot be stored on this server yet (no encryption key is set). Nothing was saved. Ask the administrator."
+msgstr "لا يمكن حفظ صور الهوية على هذا الخادم بعد (لم يُضبط مفتاح التشفير). لم يُحفظ شيء. اسأل المسؤول."
+
+#: app/seller_id/messages.py
+msgid "Choose a photo of the ID."
+msgstr "اختر صورة الهوية."
+
+#: app/seller_id/messages.py
+msgid "The ID photo must be a JPEG or PNG picture."
+msgstr "يجب أن تكون صورة الهوية بصيغة JPEG أو PNG."
+
+#: app/seller_id/messages.py
+#, python-format
+msgid "The ID photo is too large (at most %(max_mb)s MB)."
+msgstr "صورة الهوية كبيرة جداً (الحد الأقصى %(max_mb)s ميغابايت)."
+
+#: app/seller_id/messages.py
+msgid "The ID photo file is empty."
+msgstr "ملف صورة الهوية فارغ."
+
+#: app/seller_id/messages.py
+msgid "The ID photo file is damaged. Take it again."
+msgstr "ملف صورة الهوية تالف. التقطها من جديد."
+
+#: app/seller_id/messages.py
+msgid "An ID photo is already on file. Ask a Sales Manager if it has to be replaced."
+msgstr "صورة الهوية محفوظة بالفعل. اطلب من مدير المبيعات استبدالها إن لزم."
+
+#: app/seller_id/messages.py
+msgid "Another upload happened at the same moment. Try again."
+msgstr "تمت عملية رفع أخرى في اللحظة نفسها. حاول مرة أخرى."
+
+#: app/templates/employees/new.html
+msgid "ID photo (optional)"
+msgstr "صورة الهوية (اختياري)"
+
+#: app/templates/employees/new.html
+msgid "A JPEG or PNG picture, up to 10 MB. Stored encrypted. Without one, the seller is asked to upload it at first sign-in."
+msgstr "صورة بصيغة JPEG أو PNG بحجم أقصاه 10 ميغابايت. تُحفظ مشفّرة. إن لم تُرفق صورة، يُطلب من البائع رفعها عند أول تسجيل دخول."
+
+#: app/templates/employees/detail.html
+msgid "Open the ID photo"
+msgstr "فتح صورة الهوية"
+
+#: app/templates/employees/detail.html
+msgid "Not on file"
+msgstr "غير محفوظة"
+
+#: app/templates/employees/detail.html
+msgid "Choose a new photo to replace the one on file. Leave it empty to keep it."
+msgstr "اختر صورة جديدة لاستبدال المحفوظة. اتركه فارغاً للإبقاء عليها."

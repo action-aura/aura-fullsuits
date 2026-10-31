@@ -232,6 +232,15 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.contracts import gate as seller_agreement_gate
 
     seller_agreement_gate.register(app)
+    # Step two of the same gate: a seller with no photo of their own ID on file is sent to
+    # /seller-id (seller_id/gate.py). Registered AFTER the agreement hook on purpose: Flask
+    # stops at the first hook that answers, so the agreement always comes first, and it is
+    # off whenever the agreement gate is off.
+    from app.seller_id import gate as seller_id_gate
+    from app.seller_id.routes import bp as seller_id_bp
+
+    app.register_blueprint(seller_id_bp)
+    seller_id_gate.register(app)
     # `flask contracts import-seller-draft --pdf <file>`: seeds the owner's agreement as a draft.
     from app.contracts.cli import contracts_cli
 

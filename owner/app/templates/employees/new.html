@@ -4,7 +4,7 @@
 <div class="card">
   <h2>{{ _('Add employee') }}</h2>
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
-  <form method="post" action="{{ url_for('employees.create') }}">
+  <form method="post" action="{{ url_for('employees.create') }}" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
     <label for="email">{{ _('Email') }}</label>
@@ -39,6 +39,10 @@
       <option value="">{{ _('None') }}</option>
       {% for p in plans %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
     </select>
+
+    <label for="id_photo">{{ _('ID photo (optional)') }}</label>
+    <input id="id_photo" type="file" name="id_photo" accept="image/jpeg,image/png">
+    <p class="empty">{{ _('A JPEG or PNG picture, up to 10 MB. Stored encrypted. Without one, the seller is asked to upload it at first sign-in.') }}</p>
 
     <label>{{ _('Roles') }}</label>
     {% for role in roles %}

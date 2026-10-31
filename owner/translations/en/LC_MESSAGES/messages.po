@@ -10878,3 +10878,85 @@ msgstr "Extra devices bought"
 #: app/templates/licensing/detail.html
 msgid "Extra desktops bought: %(n)s · Extra phones bought: %(m)s"
 msgstr "Extra desktops bought: %(n)s · Extra phones bought: %(m)s"
+
+#: app/templates/seller_id/upload.html
+msgid "Upload your ID photo"
+msgstr "Upload your ID photo"
+
+#: app/templates/seller_id/upload.html
+msgid "Before you start, upload a clear photo of your personal ID. Only the Sales Manager can see it."
+msgstr "Before you start, upload a clear photo of your personal ID. Only the Sales Manager can see it."
+
+#: app/templates/seller_id/upload.html
+#, python-format
+msgid "ID photo on file since %(date)s"
+msgstr "ID photo on file since %(date)s"
+
+#: app/templates/seller_id/upload.html
+msgid "Go to the dashboard"
+msgstr "Go to the dashboard"
+
+#: app/templates/seller_id/upload.html
+msgid "ID photo"
+msgstr "ID photo"
+
+#: app/templates/seller_id/upload.html
+msgid "A JPEG or PNG picture, up to 10 MB. It is stored encrypted."
+msgstr "A JPEG or PNG picture, up to 10 MB. It is stored encrypted."
+
+#: app/templates/seller_id/upload.html
+msgid "Upload"
+msgstr "Upload"
+
+#: app/seller_id/messages.py
+msgid "ID photos cannot be stored on this server yet (no encryption key is set). Nothing was saved. Ask the administrator."
+msgstr "ID photos cannot be stored on this server yet (no encryption key is set). Nothing was saved. Ask the administrator."
+
+#: app/seller_id/messages.py
+msgid "Choose a photo of the ID."
+msgstr "Choose a photo of the ID."
+
+#: app/seller_id/messages.py
+msgid "The ID photo must be a JPEG or PNG picture."
+msgstr "The ID photo must be a JPEG or PNG picture."
+
+#: app/seller_id/messages.py
+#, python-format
+msgid "The ID photo is too large (at most %(max_mb)s MB)."
+msgstr "The ID photo is too large (at most %(max_mb)s MB)."
+
+#: app/seller_id/messages.py
+msgid "The ID photo file is empty."
+msgstr "The ID photo file is empty."
+
+#: app/seller_id/messages.py
+msgid "The ID photo file is damaged. Take it again."
+msgstr "The ID photo file is damaged. Take it again."
+
+#: app/seller_id/messages.py
+msgid "An ID photo is already on file. Ask a Sales Manager if it has to be replaced."
+msgstr "An ID photo is already on file. Ask a Sales Manager if it has to be replaced."
+
+#: app/seller_id/messages.py
+msgid "Another upload happened at the same moment. Try again."
+msgstr "Another upload happened at the same moment. Try again."
+
+#: app/templates/employees/new.html
+msgid "ID photo (optional)"
+msgstr "ID photo (optional)"
+
+#: app/templates/employees/new.html
+msgid "A JPEG or PNG picture, up to 10 MB. Stored encrypted. Without one, the seller is asked to upload it at first sign-in."
+msgstr "A JPEG or PNG picture, up to 10 MB. Stored encrypted. Without one, the seller is asked to upload it at first sign-in."
+
+#: app/templates/employees/detail.html
+msgid "Open the ID photo"
+msgstr "Open the ID photo"
+
+#: app/templates/employees/detail.html
+msgid "Not on file"
+msgstr "Not on file"
+
+#: app/templates/employees/detail.html
+msgid "Choose a new photo to replace the one on file. Leave it empty to keep it."
+msgstr "Choose a new photo to replace the one on file. Leave it empty to keep it."

@@ -136,6 +136,7 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("trials.override_duplicate", "CUSTOMERS", "Create a second trial for a shop that already exists (with a written reason)"),
     ("trials.extend", "CUSTOMERS", "Extend a started trial once, by up to 7 days (with a written reason)"),
     ("customer_documents.view", "CUSTOMERS", "Open a customer's ID, commercial registration and payment-slip photos"),
+    ("staff_documents.view", "STAFF", "Open a seller's ID photo"),
     # S5: the e-contract admin page (Super Admin only -- nobody else holds it), and
     # "Make activation code" for the customer's "I have a code" path (Support).
     ("contracts.manage", "CUSTOMERS", "Write, approve, publish and retire the e-contract; export who accepted it"),
@@ -309,6 +310,7 @@ ROLES: dict[str, dict] = {
             "customers.update_all", "customers.assign", "customers.capture_location", "customers.verify_location",
             "customer_accounts.view", "customer_accounts.manage",
             "customers.onboard", "trials.override_duplicate", "trials.extend", "customer_documents.view",
+            "staff_documents.view",
             "leads.create", "leads.discover", "leads.view_own", "leads.view_all", "leads.update_own",
             "leads.update_all", "leads.assign", "leads.convert", "leads.archive",
             "subscriptions.view", "licenses.view", "installations.view", "pilots.view",
