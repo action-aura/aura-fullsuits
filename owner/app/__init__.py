@@ -226,6 +226,12 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.contracts.routes import bp as contracts_bp
 
     app.register_blueprint(contracts_bp)
+    # Clauses 17 + 20: a seller who has not accepted the live seller agreement cannot use
+    # any selling screen (fail-closed hook, contracts/gate.py). Off while no SELLER
+    # contract is live.
+    from app.contracts import gate as seller_agreement_gate
+
+    seller_agreement_gate.register(app)
     app.jinja_env.globals["customer_accounts_enabled"] = lambda: bool(app.config.get("CUSTOMER_ACCOUNTS_ENABLED"))
 
     if app.config.get("EXTERNAL_API_ENABLED"):

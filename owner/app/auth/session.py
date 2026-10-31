@@ -120,6 +120,21 @@ def load_current_staff(*, touch: bool = True) -> StaffUser | None:
     return g.staff_user
 
 
+def peek_current_staff() -> StaffUser | None:
+    """The signed-in staff member for a gate that runs BEFORE the view, with no side
+    effects: it neither advances last_seen_at nor caches onto `g`. A before_request
+    hook that called load_current_staff() would (a) touch the session on requests
+    the views deliberately read with touch=False (the background badge pollers), so
+    an unattended tab would never idle out, and (b) cache g.staff_user so the view's
+    own load_current_staff() would skip its touch. Same validity rules as
+    load_current_staff (it uses the same _get_valid_session)."""
+    raw_token = request.cookies.get(COOKIE_NAME)
+    record = _get_valid_session(raw_token) if raw_token else None
+    if record is None:
+        return None
+    return db_session.get(StaffUser, record.staff_user_id)
+
+
 def current_session() -> StaffSession | None:
     load_current_staff()
     return g.get("staff_session")

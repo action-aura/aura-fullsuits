@@ -885,6 +885,30 @@ def _check_operational_finance_domain_integrity(checks: list[PreflightCheck]) ->
     return ok
 
 
+def _check_seller_agreement_live(checks: list[PreflightCheck]) -> None:
+    """Informational, never blocking. The seller-agreement gate (app/contracts/gate.py)
+    is OFF while no SELLER contract is live: a seller can then sell without having
+    accepted anything, and nothing says so. Say so, loudly, here."""
+    from app.contracts import service as contract_service
+
+    live = [contract_service.live_version("SELLER", lang) for lang in ("ar", "en")]
+    live = [v for v in live if v is not None]
+    if not live:
+        checks.append(PreflightCheck(
+            "seller_agreement_live", "WARNING",
+            "No SELLER contract is published, so the seller-agreement gate is OFF: sellers can sell without "
+            "having accepted the agreement. Fix: Contracts -> new version (audience SELLER) -> publish "
+            "(or 'flask contracts import-seller-draft --pdf <file>' on a practice server).",
+        ))
+    elif any(not v.lawyer_approved for v in live):
+        checks.append(PreflightCheck(
+            "seller_agreement_live", "WARNING",
+            "The live SELLER contract is a DRAFT no lawyer has approved (practice servers only).",
+        ))
+    else:
+        checks.append(PreflightCheck("seller_agreement_live", "OK", "A lawyer-approved SELLER contract is live; the gate is ON."))
+
+
 def run_preflight(*, key_directory: str) -> PreflightResult:
     checks: list[PreflightCheck] = []
     blocking_ok = True
@@ -913,5 +937,6 @@ def run_preflight(*, key_directory: str) -> PreflightResult:
     blocking_ok &= _check_commercial_sales_domain_integrity(checks)
     blocking_ok &= _check_operational_finance_domain_integrity(checks)
     _check_super_admin_mfa(checks)  # informational only, never blocking
+    _check_seller_agreement_live(checks)  # informational only, never blocking
 
     return PreflightResult(ok=bool(blocking_ok), checks=checks)

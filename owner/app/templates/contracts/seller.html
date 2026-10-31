@@ -7,8 +7,14 @@
   <p>{{ _("There is no seller agreement to accept right now.") }}</p>
   {% else %}
   <h2>{{ version.title }}</h2>
+  {% if required and not accepted %}
+  <p data-contract-required="1"><strong>{{ _("To keep working in Aura Owner you must read and accept the seller agreement below.") }}</strong></p>
+  {% endif %}
   {% if not version.lawyer_approved %}<p data-contract-draft="1"><strong>{{ _("DRAFT -- not yet approved by a lawyer") }}</strong></p>{% endif %}
   <pre style="white-space:pre-wrap;" dir="auto">{{ version.body }}</pre>
+  {% if version.pdf_sha256 %}
+  <p><a data-contract-pdf="1" href="{{ url_for('contracts.seller_pdf', version_id=version.id) }}">{{ _("Download the full agreement (PDF)") }}</a></p>
+  {% endif %}
   {% if accepted %}
   <p data-contract-accepted="1">{{ _("You have accepted this version.") }}</p>
   {% else %}
@@ -20,6 +26,20 @@
     <button type="submit" class="btn--primary-action">{{ _("Accept") }}</button>
   </form>
   {% endif %}
+  {% endif %}
+
+  {% if history %}
+  <h3>{{ _("Your copies") }}</h3>
+  <p>{{ _("You can download a copy of every version you accepted, with the date, time and address it was accepted from.") }}</p>
+  <ul>
+    {% for row, ver in history %}
+    <li>
+      {{ ver.version_label }} -- {{ format_owner_datetime(row.accepted_at) }}
+      -- <a data-contract-copy="1" href="{{ url_for('contracts.seller_copy', version_id=ver.id) }}">{{ _("Download the text") }}</a>
+      {% if ver.pdf_sha256 %}-- <a href="{{ url_for('contracts.seller_pdf', version_id=ver.id) }}">{{ _("Download the PDF") }}</a>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
   {% endif %}
 </div>
 {% endblock %}

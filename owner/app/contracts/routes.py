@@ -12,6 +12,8 @@
   GET  /contracts/<id>/pdf               the archived lawyer's PDF (decrypted, no-store)
   GET  /contracts/seller                 a SELLER reads and accepts the live seller contract
   POST /contracts/seller/accept
+  GET  /contracts/seller/pdf/<id>        the full agreement PDF (the live one, or one they accepted)
+  GET  /contracts/seller/copy/<id>       the seller's own copy of what they accepted (.txt)
 
 Everything but the last two is Super Admin only (permission contracts.manage, which
 only the Super Admin role holds). Publishing a version a lawyer has not approved is
@@ -215,7 +217,11 @@ def seller_page():
     actor = load_current_staff()
     version = service.live_version_for("SELLER", getattr(actor, "locale", None))
     accepted = bool(version and service.seller_has_accepted(actor.id, version.id))
-    return render_template("contracts/seller.html", version=version, accepted=accepted)
+    return render_template(
+        "contracts/seller.html", version=version, accepted=accepted, required=request.args.get("required") == "1",
+        acceptance=service.seller_acceptance_of(actor.id, version.id) if version is not None else None,
+        history=service.seller_acceptances(actor.id),
+    )
 
 
 @bp.route("/seller/accept", methods=["POST"])
@@ -238,3 +244,52 @@ def seller_accept():
     else:
         flash(_("Thank you. Your acceptance is recorded."), "success")
     return redirect(url_for("contracts.seller_page"))
+
+
+def _may_read_seller_version(actor, version) -> bool:
+    """A seller may read the version that is live (to decide whether to accept it) or one
+    they accepted (their copy). Never an unpublished draft, never another audience."""
+    if version is None or version.audience != "SELLER":
+        return False
+    is_live = version.published_at is not None and version.retired_at is None
+    return is_live or service.seller_has_accepted(actor.id, version.id)
+
+
+@bp.route("/seller/pdf/<uuid:version_id>", methods=["GET"])
+@require_login
+def seller_pdf(version_id):
+    """The full agreement as the PDF the company archived, readable BEFORE accepting."""
+    actor = load_current_staff()
+    version = service.get_version(version_id)
+    if not _may_read_seller_version(actor, version):
+        abort(404)
+    try:
+        content = service.read_pdf(version)
+    except service.ContractError:
+        abort(404)
+    audit_record(
+        actor_staff_user_id=actor.id, actor_role_snapshot=None, action_code="CONTRACT_PDF_VIEWED",
+        entity_type="contract_version", entity_public_id=str(version.id), after_state={"by": "seller"},
+    )
+    response = Response(content, mimetype="application/pdf")
+    response.headers["Content-Disposition"] = f'attachment; filename="seller-agreement-{version.version_label}.pdf"'
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@bp.route("/seller/copy/<uuid:version_id>", methods=["GET"])
+@require_login
+def seller_copy(version_id):
+    """Clause 20: the seller's own copy of what THEY accepted (text + the evidence line).
+    Only their own acceptance: another seller's version id is a 404, not a copy."""
+    actor = load_current_staff()
+    version = service.get_version(version_id)
+    acceptance = service.seller_acceptance_of(actor.id, version_id) if version is not None else None
+    if acceptance is None or version.audience != "SELLER":
+        abort(404)
+    response = Response(service.seller_copy_text(acceptance, version), mimetype="text/plain; charset=utf-8")
+    response.headers["Content-Disposition"] = f'attachment; filename="seller-agreement-{version.version_label}.txt"'
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response

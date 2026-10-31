@@ -331,6 +331,75 @@ def record_seller_acceptance(*, staff, version: ContractVersion, ip: str | None)
     return row
 
 
+# ---------------------------------------------------------- the seller gate
+
+# Who the SELLER agreement binds. Decision (2026-10-31, builder A3): the SALES role
+# only. A SALES_MANAGER on their own is the company's checker (confirms payments,
+# hands out leads, ANSWERS the sellers' objections to their statements), not a
+# commission-cooperating seller under clause 2; gating them would lock out the
+# person the agreement itself names as the one who replies within 2 working days.
+# A manager who also sells is given the SALES role as well (staff/seed_data.py), and
+# THEN the gate applies to them for every selling route -- they accept like any seller.
+# A Super Admin is never gated (they publish the text; they are the company).
+SELLER_GATED_ROLE_CODES = frozenset({"SALES"})
+
+
+def staff_is_bound_by_seller_agreement(staff) -> bool:
+    if staff is None or getattr(staff, "is_super_admin", False):
+        return False
+    return any(ra.role.code in SELLER_GATED_ROLE_CODES for ra in staff.role_assignments)
+
+
+def seller_agreement_still_owed(staff) -> ContractVersion | None:
+    """The live SELLER version this person has NOT accepted yet, or None when they may
+    work: not bound by the agreement, no SELLER contract is live (the gate is OFF
+    until the company publishes one -- preflight warns about that), or already accepted
+    the version they are shown. The version is the one the agreement page shows
+    (live_version_for, same language rule), so what blocks them is exactly what they
+    can read and accept. A newly published version is a new row, so it re-asks."""
+    if not staff_is_bound_by_seller_agreement(staff):
+        return None
+    live = live_version_for("SELLER", getattr(staff, "locale", None))
+    if live is None or seller_has_accepted(staff.id, live.id):
+        return None
+    return live
+
+
+def seller_acceptance_of(staff_user_id, version_id) -> ContractAcceptance | None:
+    return db_session.execute(
+        select(ContractAcceptance).where(
+            ContractAcceptance.staff_user_id == staff_user_id, ContractAcceptance.contract_version_id == version_id
+        )
+    ).scalars().first()
+
+
+def seller_acceptances(staff_user_id) -> list[tuple[ContractAcceptance, ContractVersion]]:
+    rows = db_session.execute(
+        select(ContractAcceptance).where(ContractAcceptance.staff_user_id == staff_user_id)
+        .order_by(ContractAcceptance.accepted_at.desc())
+    ).scalars().all()
+    return [(row, db_session.get(ContractVersion, row.contract_version_id)) for row in rows]
+
+
+def seller_copy_text(acceptance: ContractAcceptance, version: ContractVersion) -> str:
+    """The seller's own copy (clause 20: each party may get a copy): exactly the words
+    they accepted, headed by the evidence the company holds about the acceptance."""
+    lines = [
+        version.title,
+        "=" * min(max(len(version.title), 8), 72),
+        f"Version: {version.version_label} ({version.language})",
+        f"Accepted by: {acceptance.email_snapshot}",
+        f"Accepted at (UTC): {acceptance.accepted_at.astimezone(timezone.utc).isoformat()}",
+        f"From address: {acceptance.ip or '-'}",
+        f"SHA-256 of the text below: {acceptance.text_sha256}",
+        f"Lawyer approved: {'yes' if version.lawyer_approved else 'NO (draft)'}",
+    ]
+    if version.pdf_sha256:
+        lines.append(f"SHA-256 of the attached PDF: {version.pdf_sha256} (the PDF is the full agreement; download it too)")
+    lines += ["", version.body, ""]
+    return "\n".join(lines)
+
+
 # ------------------------------------------------------------------ evidence
 
 def _acceptance_json(row: ContractAcceptance, version: ContractVersion) -> dict:
