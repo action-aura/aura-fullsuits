@@ -8014,6 +8014,10 @@ msgstr ""
 msgid "The website address for account links is not set up yet (OWNER_CUSTOMER_PORTAL_BASE_URL)."
 msgstr ""
 
+#: app/customer_accounts
+msgid "The email could not be sent, so no reset link was made. Try again, or ask Support or an administrator."
+msgstr ""
+
 #: app/templates/customer_accounts
 msgid "Signed out everywhere. Licences and devices are not affected."
 msgstr ""

@@ -9371,6 +9371,10 @@ msgstr "حدث خطأ ما. لم يتم تغيير أي شيء."
 msgid "The website address for account links is not set up yet (OWNER_CUSTOMER_PORTAL_BASE_URL)."
 msgstr "عنوان الموقع الخاص بروابط الحسابات غير مضبوط بعد (OWNER_CUSTOMER_PORTAL_BASE_URL)."
 
+#: app/customer_accounts
+msgid "The email could not be sent, so no reset link was made. Try again, or ask Support or an administrator."
+msgstr "تعذّر إرسال البريد الإلكتروني، لذلك لم يُنشأ رابط إعادة التعيين. حاول مرة أخرى أو اطلب المساعدة من الدعم أو المسؤول."
+
 #: app/templates/customer_accounts
 msgid "Signed out everywhere. Licences and devices are not affected."
 msgstr "تم تسجيل الخروج من كل الأجهزة. لا تتأثر التراخيص ولا الأجهزة."

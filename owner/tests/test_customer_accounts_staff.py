@@ -554,3 +554,37 @@ def test_with_email_on_a_seller_may_trigger_a_reset_because_it_goes_to_the_custo
         from app.models.email_outbox import EmailOutbox
 
         assert [r.kind for r in db_session.execute(select(EmailOutbox)).scalars().all()].count("customer_password_reset") == 1
+
+
+def _live_reset_tokens(app):
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.customer_accounts import CustomerAccountToken
+
+        return db_session.execute(select(func.count()).select_from(CustomerAccountToken).where(
+            CustomerAccountToken.kind == "RESET", CustomerAccountToken.consumed_at.is_(None),
+            CustomerAccountToken.revoked_at.is_(None))).scalar_one()
+
+
+def test_a_mail_failure_never_hands_a_seller_the_reset_link(app, client, seeded, monkeypatch):
+    """r32: email IS set up, so the 403 guard lets a manager through -- but mail.queue()
+    swallows every error and answers False. The link must then NOT fall through to the
+    screen of someone without customer_accounts.disable, and must not stay usable."""
+    from app.customer_accounts import mail
+
+    seller = make_staff(app, "seller@example.com", role_codes=["SALES"])
+    support = make_staff(app, "support@example.com", role_codes=["SUPPORT"])
+    _enable(app, mail=True)
+    cid = _active_for(app, seller, "active@shop.example")
+    monkeypatch.setattr(mail, "queue", lambda *a, **k: False)
+    force_login(client, app, seller)
+    resp = client.post(BASE.format(cid=cid) + "/reset-link", data={"csrf_token": _csrf_any(client)})
+    body = resp.get_data(as_text=True)
+    assert resp.status_code == 302 and "#t=" not in body and 'data-link-shown-once="1"' not in body
+    assert _live_reset_tokens(app) == 0  # the link that was minted is dead too
+    # allow: Support (holds customer_accounts.disable) is still handed the link when the mail fails
+    support_client = app.test_client()
+    force_login(support_client, app, support)
+    shown = support_client.post(BASE.format(cid=cid) + "/reset-link", data={"csrf_token": _csrf_any(support_client)})
+    assert shown.status_code == 200 and 'data-link-shown-once="1"' in shown.get_data(as_text=True)
+    assert _live_reset_tokens(app) == 1

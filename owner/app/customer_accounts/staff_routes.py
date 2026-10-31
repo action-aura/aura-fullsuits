@@ -178,6 +178,14 @@ def reset_link(customer_id):
     except service.AccountError as exc:
         flash(_message(exc.code), "error")
         return _back(customer_id)
+    if not issued.emailed and not any(code in codes for code in RESET_LINK_SHOWN_PERMISSIONS):
+        # The check above only knows email is SET UP; mail.queue() can still fail
+        # (it swallows every error and answers False), and then the link would fall
+        # through to the screen of whoever pressed the button -- the exact hand-over
+        # the rule above forbids. Fail closed: kill the link we just made and say so.
+        service.revoke_reset_links(account)
+        flash(_("The email could not be sent, so no reset link was made. Try again, or ask Support or an administrator."), "error")
+        return _back(customer_id)
     return _shown_once(issued, "RESET")
 
 

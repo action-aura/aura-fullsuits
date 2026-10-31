@@ -346,6 +346,14 @@ def issue_reset_link(account: CustomerAccount, actor_staff_user_id) -> IssuedLin
     return _send_link(account, "RESET", raw, "customer_password_reset")
 
 
+def revoke_reset_links(account: CustomerAccount) -> None:
+    """Kills the account's unused set-password links and commits. For the staff
+    screen that issued a reset link, the mail then failed to queue, and the person
+    on the screen must not be handed the link instead (see staff_routes.reset_link)."""
+    _revoke_unused_links(account)
+    db_session.commit()
+
+
 def sign_out_everywhere(account: CustomerAccount, actor_staff_user_id, *, reason: str = "STAFF_SIGN_OUT_EVERYWHERE") -> int:
     revoked = _revoke_all_sessions(account, reason, bump_version=True)
     db_session.commit()
