@@ -100,5 +100,7 @@ def import_seller_draft(pdf_path: str, language: str, label: str | None, publish
                     f"Not published: {exc.code}. A draft can only go live on a practice server "
                     f"(OWNER_CONTRACT_ALLOW_DRAFT=1); {os.environ.get('OWNER_CONTRACT_ALLOW_DRAFT', '') or 'it is not set here'}.")
             click.echo("Published. Sellers must now accept it before they can sell.")
+    elif version.published_at is not None and version.retired_at is None:
+        click.echo("It is already live.")
     else:
         click.echo("Not published. Publish it from the Contracts page (or re-run with --publish on a practice server).")

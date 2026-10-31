@@ -74,7 +74,7 @@ def test_importing_the_same_pdf_twice_creates_one_version(app, seeded, kyc, tmp_
     path = _pdf_file(tmp_path)
     assert _run(app, "--pdf", path).exit_code == 0
     again = _run(app, "--pdf", path)
-    assert again.exit_code == 0 and "Already imported" in again.output
+    assert again.exit_code == 0 and "Already imported" in again.output and "Not published" in again.output
     assert len(_versions(app)) == 1
 
 
@@ -100,6 +100,9 @@ def test_publishing_the_draft_is_refused_on_a_real_server_and_allowed_on_a_pract
     assert done.exit_code == 0 and "Published" in done.output
     (version,) = _versions(app)
     assert version.published_at is not None and version.lawyer_approved is False
+    # re-running without --publish tells the truth about a version that is already live
+    again = _run(app, "--pdf", path)
+    assert again.exit_code == 0 and "already live" in again.output and "Not published" not in again.output
 
 
 def test_a_seller_must_read_the_pdf_and_accept_it_before_selling_and_the_acceptance_pins_the_pdf_hash(app, seeded, kyc, tmp_path):
