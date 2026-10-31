@@ -743,6 +743,45 @@ def admin_assignment_wins(local, incoming: dict) -> bool:
     return str(incoming['device_id']) < str(local['device_id'])
 
 
+def _is_windows_or_unknown(platform) -> bool:
+    """A device that has not reported a platform yet is treated as Windows: an
+    unknown platform here is a Windows desktop in practice (Android has always
+    announced 'ANDROID'), and refusing it would lock out every upgrade until
+    the boot announcement runs."""
+    return not platform or not str(platform).strip() or str(platform).strip().upper() == WINDOWS_PLATFORM
+
+
+def windows_device_registered(conn: sqlite3.Connection, company_id: str, *, as_of_utc=None) -> bool:
+    """Does this shop have an ACTIVE Windows (or not-yet-announced) computer?
+
+    WHY: owner decision 2026-10-31 -- a PHONE may be the main computer only in
+    a phone-only shop. The moment a Windows computer is registered, the main
+    role belongs on Windows (the LAN hub, printing and the drawer live there).
+
+    `as_of_utc=None` asks "right now" -- used when a person claims or
+    transfers. A given instant asks "was there one when the assignment was
+    made?" -- used by the sync apply and by recompute_admin_flag, so a phone
+    that was legitimately main in a phone-only shop STAYS main (on every
+    device, deterministically) after a PC joins later, while a main named for
+    a phone in a shop that already had a PC is still refused. A Windows row
+    whose first_seen_at does not parse counts as registered (fail closed)."""
+    cutoff = _parse_utc(as_of_utc) if as_of_utc is not None else None
+    rows = conn.execute(
+        "SELECT platform, first_seen_at FROM devices WHERE company_id=? AND status='active'",
+        (company_id,),
+    ).fetchall()
+    for row in rows:
+        platform, first_seen = row[0], row[1]
+        if not _is_windows_or_unknown(platform):
+            continue
+        if cutoff is None:
+            return True
+        seen = _parse_utc(first_seen)
+        if seen is None or seen <= cutoff:
+            return True
+    return False
+
+
 def recompute_admin_flag(conn: sqlite3.Connection, company_id: str) -> None:
     """Derive `devices.is_admin_device` from the assignment: clear every row
     for the company, then set the assigned device if it exists locally AND is
@@ -751,22 +790,26 @@ def recompute_admin_flag(conn: sqlite3.Connection, company_id: str) -> None:
     owns the transaction. If the assigned device row has not arrived yet,
     nobody holds the flag until the device event lands and this runs again.
 
-    Fix round 2 (D3): the flag is set only for a device whose platform is
-    WINDOWS or unknown (NULL / empty). An ANDROID row never becomes main, in
-    ANY event order -- apply_admin_assignment refuses an Android target it
-    already knows about, but an assignment that arrived BEFORE the device row
-    (the row is announced later, as Android) used to be flagged the moment the
-    row landed. The assignment row itself stays (it is the shop's recorded
-    fact); the flag simply never lands on an ineligible device."""
+    Fix round 2 (D3): the flag is set only for an ELIGIBLE device -- a Windows
+    or unknown-platform one, or (owner decision 2026-10-31) an Android one in
+    a shop that had no Windows computer when the assignment was made. An
+    ANDROID row never becomes main otherwise, in ANY event order --
+    apply_admin_assignment refuses an Android target it already knows about,
+    but an assignment that arrived BEFORE the device row (the row is announced
+    later, as Android) used to be flagged the moment the row landed. The
+    assignment row itself stays (it is the shop's recorded fact); the flag
+    simply never lands on an ineligible device."""
     conn.execute("UPDATE devices SET is_admin_device=0 WHERE company_id=?", (company_id,))
     assignment = get_assignment(conn, company_id)
     if assignment is not None:
-        conn.execute(
-            "UPDATE devices SET is_admin_device=1 "
-            "WHERE id=? AND company_id=? AND status='active' "
-            "AND (platform IS NULL OR TRIM(platform)='' OR UPPER(TRIM(platform))=?)",
-            (assignment['device_id'], company_id, WINDOWS_PLATFORM),
-        )
+        target = get_device(conn, assignment['device_id'])
+        if (target is not None and target.get('company_id') == company_id
+                and (target.get('status') or '') == 'active'
+                and (_is_windows_or_unknown(target.get('platform'))
+                     or not windows_device_registered(
+                         conn, company_id, as_of_utc=assignment['assigned_at_utc']))):
+            conn.execute("UPDATE devices SET is_admin_device=1 WHERE id=? AND company_id=?",
+                         (assignment['device_id'], company_id))
 
 
 def _assignment_has_takeover_column(conn) -> bool:
@@ -857,8 +900,8 @@ def apply_admin_assignment(conn: sqlite3.Connection, company_id: str, incoming: 
             raise ValueError(f'{REASON_ADMIN_TARGET_INELIGIBLE}: device belongs to another company')
         if (target.get('status') or '').lower() == 'revoked':
             raise ValueError(f'{REASON_ADMIN_TARGET_INELIGIBLE}: device is revoked')
-        platform = target.get('platform')
-        if platform and str(platform).upper() != WINDOWS_PLATFORM:
+        if (not _is_windows_or_unknown(target.get('platform'))
+                and windows_device_registered(conn, company_id, as_of_utc=assigned_at)):
             raise ValueError(f'{REASON_ADMIN_TARGET_INELIGIBLE}: device is not a Windows computer')
 
     local = get_assignment(conn, company_id)
@@ -882,19 +925,20 @@ def apply_admin_assignment(conn: sqlite3.Connection, company_id: str, incoming: 
     return True
 
 
-def _refuse_ineligible_main(target) -> None:
+def _refuse_ineligible_main(conn: sqlite3.Connection, company_id: str, target) -> None:
     """The rule for who may be the main computer, in ONE place, enforced by
     claim and transfer themselves and not only by the routes in front of them
     (review item 18): a route is one caller, and the takeover, a future
     screen or a script is another. Raises ValueError(`admin_target_ineligible:
     ...`) for a revoked device, or one that has reported a platform other than
-    Windows. A device that has reported no platform yet is NOT refused (a row
-    from before v9 must keep working until its boot announcement lands) --
-    the same allowance device_routes._platform_can_be_main makes."""
+    Windows WHILE THE SHOP HAS A WINDOWS COMPUTER (owner decision 2026-10-31:
+    a phone-only shop may have a phone as its main computer). A device that
+    has reported no platform yet is NOT refused (a row from before v9 must
+    keep working until its boot announcement lands) -- the same allowance
+    device_routes._can_be_main makes."""
     if (target.get('status') or '').lower() == 'revoked':
         raise ValueError(f'{REASON_ADMIN_TARGET_INELIGIBLE}: device is revoked')
-    platform = target.get('platform')
-    if platform and str(platform).upper() != WINDOWS_PLATFORM:
+    if not _is_windows_or_unknown(target.get('platform')) and windows_device_registered(conn, company_id):
         raise ValueError(f'{REASON_ADMIN_TARGET_INELIGIBLE}: device is not a Windows computer')
 
 
@@ -920,7 +964,7 @@ def claim_admin_device_with_assignment(conn: sqlite3.Connection, company_id: str
         # the platform rule has no other home, so it is checked here.
         # Raised before anything is written: nothing to roll back.
         if (before.get('status') or '').lower() != 'revoked':
-            _refuse_ineligible_main(before)
+            _refuse_ineligible_main(conn, company_id, before)
     was_flagged = bool(before and before.get('is_admin_device') and before.get('company_id') == company_id)
     try:
         cur = conn.execute(
@@ -970,7 +1014,7 @@ def transfer_admin_device_with_assignment(conn: sqlite3.Connection, company_id: 
     assignment = get_assignment(conn, company_id)
     if assignment is not None and assignment['device_id'] == target_id and target.get('is_admin_device'):
         return target
-    _refuse_ineligible_main(target)
+    _refuse_ineligible_main(conn, company_id, target)
     try:
         epoch = _next_epoch(assignment['epoch']) if assignment is not None else 1
     except ValueError:

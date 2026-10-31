@@ -214,6 +214,12 @@ def test_h1_the_named_computer_must_be_eligible_when_we_know_it(conn):
     are refused as main; a computer we have never heard of is STORED (its own
     `device` event may simply not have arrived yet -- ordering is not
     guaranteed). The check ran: each refusal carries the one reason code."""
+    # 2026-10-31 (phone-only shops): a phone is refused only while the shop has
+    # a live Windows computer, so one ("pc") is registered here BEFORE the
+    # assignment (first_seen_at older than GOOD_AT). A phone in a shop with no
+    # Windows computer is the allowed case: test_phone_only_main.py.
+    upsert_local_device(conn, "pc", CO, platform="WINDOWS")
+    conn.execute("UPDATE devices SET first_seen_at='2026-08-01T00:00:00+00:00' WHERE id='pc'")
     upsert_local_device(conn, "phone", CO, platform="ANDROID")
     upsert_local_device(conn, "till2", CO, platform="WINDOWS")
     upsert_local_device(conn, "foreign", "other-shop", platform="WINDOWS")
@@ -272,6 +278,9 @@ def test_item_18_transfer_refuses_revoked_and_non_windows_targets_directly(conn)
 
 
 def test_item_18_claim_refuses_a_non_windows_device_directly(conn):
+    # Refused while the shop has a Windows computer (2026-10-31: phone-only
+    # shops may have a phone as main -- see test_phone_only_main.py).
+    upsert_local_device(conn, "pc", CO, platform="WINDOWS")
     upsert_local_device(conn, "phone", CO, platform="ANDROID")
     with pytest.raises(ValueError, match=device_registry.REASON_ADMIN_TARGET_INELIGIBLE):
         claim_admin_device_with_assignment(conn, CO, "phone")
@@ -918,6 +927,10 @@ def test_d3_an_assignment_that_arrived_before_an_android_row_never_flags_it(conn
     guaranteed); the row then lands as ANDROID. It used to be flagged main the
     moment it arrived. The assignment row stays -- it is the shop's recorded
     fact -- but the flag must not land on a phone."""
+    # 2026-10-31: "never" is now "never while the shop has a Windows computer
+    # registered before the assignment" -- so one is registered here.
+    upsert_local_device(conn, "pc", CO, platform="WINDOWS")
+    conn.execute("UPDATE devices SET first_seen_at='2026-08-01T00:00:00+00:00' WHERE id='pc'")
     assert apply_admin_assignment(conn, CO, _a("late-phone", 1), now=NOW) is True
     apply_device_event(conn, CO, _dev_event("late-phone", platform="ANDROID", row_version=1), now=NOW)
     assert get_device(conn, "late-phone")["platform"] == "ANDROID"
