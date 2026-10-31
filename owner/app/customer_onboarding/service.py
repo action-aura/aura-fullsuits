@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -215,8 +216,22 @@ def _phone_key(raw: str | None) -> str | None:
         return digits or None
 
 
+def _ascii_digits(raw: str | None) -> str:
+    """Every Unicode decimal digit -> its ASCII digit (Arabic-Indic '١٢٣' -> '123').
+    NFKC does NOT do this: it leaves Arabic-Indic digits unchanged, so a seller on an
+    Arabic keyboard (normal here) typed a number that no ASCII-only comparison could
+    ever match. unicodedata.decimal is the mapping that actually works."""
+    return "".join(str(unicodedata.decimal(c)) if c.isdecimal() else c for c in (raw or ""))
+
+
+# Same mapping for the SQL side, so rows stored BEFORE the ASCII rule (typed with
+# Arabic-Indic U+0660.. or Extended U+06F0.. digits) still match: Postgres translate().
+_NON_ASCII_DIGITS = "".join(chr(base + i) for base in (0x0660, 0x06F0) for i in range(10))
+_ASCII_DIGITS_FOR_THEM = "0123456789" * 2
+
+
 def _cr_key(raw: str | None) -> str:
-    return re.sub(r"[^0-9A-Za-z]", "", raw or "").casefold()
+    return re.sub(r"[^0-9A-Za-z]", "", _ascii_digits(raw)).casefold()
 
 
 def _clean_name(value: str | None, *, required_code: str | None = None, limit: int = _NAME_MAX) -> str:
@@ -239,7 +254,10 @@ def find_duplicates(*, cr_number: str, phone_e164: str, email: str) -> dict:
         rows = db_session.execute(
             select(Customer.id).where(
                 Customer.commercial_registration_reference.is_not(None),
-                func.lower(func.regexp_replace(Customer.commercial_registration_reference, "[^0-9A-Za-z]", "", "g")) == cr_norm,
+                func.lower(func.regexp_replace(
+                    func.translate(Customer.commercial_registration_reference, _NON_ASCII_DIGITS, _ASCII_DIGITS_FOR_THEM),
+                    "[^0-9A-Za-z]", "", "g",
+                )) == cr_norm,
             )
         ).scalars().all()
         if rows:
@@ -374,7 +392,11 @@ def create_trial_customer(
         except policy.PasswordPolicyError as exc:
             raise OnboardingError(_password_error_code(exc))
         phone_e164 = normalize_phone_e164(phone)
-        cr_clean = _clean_name(cr_number, required_code="CR_NUMBER_REQUIRED", limit=_CR_MAX)
+        cr_clean = _ascii_digits(_clean_name(cr_number, required_code="CR_NUMBER_REQUIRED", limit=_CR_MAX))
+        if not _cr_key(cr_clean):
+            # "---" / only symbols: an empty key would make find_duplicates skip the CR
+            # check entirely, i.e. a number that can never clash with anything.
+            raise OnboardingError("CR_NUMBER_REQUIRED")
         address_clean = _clean_name(address, required_code="ADDRESS_REQUIRED", limit=_ADDRESS_MAX)
         city_clean = _clean_name(city, limit=128) or None
         location_fields = _check_location(latitude, longitude, accuracy_meters)

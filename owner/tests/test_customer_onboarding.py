@@ -759,3 +759,61 @@ def test_every_onboarding_message_is_translated(app, seeded):
                 english = ONBOARDING_MESSAGES[code] % {k: v for k, v in params.items()} if "%(" in ONBOARDING_MESSAGES[code] else ONBOARDING_MESSAGES[code]
                 arabic = localize_onboarding_error(code, **params)
                 assert arabic != code and arabic != english, code
+
+
+# ------------------------------------- r32: Arabic-keyboard digits must not blind the duplicate check
+# (NFKC leaves U+0660.. digits unchanged, so only unicodedata.decimal normalises them.)
+
+ARABIC_INDIC = "".join(chr(0x0660 + int(d)) for d in "1234509")   # 1234509
+EXTENDED = "".join(chr(0x06F0 + int(d)) for d in "1234509")       # 1234509 (Persian/Urdu forms)
+
+
+@pytest.mark.parametrize("typed", [ARABIC_INDIC, EXTENDED, f"{ARABIC_INDIC[:5]}-{ARABIC_INDIC[5:]}"])
+def test_a_cr_typed_in_arabic_digits_is_still_a_duplicate(app, seeded, kyc, typed):
+    from app.customer_onboarding.service import OnboardingError
+
+    w = _world(app)
+    onboard(app, w, cr_number="1234509")
+    before = counts(app)
+    with pytest.raises(OnboardingError) as caught:
+        onboard(app, w, who="other_seller", cr_number=typed)
+    assert caught.value.code == "TRIAL_ALREADY_USED" and "cr" in caught.value.params["fields"]
+    assert counts(app) == before
+
+
+def test_an_old_row_stored_with_arabic_digits_is_matched_by_an_ascii_cr(app, seeded, kyc):
+    """Rows saved before the ASCII rule hold the digits as typed; the SQL side must map them too."""
+    from app.customer_onboarding.service import OnboardingError
+
+    w = _world(app)
+    first = onboard(app, w, cr_number="777")
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.customers import Customer
+
+        db_session.get(Customer, first.customer_id).commercial_registration_reference = ARABIC_INDIC
+        db_session.commit()
+    with pytest.raises(OnboardingError) as caught:
+        onboard(app, w, who="other_seller", cr_number="1234509")
+    assert caught.value.code == "TRIAL_ALREADY_USED" and "cr" in caught.value.params["fields"]
+
+
+def test_a_new_arabic_digit_cr_is_allowed_and_stored_as_ascii(app, seeded, kyc):
+    w = _world(app)
+    result = onboard(app, w, cr_number=ARABIC_INDIC)
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.customers import Customer
+
+        assert db_session.get(Customer, result.customer_id).commercial_registration_reference == "1234509"
+
+
+@pytest.mark.parametrize("typed", ["---", " / . ", "—"])
+def test_a_cr_with_nothing_comparable_in_it_is_refused(app, seeded, kyc, typed):
+    """An empty key used to mean 'skip the CR duplicate check' -- a number that can never clash."""
+    from app.customer_onboarding.service import OnboardingError
+
+    w = _world(app)
+    with pytest.raises(OnboardingError) as caught:
+        onboard(app, w, cr_number=typed)
+    assert caught.value.code == "CR_NUMBER_REQUIRED" and counts(app) == NOTHING
