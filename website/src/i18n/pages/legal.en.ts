@@ -2,46 +2,59 @@ export const legalEn = {
   privacy: {
     title: 'Privacy',
     updated: 'October 2026',
-    draftNote: 'Draft. A lawyer must review this text before launch.',
+    draftNote: 'Draft pending lawyer review. This text may change before launch.',
     sections: [
       {
         h: 'Who we are',
         p: [
           'This website is run by الذئب الأسود لتصميم وتشغيل التطبيقات وبرامج الأعمال, trading as Action Aura, in Amman, Jordan.',
-          'This page explains what this website collects and why. It does not cover the Aura software itself.',
+          'This page explains what this website collects and why, including the customer accounts you can create on it. It does not cover the Aura software itself, which has its own agreement.',
         ],
       },
       {
         h: 'What we collect',
         p: [
-          'Only what you type into the demo form on the contact page: your name, phone number, business type, business name, number of branches, your message, and the language of the page you were on.',
-          'We also keep a salted hash of your IP address. A hash cannot be turned back into the address. We use it only to block abuse of the form.',
-          'We also record the time the request arrived. A copy of each request is also sent to our own mailbox (info@actionaura.me) and to our own internal customer system, which only our staff can open. Nothing else is collected through this site. There are no accounts and no sign-in on this website.',
+          'From the demo form on the contact page: your name, phone number, business type, business name, number of branches, your message, and the language of the page you were on.',
+          'We also keep a salted hash of your IP address. A hash cannot be turned back into the address. We use it only to block abuse of the form. We also record the time the request arrived. A copy of each request is also sent to our own mailbox (info@actionaura.me) and to our own internal customer system, which only our staff can open.',
+        ],
+      },
+      {
+        h: 'Customer accounts',
+        p: [
+          'If you create an account, we keep your email address and your password. The password is stored only as a hash, so nobody at Action Aura can read it.',
+        ],
+      },
+      {
+        h: 'ID and commercial-registration photos',
+        p: [
+          'When one of our sellers registers a shop, the seller may collect photos of an ID document and of the commercial registration, to check who the customer is and to issue the subscription. These photos are stored encrypted, and only authorised staff can open them.',
         ],
       },
       {
         h: 'Why we collect it',
         p: [
-          'To call you back about a demo. We do not use your details for anything else, and we do not sell or share them.',
+          'To call you back about a demo, to run your account, and to check and issue your subscription. We do not use your details for anything else, and we do not sell or share them.',
         ],
       },
       {
         h: 'How long we keep it',
         p: [
-          'We keep demo requests for 24 months, then delete them. This applies to the copies in our mailbox and in our internal customer system too.',
+          'Demo requests: 24 months, then deleted. This applies to the copies in our mailbox and in our internal customer system too.',
+          'Accounts and ID or commercial-registration photos: for as long as you are a customer, plus 1 year. If a free trial is never followed by a payment, they are deleted 90 days after the trial ends.',
         ],
       },
       {
         h: 'Where it is hosted',
         p: [
           'This website is hosted by Cloudflare, which processes the data on our behalf.',
+          'Account and shop data is kept on our servers in Germany (Oracle Cloud, Frankfurt), with encrypted backups on Cloudflare R2.',
         ],
       },
       {
         h: 'Analytics and cookies',
         p: [
           'We measure visits with cookieless analytics. It does not follow you from one site to another.',
-          'This website sets no tracking cookies. Your language choice may be remembered in your browser\'s local storage on this device only. It is not sent to us.',
+          'When you sign in, we set one session cookie. It is HttpOnly, so scripts on the page cannot read it, and it is needed to keep you signed in. It expires on its own and is removed when you sign out. This website sets no tracking cookies. Your language choice may be remembered in your browser\'s local storage on this device only. It is not sent to us.',
         ],
       },
       {
@@ -53,7 +66,8 @@ export const legalEn = {
       {
         h: 'Your rights',
         p: [
-          'You can ask us to delete your data at any time. Write to info@actionaura.me and tell us the phone number you used. We will delete your request.',
+          'Under Jordan\'s Personal Data Protection Law of 2023 you may, within the limits of that law, ask to see your data, correct it, delete it, object to how it is used, or withdraw your consent.',
+          'Write to info@actionaura.me and tell us the email address or phone number you used. We will answer your request.',
         ],
       },
     ],
