@@ -73,7 +73,17 @@ def test_arabic_translations_are_real_arabic_not_placeholder_text():
     # key (the same "بحث (Ctrl+K)" precedent already established for
     # "Search (Ctrl+K)" -- the surrounding instructional text is real
     # Arabic, the literal key name stays Latin).
-    ARABIC_SCRIPT_EXEMPT = {"Aura Owner", "Enter", "Esc", "Ctrl K"}
+    #
+    # Aura product names ("Aura Retail", and its siblings "Aura Clinic" / "Aura Gym"
+    # should they ever get a catalog entry) stay in Latin letters on purpose:
+    # the owner prefers the brand written the same in every language, the way
+    # "Aura Owner" is. This is a DEFAULT decision still pending the owner's final
+    # word; if he asks for Arabic brand names, delete these entries and translate
+    # them. It exempts brand names ONLY -- every other string is still checked.
+    ARABIC_SCRIPT_EXEMPT = {
+        "Aura Owner", "Enter", "Esc", "Ctrl K",
+        "Aura Retail", "Aura Clinic", "Aura Gym",
+    }
     ascii_only = []
     for m in catalog:
         if not m.id or not m.string:
