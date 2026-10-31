@@ -96,8 +96,8 @@
                {% if values.get('plan_id') == pkg.plan_id|string or (not values.get('plan_id') and loop.first) %}checked{% endif %}>
         <span>
           <strong>{{ catalog_label(pkg.name) }}</strong>
-          {{ _("first payment") }} {{ pkg.first_sale_unit_price }} {{ pkg.currency }},
-          {{ _("then") }} {{ pkg.renewal_unit_price }} {{ pkg.currency }}
+          {{ _("first payment") }} {{ format_owner_money(pkg.first_sale_unit_price, pkg.currency) }}{{ owner_comma() }}
+          {{ _("then") }} {{ format_owner_money(pkg.renewal_unit_price, pkg.currency) }}
           {% if pkg.billing_model == "MONTHLY" %}{{ _("a month") }}{% elif pkg.billing_model == "ANNUAL" %}{{ _("a year") }}{% endif %}
           &middot; {{ pkg.included_device_count }} {{ _("devices included") }}
         </span>

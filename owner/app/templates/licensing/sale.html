@@ -8,7 +8,14 @@
   <p>{{ _("This form was already submitted -- nothing new was recorded. This is the sale it recorded:") }}</p>
   {% endif %}
   <p>{{ _("Order") }} <strong dir="ltr">{{ recorded.order_number }}</strong> &middot; {{ recorded.total }} {{ recorded.currency }}</p>
+  {% if recorded.converts_trial %}
+  <p data-recorded-trial="1">{{ _("The payment now waits for a manager to confirm it. When it is confirmed, the shop is unlocked with the same licence. No new key is made.") }}</p>
+  {% else %}
   <p>{{ _("The payment now waits for a manager to confirm it. The licence key is made when the payment is confirmed -- not before.") }}</p>
+  {% endif %}
+  {% if recorded.method == "CASH" %}
+  <p class="notice" data-cash-reminder="1"><strong>{{ _("Cash reminder: hand over ALL of it to the company within 24 hours, by bank transfer or at the office, with no deduction.") }}</strong></p>
+  {% endif %}
   <p>
     <a href="{{ url_for('license_issuance.new_form') }}">{{ _("Record another sale") }}</a>
     {% if can_confirm %}&middot; <a href="{{ url_for('license_issuance.sales_awaiting_confirmation') }}">{{ _("Sales waiting for confirmation") }}</a>{% endif %}
@@ -27,7 +34,8 @@
   <p class="error" role="alert">{{ error }}</p>
   {% endif %}
 
-  <form method="post" action="{{ url_for('license_issuance.record_sale') }}" enctype="multipart/form-data">
+  <form method="post" id="sale-form" action="{{ url_for('license_issuance.record_sale') }}" enctype="multipart/form-data"
+        {% if prefill_amount is not none %}data-prefill="1"{% endif %}>
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="idempotency_key" value="{{ sale_idempotency_key }}">
 
@@ -53,7 +61,7 @@
       {% for pkg in packages %}
       {# Step 0 packages: what the customer pays now (the first period + any
          first-time fee), what each later period costs, and the contract. #}
-      <option value="{{ pkg.plan_id }}" {% if fv.get("plan_id") == pkg.plan_id|string %}selected{% endif %}>{{ catalog_label(pkg.name) }} -- {{ _("first payment") }} {{ pkg.first_sale_unit_price }} {{ pkg.currency }}, {{ _("then") }} {{ pkg.renewal_unit_price }} {{ pkg.currency }} {% if pkg.billing_model == "MONTHLY" %}{{ _("a month") }}{% if pkg.yearly_activation_fee %}, + {{ pkg.yearly_activation_fee }} {{ pkg.currency }} {{ _("activation every year") }}{% endif %}{% elif pkg.billing_model == "ANNUAL" %}{{ _("a year") }}{% else %}{{ billing_model_label(pkg.billing_model) }}{% endif %}{% if pkg.contract_term_months %}; {{ _("%(months)s-month contract", months=pkg.contract_term_months) }}{% endif %} ({{ pkg.included_device_count }} {{ _("devices included") }}{% if pkg.extra_pair_price is not none %}; {{ _("extra pair (1 desktop + 1 phone)") }} {{ pkg.extra_pair_price }} {{ pkg.currency }}{% endif %})</option>
+      <option value="{{ pkg.plan_id }}" data-first-payment="{{ pkg.first_sale_unit_price }}" data-pair-price="{{ pkg.extra_pair_price if pkg.extra_pair_price is not none else 0 }}" data-breakdown="{{ pkg.breakdown }}" {% if (fv.get("plan_id") or convert_plan_id) == pkg.plan_id|string %}selected{% endif %}>{{ catalog_label(pkg.name) }} {{ "—" }} {{ _("first payment") }} {{ format_owner_money(pkg.first_sale_unit_price, pkg.currency) }}{{ owner_comma() }} {{ _("then") }} {{ format_owner_money(pkg.renewal_unit_price, pkg.currency) }} {% if pkg.billing_model == "MONTHLY" %}{{ _("a month") }}{% if pkg.yearly_activation_fee %}{{ owner_comma() }} + {{ format_owner_money(pkg.yearly_activation_fee, pkg.currency) }} {{ _("activation every year") }}{% endif %}{% elif pkg.billing_model == "ANNUAL" %}{{ _("a year") }}{% else %}{{ billing_model_label(pkg.billing_model) }}{% endif %}{% if pkg.contract_term_months %}; {{ _("%(months)s-month contract", months=pkg.contract_term_months) }}{% endif %} ({{ pkg.included_device_count }} {{ _("devices included") }}{% if pkg.extra_pair_price is not none %}; {{ _("extra pair (1 desktop + 1 phone)") }} {{ format_owner_money(pkg.extra_pair_price, pkg.currency) }}{% endif %})</option>
       {% else %}
       <option value="" disabled>{{ _("No sellable packages yet -- set an effective date and current price on a plan first.") }}</option>
       {% endfor %}
@@ -76,11 +84,18 @@
 
     <h3>{{ _("4. Payment") }}</h3>
     <label for="sale-amount">{{ _("Amount paid (the full first payment, extra pairs included)") }}</label>
-    <input id="sale-amount" name="amount" inputmode="decimal" value="{{ fv.get("amount", "") }}" required dir="ltr">
+    <input id="sale-amount" name="amount" inputmode="decimal" value="{{ fv.get("amount", prefill_amount if prefill_amount is not none else "") }}" required dir="ltr">
+    {% if convert %}
+    <p class="hint" id="sale-amount-breakdown" data-amount-breakdown="1">{% for pkg in packages %}{% if (fv.get("plan_id") or convert_plan_id) == pkg.plan_id|string %}{{ pkg.breakdown }}{% endif %}{% endfor %}</p>
+    {% endif %}
     <label for="sale-method">{{ _("How the customer paid") }}</label>
     <select id="sale-method" name="method">
       {% for m in payment_methods %}<option value="{{ m }}" {% if fv.get("method") == m %}selected{% endif %}>{% if m == "BANK_TRANSFER" %}{{ _("CliQ / bank transfer") }}{% elif m == "CASH" %}{{ _("Cash") }}{% else %}{{ m }}{% endif %}</option>{% endfor %}
     </select>
+    <div id="sale-cash-rule" class="notice" data-cash-rule="1" {% if fv.get("method") != "CASH" %}hidden{% endif %}>
+      <strong>{{ _("Cash rule") }}</strong>
+      <p>{{ _("Hand over ALL of the cash to the company within 24 hours, by bank transfer or at the office, with no deduction. Record the sale now, before you hand it over.") }}</p>
+    </div>
     <label for="sale-reference">{{ _("CliQ or transfer reference number (for cash, your receipt number)") }}</label>
     <input id="sale-reference" name="reference" value="{{ fv.get("reference", "") }}" required maxlength="128" dir="ltr">
     <label for="sale-payment-date">{{ _("Date the money arrived") }}</label>
@@ -99,4 +114,5 @@
 <p><a href="{{ url_for('license_issuance.sales_awaiting_confirmation') }}">{{ _("Sales waiting for confirmation") }}</a></p>
 {% endif %}
 {% endif %}
+<script src="{{ url_for('static', filename='js/sale-form.js') }}"></script>
 {% endblock %}

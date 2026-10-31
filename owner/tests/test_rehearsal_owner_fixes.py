@@ -81,7 +81,7 @@ from tests.conftest import get_csrf, jordan_today
 from tests.test_trial_conversion import SLIP, confirm, money_rows, sell
 
 
-def _sale_post(client, app, who_id, w, *, method, slip=None, customer_id=None, amount="100.00", plan=None):
+def _sale_post(client, app, who_id, w, *, method, slip=None, customer_id=None, amount="100.00", plan=None, converts=None):
     force_login(client, app, who_id)
     page = client.get("/licenses/issuance/new").get_data(as_text=True)
     data = {
@@ -89,6 +89,8 @@ def _sale_post(client, app, who_id, w, *, method, slip=None, customer_id=None, a
         "plan_id": str(plan or w["plan"]), "extra_device_pairs": "0", "amount": amount, "method": method,
         "reference": "REF-" + uuid.uuid4().hex[:6], "payment_date": jordan_today().isoformat(),
     }
+    if converts:
+        data["converts_subscription_id"] = str(converts)
     if customer_id:
         data["customer_id"] = str(customer_id)
     else:
@@ -151,3 +153,55 @@ def test_the_old_record_payment_form_is_for_finance_and_managers_not_sellers(app
     client.get("/auth/logout")
     force_login(client, app, w["admin"])
     assert client.get(legacy, follow_redirects=False).status_code == 200  # allow: finance / admins keep it
+
+
+# ------------------------------------ 1. the trial's payment page pre-fills
+
+def _first_year_costs_250(app, w):
+    """The launch Package 1 shape: 100 a year + 150 first time = 250 JOD to pay first."""
+    from datetime import date
+
+    with app.app_context():
+        from app.catalog.services import add_plan_price
+        from app.extensions import db_session
+        from app.models.catalog import Plan
+
+        add_plan_price(db_session.get(Plan, w["plan"]), 100, "JOD", date.today(), None, setup_fee=150)
+
+
+def test_the_trial_payment_page_prefills_the_first_payment_and_says_what_it_is_made_of(app, client, seeded, kyc):
+    from tests.test_customer_onboarding import _world, onboard
+
+    w = _world(app)
+    _first_year_costs_250(app, w)
+    trial = onboard(app, w)
+    force_login(client, app, w["seller"])
+    html = client.get(f"/licenses/issuance/new?convert={trial.subscription_id}").get_data(as_text=True)
+    assert re.search(r'id="sale-amount"[^>]*value="250\.00"', html)  # the amount is already typed
+    assert re.search(r'data-amount-breakdown="1">\s*100\.00 JOD first year \+ 150\.00 JOD first-time fee', html)
+    assert f'<option value="{w["plan"]}" data-first-payment="250.00"' in html and "selected" in html.split(f'value="{w["plan"]}"')[1][:200]
+    assert re.search(r'data-cash-rule="1"\s+hidden', html)  # the cash rule is only shown once Cash is picked
+    # the ordinary sale form (no trial) is NOT pre-filled: a new sale's amount is the seller's to enter
+    plain = client.get("/licenses/issuance/new").get_data(as_text=True)
+    assert re.search(r'id="sale-amount"[^>]*value=""', plain) and 'data-amount-breakdown' not in plain
+
+
+def test_the_success_page_for_a_trial_payment_does_not_promise_a_new_key_and_repeats_the_cash_rule(app, client, seeded, kyc):
+    from tests.test_customer_onboarding import _world, onboard
+
+    w = _world(app)
+    _first_year_costs_250(app, w)
+    trial = onboard(app, w)
+    cash = _sale_post(client, app, w["seller"], w, method="CASH", amount="250.00", converts=trial.subscription_id,
+                      customer_id=trial.customer_id).get_data(as_text=True)
+    assert "Sale recorded" in cash and 'data-recorded-trial="1"' in cash and 'data-cash-reminder="1"' in cash
+    assert "licence key is made when the payment is confirmed" not in cash
+    assert "within 24 hours" in cash
+    # a second trial customer paying by transfer: same page, but no cash reminder
+    trial2 = onboard(app, w)
+    bank = _sale_post(client, app, w["seller"], w, method="BANK_TRANSFER", slip=SLIP, amount="250.00",
+                      converts=trial2.subscription_id, customer_id=trial2.customer_id).get_data(as_text=True)
+    assert 'data-recorded-trial="1"' in bank and 'data-cash-reminder' not in bank
+    # and an ordinary (non-trial) sale keeps its own wording
+    plain = _sale_post(client, app, w["seller"], w, method="CASH", amount="250.00").get_data(as_text=True)
+    assert "licence key is made when the payment is confirmed" in plain and 'data-recorded-trial' not in plain

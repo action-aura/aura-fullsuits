@@ -620,6 +620,36 @@ def addon_availability_status_label(code: str) -> str:
     return labels.get(code, code)
 
 
+def payment_method_label(code: str) -> str:
+    """How the customer paid, as the sale form words it (a transfer / CliQ / deposit all
+    arrive as BANK_TRANSFER). Other codes (legacy rows) are shown as stored."""
+    labels = {
+        "BANK_TRANSFER": _("CliQ / bank transfer"),
+        "CASH": _("Cash"),
+    }
+    return labels.get(code, code)
+
+
+def first_payment_breakdown(package: dict) -> str:
+    """What a package's first payment is made of, as one sentence next to the amount box
+    ("100.00 JOD first year + 150.00 JOD first-time fee"). `package` is the dict
+    catalog_for_sales.describe_plan_for_sale returns."""
+    from decimal import Decimal
+
+    from app.i18n_format import format_owner_money
+
+    currency = package["currency"]
+    base = format_owner_money(package["unit_price"], currency)
+    monthly = package["billing_model"] == "MONTHLY"
+    fee = Decimal(package.get("setup_fee") or 0)
+    if fee > 0:
+        fee_text = format_owner_money(fee, currency)
+        if monthly:
+            return _("%(base)s first month + %(fee)s first-time fee", base=base, fee=fee_text)
+        return _("%(base)s first year + %(fee)s first-time fee", base=base, fee=fee_text)
+    return _("%(base)s first month", base=base) if monthly else _("%(base)s first year", base=base)
+
+
 def payment_status_label(code: str) -> str:
     labels = {
         "PENDING": _("Pending"),

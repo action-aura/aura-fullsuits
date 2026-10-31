@@ -89,6 +89,25 @@ def catalog_label(name):
     return _gettext(name)
 
 
+def format_owner_money(amount, currency) -> str:
+    """An amount with its currency, safe inside Arabic sentences (rehearsal 2026-10-31:
+    "250.00 JOD, then ..." came out jumbled in the plan cards because Latin letters and a
+    Latin comma sat inside right-to-left text). English keeps "250.00 JOD". Arabic shows
+    the number isolated left-to-right followed by the dinar sign "د.أ" (JOD); any other
+    currency keeps its code. The stored value is never touched."""
+    if amount is None:
+        return "-"
+    if not _is_rtl():
+        return f"{amount} {currency}"
+    sign = "د.أ" if (currency or "").upper() == "JOD" else currency
+    return f"{_isolate(str(amount))} {sign}"
+
+
+def owner_comma() -> str:
+    """The list comma of the page language: "،" in Arabic, "," otherwise."""
+    return "،" if _is_rtl() else ","
+
+
 def format_owner_number(value) -> str:
     """Never used on an identifier (employee number, UUID, phone, version,
     correlation ID) -- only a real count/quantity. Callers are responsible

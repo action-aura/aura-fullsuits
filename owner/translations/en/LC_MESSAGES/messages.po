@@ -10746,3 +10746,35 @@ msgstr "This customer is in a free trial. Record their payment on the trial's pa
 #: app/templates/licensing/sale.html
 msgid "This customer is in a free trial, so the payment is recorded here. When a manager confirms it, their shop is unlocked with the same licence. No second licence is made."
 msgstr "This customer is in a free trial, so the payment is recorded here. When a manager confirms it, their shop is unlocked with the same licence. No second licence is made."
+
+#: app/i18n_labels.py
+msgid "%(base)s first year + %(fee)s first-time fee"
+msgstr "%(base)s first year + %(fee)s first-time fee"
+
+#: app/i18n_labels.py
+msgid "%(base)s first month + %(fee)s first-time fee"
+msgstr "%(base)s first month + %(fee)s first-time fee"
+
+#: app/i18n_labels.py
+msgid "%(base)s first year"
+msgstr "%(base)s first year"
+
+#: app/i18n_labels.py
+msgid "%(base)s first month"
+msgstr "%(base)s first month"
+
+#: app/templates/licensing/sale.html
+msgid "The payment now waits for a manager to confirm it. When it is confirmed, the shop is unlocked with the same licence. No new key is made."
+msgstr "The payment now waits for a manager to confirm it. When it is confirmed, the shop is unlocked with the same licence. No new key is made."
+
+#: app/templates/licensing/sale.html
+msgid "Cash reminder: hand over ALL of it to the company within 24 hours, by bank transfer or at the office, with no deduction."
+msgstr "Cash reminder: hand over ALL of it to the company within 24 hours, by bank transfer or at the office, with no deduction."
+
+#: app/templates/licensing/sale.html
+msgid "Cash rule"
+msgstr "Cash rule"
+
+#: app/templates/licensing/sale.html
+msgid "Hand over ALL of the cash to the company within 24 hours, by bank transfer or at the office, with no deduction. Record the sale now, before you hand it over."
+msgstr "Hand over ALL of the cash to the company within 24 hours, by bank transfer or at the office, with no deduction. Record the sale now, before you hand it over."

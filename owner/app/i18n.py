@@ -78,9 +78,12 @@ def is_rtl(locale_code: str | None = None) -> bool:
 def init_app(app) -> None:
     babel.init_app(app, locale_selector=select_locale)
 
-    from app.i18n_format import catalog_label, format_owner_date, format_owner_datetime, format_owner_number
+    from app.i18n_format import (
+        catalog_label, format_owner_date, format_owner_datetime, format_owner_money, format_owner_number, owner_comma,
+    )
     from app.i18n_labels import (
         account_status_label,
+        payment_method_label,
         staff_account_filter_status_label,
         activation_event_result_label,
         activation_event_type_label,
@@ -219,7 +222,10 @@ def init_app(app) -> None:
         format_owner_date=format_owner_date,
         format_owner_datetime=format_owner_datetime,
         format_owner_number=format_owner_number,
+        format_owner_money=format_owner_money,
+        owner_comma=owner_comma,
         catalog_label=catalog_label,
+        payment_method_label=payment_method_label,
         subscription_status_label=subscription_status_label,
         license_status_label=license_status_label,
         license_status_drilldown_url=license_status_drilldown_url,

@@ -504,8 +504,12 @@ def _check_same_payment(payment: PaymentRecord, *, amount, method, reference, pa
         raise DirectSaleError("KEY_USED_FOR_DIFFERENT_SALE")
 
 
-def _result(order: SalesOrder, payment_id, *, replayed: bool) -> dict:
+def _result(order: SalesOrder, payment_id, *, replayed: bool, method: str | None = None) -> dict:
     return {
+        # What the success page needs to word itself: a trial payment unlocks the existing
+        # licence (no new key), and a cash payment carries the 24-hour hand-over reminder.
+        "method": method,
+        "converts_trial": order.converts_subscription_id is not None,
         "order_id": order.id,
         "order_number": order.order_number,
         "customer_id": order.customer_id,
@@ -608,7 +612,7 @@ def record_direct_sale(
             payment = db_session.get(PaymentRecord, payment_id)
             if payment is not None:
                 _check_same_payment(payment, amount=amount, method=method, reference=reference, payment_date=payment_date)
-                return _result(order, payment_id, replayed=True)
+                return _result(order, payment_id, replayed=True, method=method)
             _validate_payment(
                 amount=amount, currency=order.currency, total=order.total, method=method,
                 reference=reference, payment_date=payment_date, as_of=as_of,
@@ -616,7 +620,7 @@ def record_direct_sale(
             _record_sale_payment(order, payment_id, amount=amount, method=method, reference=reference,
                                  payment_date=payment_date, seller=seller, actor_staff_user_id=actor_staff_user_id,
                                  slip_photo=slip_photo)
-            return _result(order, payment_id, replayed=False)
+            return _result(order, payment_id, replayed=False, method=method)
 
         if trial_subscription is None and customer is not None:
             live_trial_id = _live_trial_subscription_id(customer.id)
@@ -730,7 +734,7 @@ def record_direct_sale(
         _record_sale_payment(order, payment_id, amount=amount, method=method, reference=reference,
                              payment_date=payment_date, seller=seller, actor_staff_user_id=actor_staff_user_id,
                              slip_photo=slip_photo)
-        return _result(order, payment_id, replayed=False)
+        return _result(order, payment_id, replayed=False, method=method)
 
 
 def _resolve_conversion(raw_subscription_id, idempotency_key, actor_staff_user_id, actor_permission_codes) -> Subscription:

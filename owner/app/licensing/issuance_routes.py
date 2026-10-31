@@ -58,7 +58,7 @@ from app.commercial_sales.direct_sale import (
 from app.commercial_sales.errors import CommercialSalesError
 from app.employees.queries import find_own_profile
 from app.extensions import db_session
-from app.i18n_labels import localize_commercial_sales_error, localize_direct_sale_error
+from app.i18n_labels import first_payment_breakdown, localize_commercial_sales_error, localize_direct_sale_error
 from app.licensing.issuance import LicenseIssuanceError, issue_no_charge_license
 from app.models.catalog import Plan
 from app.models.customers import Customer
@@ -156,6 +156,11 @@ def _render_sale_form(*, error: str | None, idempotency_key: str, form_values=No
     for package in packages:
         offer = extra_device_pair_offer(uuid.UUID(package["product_id"]))
         package["extra_pair_price"] = offer["unit_price"] if offer and offer["currency"] == package["currency"] else None
+        # What the customer pays first (the first period + any first-time fee) and what that is
+        # made of -- the trial-conversion page pre-fills the amount with it and says so, the way
+        # 7e223f38 did for the other payment screens. For a trial nothing has been paid yet, so
+        # this is exactly packages.next_payment_due for its subscription.
+        package["breakdown"] = first_payment_breakdown(package)
     return render_template(
         "licensing/sale.html",
         customers=_customers_visible_to(actor, codes),
@@ -172,6 +177,12 @@ def _render_sale_form(*, error: str | None, idempotency_key: str, form_values=No
         can_issue_no_charge=bool(actor.is_super_admin),
         can_confirm="payments.confirm" in codes,
         convert=convert,
+        prefill_amount=(
+            next((p["first_sale_unit_price"] for p in packages
+                  if str(p["plan_id"]) == str((form_values or {}).get("plan_id") or convert["plan"].id)), None)
+            if convert and not (form_values or {}).get("amount") else None
+        ),
+        convert_plan_id=str(convert["plan"].id) if convert else None,
         sent_from_sale=bool(convert) and request.args.get("from_sale") == "1",
     ), status
 
