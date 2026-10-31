@@ -251,6 +251,41 @@ def test_a_manager_may_extend_a_started_trial_once_by_up_to_seven_days(app, clie
     assert resp.get_json()["signed_assertion"]["payload"]["term_end"] == (end + timedelta(days=5)).isoformat()
 
 
+def test_a_double_click_on_extend_extends_once(app, client, seeded, kyc, signing_key):
+    """r32: both presses read extension_count == 0 before either wrote, so a trial got 14
+    days and count 2. The barrier makes sure both hold the pilot BEFORE either extends."""
+    import threading
+
+    from app.customer_onboarding.trial import TrialError, extend_trial
+
+    w, result = _started(app, client)
+    end = jordan_today() + timedelta(days=7)
+    barrier = threading.Barrier(2)
+    done, errors = [], []
+
+    def press():
+        try:
+            with app.app_context():
+                pilot = db_session_pilot()
+                barrier.wait(timeout=10)
+                extend_trial(pilot, days=7, reason="Customer asked twice by mistake", actor_staff_user_id=w["manager"])
+                done.append(1)
+        except Exception as exc:  # noqa: BLE001 -- recorded and asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=press) for _ in range(2)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len(done) == 1 and len(errors) == 1, (done, errors)
+    assert isinstance(errors[0], TrialError) and errors[0].code == "TRIAL_ALREADY_EXTENDED", errors[0]
+    sub, pilot_row, lic = _trial(app, result.customer_id)
+    assert pilot_row["extensions"] == 1 and sub["end"] == end + timedelta(days=7) and lic["until"] == end + timedelta(days=7)
+    with app.app_context():
+        from app.models.commercial_ops import PilotExtension
+
+        assert db_session_count(PilotExtension) == 1
+
+
 def db_session_pilot():
     from app.extensions import db_session
     from app.models.commercial_ops import PilotRecord

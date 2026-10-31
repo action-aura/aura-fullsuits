@@ -215,14 +215,25 @@ def extend_trial(pilot: PilotRecord, *, days: int, reason: str, actor_staff_user
         raise TrialError("TRIAL_EXTEND_REASON_REQUIRED")
     if not isinstance(days, int) or days < 1 or days > MAX_TRIAL_EXTENSION_DAYS:
         raise TrialError("TRIAL_EXTEND_DAYS_INVALID")
-    if pilot.pilot_kind != "TRIAL":
-        raise TrialError("NOT_A_TRIAL")
-    if pilot.trial_started_at is None:
-        raise TrialError("TRIAL_NOT_STARTED")
-    if pilot.status in _DEAD_PILOT_STATUSES:
-        raise TrialError("TRIAL_NOT_ACTIVE")
-    if pilot.extension_count >= MAX_TRIAL_EXTENSIONS:
-        raise TrialError("TRIAL_ALREADY_EXTENDED")
+    # Lock the pilot row and RELOAD it before judging it: the object the caller holds
+    # was read before this request started waiting, so two presses of "Extend" (a
+    # double click) both saw extension_count == 0 and both extended -- 14 days, count 2.
+    # The second press now waits here until the first has committed, then reads 1.
+    # (owner_pilot_extensions has no unique (pilot, number); the row lock is what
+    # serialises the writers, so no schema change is needed.)
+    db_session.refresh(pilot, with_for_update=True)
+    try:
+        if pilot.pilot_kind != "TRIAL":
+            raise TrialError("NOT_A_TRIAL")
+        if pilot.trial_started_at is None:
+            raise TrialError("TRIAL_NOT_STARTED")
+        if pilot.status in _DEAD_PILOT_STATUSES:
+            raise TrialError("TRIAL_NOT_ACTIVE")
+        if pilot.extension_count >= MAX_TRIAL_EXTENSIONS:
+            raise TrialError("TRIAL_ALREADY_EXTENDED")
+    except TrialError:
+        db_session.rollback()  # a refusal must not keep the row locked
+        raise
     new_end = pilot.pilot_end + timedelta(days=days)
     extension = extend_pilot(pilot, new_end_date=new_end, reason=reason, actor_staff_user_id=actor_staff_user_id)
     subscription = db_session.get(Subscription, pilot.subscription_id)
