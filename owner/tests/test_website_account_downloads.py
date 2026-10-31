@@ -382,6 +382,38 @@ def test_unknown_expired_and_withdrawn_links_are_refused_without_bytes(app, clie
     assert expired.status_code == 410 and expired.get_json()["error"] == "token_expired" and uses(app) == [0]
 
 
+def test_a_newer_release_published_meanwhile_does_not_kill_a_live_link(app, client, site):
+    """r32: fetch re-checked the link with find_offer(), which only knows the NEWEST build,
+    so publishing 1.0.0-rc.99 inside the link's 10 minutes made the fetch answer TOKEN_REVOKED."""
+    token, _session, _rid, _path = _token_for(app, client, site)
+    release(app, "WINDOWS", "1.0.0-rc.99", WIN_BYTES, build=9)
+    resp = fetch(client, token)
+    assert resp.status_code == 200 and resp.get_data() == WIN_BYTES and uses(app) == [1]
+
+
+@pytest.mark.parametrize("what", ["licence_suspended", "channel_not_allowed", "platform_not_allowed"])
+def test_a_link_still_dies_when_the_customer_may_no_longer_fetch_that_build(app, client, site, what):
+    """The allow half above must not have loosened the entitlement itself."""
+    token, _session, rid, _path = _token_for(app, client, site)
+    release(app, "WINDOWS", "1.0.0-rc.99", WIN_BYTES, build=9)  # a newer build exists too: irrelevant to the outcome
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.catalog import ProductVersion, ReleaseChannel
+        from app.models.licensing import License
+        from app.models.subscriptions import Subscription
+
+        if what == "licence_suspended":
+            db_session.execute(select(Subscription)).scalars().one().status = "SUSPENDED"
+        elif what == "channel_not_allowed":
+            db_session.get(ProductVersion, uuid.UUID(rid)).release_channel_id = db_session.execute(
+                select(ReleaseChannel.id).where(ReleaseChannel.channel_code == "RC")).scalar_one()
+        else:
+            db_session.execute(select(License)).scalars().one().allowed_platforms = "ANDROID"
+        db_session.commit()
+    resp = fetch(client, token)
+    assert resp.status_code == 410 and resp.get_json()["error"] == "token_revoked" and uses(app) == [0]
+
+
 def test_a_link_dies_with_the_account_it_was_made_for(app, client, site):
     token, *_ = _token_for(app, client, site)
     with app.app_context():

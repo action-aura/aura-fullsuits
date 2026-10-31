@@ -126,3 +126,28 @@ def offers_for_customer(customer_id) -> list[Offer]:
 
 def find_offer(customer_id, offer_id: str) -> Offer | None:
     return next((o for o in offers_for_customer(customer_id) if o.offer_id == offer_id), None)
+
+
+def entitled_offer(customer_id, release: ProductVersion) -> Offer | None:
+    """The offer for THIS release if the customer may still fetch it -- without asking
+    whether it is the newest. offers_for_customer answers "what do we advertise now"
+    (one newest build per product and platform); a link made a few minutes ago for the
+    build that was newest THEN must not die just because a newer one was published in
+    its 10-minute life. What must still stop a link: the release no longer PUBLISHED, no
+    listable licence for the product, the platform not allowed, or its channel not
+    allowed for those licences (the same rules, via the same helpers, as the page)."""
+    if release.publication_state != "PUBLISHED" or None in (
+            release.artifact_path, release.artifact_checksum_sha256, release.artifact_size_bytes):
+        return None
+    licences = [row for row in views.licence_rows(customer_id) if row.product.id == release.product_id]
+    platform_row = db_session.get(Platform, release.platform_id)
+    label = PLATFORM_LABEL.get(platform_row.platform_code) if platform_row is not None else None
+    if not licences or label is None:
+        return None
+    if platform_row.platform_code not in {p for row in licences for p in (row.license.allowed_platforms or "").split(",")}:
+        return None
+    if release.release_channel_id not in _channel_ids_for(licences):
+        return None
+    return Offer(offer_id=str(release.id), platform=label, version=release.version,
+                 size_bytes=int(release.artifact_size_bytes), filename=filename_for(licences[0].product.name, label, release),
+                 release=release)

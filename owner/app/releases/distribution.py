@@ -362,10 +362,13 @@ def open_customer_download(raw_token: str) -> CustomerDownload:
     release = db_session.get(ProductVersion, row.product_version_id)
     if release is None or release.publication_state != "PUBLISHED":
         raise DownloadAuthorizationRejected("RELEASE_NOT_PUBLISHED")
-    offer = customer_offers.find_offer(account.customer_id, str(release.id))
+    offer = customer_offers.entitled_offer(account.customer_id, release)
     if offer is None:
-        # Still published, but this customer is no longer offered it (licence
-        # suspended / cancelled since the link was made).
+        # Still published, but this customer may no longer fetch it (licence
+        # suspended / cancelled, platform or channel no longer allowed, since the link
+        # was made). NOT "a newer build exists": the link was authorised against the
+        # newest build at the time, and a release published within its 10 minutes of life
+        # must not kill it (the customer would only be told to ask for another link).
         raise DownloadAuthorizationRejected("TOKEN_REVOKED")
     try:
         actual, size = storage.artifact_sha256(release.artifact_path)
