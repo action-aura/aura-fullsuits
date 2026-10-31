@@ -1551,6 +1551,9 @@ const SubsystemApp = {
       return;
     }
 
+    // Past first-run: an admin exists here, so the role step has nothing to ask.
+    this._clearRolePending();
+
     this._authPrompted = false;     // re-arm the 401 guard on every (re)init
     this._installAuthGuard();
     ThemeEngine.init();
@@ -2419,6 +2422,14 @@ const SubsystemApp = {
         if (el) { el.value = carry.values[id]; restored = true; }
       });
     }
+    // Boss computer chosen in the role step: the Aura account's e-mail, and a
+    // plain sentence that the password asked for here is a different one.
+    if (this._setupPrefillEmail && !restored) {
+      const emailEl = document.getElementById('su-email');
+      if (emailEl && !emailEl.value) emailEl.value = this._setupPrefillEmail;
+      const subEl = document.getElementById('su-sub');
+      if (subEl) subEl.textContent = t('Create the boss account for this computer. Choose a password for signing in here; it is separate from your Aura account password.');
+    }
     // Focus the first EMPTY field when we restored something, so the owner
     // carries on typing where they stopped instead of at "Full name" again.
     setTimeout(() => {
@@ -2655,8 +2666,26 @@ const SubsystemApp = {
   async _openFirstRun() {
     try {
       const lic = await fetch('/api/licensing/status', { cache: 'no-store' }).then(r => r.json());
+      // New customer flow: a computer that was JUST activated by signing in with
+      // an Aura account is first asked which computer it is (boss or cashier).
+      // Only when the licence really is active -- a stale marker on a device
+      // that is not activated must not hide the activation gate.
+      const rolePending = this._readRolePending();
+      if (rolePending && !this._needsActivation(lic)) {
+        return this._showRoleStep(rolePending);
+      }
       if (this._isJoinedDevice(lic)) {
         return this._waitForShopAccount();
+      }
+      // New customer flow: a computer that still needs activating starts at
+      // "Sign in with your Aura account" (licensing.html), not at a form that
+      // asks for a licence key. The key and the activation code are still on
+      // that page, folded under the sign-in. After activation the page sends
+      // the person back here and the role step above asks which computer it is.
+      // A key already submitted and waiting for approval keeps its own screens.
+      if (this._needsActivation(lic) && !this._isActivationPending()) {
+        location.href = '/static/licensing.html?gate=1';
+        return;
       }
     } catch (e) {
       // Fail open, same as every other best-effort licensing check in this
@@ -2670,6 +2699,90 @@ const SubsystemApp = {
     // reasoning, including why it is fired WITHOUT an await.
     this._maybeShowFirstRunIntro();
     this.showSetupModal();
+  },
+
+  // ── ROLE STEP: "which computer is this?" (new customer flow, plan S6) ───────
+  // Shown ONCE, right after a computer was activated by signing in with an Aura
+  // account (licensing-account.js writes the marker; it must match this key
+  // EXACTLY -- separate documents, nothing to import).
+  //   ADMIN   the boss computer: the ordinary create-admin screen, e-mail
+  //           prefilled with the Aura account's, and a SEPARATE local password
+  //           (the account password is for the website and for activation; the
+  //           till password is what staff of THIS shop use). The first admin
+  //           also claims the main-computer seat (_autoClaimAdminOnSignup) and
+  //           then lands on Employees to add the shop's users.
+  //   CASHIER the existing "join a shop" wait screen: this computer receives the
+  //           shop's accounts from the boss computer by sync. If no boss
+  //           computer exists yet the wait screen says so and offers the way out.
+  ROLE_PENDING_KEY: 'aura.firstrun.rolePending',
+  ROLE_PENDING_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+  _setupPrefillEmail: '',
+  _landOnEmployeesOnce: false,
+
+  _readRolePending() {
+    try {
+      const rec = JSON.parse(localStorage.getItem(this.ROLE_PENDING_KEY) || 'null');
+      if (!rec || rec.v !== 1 || typeof rec.at !== 'number') return null;
+      if (Date.now() - rec.at > this.ROLE_PENDING_MAX_AGE_MS) {
+        localStorage.removeItem(this.ROLE_PENDING_KEY);
+        return null;
+      }
+      return rec;
+    } catch (e) { return null; }
+  },
+
+  _clearRolePending() {
+    try { localStorage.removeItem(this.ROLE_PENDING_KEY); } catch (e) { /* storage blocked */ }
+  },
+
+  _showRoleStep(rec) {
+    this._authModalOpen = true;
+    this._applyAccent(this.systems.retail);
+    let overlay = document.getElementById('aura-relogin-modal');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'aura-relogin-modal';
+      overlay.className = 'auth-overlay';
+      overlay.innerHTML = '<div class="auth-card"></div>';
+      document.body.appendChild(overlay);
+    }
+    const card = overlay.querySelector('.auth-card');
+    card.innerHTML = `
+      <div class="auth-head">
+        <div class="auth-icon">${window.AuraIcons && AuraIcons.mark ? AuraIcons.mark(40) : ''}</div>
+        <h2 class="auth-title" id="role-title"></h2>
+        <p class="auth-sub" id="role-sub"></p>
+      </div>
+      <button id="role-admin-btn" class="auth-submit" style="width:100%;margin-top:8px"></button>
+      <p class="auth-note" id="role-admin-note"></p>
+      <button id="role-cashier-btn" class="btn-secondary" style="width:100%;justify-content:center;min-block-size:var(--touch-target-min);margin-top:12px"></button>
+      <p class="auth-note" id="role-cashier-note"></p>`;
+    // textContent for every string, one place: nothing here is markup.
+    const set = (id, text) => { const n = card.querySelector('#' + id); if (n) n.textContent = text; };
+    set('role-title', t('Which computer is this?'));
+    set('role-sub', t('Choose once. You can add more computers later.'));
+    set('role-admin-btn', t('This is the boss computer (Admin)'));
+    set('role-admin-note', t('The boss computer sets up the shop, the staff and the settings. Every shop needs one.'));
+    set('role-cashier-btn', t('This is a cashier computer'));
+    set('role-cashier-note', t('A cashier computer sells at the counter. It gets its staff from the boss computer.'));
+    card.querySelector('#role-admin-btn').addEventListener('click', () => this._chooseRole('ADMIN', rec));
+    card.querySelector('#role-cashier-btn').addEventListener('click', () => this._chooseRole('CASHIER', rec));
+  },
+
+  async _chooseRole(role, rec) {
+    // Cleared the moment a choice is made: the step is asked once, and a later
+    // restart must not ask it again over a half-built shop.
+    this._clearRolePending();
+    if (role === 'ADMIN') {
+      this._setupPrefillEmail = (rec && rec.email) || '';
+      this._landOnEmployeesOnce = true;
+      this._maybeShowFirstRunIntro();
+      return this.showSetupModal();
+    }
+    // CASHIER: the join wait screen. It polls for the shop's account, which the
+    // boss computer sends by sync; with no boss computer yet it keeps waiting
+    // and keeps the "first device" way out visible.
+    return this._waitForShopAccount();
   },
 
   // ── First-run brand intro (brand/intro.html) ────────────────────────────
@@ -4720,6 +4833,14 @@ const SubsystemApp = {
   // on another computer all fall back to Today). Anything unreadable falls back too.
   _landingSection() {
     if (this._isSellOnlyCapabilities()) return 'pos';
+    // First start of a brand-new boss computer (role step): the next thing to do
+    // is adding the shop's users, so land on Employees, once.
+    if (this._landOnEmployeesOnce) {
+      this._landOnEmployeesOnce = false;
+      const sys0 = this.systems && this.systems.retail;
+      const emp = sys0 && (sys0.nav || []).find((i) => i.id === 'employees');
+      if (emp && !emp.externalPage && this._isPageOffered(emp)) return 'employees';
+    }
     let stored = null;
     try { stored = localStorage.getItem(this._lastSectionStorageKey()); } catch (e) { stored = null; }
     if (!stored) return 'dashboard';
