@@ -84,6 +84,138 @@ class LicensingCoordinator(context: Context) {
         executeLocal(request)
     }
 
+    // ── Sign in with an Aura account (new customer flow, plan S6) ─────────────
+    // Same two-step shape as activate(): Kotlin makes the signed Owner call, Python
+    // re-reads Owner's RAW answer (the contract text is checked against its hash
+    // there, by the same code the desktop uses). The typed password and the Owner
+    // ticket stay in this process: the ticket in AccountFlowStore (memory only).
+
+    private val productCode get() = com.actionaura.retail.BuildConfig.PRODUCT_CODE
+    private val appVersion get() = com.actionaura.retail.BuildConfig.VERSION_NAME
+
+    private fun refusal(code: String, detail: String = ""): Map<String, Any?> =
+        mapOf("reason_code" to code, "detail" to detail, "_local_error" to true)
+
+    /** Returns the screen's view of the sign-in (NO ticket) or `{reason_code: ...}`. */
+    suspend fun accountSignIn(email: String, password: String): Map<String, Any?> = withContext(Dispatchers.IO) {
+        if (!identity.hasKey()) identity.generateNewKey()
+        val raw: String = try {
+            ownerClient().accountSignIn(
+                productCode, "ANDROID", appVersion, identity.getPublicKeyB64(),
+                email.trim(), password, identity,
+            )
+        } catch (exc: OwnerClientError) {
+            return@withContext refusal(exc.reasonCode, exc.message ?: "")
+        }
+        val ticket = (parseMap(raw)["ticket"] as? String)?.takeIf { it.isNotBlank() }
+        val request = Request.Builder()
+            .url(localUrl("/api/licensing/_internal/account-sign-in-response"))
+            .header("X-Aura-Internal-Secret", ServerBootstrap.internalSecret())
+            .post(raw.toRequestBody("application/json".toMediaType()))
+            .build()
+        val view = executeLocal(request)
+        val parsed = parseAccountView(view)
+        if (ticket == null || parsed == null) {
+            AccountFlowStore.clear()
+            // A refused sign-in carries Python's single public reason code; an
+            // answer with no ticket and no code is the same single failure.
+            return@withContext if (view["reason_code"] != null) view else refusal("ACCOUNT_SIGN_IN_FAILED")
+        }
+        AccountFlowStore.set(AccountFlowSession(parsed, ticket))
+        view
+    }
+
+    suspend fun changePassword(newPassword: String): Map<String, Any?> = withContext(Dispatchers.IO) {
+        val session = AccountFlowStore.get() ?: return@withContext refusal("ACCOUNT_FLOW_EXPIRED")
+        if (!session.passwordPending) return@withContext refusal("PASSWORD_CHANGE_NOT_NEEDED")
+        if (newPassword.length < MIN_NEW_PASSWORD_LENGTH) {
+            return@withContext mapOf("reason_code" to "PASSWORD_POLICY_FAILED", "policy_code" to "too_short")
+        }
+        val ticket = session.ticket() ?: return@withContext refusal("ACCOUNT_FLOW_EXPIRED")
+        val raw: String = try {
+            ownerClient().changeAccountPassword(
+                productCode, "ANDROID", appVersion, identity.getPublicKeyB64(), ticket, newPassword, identity,
+            )
+        } catch (exc: OwnerClientError) {
+            return@withContext refusal(exc.reasonCode, exc.message ?: "")
+        }
+        val answer = parseMap(raw)
+        val code = answer["reason_code"] as? String
+        if (code != null) {
+            if (code == "ACCOUNT_SIGN_IN_FAILED") AccountFlowStore.clear()   // ticket refused: start over
+            return@withContext answer
+        }
+        session.replaceTicket(answer["ticket"] as? String)
+        session.markPasswordChanged()
+        mapOf("result" to "SUCCESS")
+    }
+
+    suspend fun acceptContract(): Map<String, Any?> = withContext(Dispatchers.IO) {
+        val session = AccountFlowStore.get() ?: return@withContext refusal("ACCOUNT_FLOW_EXPIRED")
+        if (session.passwordPending) return@withContext refusal("PASSWORD_CHANGE_REQUIRED")
+        val c = session.view.contract
+        val body = c.body
+        val versionId = c.versionId
+        val sha = c.sha256
+        if (!c.required || body == null || versionId == null || sha == null) {
+            return@withContext refusal("CONTRACT_HASH_MISMATCH", "There is no contract to accept.")
+        }
+        // Re-hash at the moment of acceptance: what is recorded is what was shown.
+        if (contractSha256(body) != sha.lowercase()) return@withContext refusal("CONTRACT_HASH_MISMATCH")
+        val ticket = session.ticket() ?: return@withContext refusal("ACCOUNT_FLOW_EXPIRED")
+        val raw: String = try {
+            ownerClient().acceptAccountContract(
+                productCode, "ANDROID", appVersion, identity.getPublicKeyB64(),
+                ticket, versionId, sha.lowercase(), c.language ?: "ar", identity,
+            )
+        } catch (exc: OwnerClientError) {
+            return@withContext refusal(exc.reasonCode, exc.message ?: "")
+        }
+        val answer = parseMap(raw)
+        val code = answer["reason_code"] as? String
+        if (code != null) {
+            if (code == "ACCOUNT_SIGN_IN_FAILED") AccountFlowStore.clear()
+            return@withContext answer
+        }
+        session.markContractAccepted()
+        mapOf("result" to "SUCCESS")
+    }
+
+    /** Activates this phone for one of the licences listed by the sign-in. */
+    suspend fun activateAccount(licensePublicId: String?): Map<String, Any?> = withContext(Dispatchers.IO) {
+        val session = AccountFlowStore.get() ?: return@withContext refusal("ACCOUNT_FLOW_EXPIRED")
+        if (session.passwordPending) return@withContext refusal("PASSWORD_CHANGE_REQUIRED")
+        if (session.contractPending) return@withContext refusal("CONTRACT_ACCEPTANCE_REQUIRED")
+        val chosen = licensePublicId ?: session.view.licences.singleOrNull()?.licensePublicId
+        if (chosen == null || !session.isListed(chosen)) return@withContext refusal("ACTIVATION_GRANT_INVALID")
+        val ticket = session.ticket() ?: return@withContext refusal("ACCOUNT_FLOW_EXPIRED")
+        if (!identity.hasKey()) identity.generateNewKey()
+        val raw: String = try {
+            ownerClient().activateWithAccount(
+                productCode, "ANDROID", appVersion, "rc", UUID.randomUUID().toString(),
+                identity.getPublicKeyB64(), ticket, chosen, UUID.randomUUID().toString(), identity,
+                registryDeviceId(),
+            )
+        } catch (exc: OwnerClientError) {
+            return@withContext refusal(exc.reasonCode, exc.message ?: "")
+        }
+        val request = Request.Builder()
+            .url(localUrl("/api/licensing/_internal/sync-activation"))
+            .header("X-Aura-Internal-Secret", ServerBootstrap.internalSecret())
+            .post(raw.toRequestBody("application/json".toMediaType()))
+            .build()
+        val result = executeLocal(request)
+        // The ticket is single-use: whatever the verdict, it has done its job.
+        if (result["result"] == "SUCCESS" || result["result"] == "PENDING" ||
+            result["reason_code"] == "ACTIVATION_GRANT_INVALID") AccountFlowStore.clear()
+        result
+    }
+
+    private fun parseMap(body: String): Map<String, Any?> = try {
+        val type = object : TypeToken<Map<String, Any?>>() {}.type
+        gson.fromJson<Map<String, Any?>>(body, type) ?: emptyMap()
+    } catch (e: Exception) { emptyMap() }
+
     suspend fun checkIn(): Map<String, Any?> = withContext(Dispatchers.IO) {
         if (!identity.hasKey()) return@withContext mapOf("current_state" to "ACTIVATION_REQUIRED")
         val currentStatus = status()

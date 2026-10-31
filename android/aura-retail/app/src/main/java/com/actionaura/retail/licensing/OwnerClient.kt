@@ -105,6 +105,113 @@ class OwnerClient(
         }
     }
 
+    // ── Sign in with an Aura account (new customer flow, plan S6) ─────────────
+    // Mirrors client.py's account_sign_in / change_password / accept_contract and
+    // the account_ticket activation. Field names are the S5 contract; AccountFlow.kt
+    // explains the split of work with Python.
+    //
+    // NEVER RETRIED (retry = false). A sign-in or password change that reached Owner
+    // and was refused or rate-limited must not be repeated automatically: a retry
+    // burns a lockout slot and, for the password change, re-sends a credential.
+    // A 429 comes back as {"reason_code":"RATE_LIMITED","retry_after_seconds":N}.
+
+    private fun accountBase(productCode: String, platform: String, appVersion: String, devicePublicKeyB64: String) =
+        linkedMapOf<String, Any?>(
+            "contract_version" to CONTRACT_VERSION,
+            "request_id" to UUID.randomUUID().toString(),
+            "correlation_id" to UUID.randomUUID().toString(),
+            "timestamp" to Instant.now().toString(),
+            "nonce" to newNonce(),
+            "product_code" to productCode,
+            "platform" to platform,
+            "app_version" to appVersion,
+            "device_public_key" to devicePublicKeyB64,
+            "device_public_key_algorithm" to "ed25519",
+        )
+
+    fun accountSignIn(
+        productCode: String, platform: String, appVersion: String, devicePublicKeyB64: String,
+        email: String, password: String, identity: DeviceIdentity,
+    ): String {
+        var lastBody: LinkedHashMap<String, Any?>? = null
+        try {
+            return requestRaw("POST", "/account-sign-ins", retry = false) {
+                val body = accountBase(productCode, platform, appVersion, devicePublicKeyB64)
+                body["email"] = email
+                body["password"] = password
+                lastBody = body
+                sign(body, identity)
+            }
+        } finally {
+            lastBody?.set("password", null)
+        }
+    }
+
+    fun changeAccountPassword(
+        productCode: String, platform: String, appVersion: String, devicePublicKeyB64: String,
+        ticket: String, newPassword: String, identity: DeviceIdentity,
+    ): String {
+        var lastBody: LinkedHashMap<String, Any?>? = null
+        try {
+            return requestRaw("POST", "/account-password-changes", retry = false) {
+                val body = accountBase(productCode, platform, appVersion, devicePublicKeyB64)
+                body["ticket"] = ticket
+                body["new_password"] = newPassword
+                lastBody = body
+                sign(body, identity)
+            }
+        } finally {
+            lastBody?.set("new_password", null)
+            lastBody?.set("ticket", null)
+        }
+    }
+
+    fun acceptAccountContract(
+        productCode: String, platform: String, appVersion: String, devicePublicKeyB64: String,
+        ticket: String, contractVersionId: String, textSha256: String, language: String, identity: DeviceIdentity,
+    ): String {
+        var lastBody: LinkedHashMap<String, Any?>? = null
+        try {
+            return requestRaw("POST", "/contract-acceptances", retry = false) {
+                val body = accountBase(productCode, platform, appVersion, devicePublicKeyB64)
+                body["ticket"] = ticket
+                body["contract_version_id"] = contractVersionId
+                body["text_sha256"] = textSha256
+                body["language"] = language
+                lastBody = body
+                sign(body, identity)
+            }
+        } finally {
+            lastBody?.set("ticket", null)
+        }
+    }
+
+    /** Activation by `{account_ticket, license_public_id}` -- the response is forwarded to
+     * Python's /_internal/sync-activation exactly like a key activation's. */
+    fun activateWithAccount(
+        productCode: String, platform: String, appVersion: String, releaseChannel: String?,
+        installationId: String, devicePublicKeyB64: String, accountTicket: String,
+        licensePublicId: String, idempotencyKey: String, identity: DeviceIdentity,
+        registryDeviceId: String? = null,
+    ): String {
+        var lastBody: LinkedHashMap<String, Any?>? = null
+        try {
+            return requestRaw("POST", "/activations") {
+                val body = accountBase(productCode, platform, appVersion, devicePublicKeyB64)
+                body["release_channel"] = releaseChannel
+                body["installation_id"] = installationId
+                body["account_ticket"] = accountTicket
+                body["license_public_id"] = licensePublicId
+                body["idempotency_key"] = idempotencyKey
+                addRegistryDeviceId(body, registryDeviceId)
+                lastBody = body
+                sign(body, identity)
+            }
+        } finally {
+            lastBody?.set("account_ticket", null)
+        }
+    }
+
     fun checkIn(installationId: String, identity: DeviceIdentity, registryDeviceId: String? = null): String =
         requestRaw("POST", "/check-ins") {
             val body = linkedMapOf<String, Any?>(
@@ -255,9 +362,9 @@ class OwnerClient(
         }
     }
 
-    fun fetchSigningKeys(): Map<String, Any?> = parseJson(requestRaw("GET", "/signing-keys", null))
+    fun fetchSigningKeys(): Map<String, Any?> = parseJson(requestRaw("GET", "/signing-keys"))
 
-    fun fetchServiceInfo(): Map<String, Any?> = parseJson(requestRaw("GET", "/service-info", null))
+    fun fetchServiceInfo(): Map<String, Any?> = parseJson(requestRaw("GET", "/service-info"))
 
     private fun parseJson(bodyString: String): Map<String, Any?> {
         val type = object : TypeToken<Map<String, Any?>>() {}.type
@@ -301,11 +408,14 @@ class OwnerClient(
      * exactly, only the signature itself failed). Forwarding the raw string
      * makes this a non-issue: the bytes Python re-verifies are byte-for-byte
      * what Owner sent. */
-    private fun requestRaw(method: String, path: String, bodyProvider: (() -> Map<String, Any?>)? = null): String {
+    private fun requestRaw(
+        method: String, path: String, retry: Boolean = true,
+        bodyProvider: (() -> Map<String, Any?>)? = null,
+    ): String {
         val url = config.baseUrl.trimEnd('/') + path
         var lastError: OwnerClientError? = null
 
-        for (attempt in 0..config.maxRetries) {
+        for (attempt in 0..(if (retry) config.maxRetries else 0)) {
             if (attempt > 0) {
                 val delay = config.retryBaseBackoffMillis * (1L shl (attempt - 1))
                 val jitter = (delay * 0.25 * Random.nextDouble()).toLong()
@@ -332,7 +442,13 @@ class OwnerClient(
 
             val outcome: RequestOutcome = try {
                 http.newCall(requestBuilder.build()).execute().use { response ->
-                    if (response.code in RETRYABLE_STATUS_CODES) {
+                    if (!retry && response.code == 429) {
+                        // A lockout is an ANSWER, not a hiccup: hand it back with its wait time.
+                        val wait = response.header("Retry-After")?.toDoubleOrNull()?.toLong()
+                        val answer = linkedMapOf<String, Any?>("reason_code" to "RATE_LIMITED")
+                        if (wait != null) answer["retry_after_seconds"] = wait
+                        RequestOutcome.Success(gson.toJson(answer))
+                    } else if (response.code in RETRYABLE_STATUS_CODES) {
                         val retryAfterSeconds = response.header("Retry-After")?.toDoubleOrNull()
                         if (retryAfterSeconds != null) {
                             sleepFn(minOf((retryAfterSeconds * 1000).toLong(), config.retryMaxBackoffMillis))

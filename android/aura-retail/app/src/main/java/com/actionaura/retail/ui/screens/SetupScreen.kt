@@ -23,7 +23,8 @@ import kotlinx.coroutines.launch
 fun SetupScreen(onDone: () -> Unit) {
     var name by remember { mutableStateOf("") }
     var company by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
+    // The Aura account's e-mail when the boss computer was chosen at the role step (else blank).
+    var email by remember { mutableStateOf(com.actionaura.retail.licensing.SetupPrefill.email) }
     var password by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }

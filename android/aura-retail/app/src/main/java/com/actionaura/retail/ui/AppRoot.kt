@@ -64,7 +64,7 @@ import kotlinx.coroutines.withContext
 // stranded the user on a login screen that could never succeed (there is no
 // server behind it to authenticate against) with zero diagnostics anywhere:
 // no log line, no message, just a form that rejects every attempt.
-private enum class Phase { LOADING, LICENSE, SETUP, JOIN_CHOICE, JOINING, LOGIN, READY, ERROR }
+private enum class Phase { LOADING, LICENSE, ROLE, SETUP, JOIN_CHOICE, JOINING, LOGIN, READY, ERROR }
 
 private const val TAG = "AppRoot"
 
@@ -134,6 +134,14 @@ private suspend fun phaseAfterActivationGate(ctx: android.content.Context, licen
     val licensingStatus = if (!licensingConfigured) null else try {
         com.actionaura.retail.licensing.LicensingCoordinator(ctx).status()
     } catch (e: Exception) { null }
+    // New customer flow: a phone activated at the gate (sign-in, or a key) is asked once "which computer is
+    // this?" before anything else. Only while the shop still needs its first account, and only once the
+    // licence really is active -- a stale marker must never hide the activation gate.
+    val rolePending = com.actionaura.retail.licensing.RolePendingStore(ctx)
+    if (!needsSetup) rolePending.clear()
+    else if (licensingStatus != null &&
+        (licensingStatus["current_state"] as? String) !in com.actionaura.retail.ui.screens.NEEDS_ACTIVATION_STATES &&
+        rolePending.pendingEmail() != null) return Phase.ROLE
     when (FirstRunDecision.decide(needsSetup, licensingStatus, com.actionaura.retail.ui.screens.NEEDS_ACTIVATION_STATES)) {
         FirstRun.SETUP -> return Phase.SETUP
         FirstRun.JOIN_CHOICE -> return Phase.JOIN_CHOICE
@@ -319,6 +327,20 @@ fun AppRoot() {
                     // and awaiting it is what the desktop shell does too (its
                     // login modal's success handler re-runs init() rather than
                     // rendering first and catching up afterwards).
+                    // Boss computer -> the create-account screen (e-mail prefilled); cashier computer -> the
+                    // existing join wait. The marker is cleared the moment a choice is made: asked once.
+                    Phase.ROLE -> RoleStepScreen(
+                        onAdmin = {
+                            val store = com.actionaura.retail.licensing.RolePendingStore(ctx)
+                            com.actionaura.retail.licensing.SetupPrefill.email = store.pendingEmail().orEmpty()
+                            store.clear()
+                            phase = Phase.SETUP
+                        },
+                        onCashier = {
+                            com.actionaura.retail.licensing.RolePendingStore(ctx).clear()
+                            phase = Phase.JOINING
+                        },
+                    )
                     Phase.SETUP -> SetupScreen(onDone = { scope.launch { adoptSession(); phase = Phase.READY } })
                     // A device joining an existing shop: JOIN_CHOICE asks the
                     // one question AppRoot cannot answer on its own, JOINING
