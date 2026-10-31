@@ -24,11 +24,17 @@
   <p class="error" role="alert">{{ error }}</p>
   {% endif %}
 
-  <form method="post" action="{{ url_for('license_issuance.record_sale') }}">
+  <form method="post" action="{{ url_for('license_issuance.record_sale') }}" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="idempotency_key" value="{{ sale_idempotency_key }}">
 
     <h3>{{ _("1. Customer") }}</h3>
+    {% if convert %}
+    {# New customer flow (S3): this payment is for a customer's running trial. The customer is fixed. #}
+    <input type="hidden" name="converts_subscription_id" value="{{ convert.subscription_id }}">
+    <input type="hidden" name="customer_id" value="{{ convert.customer.id }}">
+    <p data-converting-trial="1"><strong>{{ convert.customer.legal_name }}</strong> -- {{ _("this payment is for their trial. When a manager confirms it, their shop is unlocked with the same licence; no new key is made.") }}</p>
+    {% else %}
     <label for="sale-customer-id">{{ _("Existing customer") }}</label>
     <select id="sale-customer-id" name="customer_id">
       <option value="">{{ _("-- New customer --") }}</option>
@@ -36,6 +42,7 @@
     </select>
     <label for="sale-new-customer-name">{{ _("Or: legal name of a new customer") }}</label>
     <input id="sale-new-customer-name" name="new_customer_legal_name" value="{{ fv.get("new_customer_legal_name", "") }}" placeholder="{{ _("Only used when no existing customer is selected above") }}">
+    {% endif %}
 
     <h3>{{ _("2. Package") }}</h3>
     <label for="sale-plan-id">{{ _("Package") }}</label>
@@ -75,6 +82,9 @@
     <input id="sale-reference" name="reference" value="{{ fv.get("reference", "") }}" required maxlength="128" dir="ltr">
     <label for="sale-payment-date">{{ _("Date the money arrived") }}</label>
     <input id="sale-payment-date" name="payment_date" type="date" value="{{ fv.get("payment_date", today) }}" max="{{ today }}" required>
+    <label for="sale-slip">{{ _("Photo of the bank slip or CliQ confirmation") }}{% if convert %} ({{ _("required") }}){% endif %}</label>
+    <input id="sale-slip" name="slip_photo" type="file" accept="image/*,application/pdf" capture="environment" {% if convert %}required{% endif %}>
+    <p class="hint">{{ _("For cash, photograph the bank deposit slip. Up to 10 MB. It is stored encrypted and the manager who confirms the payment sees it.") }}</p>
 
     <div style="margin-top:0.75rem;"><button type="submit" class="btn--primary-action">{{ _("Record the sale") }}</button></div>
   </form>

@@ -24,6 +24,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -110,6 +111,13 @@ class QuoteLine(Base, UUIDPKMixin, TimestampMixin):
 
 class SalesOrder(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_sales_orders"
+    __table_args__ = (
+        # New customer flow (NC2, f6d19b3a05c8): at most ONE live order may convert
+        # a given trial. A cancelled one (payment rejected) frees the trial for a
+        # fresh attempt; two live ones would be two payments for one conversion.
+        Index("uq_owner_sales_orders_one_live_conversion_per_trial", "converts_subscription_id", unique=True,
+              postgresql_where=text("converts_subscription_id IS NOT NULL AND status <> 'CANCELLED'")),
+    )
 
     quote_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_quotes.id"), index=True)
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False)
@@ -124,6 +132,13 @@ class SalesOrder(Base, UUIDPKMixin, TimestampMixin):
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # New customer flow (NC2): set when this order PAYS FOR AN EXISTING TRIAL. The
+    # subscription it names is converted in place when the order is fulfilled (no
+    # new subscription, no new licence key). NULL = an ordinary sale.
+    converts_subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_subscriptions.id", use_alter=True, name="fk_owner_sales_orders_converts_subscription"),
+        index=True,
+    )
 
     lines: Mapped[list["SalesOrderLine"]] = relationship(order_by="SalesOrderLine.sort_order")
 

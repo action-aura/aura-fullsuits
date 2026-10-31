@@ -30,7 +30,10 @@
 {% endif %}
 {% if confirmed %}
 <div class="card card--critical">
-  {% if confirmed.full_key %}
+  {% if confirmed.converted %}
+  <h2 data-trial-converted="1">{{ _("Trial paid -- the shop is unlocked") }}</h2>
+  <p>{{ _("The shop keeps the same licence and key. Its tills unlock at their next check-in with Owner. No new key was made.") }}</p>
+  {% elif confirmed.full_key %}
   <h2>{{ _("License key -- shown once") }}</h2>
   <p><strong>{{ _("Copy this now. It will never be displayed again.") }}</strong></p>
   <p>
@@ -71,7 +74,7 @@
     <tbody>
     {% for sale in sales %}
     <tr id="sale-{{ sale.order.id }}"{% if tapped and tapped.state == "waiting" and tapped.order_id == sale.order.id %} class="is-highlighted" aria-current="true"{% endif %}>
-      <td data-label="{{ _('Order') }}" dir="ltr">{{ sale.order.order_number }}</td>
+      <td data-label="{{ _('Order') }}" dir="ltr">{{ sale.order.order_number }}{% if sale.converts_trial %}<br><span class="badge draft" data-converts-trial="1">{{ _("Trial payment") }}</span>{% endif %}</td>
       <td data-label="{{ _('Customer') }}">{{ sale.customer.legal_name if sale.customer else "" }}</td>
       <td data-label="{{ _('Package') }}">{{ catalog_label(sale.plan.name) if sale.plan else "" }}{% if sale.extra_device_pairs == 1 %} {{ _("+ 1 extra pair") }}{% elif sale.extra_device_pairs %} {{ _("+ %(count)d extra pairs", count=sale.extra_device_pairs) }}{% endif %}{% if sale.extra_devices == 1 %} {{ _("+ 1 extra device") }}{% elif sale.extra_devices %} {{ _("+ %(count)d extra devices", count=sale.extra_devices) }}{% endif %}</td>
       <td data-label="{{ _('Seller') }}">{{ sale.seller.full_name if sale.seller else "" }}</td>
@@ -80,6 +83,8 @@
         <span dir="ltr">{{ sale.payment.amount }} {{ sale.payment.currency }}</span> &middot; {{ _("ref.") }} <span dir="ltr">{{ sale.payment.reference }}</span>
         &middot; <span dir="ltr">{{ format_owner_date(sale.payment.payment_date) }}</span>
         &middot; {{ payment_status_label(sale.payment.status) }}
+        {% if sale.slip %}&middot; <a href="{{ url_for('customer_onboarding.view_document', customer_id=sale.order.customer_id, document_id=sale.slip.id) }}" target="_blank" rel="noopener" data-slip-link="1">{{ _("View the slip") }}</a>
+        {% else %}&middot; <span data-no-slip="1">{{ _("No slip photo") }}</span>{% endif %}
         {% else %}
         {{ _("Not recorded -- the seller must submit the same form again.") }}
         {% endif %}
@@ -89,7 +94,7 @@
         {% if recent_auth_ok %}
         <form method="post" action="{{ url_for('license_issuance.confirm_sale', order_id=sale.order.id) }}" class="inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="btn--primary-action">{{ _("Money received -- confirm and issue the licence") }}</button>
+          <button type="submit" class="btn--primary-action">{% if sale.converts_trial %}{{ _("Money received -- confirm and unlock the shop") }}{% else %}{{ _("Money received -- confirm and issue the licence") }}{% endif %}</button>
         </form>
         {% else %}
         <a href="{{ url_for('auth.reauth_form', next=url_for('license_issuance.sales_awaiting_confirmation')) }}">{{ _("Confirm (requires recent authentication)") }}</a>

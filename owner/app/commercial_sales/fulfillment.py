@@ -192,6 +192,178 @@ def _hold_fulfillment_lock(order_id: uuid.UUID):
         conn.close()
 
 
+def _create_subscription_and_license(
+    order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id, license_pepper, idempotency_key
+):
+    """The ordinary sale: a NEW subscription and a NEW licence with a new key.
+    (Moved here unchanged from fulfill_order's body so the conversion path can
+    sit beside it; the comments are the original ones.)"""
+    # Recovery guard (items #1/#2): create_subscription()/
+    # create_license() each commit their own transaction internally
+    # (their own established behavior, unchanged) -- fulfill_order()
+    # cannot wrap the whole sequence in one atomic outer transaction
+    # without changing code outside app/commercial_sales/. A retry
+    # after a partial failure at ANY point in the sequence (License
+    # creation crashes after Subscription exists; the final
+    # order/idempotency-key write crashes after both exist) must not
+    # create a SECOND Subscription/License for the same order -- an
+    # already-existing row for this sales_order_id/subscription_id is
+    # reused, never duplicated, before falling back to creating a new
+    # one.
+    subscription = db_session.execute(select(Subscription).where(Subscription.sales_order_id == order.id)).scalars().first()
+    if subscription is None:
+        # Canonical service call -- never a direct model-row insert.
+        subscription = create_subscription(
+            {
+                "customer_id": order.customer_id,
+                "product_id": plan.product_id,
+                "plan_id": plan.id,
+                "sales_order_id": order.id,
+                "billing_cycle": plan.billing_model,
+                "start_date": start,
+                "end_date": end,
+                "device_allowance": device_limit,
+                "sales_owner_staff_user_id": _sales_owner_staff_user_id(order),
+                # Step 0 packages: the contract the package is sold
+                # on (Package 2: 12 months, Package 3: 24), fixed
+                # at the sale. The licence term above is the PAID
+                # period (one month for a monthly package); the
+                # contract is what the later months and the
+                # commission ladder read (packages.contract_terms).
+                **contract_terms(plan, start),
+            },
+            actor_staff_user_id,
+        )
+    elif subscription.status not in _RESUMABLE_SUBSCRIPTION_STATUSES:
+        # Item #4: an incompatible existing state (e.g. CANCELLED,
+        # EXPIRED, SUSPENDED) means something else already happened
+        # to this Subscription outside this fulfillment attempt --
+        # blindly reusing/transitioning it would silently override
+        # that. Rejected, not silently proceeded.
+        raise CommercialSalesError(
+            "FULFILLMENT_NOT_ELIGIBLE", reason=f"existing subscription is in incompatible status {subscription.status}"
+        )
+
+    if subscription.status == "DRAFT":
+        transition_subscription(subscription, "ACTIVE", actor_staff_user_id, reason="Fulfilled from confirmed, paid Sales Order")
+
+    license_row = db_session.execute(select(License).where(License.subscription_id == subscription.id)).scalars().first()
+    if license_row is not None and license_row.status not in ("DRAFT", "ISSUED"):
+        raise CommercialSalesError(
+            "FULFILLMENT_NOT_ELIGIBLE", reason=f"existing license is in incompatible status {license_row.status}"
+        )
+    if license_row is None:
+        # Canonical service call -- never a direct model-row insert.
+        license_row = create_license(
+            {
+                "customer_id": order.customer_id,
+                "subscription_id": subscription.id,
+                "product_id": plan.product_id,
+                "plan_id": plan.id,
+                "allowed_platforms": allowed_platforms,
+                "device_limit": device_limit,
+                "valid_from": start,
+                "valid_until": end,
+            },
+            actor_staff_user_id,
+        )
+    # The one real key-issuance authority -- never constructs the key
+    # or writes key fields directly (app/licensing/services.py). Its
+    # own idempotency ledger (LicenseKeyIssuanceEvent) already makes
+    # this call itself safely retryable.
+    #
+    # AUDIT-NNN: the plaintext key `issue_license_key` returns here used
+    # to be discarded -- a licence fulfilled through this pipeline was
+    # issued to a customer who could never read the key to activate it.
+    # The full key exists only in this return value (ADR-9: never
+    # persisted, never logged, never re-derivable), so it is captured
+    # and threaded through fulfill_order's own return value, to be
+    # revealed once by the caller exactly the way
+    # licensing/routes.py::issue renders `revealed_key` for the direct
+    # path. `license_key` stays None when this call resumes a retry
+    # whose license was already ISSUED by an earlier attempt (the key
+    # was shown once, then, and is equally unrecoverable now).
+    license_key = None
+    if license_row.status == "DRAFT":
+        license_row, license_key = issue_license_key(license_row, license_pepper, f"{idempotency_key}-license", actor_staff_user_id)
+    return subscription, license_row, license_key
+
+
+def _convert_trial_in_place(order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id):
+    """New customer flow (NC2): the money for a trial is confirmed. Under the
+    order's fulfillment lock (held by the caller) the trial's OWN subscription
+    goes PILOT -> ACTIVE with the paid term and package, its licence keeps its
+    key and gets the new package / device limit / dates, and the trial record
+    becomes CONVERTED. Each step is a get-or-do so a retry after a crash part-way
+    finishes the conversion instead of failing on the half-converted rows.
+
+    Why in place and not a new subscription: the shop's devices are registered
+    against the trial's licence; a new licence would strand them and need a new
+    key typed on every till. The lease the shop's next check-in receives now says
+    ACTIVE with the paid term_end, which is what unlocks the till.
+
+    LicenseEntitlement needs no sync step: entitlements are resolved from the
+    licence's plan every time a lease is signed (licensing_service/entitlements.py;
+    LicenseEntitlement rows are only staff overrides, and none are written for a
+    trial), so pointing the licence at the new plan IS the re-sync."""
+    from app.customer_onboarding import documents as customer_documents
+    from app.customer_onboarding.trial import convert_trial_pilot, trial_pilot_for_subscription
+
+    subscription = db_session.get(Subscription, order.converts_subscription_id)
+    if subscription is None or subscription.customer_id != order.customer_id:
+        raise CommercialSalesError("FULFILLMENT_NOT_ELIGIBLE", reason="the trial this order converts does not belong to this customer")
+    already_done_by_this_order = subscription.sales_order_id == order.id
+    if not already_done_by_this_order and subscription.status != "PILOT":
+        raise CommercialSalesError(
+            "FULFILLMENT_NOT_ELIGIBLE", reason=f"the trial to convert is in status {subscription.status}, not PILOT"
+        )
+    pilot = trial_pilot_for_subscription(subscription.id)
+    if pilot is None:
+        raise CommercialSalesError("FULFILLMENT_NOT_ELIGIBLE", reason="the subscription to convert is not a trial")
+    if subscription.product_id != plan.product_id:
+        raise CommercialSalesError("FULFILLMENT_NOT_ELIGIBLE", reason="a trial can only be converted to a package of its own product")
+
+    license_row = db_session.execute(select(License).where(License.subscription_id == subscription.id)).scalars().first()
+    if license_row is None or license_row.status not in ("ISSUED", "ACTIVE"):
+        raise CommercialSalesError(
+            "FULFILLMENT_NOT_ELIGIBLE",
+            reason=f"the trial's licence is in incompatible status {license_row.status if license_row else 'MISSING'}",
+        )
+
+    if not already_done_by_this_order:
+        subscription.plan_id = plan.id
+        subscription.billing_cycle = plan.billing_model
+        subscription.start_date = start
+        subscription.end_date = end
+        subscription.device_allowance = device_limit
+        subscription.sales_order_id = order.id
+        subscription.sales_owner_staff_user_id = _sales_owner_staff_user_id(order)
+        for column, value in contract_terms(plan, start).items():
+            setattr(subscription, column, value)
+        db_session.commit()
+    if subscription.status == "PILOT":
+        transition_subscription(
+            subscription, "ACTIVE", actor_staff_user_id, reason="Trial paid: converted from the confirmed, paid Sales Order"
+        )
+    license_row.plan_id = plan.id
+    license_row.allowed_platforms = allowed_platforms
+    license_row.device_limit = device_limit
+    license_row.valid_from = start
+    license_row.valid_until = end
+    db_session.commit()
+    if pilot.status != "CONVERTED":
+        convert_trial_pilot(pilot, order_id=order.id, actor_staff_user_id=actor_staff_user_id)
+    customer_documents.keep_for_customer_lifetime(order.customer_id)
+    db_session.commit()
+    audit_record(
+        actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="TRIAL_CONVERTED",
+        entity_type="subscription", entity_public_id=str(subscription.id),
+        after_state={"sales_order_id": str(order.id), "plan_id": str(plan.id), "device_limit": device_limit,
+                     "term_start": start.isoformat(), "term_end": end.isoformat() if end else None},
+    )
+    return subscription, license_row
+
+
 def fulfill_order(
     order: SalesOrder,
     *,
@@ -279,94 +451,18 @@ def fulfill_order(
         )
 
         try:
-            # Recovery guard (items #1/#2): create_subscription()/
-            # create_license() each commit their own transaction internally
-            # (their own established behavior, unchanged) -- fulfill_order()
-            # cannot wrap the whole sequence in one atomic outer transaction
-            # without changing code outside app/commercial_sales/. A retry
-            # after a partial failure at ANY point in the sequence (License
-            # creation crashes after Subscription exists; the final
-            # order/idempotency-key write crashes after both exist) must not
-            # create a SECOND Subscription/License for the same order -- an
-            # already-existing row for this sales_order_id/subscription_id is
-            # reused, never duplicated, before falling back to creating a new
-            # one.
-            subscription = db_session.execute(select(Subscription).where(Subscription.sales_order_id == order.id)).scalars().first()
-            if subscription is None:
-                # Canonical service call -- never a direct model-row insert.
-                subscription = create_subscription(
-                    {
-                        "customer_id": order.customer_id,
-                        "product_id": plan.product_id,
-                        "plan_id": plan.id,
-                        "sales_order_id": order.id,
-                        "billing_cycle": plan.billing_model,
-                        "start_date": start,
-                        "end_date": end,
-                        "device_allowance": device_limit,
-                        "sales_owner_staff_user_id": _sales_owner_staff_user_id(order),
-                        # Step 0 packages: the contract the package is sold
-                        # on (Package 2: 12 months, Package 3: 24), fixed
-                        # at the sale. The licence term above is the PAID
-                        # period (one month for a monthly package); the
-                        # contract is what the later months and the
-                        # commission ladder read (packages.contract_terms).
-                        **contract_terms(plan, start),
-                    },
-                    actor_staff_user_id,
+            if order.converts_subscription_id is not None:
+                # New customer flow (NC2): this order PAYS FOR A TRIAL. The trial's
+                # own subscription and licence are converted in place -- no second
+                # subscription, no new licence key (the shop already has the key).
+                subscription, license_row = _convert_trial_in_place(
+                    order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id
                 )
-            elif subscription.status not in _RESUMABLE_SUBSCRIPTION_STATUSES:
-                # Item #4: an incompatible existing state (e.g. CANCELLED,
-                # EXPIRED, SUSPENDED) means something else already happened
-                # to this Subscription outside this fulfillment attempt --
-                # blindly reusing/transitioning it would silently override
-                # that. Rejected, not silently proceeded.
-                raise CommercialSalesError(
-                    "FULFILLMENT_NOT_ELIGIBLE", reason=f"existing subscription is in incompatible status {subscription.status}"
+                license_key = None
+            else:
+                subscription, license_row, license_key = _create_subscription_and_license(
+                    order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id, license_pepper, idempotency_key
                 )
-
-            if subscription.status == "DRAFT":
-                transition_subscription(subscription, "ACTIVE", actor_staff_user_id, reason="Fulfilled from confirmed, paid Sales Order")
-
-            license_row = db_session.execute(select(License).where(License.subscription_id == subscription.id)).scalars().first()
-            if license_row is not None and license_row.status not in ("DRAFT", "ISSUED"):
-                raise CommercialSalesError(
-                    "FULFILLMENT_NOT_ELIGIBLE", reason=f"existing license is in incompatible status {license_row.status}"
-                )
-            if license_row is None:
-                # Canonical service call -- never a direct model-row insert.
-                license_row = create_license(
-                    {
-                        "customer_id": order.customer_id,
-                        "subscription_id": subscription.id,
-                        "product_id": plan.product_id,
-                        "plan_id": plan.id,
-                        "allowed_platforms": allowed_platforms,
-                        "device_limit": device_limit,
-                        "valid_from": start,
-                        "valid_until": end,
-                    },
-                    actor_staff_user_id,
-                )
-            # The one real key-issuance authority -- never constructs the key
-            # or writes key fields directly (app/licensing/services.py). Its
-            # own idempotency ledger (LicenseKeyIssuanceEvent) already makes
-            # this call itself safely retryable.
-            #
-            # AUDIT-NNN: the plaintext key `issue_license_key` returns here used
-            # to be discarded -- a licence fulfilled through this pipeline was
-            # issued to a customer who could never read the key to activate it.
-            # The full key exists only in this return value (ADR-9: never
-            # persisted, never logged, never re-derivable), so it is captured
-            # and threaded through fulfill_order's own return value, to be
-            # revealed once by the caller exactly the way
-            # licensing/routes.py::issue renders `revealed_key` for the direct
-            # path. `license_key` stays None when this call resumes a retry
-            # whose license was already ISSUED by an earlier attempt (the key
-            # was shown once, then, and is equally unrecoverable now).
-            license_key = None
-            if license_row.status == "DRAFT":
-                license_row, license_key = issue_license_key(license_row, license_pepper, f"{idempotency_key}-license", actor_staff_user_id)
 
             order.status = "FULFILLED"
             order.fulfilled_at = utcnow()

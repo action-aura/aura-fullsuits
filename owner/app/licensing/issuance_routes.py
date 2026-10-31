@@ -71,6 +71,9 @@ from app.security.rbac import get_staff_permission_codes, require_permission, re
 
 bp = Blueprint("license_issuance", __name__, url_prefix="/licenses/issuance")
 
+# One byte over the 10 MB limit is enough for the slip check to refuse it.
+MAX_SLIP_READ_BYTES = 10 * 1024 * 1024 + 1
+
 
 def _sellable_packages() -> list[dict]:
     """Plans a support/sales user may pick from this screen -- only ones
@@ -125,9 +128,29 @@ def _wants_json_error() -> bool:
 
 # ------------------------------------------------------------ the sale form --
 
+def _conversion_context(raw_subscription_id, actor, codes):
+    """The trial a sale form is opened FOR (?convert=<subscription>), or None. A
+    trial the actor cannot see answers like one that does not exist."""
+    if not raw_subscription_id:
+        return None
+    from app.commercial_sales.direct_sale import _resolve_conversion
+
+    try:
+        subscription = _resolve_conversion(raw_subscription_id, "-", actor.id, codes)
+    except DirectSaleError:
+        return None
+    return {
+        "subscription_id": subscription.id,
+        "customer": db_session.get(Customer, subscription.customer_id),
+        "plan": db_session.get(Plan, subscription.plan_id),
+    }
+
+
 def _render_sale_form(*, error: str | None, idempotency_key: str, form_values=None, recorded=None, status: int = 200):
     actor = load_current_staff()
     codes = get_staff_permission_codes(actor)
+    convert_raw = (form_values or {}).get("converts_subscription_id") if form_values else None
+    convert = _conversion_context(convert_raw or request.args.get("convert"), actor, codes)
     may_choose_seller = CHOOSE_SELLER_PERMISSION in codes
     packages = _sellable_packages()
     for package in packages:
@@ -148,6 +171,7 @@ def _render_sale_form(*, error: str | None, idempotency_key: str, form_values=No
         sale_idempotency_key=idempotency_key,
         can_issue_no_charge=bool(actor.is_super_admin),
         can_confirm="payments.confirm" in codes,
+        convert=convert,
     ), status
 
 
@@ -184,9 +208,13 @@ def record_sale():
         payment_date = date.fromisoformat(form.get("payment_date") or "")
     except ValueError:
         return _sale_error(_("Type the date the money arrived."), idempotency_key)
+    slip = request.files.get("slip_photo")
+    slip_bytes = slip.read(MAX_SLIP_READ_BYTES) if slip is not None and slip.filename else b""
     try:
         amount = parse_amount(form.get("amount") or "")
         result = record_direct_sale(
+            converts_subscription_id=form.get("converts_subscription_id") or None,
+            slip_photo=slip_bytes or None,
             customer_id=form.get("customer_id") or None,
             new_customer_legal_name=form.get("new_customer_legal_name") or None,
             plan_id=form.get("plan_id") or None,

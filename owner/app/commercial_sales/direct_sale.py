@@ -68,7 +68,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import String, cast, func, select, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.audit.services import record as audit_record
 from app.commercial_sales.allocation import allocate_payment
@@ -218,6 +218,17 @@ DIRECT_SALE_MESSAGES = {
     "REJECT_INVOICE_EXISTS": (
         "An invoice was already made for this sale; it can no longer be rejected here. Void the invoice first."
     ),
+    # New customer flow (S3): paying for a trial, and the payment slip photo.
+    "SLIP_REQUIRED": "Add a photo of the bank slip or CliQ confirmation. A trial is only unlocked against a slip.",
+    "SLIP_TYPE_NOT_ALLOWED": "The slip must be a JPEG or PNG picture (or a PDF).",
+    "SLIP_TOO_LARGE": "The slip photo is too large (at most 10 MB).",
+    "SLIP_INVALID": "The slip photo is empty or damaged. Take it again.",
+    "SLIP_STORAGE_NOT_READY": "Slip photos cannot be stored on this server yet (no encryption key is set). Nothing was recorded. Ask the administrator.",
+    "CONVERSION_TRIAL_NOT_FOUND": "The trial to pay for was not found.",
+    "CONVERSION_CUSTOMER_MISMATCH": "That trial belongs to a different customer.",
+    "CONVERSION_NOT_A_TRIAL": "That subscription is not a running trial, so there is nothing to convert.",
+    "CONVERSION_WRONG_PRODUCT": "A trial can only be paid with a package of its own product.",
+    "CONVERSION_ALREADY_PENDING": "A payment for this trial is already waiting for a manager. Wait for it, or ask a manager to reject it first.",
 }
 
 
@@ -450,7 +461,8 @@ def _plan_id_on(order: SalesOrder):
     ).scalars().first()
 
 
-def _check_same_sale(order: SalesOrder, *, idempotency_key, customer, legal_name, plan_id, extra_device_pairs, seller) -> None:
+def _check_same_sale(order: SalesOrder, *, idempotency_key, customer, legal_name, plan_id, extra_device_pairs, seller,
+                     converts_subscription_id=None) -> None:
     """A key names one sale: the same customer choice, package, pairs and
     seller every time (issuance.py's replay rule). Refused otherwise."""
     if customer is not None:
@@ -467,6 +479,7 @@ def _check_same_sale(order: SalesOrder, *, idempotency_key, customer, legal_name
         # never the same sale as a form that sells pairs.
         and _addon_quantity_on(order, EXTRA_DEVICE_ADDON_CODE) == 0
         and order.created_by_employee_profile_id == seller.id
+        and order.converts_subscription_id == converts_subscription_id
     )
     if not same:
         raise DirectSaleError("KEY_USED_FOR_DIFFERENT_SALE")
@@ -504,12 +517,21 @@ def record_direct_sale(
     actor_staff_user_id: uuid.UUID,
     actor_permission_codes: set[str],
     as_of: date | None = None,
+    converts_subscription_id=None,
+    slip_photo: bytes | None = None,
 ) -> dict:
     """Records the sale and its PENDING payment. Never issues a licence --
     that waits for a manager (confirm_direct_sale). Returns {order_id,
     order_number, customer_id, payment_id, total, currency, replayed};
     replayed=True means this key's sale was already recorded and these are
-    its original rows."""
+    its original rows.
+
+    New customer flow (S3): converts_subscription_id makes this sale PAY FOR A
+    TRIAL. The customer is then the trial's own customer (must be visible to the
+    actor), the package may differ from the trial's, a payment-slip photo is
+    REQUIRED, and when a manager confirms, fulfillment converts that very
+    subscription (no new licence). slip_photo, when given, is stored encrypted as
+    the payment's PAYMENT_SLIP in the payment's own transaction."""
     if not idempotency_key:
         raise DirectSaleError("KEY_REQUIRED")
     # Jordan's date (Step 0 fix round): at 00:30 in Amman, utcnow().date() is
@@ -523,6 +545,17 @@ def record_direct_sale(
         _RECORD_LOCK_NAMESPACE, idempotency_key, "RECORD_IN_PROGRESS",
     ):
         # -- read-only until every check has passed --
+        trial_subscription = None
+        if converts_subscription_id:
+            trial_subscription = _resolve_conversion(
+                converts_subscription_id, idempotency_key, actor_staff_user_id, actor_permission_codes
+            )
+            if customer_id and str(customer_id) != str(trial_subscription.customer_id):
+                raise DirectSaleError("CONVERSION_CUSTOMER_MISMATCH")
+            if new_customer_legal_name:
+                raise DirectSaleError("CONVERSION_CUSTOMER_MISMATCH")
+            customer_id = trial_subscription.customer_id
+        slip_photo = _check_slip(slip_photo, required=trial_subscription is not None)
         seller = _resolve_seller(
             sales_owner_employee_profile_id,
             actor_staff_user_id=actor_staff_user_id, actor_permission_codes=actor_permission_codes,
@@ -542,6 +575,7 @@ def record_direct_sale(
             _check_same_sale(
                 order, idempotency_key=idempotency_key, customer=customer, legal_name=legal_name,
                 plan_id=plan_id, extra_device_pairs=extra_device_pairs, seller=seller,
+                converts_subscription_id=trial_subscription.id if trial_subscription is not None else None,
             )
             payment = db_session.get(PaymentRecord, payment_id)
             if payment is not None:
@@ -552,7 +586,8 @@ def record_direct_sale(
                 reference=reference, payment_date=payment_date, as_of=as_of,
             )
             _record_sale_payment(order, payment_id, amount=amount, method=method, reference=reference,
-                                 payment_date=payment_date, seller=seller, actor_staff_user_id=actor_staff_user_id)
+                                 payment_date=payment_date, seller=seller, actor_staff_user_id=actor_staff_user_id,
+                                 slip_photo=slip_photo)
             return _result(order, payment_id, replayed=False)
 
         plan = None
@@ -562,6 +597,8 @@ def record_direct_sale(
             plan = None
         if plan is None:
             raise DirectSaleError("PACKAGE_NOT_FOUND")
+        if trial_subscription is not None and plan.product_id != trial_subscription.product_id:
+            raise DirectSaleError("CONVERSION_WRONG_PRODUCT")
         plan_item, _addon_item, lines, total, currency = _price_sale(plan, extra_device_pairs)
         _validate_payment(
             amount=amount, currency=currency, total=total, method=method,
@@ -609,6 +646,7 @@ def record_direct_sale(
             currency=currency,
             total=total,
             version=1,
+            converts_subscription_id=trial_subscription.id if trial_subscription is not None else None,
         )
         db_session.add(order)
         db_session.flush()
@@ -635,6 +673,13 @@ def record_direct_sale(
         )
         try:
             db_session.commit()
+        except IntegrityError:
+            # The partial unique index (one live conversion order per trial) lost a
+            # race that the read-only check above could not see.
+            db_session.rollback()
+            if trial_subscription is not None:
+                raise DirectSaleError("CONVERSION_ALREADY_PENDING")
+            raise
         except Exception:
             db_session.rollback()
             raise
@@ -646,14 +691,71 @@ def record_direct_sale(
                 "order_number": order.order_number, "customer_id": str(customer.id), "source": "DIRECT_SALE",
                 "seller_employee_profile_id": str(seller.id), "plan_id": str(plan.id),
                 "extra_device_pairs": extra_device_pairs, "total": str(total), "currency": currency,
+                "converts_subscription_id": str(trial_subscription.id) if trial_subscription is not None else None,
             },
         )
         _record_sale_payment(order, payment_id, amount=amount, method=method, reference=reference,
-                             payment_date=payment_date, seller=seller, actor_staff_user_id=actor_staff_user_id)
+                             payment_date=payment_date, seller=seller, actor_staff_user_id=actor_staff_user_id,
+                             slip_photo=slip_photo)
         return _result(order, payment_id, replayed=False)
 
 
-def _record_sale_payment(order, payment_id, *, amount, method, reference, payment_date, seller, actor_staff_user_id):
+def _resolve_conversion(raw_subscription_id, idempotency_key, actor_staff_user_id, actor_permission_codes) -> Subscription:
+    """The trial this sale pays for, or a refusal -- read-only, before any write.
+    A trial is convertible while its subscription is PILOT and its trial record is
+    still running (ACTIVE / EXTENDED); one live order per trial (a rejected one
+    frees it). The customer-visibility check is the shared one in
+    _resolve_customer, run on the trial's customer by the caller."""
+    from app.customer_onboarding.trial import trial_pilot_for_subscription
+
+    try:
+        subscription = db_session.get(Subscription, uuid.UUID(str(raw_subscription_id)))
+    except ValueError:
+        subscription = None
+    owner = db_session.get(Customer, subscription.customer_id) if subscription is not None else None
+    # Not visible = not found: a seller learns nothing about another seller's trial.
+    if owner is None or not customer_visible_to_actor(owner, actor_staff_user_id, actor_permission_codes):
+        raise DirectSaleError("CONVERSION_TRIAL_NOT_FOUND")
+    pilot = trial_pilot_for_subscription(subscription.id)
+    own_order_id = _row_id_for(idempotency_key, "order")
+    live = db_session.execute(
+        select(SalesOrder.id).where(
+            SalesOrder.converts_subscription_id == subscription.id, SalesOrder.status != "CANCELLED",
+            SalesOrder.id != own_order_id,
+        )
+    ).first()
+    if live is not None:
+        raise DirectSaleError("CONVERSION_ALREADY_PENDING")
+    this_forms_own_order = db_session.get(SalesOrder, own_order_id)
+    if this_forms_own_order is None and (
+        pilot is None or subscription.status != "PILOT" or pilot.status not in ("ACTIVE", "EXTENDED")
+    ):
+        raise DirectSaleError("CONVERSION_NOT_A_TRIAL")
+    return subscription
+
+
+def _check_slip(slip_photo: bytes | None, *, required: bool) -> bytes | None:
+    """Type, size and storage readiness of the payment slip photo -- before any
+    write, so a refused form leaves no customer-side trace. None when there is no slip."""
+    from app.customer_onboarding import documents
+
+    if not slip_photo:
+        if required:
+            raise DirectSaleError("SLIP_REQUIRED")
+        return None
+    try:
+        documents.clean_file(slip_photo)
+    except documents.DocumentError as exc:
+        raise DirectSaleError({
+            "DOCUMENT_TYPE_NOT_ALLOWED": "SLIP_TYPE_NOT_ALLOWED", "DOCUMENT_TOO_LARGE": "SLIP_TOO_LARGE",
+        }.get(exc.code, "SLIP_INVALID")) from exc
+    if not documents.storage_is_ready():
+        raise DirectSaleError("SLIP_STORAGE_NOT_READY")
+    return slip_photo
+
+
+def _record_sale_payment(order, payment_id, *, amount, method, reference, payment_date, seller, actor_staff_user_id,
+                         slip_photo=None):
     # The existing storage writer, PENDING -- record_payment itself refuses
     # CONFIRMED (two-person rule, 16cbc323). The managers' push-notification
     # outbox row is written in the payment's OWN transaction (Step 1): the sale
@@ -673,7 +775,7 @@ def _record_sale_payment(order, payment_id, *, amount, method, reference, paymen
             "status": "PENDING",
         },
         actor_staff_user_id,
-        in_same_transaction=lambda payment: enqueue_sale_waiting(order_id=order.id, payment_id=payment.id),
+        in_same_transaction=lambda payment: _in_payment_transaction(payment, order, slip_photo, actor_staff_user_id),
     )
     audit_record(
         actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="DIRECT_SALE_RECORDED",
@@ -683,6 +785,20 @@ def _record_sale_payment(order, payment_id, *, amount, method, reference, paymen
             "seller_employee_profile_id": str(seller.id), "amount": str(amount), "currency": order.currency,
         },
     )
+
+
+def _in_payment_transaction(payment, order, slip_photo, actor_staff_user_id) -> None:
+    """Runs inside the payment's own transaction (record_payment's hook): the
+    managers' notification, and the slip photo -- so the payment, the slip that
+    proves it and the announcement all commit or all roll back together."""
+    enqueue_sale_waiting(order_id=order.id, payment_id=payment.id)
+    if slip_photo:
+        from app.customer_onboarding import documents
+
+        documents.store_document(
+            customer_id=order.customer_id, kind="PAYMENT_SLIP", content=slip_photo,
+            uploaded_by_staff_user_id=actor_staff_user_id, payment_record_id=payment.id,
+        )
 
 
 # --------------------------------------------------------- the manager side --
@@ -717,8 +833,24 @@ def list_sales_awaiting_confirmation(limit: int = 200) -> list[dict]:
             "extra_device_pairs": _extra_pairs_on(order),
             # Single extra devices on a sale recorded before the pairs.
             "extra_devices": _addon_quantity_on(order, EXTRA_DEVICE_ADDON_CODE),
+            # New customer flow (S3): a payment for a trial, and the slip that proves it.
+            "converts_trial": order.converts_subscription_id is not None,
+            "slip": _slip_of(payment),
         })
     return sales
+
+
+def _slip_of(payment):
+    from app.models.customer_onboarding import CustomerDocument
+
+    if payment is None:
+        return None
+    return db_session.execute(
+        select(CustomerDocument).where(
+            CustomerDocument.payment_record_id == payment.id, CustomerDocument.kind == "PAYMENT_SLIP",
+            CustomerDocument.purged_at.is_(None),
+        )
+    ).scalars().first()
 
 
 def _waiting_sales_select(*columns):
@@ -912,8 +1044,10 @@ def _confirm_locked(order_id, *, actor_staff_user_id, license_pepper) -> dict:
         whatsapp_message = compose_activation_whatsapp_message(
             customer_name=customer.legal_name, product_name=plan_item["name"], full_key=full_key
         )
+    converted = order.converts_subscription_id is not None
     return {"order_id": order.id, "license_id": licence.id if licence else None, "full_key": full_key,
-            "whatsapp_message": whatsapp_message, "replayed": full_key is None}
+            "whatsapp_message": whatsapp_message, "replayed": full_key is None and not converted,
+            "converted": converted}
 
 
 def reject_direct_sale(order_id, *, reason: str, actor_staff_user_id: uuid.UUID) -> SalesOrder:
