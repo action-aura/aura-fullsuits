@@ -7,7 +7,7 @@ from functools import wraps
 from flask import abort, jsonify, redirect, request, url_for
 from sqlalchemy import select
 
-from app.auth.session import has_recent_auth, load_current_staff
+from app.auth.session import COOKIE_NAME, has_recent_auth, load_current_staff
 from app.extensions import db_session
 from app.models.staff import Permission, Role, RolePermission, StaffRoleAssignment
 
@@ -42,7 +42,15 @@ def require_login(view):
             # session ended, sign in again" message instead of a bare
             # login form -- never trusted for anything security-relevant,
             # the actual authorization decision above is already made.
-            return redirect(url_for("auth.login_form", next=request.path, reason="session_expired"))
+            #
+            # ONLY when a session cookie came with the request: a first-time visitor
+            # (no cookie at all) has no session to have "ended", and telling them so
+            # is wrong and confusing (dress rehearsal 2026-10-31). A cookie that no
+            # longer matches a live session (idle timeout, signed out elsewhere,
+            # revoked) is the case the message is for.
+            if request.cookies.get(COOKIE_NAME):
+                return redirect(url_for("auth.login_form", next=request.path, reason="session_expired"))
+            return redirect(url_for("auth.login_form", next=request.path))
         return view(*args, **kwargs)
 
     return wrapped
