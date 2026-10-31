@@ -71,6 +71,14 @@
 
 {# ---------- SALES ---------- #}
 {% set sales_links = [] %}
+{# "Create a new customer" (the seller's trial form, /customers/new-trial) was
+   reachable only by typing the URL -- a seller who did not know it could not find
+   it. First in the group: it is the first thing a seller does. Shown only when the
+   feature is ON (the route answers 404 otherwise, so a link would be a dead end)
+   AND the viewer holds the permission the route itself demands. #}
+{% if config.get('CUSTOMER_ONBOARDING_ENABLED') and has_permission('customers.onboard') %}
+  {% set _unused = sales_links.append({'endpoint': 'customer_onboarding.new_form', 'label': _('Create a new customer')}) %}
+{% endif %}
 {# Step 0: the one-screen sale (sale form needs orders.create + payments.create)
    and the managers' confirmation list (payments.confirm). #}
 {% if has_permission('orders.create') and has_permission('payments.create') %}
