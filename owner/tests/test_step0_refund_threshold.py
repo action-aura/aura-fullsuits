@@ -613,7 +613,7 @@ def test_the_new_refusals_are_translated(app, seeded):
             "فقط المشرف العام يمكنه السماح بالاسترداد بعد مرور 30 يومًا."),
         "REFUND_OVERRIDE_REASON_REQUIRED": (
             "Write why this refund is allowed after the 30 days -- at least 10 characters.",
-            "اكتب سبب السماح بهذا الاسترداد بعد مرور 30 يومًا -- 10 أحرف على الأقل."),
+            "اكتب سبب السماح بهذا الاسترداد بعد مرور 30 يومًا — 10 أحرف على الأقل."),
     }
     with app.test_request_context():
         from flask_babel import force_locale

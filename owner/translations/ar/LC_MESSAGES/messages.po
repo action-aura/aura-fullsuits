@@ -449,7 +449,7 @@ msgstr "غير موثّق"
 
 #: app/i18n_labels.py:267
 msgid "Possible existing record -- requires management review"
-msgstr "سجل موجود محتمل -- يتطلب مراجعة الإدارة"
+msgstr "سجل موجود محتمل — يتطلب مراجعة الإدارة"
 
 #: app/i18n_labels.py:277
 msgid "Quoted"
@@ -580,7 +580,7 @@ msgid ""
 "%(max)s). No indefinite rolling pilot."
 msgstr ""
 "تم تمديد التجربة التشغيلية %(count)s مرة/مرات بالفعل (الحد الأقصى المسموح"
-" به: %(max)s) -- لا يُسمح بتمديد التجربة إلى ما لا نهاية."
+" به: %(max)s) — لا يُسمح بتمديد التجربة إلى ما لا نهاية."
 
 #: app/i18n_labels.py:384
 msgid "The new end date must be after the current pilot end date."
@@ -666,7 +666,7 @@ msgid ""
 "Device slot exceptions may not exceed %(max_days)s days -- temporary "
 "means temporary."
 msgstr ""
-"لا يجوز أن تتجاوز استثناءات فتحات الأجهزة %(max_days)s يومًا -- فالمؤقت "
+"لا يجوز أن تتجاوز استثناءات فتحات الأجهزة %(max_days)s يومًا — فالمؤقت "
 "يعني مؤقتًا."
 
 #: app/i18n_labels.py:430
@@ -1821,7 +1821,7 @@ msgstr "لا يمكنك اعتماد إقفال نقدي قمت بإعداده."
 msgid ""
 "This cash closing is approved or closed and cannot be edited directly -- "
 "reopen it first."
-msgstr "هذا الإقفال النقدي معتمد أو مغلق ولا يمكن تعديله مباشرة -- أعد فتحه أولاً."
+msgstr "هذا الإقفال النقدي معتمد أو مغلق ولا يمكن تعديله مباشرة — أعد فتحه أولاً."
 
 #: app/i18n_labels.py:1104
 msgid "Reopening a cash closing requires a reason."
@@ -2055,7 +2055,7 @@ msgstr "التراخيص الموقوفة"
 #: app/attention/service.py:580
 #, python-format
 msgid "Open %(duration)s -- %(message)s"
-msgstr "منذ %(duration)s -- %(message)s"
+msgstr "منذ %(duration)s — %(message)s"
 
 #: app/attention/service.py:583 app/attention/service.py:586
 msgid "Device-Limit Events"
@@ -2072,7 +2072,7 @@ msgstr "فشلت أحدث نسخة احتياطية لقاعدة البيانا�
 #: app/attention/service.py:603
 #, python-format
 msgid "Failed %(duration)s ago -- no successful backup since"
-msgstr "فشلت منذ %(duration)s -- لا توجد نسخة احتياطية ناجحة منذ ذلك الحين"
+msgstr "فشلت منذ %(duration)s — لا توجد نسخة احتياطية ناجحة منذ ذلك الحين"
 
 #: app/attention/service.py:606 app/attention/service.py:609
 msgid "Failed Backups"
@@ -2112,7 +2112,7 @@ msgstr "العميل"
 #: app/command_palette/service.py:209 app/command_palette/service.py:277
 #, python-format
 msgid "%(name)s -- %(status)s"
-msgstr "%(name)s -- الحالة: %(status)s"
+msgstr "%(name)s — الحالة: %(status)s"
 
 #: app/command_palette/service.py:158
 msgid "Quote"
@@ -2138,7 +2138,7 @@ msgstr "ترخيص لـ %(name)s"
 #: app/command_palette/service.py:241
 #, python-format
 msgid "%(prefix)s -- %(status)s"
-msgstr "%(prefix)s -- الحالة: %(status)s"
+msgstr "%(prefix)s — الحالة: %(status)s"
 
 #: app/command_palette/service.py:242 app/customers/customer_360.py:324
 msgid "(unissued)"
@@ -2707,7 +2707,7 @@ msgid ""
 "This is computed fresh from real records every time you open it -- "
 "nothing is stored as read or unread."
 msgstr ""
-"يُحسب هذا من السجلات الفعلية في كل مرة تفتح فيها هذه الصفحة -- لا شيء "
+"يُحسب هذا من السجلات الفعلية في كل مرة تفتح فيها هذه الصفحة — لا شيء "
 "يُخزَّن كمقروء أو غير مقروء."
 
 #: app/templates/attention/index.html:38
@@ -2725,7 +2725,7 @@ msgstr ""
 "إذا كان دورك لا يشمل أيًا من الصلاحيات التي تتحقق منها هذه الصفحة "
 "(العملاء المحتملون، عروض الأسعار، الفواتير، الدفعات، المصروفات، العمولات،"
 " التراخيص، الاشتراكات، أو إدارة النظام)، فستكون هذه الصفحة فارغة دائمًا "
-"بالنسبة لك -- استخدم الشريط الجانبي للوصول إلى الشاشات المسموح لك بالعمل "
+"بالنسبة لك — استخدم الشريط الجانبي للوصول إلى الشاشات المسموح لك بالعمل "
 "فيها."
 
 #: app/templates/audit/list.html:2
@@ -2834,7 +2834,7 @@ msgid ""
 "The entire audit log chain is intact -- no tampered or out-of-order "
 "entries detected."
 msgstr ""
-"سلسلة سجل التدقيق بأكملها سليمة -- لم يتم اكتشاف أي إدخالات تم العبث بها "
+"سلسلة سجل التدقيق بأكملها سليمة — لم يتم اكتشاف أي إدخالات تم العبث بها "
 "أو خارج الترتيب."
 
 #: app/templates/audit/verify_chain.html:9
@@ -2956,7 +2956,7 @@ msgid ""
 "QR code for MFA enrollment -- scan with an authenticator app, or use the "
 "manual secret below"
 msgstr ""
-"رمز QR للتسجيل في المصادقة الثنائية -- امسحه باستخدام تطبيق مصادقة، أو "
+"رمز QR للتسجيل في المصادقة الثنائية — امسحه باستخدام تطبيق مصادقة، أو "
 "استخدم الرمز السري اليدوي أدناه"
 
 #: app/templates/auth/mfa_enroll.html:16
@@ -2992,7 +2992,7 @@ msgid ""
 "No codes to display -- this page can only be viewed once, immediately "
 "after generation."
 msgstr ""
-"لا توجد رموز لعرضها -- يمكن الاطلاع على هذه الصفحة مرة واحدة فقط، مباشرة "
+"لا توجد رموز لعرضها — يمكن الاطلاع على هذه الصفحة مرة واحدة فقط، مباشرة "
 "بعد إنشائها."
 
 #: app/templates/auth/mfa_recovery_codes.html:15
@@ -3265,7 +3265,7 @@ msgstr "المجموع التحققي"
 
 #: app/templates/catalog/index.html:103
 msgid "No versions imported yet -- use"
-msgstr "لم يتم استيراد أي إصدارات بعد -- استخدم"
+msgstr "لم يتم استيراد أي إصدارات بعد — استخدم"
 
 #: app/templates/catalog/plan_detail.html:9
 #: app/templates/catalog/plan_new.html:22
@@ -3378,7 +3378,7 @@ msgid ""
 msgstr ""
 "يحافظ الوضع التلقائي (بدون سطر سياسة) تمامًا على السلوك السابق للمرحلة "
 "الثامنة: تتم الموافقة على التفعيل الصالح وتوقيعه فورًا دون خطوة مراجعة. "
-"تغيير هذا يغيّر الوضع الأمني لكل تفعيل مستقبلي لهذا المنتج -- مقتصر على "
+"تغيير هذا يغيّر الوضع الأمني لكل تفعيل مستقبلي لهذا المنتج — مقتصر على "
 "المشرف العام."
 
 #: app/templates/commercial_ops/activation_policy.html:8
@@ -3406,7 +3406,7 @@ msgstr "المنتج (اتركه فارغًا للإعداد الافتراضي 
 
 #: app/templates/commercial_ops/activation_policy.html:23
 msgid "-- global default --"
-msgstr "-- الإعداد الافتراضي العام --"
+msgstr "— الإعداد الافتراضي العام —"
 
 #: app/templates/commercial_ops/activation_policy.html:24
 #: app/templates/commercial_ops/activation_policy.html:39
@@ -3446,7 +3446,7 @@ msgstr "(عام)"
 
 #: app/templates/commercial_ops/activation_policy.html:43
 msgid "No policies configured -- every product is AUTOMATIC."
-msgstr "لم يتم تكوين أي سياسات -- كل منتج في الوضع التلقائي."
+msgstr "لم يتم تكوين أي سياسات — كل منتج في الوضع التلقائي."
 
 #: app/templates/commercial_ops/emergency_extension_detail.html:9
 msgid "(all licenses on this subscription)"
@@ -3538,7 +3538,7 @@ msgstr "أنشأه"
 #: app/templates/commercial_ops/emergency_extension_detail.html:16
 #, python-format
 msgid "%(when)s by %(who)s -- %(reason)s"
-msgstr "%(when)s بواسطة %(who)s -- %(reason)s"
+msgstr "%(when)s بواسطة %(who)s — %(reason)s"
 
 #: app/templates/commercial_ops/emergency_extension_detail.html:18
 msgid ""
@@ -3598,7 +3598,7 @@ msgid ""
 "subscription's paid term or marks any payment confirmed, and it can never"
 " restore a REVOKED license."
 msgstr ""
-"هذا تجاوز صريح وقصير الأمد وخاضع للتدقيق لحالات الدعم الاستثنائية فقط -- "
+"هذا تجاوز صريح وقصير الأمد وخاضع للتدقيق لحالات الدعم الاستثنائية فقط — "
 "وليس تحايلاً. لا يُعدِّل أبدًا مدة الاشتراك المدفوعة ولا يُعلِّم أي دفعة "
 "كمؤكدة، ولا يمكنه أبدًا استعادة ترخيص تم إلغاؤه."
 
@@ -3746,7 +3746,7 @@ msgstr "القرار"
 #: app/templates/commercial_ops/pending_activation_detail.html:16
 #, python-format
 msgid "%(status)s by %(who)s at %(when)s -- %(reason)s"
-msgstr "%(status)s بواسطة %(who)s في %(when)s -- %(reason)s"
+msgstr "%(status)s بواسطة %(who)s في %(when)s — %(reason)s"
 
 #: app/templates/commercial_ops/pending_activation_detail.html:16
 msgid "not yet decided"
@@ -3818,7 +3818,7 @@ msgid ""
 msgstr ""
 "ينشئ هذا طلب تجديد حقيقيًا مقابل اشتراك التجربة. لا يصبح التحويل نهائيًا "
 "إلا بعد الموافقة على ذلك التجديد بشكل منفصل (من قِبل شخص آخر غير منشئه) "
-"وتطبيقه -- بنفس آلية الدفع/المصادقة الحديثة المطلوبة لأي تجديد آخر. لا "
+"وتطبيقه — بنفس آلية الدفع/المصادقة الحديثة المطلوبة لأي تجديد آخر. لا "
 "يوجد تحويل صامت."
 
 #: app/templates/commercial_ops/pilot_convert.html:10
@@ -3936,7 +3936,7 @@ msgstr "تمديد التجربة"
 #, python-format
 msgid "Maximum extensions (%(max)s) already used -- no indefinite rolling pilot."
 msgstr ""
-"تم استخدام الحد الأقصى للتمديدات (%(max)s) بالفعل -- لا يمكن استمرار "
+"تم استخدام الحد الأقصى للتمديدات (%(max)s) بالفعل — لا يمكن استمرار "
 "التجربة إلى أجل غير مسمى."
 
 #: app/templates/commercial_ops/pilot_detail.html:46
@@ -4075,7 +4075,7 @@ msgstr "قائمة انتظاري"
 #: app/templates/commercial_ops/queue.html:5
 #, python-format
 msgid "Operational queue -- %(role)s"
-msgstr "قائمة انتظار العمليات -- %(role)s"
+msgstr "قائمة انتظار العمليات — %(role)s"
 
 #: app/templates/commercial_ops/queue.html:28
 msgid "Nothing here right now."
@@ -4087,7 +4087,7 @@ msgstr "(تمت كتابة الإشعارات)"
 
 #: app/templates/commercial_ops/reconciliation.html:5
 msgid "(dry run -- nothing written)"
-msgstr "(تشغيل تجريبي -- لم يُكتب شيء)"
+msgstr "(تشغيل تجريبي — لم يُكتب شيء)"
 
 #: app/templates/commercial_ops/reconciliation.html:7
 msgid "As of"
@@ -4137,7 +4137,7 @@ msgstr "نوع الكيان"
 
 #: app/templates/commercial_ops/reconciliation.html:30
 msgid "No findings -- everything reconciles."
-msgstr "لا توجد نتائج -- كل شيء متوافق."
+msgstr "لا توجد نتائج — كل شيء متوافق."
 
 #: app/templates/commercial_ops/renewal_detail.html:5
 #, python-format
@@ -4264,7 +4264,7 @@ msgstr "إنشاء طلب تجديد"
 
 #: app/templates/commercial_ops/renewals_new.html:11
 msgid "-- current plan"
-msgstr "-- الخطة الحالية"
+msgstr "— الخطة الحالية"
 
 #: app/templates/commercial_ops/renewals_new.html:12
 msgid "current end date"
@@ -4284,7 +4284,7 @@ msgstr "الخطة المطلوبة (اتركها فارغة للاحتفاظ ب
 
 #: app/templates/commercial_ops/renewals_new.html:24
 msgid "-- keep current plan --"
-msgstr "-- الاحتفاظ بالخطة الحالية --"
+msgstr "— الاحتفاظ بالخطة الحالية —"
 
 #: app/templates/commercial_ops/renewals_new.html:28
 msgid "Device allowance after (leave blank to keep unchanged)"
@@ -4341,7 +4341,7 @@ msgstr "المخطط الزمني"
 #: app/templates/commercial_ops/timeline.html:5
 #, python-format
 msgid "Commercial timeline -- %(customer)s"
-msgstr "المخطط الزمني التجاري -- %(customer)s"
+msgstr "المخطط الزمني التجاري — %(customer)s"
 
 #: app/templates/commercial_ops/timeline.html:6
 msgid "Back to subscription"
@@ -4655,7 +4655,7 @@ msgstr "لا توجد فواتير بعد."
 #: app/templates/licensing/detail.html:7
 #: app/templates/licensing/issuance.html:6
 msgid "License key -- shown once"
-msgstr "مفتاح الترخيص -- يُعرض مرة واحدة"
+msgstr "مفتاح الترخيص — يُعرض مرة واحدة"
 
 #: app/templates/commercial_sales/order_detail.html:10
 #: app/templates/licensing/detail.html:8
@@ -5508,7 +5508,7 @@ msgid ""
 "overview permission. Use the sidebar to reach the screens you're "
 "permitted to work in."
 msgstr ""
-"لا يوجد شيء لعرضه هنا بعد -- دورك لا يشمل صلاحية النظرة العامة على مستوى "
+"لا يوجد شيء لعرضه هنا بعد — دورك لا يشمل صلاحية النظرة العامة على مستوى "
 "الشركة. استخدم الشريط الجانبي للوصول إلى الشاشات المسموح لك بالعمل فيها."
 
 #: app/templates/dashboard/index.html:125
@@ -5766,7 +5766,7 @@ msgstr "الحضور"
 
 #: app/templates/employees/detail.html:13
 msgid "application usage only -- not attendance/working hours"
-msgstr "استخدام التطبيق فقط -- وليس الحضور أو ساعات العمل"
+msgstr "استخدام التطبيق فقط — وليس الحضور أو ساعات العمل"
 
 #: app/templates/employees/detail.html:18 app/templates/layout/_tour.html:73
 msgid "Account security"
@@ -6048,7 +6048,7 @@ msgid ""
 "audit record is more specific."
 msgstr ""
 "تتطلب هذه العمليات سببًا وهي المسار الموصى به (بدلاً من تغيير الحالة "
-"العام أعلاه) لتحرير فتحة جهاز أو استبدالها -- سجل التدقيق أكثر تحديدًا."
+"العام أعلاه) لتحرير فتحة جهاز أو استبدالها — سجل التدقيق أكثر تحديدًا."
 
 #: app/templates/installations/detail.html:37
 msgid "Release this device slot? The installation will be deactivated."
@@ -6056,7 +6056,7 @@ msgstr "تحرير فتحة الجهاز هذه؟ سيتم إلغاء تفعيل
 
 #: app/templates/installations/detail.html:39
 msgid "Release this slot -- reason (required)"
-msgstr "تحرير هذه الفتحة -- السبب (مطلوب)"
+msgstr "تحرير هذه الفتحة — السبب (مطلوب)"
 
 #: app/templates/installations/detail.html:40
 msgid "Release slot"
@@ -6070,7 +6070,7 @@ msgstr "وضع علامة على هذا التثبيت كمُستبدَل؟ سي
 
 #: app/templates/installations/detail.html:45
 msgid "Mark replaced -- reason (required)"
-msgstr "وضع علامة كمُستبدَل -- السبب (مطلوب)"
+msgstr "وضع علامة كمُستبدَل — السبب (مطلوب)"
 
 #: app/templates/installations/detail.html:46
 msgid "Mark replaced"
@@ -6268,7 +6268,7 @@ msgid ""
 "the navigation on the left only shows what you're actually permitted to "
 "use."
 msgstr ""
-"يحدد دورك بالضبط الشاشات والإجراءات التي يمكنك الوصول إليها -- يعرض "
+"يحدد دورك بالضبط الشاشات والإجراءات التي يمكنك الوصول إليها — يعرض "
 "التنقل الموجود على اليسار فقط ما يُسمح لك فعليًا باستخدامه."
 
 #: app/templates/layout/_tour.html:61
@@ -6277,27 +6277,27 @@ msgstr "مجالات عملك"
 
 #: app/templates/layout/_tour.html:63
 msgid "CRM -- Leads and Customers"
-msgstr "إدارة علاقات العملاء -- العملاء المحتملون والعملاء"
+msgstr "إدارة علاقات العملاء — العملاء المحتملون والعملاء"
 
 #: app/templates/layout/_tour.html:64
 msgid "Sales -- Quotes, Orders, Invoices, Payments"
-msgstr "المبيعات -- عروض الأسعار، الطلبات، الفواتير، الدفعات"
+msgstr "المبيعات — عروض الأسعار، الطلبات، الفواتير، الدفعات"
 
 #: app/templates/layout/_tour.html:65
 msgid "Finance / Operations -- Expenses, Cash Closing"
-msgstr "المالية / العمليات -- المصروفات، الإقفال النقدي"
+msgstr "المالية / العمليات — المصروفات، الإقفال النقدي"
 
 #: app/templates/layout/_tour.html:66
 msgid "Licensing -- Subscriptions, Licenses, Installations"
-msgstr "التراخيص -- الاشتراكات، التراخيص، التثبيتات"
+msgstr "التراخيص — الاشتراكات، التراخيص، التثبيتات"
 
 #: app/templates/layout/_tour.html:67
 msgid "Management -- Staff and Employees"
-msgstr "الإدارة -- الموظفون الإداريون والموظفون"
+msgstr "الإدارة — الموظفون الإداريون والموظفون"
 
 #: app/templates/layout/_tour.html:68
 msgid "System -- Audit Log and Backups"
-msgstr "النظام -- سجل التدقيق والنسخ الاحتياطية"
+msgstr "النظام — سجل التدقيق والنسخ الاحتياطية"
 
 #: app/templates/layout/_tour.html:75
 msgid "Multi-factor authentication is enabled on your account."
@@ -6963,7 +6963,7 @@ msgstr "المنصات المسموح بها (مفصولة بفواصل)"
 
 #: app/templates/licensing/new.html:16
 msgid "Create (DRAFT -- no key yet)"
-msgstr "إنشاء (مسودة -- بدون مفتاح بعد)"
+msgstr "إنشاء (مسودة — بدون مفتاح بعد)"
 
 #: app/templates/licensing_admin/device_keys.html:3
 msgid "Device Keys"
@@ -7006,7 +7006,7 @@ msgstr "معاينة تحليل الاستحقاقات"
 #: app/templates/licensing_admin/entitlement_preview.html:5
 #, python-format
 msgid "Entitlement resolution -- %(customer)s"
-msgstr "تحليل الاستحقاقات -- %(customer)s"
+msgstr "تحليل الاستحقاقات — %(customer)s"
 
 #: app/templates/licensing_admin/entitlement_preview.html:7
 msgid "Entitlement"
@@ -7020,7 +7020,7 @@ msgstr "القيمة المحلَّلة"
 msgid ""
 "Source is internal diagnostic detail only -- never sent to a client in a "
 "signed assertion."
-msgstr "المصدر تفصيل تشخيصي داخلي فقط -- لا يُرسل أبدًا إلى عميل ضمن تأكيد موقَّع."
+msgstr "المصدر تفصيل تشخيصي داخلي فقط — لا يُرسل أبدًا إلى عميل ضمن تأكيد موقَّع."
 
 #: app/templates/licensing_admin/offline_policies.html:2
 msgid "Offline Policies"
@@ -7064,14 +7064,14 @@ msgstr "%(seconds)s ث قبل انتهاء المهلة"
 
 #: app/templates/licensing_admin/offline_policies.html:17
 msgid "No offline policies seeded yet -- run"
-msgstr "لم يتم تهيئة أي سياسات عمل دون اتصال بعد -- شغّل"
+msgstr "لم يتم تهيئة أي سياسات عمل دون اتصال بعد — شغّل"
 
 #: app/templates/licensing_admin/offline_policies.html:21
 msgid ""
 "Policy is DEFINED and RETURNED to clients only -- Phase 6 does not "
 "enforce it inside Retail or Clinic."
 msgstr ""
-"السياسة مُعرَّفة ومُعادة إلى العملاء فقط -- لا تفرضها المرحلة 6 داخل "
+"السياسة مُعرَّفة ومُعادة إلى العملاء فقط — لا تفرضها المرحلة 6 داخل "
 "التجزئة أو العيادة."
 
 #: app/templates/licensing_admin/requests.html:3
@@ -7123,7 +7123,7 @@ msgid ""
 "Private key material is never shown here or stored in the database -- "
 "only public metadata."
 msgstr ""
-"لا تُعرض مادة المفتاح الخاص هنا أبدًا ولا تُخزَّن في قاعدة البيانات -- "
+"لا تُعرض مادة المفتاح الخاص هنا أبدًا ولا تُخزَّن في قاعدة البيانات — "
 "البيانات الوصفية العامة فقط."
 
 #: app/templates/licensing_admin/signing_keys.html:24
@@ -7139,12 +7139,12 @@ msgid ""
 "Revoke this key? Assertions signed by it will no longer verify -- use "
 "only for compromise response."
 msgstr ""
-"إلغاء هذا المفتاح؟ لن يتم التحقق من التأكيدات الموقَّعة به بعد الآن -- "
+"إلغاء هذا المفتاح؟ لن يتم التحقق من التأكيدات الموقَّعة به بعد الآن — "
 "يُستخدم فقط للاستجابة لاختراق أمني."
 
 #: app/templates/licensing_admin/signing_keys.html:52
 msgid "No signing keys yet -- generate one to enable the external API."
-msgstr "لا توجد مفاتيح توقيع بعد -- أنشئ واحدًا لتفعيل واجهة API الخارجية."
+msgstr "لا توجد مفاتيح توقيع بعد — أنشئ واحدًا لتفعيل واجهة API الخارجية."
 
 #: app/templates/licensing_admin/status.html:2
 msgid "Activation Service Status"
@@ -7503,7 +7503,7 @@ msgstr "سبب التجاوز"
 
 #: app/templates/operations_ui/expense_detail.html:36
 msgid "Not a duplicate -- proceed"
-msgstr "ليس تكرارًا -- متابعة"
+msgstr "ليس تكرارًا — متابعة"
 
 #: app/templates/operations_ui/expense_detail.html:44
 msgid "Submit for approval"
@@ -8492,7 +8492,7 @@ msgstr "تم تسجيل عملية البيع"
 
 #: app/templates/licensing/sale.html
 msgid "This form was already submitted -- nothing new was recorded. This is the sale it recorded:"
-msgstr "تم إرسال هذا النموذج من قبل -- لم يُسجَّل شيء جديد. هذه هي عملية البيع التي سجّلها:"
+msgstr "تم إرسال هذا النموذج من قبل — لم يُسجَّل شيء جديد. هذه هي عملية البيع التي سجّلها:"
 
 #: app/templates/licensing/sale.html
 msgid "Order"
@@ -8500,7 +8500,7 @@ msgstr "الطلب"
 
 #: app/templates/licensing/sale.html
 msgid "The payment now waits for a manager to confirm it. The licence key is made when the payment is confirmed -- not before."
-msgstr "الدفعة الآن بانتظار أن يؤكدها مدير. يُنشأ مفتاح الترخيص عند تأكيد الدفعة -- وليس قبل ذلك."
+msgstr "الدفعة الآن بانتظار أن يؤكدها مدير. يُنشأ مفتاح الترخيص عند تأكيد الدفعة — وليس قبل ذلك."
 
 #: app/templates/licensing/sale.html
 msgid "Record another sale"
@@ -8520,11 +8520,11 @@ msgstr "3. البائع"
 
 #: app/templates/licensing/sale.html
 msgid "Seller (sales owner) -- the employee whose commission this sale counts for"
-msgstr "البائع (مسؤول البيع) -- الموظف الذي تُحتسب له عمولة هذه البيعة"
+msgstr "البائع (مسؤول البيع) — الموظف الذي تُحتسب له عمولة هذه البيعة"
 
 #: app/templates/licensing/sale.html
 msgid "-- Pick the seller --"
-msgstr "-- اختر البائع --"
+msgstr "— اختر البائع —"
 
 #: app/templates/licensing/sale.html
 msgid "You are the seller of this sale:"
@@ -8564,7 +8564,7 @@ msgstr "تسجيل عملية البيع"
 
 #: app/templates/licensing/sale.html
 msgid "No-charge licence (demo, replacement, internal) -- Super Admin only"
-msgstr "ترخيص بدون مقابل (عرض تجريبي، بديل، داخلي) -- للمدير العام فقط"
+msgstr "ترخيص بدون مقابل (عرض تجريبي، بديل، داخلي) — للمدير العام فقط"
 
 #: app/templates/licensing/sales_pending.html
 msgid "Already confirmed"
@@ -8596,11 +8596,11 @@ msgstr "المرجع"
 
 #: app/templates/licensing/sales_pending.html
 msgid "Not recorded -- the seller must submit the same form again."
-msgstr "لم تُسجَّل -- يجب على البائع إرسال النموذج نفسه مرة أخرى."
+msgstr "لم تُسجَّل — يجب على البائع إرسال النموذج نفسه مرة أخرى."
 
 #: app/templates/licensing/sales_pending.html
 msgid "Money received -- confirm and issue the licence"
-msgstr "تم استلام المبلغ -- أكّد وأصدر الترخيص"
+msgstr "تم استلام المبلغ — أكّد وأصدر الترخيص"
 
 #: app/templates/licensing/sales_pending.html
 msgid "Confirm (requires recent authentication)"
@@ -8884,15 +8884,15 @@ msgstr "+ %(count)d أزواج أجهزة إضافية"
 
 #: app/i18n_labels.py
 msgid "Sale counted on the commission ladder"
-msgstr "احتُسب البيع على سلّم العمولة"
+msgstr "احتُسب البيع على سُلَّم العمولة"
 
 #: app/i18n_labels.py
 msgid "Sale removed from the commission ladder"
-msgstr "أُزيل البيع من سلّم العمولة"
+msgstr "أُزيل البيع من سُلَّم العمولة"
 
 #: app/i18n_labels.py
 msgid "Commission ladder month recalculated"
-msgstr "أُعيد حساب شهر سلّم العمولة"
+msgstr "أُعيد حساب شهر سُلَّم العمولة"
 
 #: app/i18n_labels.py
 msgid "Refund after the commission hold"
@@ -8920,11 +8920,11 @@ msgstr "هذه العمولة ما زالت ضمن فترة الحجز البا�
 
 #: app/i18n_labels.py
 msgid "The monthly ladder rule is in JOD and takes no rate or fixed amount."
-msgstr "قاعدة سلّم العمولة الشهري بالدينار الأردني ولا تأخذ نسبة ولا مبلغًا ثابتًا."
+msgstr "قاعدة سُلَّم العمولة الشهري بالدينار الأردني ولا تأخذ نسبة ولا مبلغًا ثابتًا."
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "Monthly commission ladder"
-msgstr "سلّم العمولة الشهري"
+msgstr "سُلَّم العمولة الشهري"
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "1 sale = 20, 2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD in a month; each sale after the 5th adds 30. Each sale is payable 30 days after its payment is confirmed. Extra devices never count."
@@ -8940,7 +8940,7 @@ msgstr "المبيعات المحتسبة"
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "Ladder total"
-msgstr "مجموع السلّم"
+msgstr "مجموع السُّلَّم"
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "Held"
@@ -8952,7 +8952,7 @@ msgstr "مستحقة الدفع"
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "No sales on your ladder yet."
-msgstr "لا توجد مبيعات على سلّمك بعد."
+msgstr "لا توجد مبيعات على سُلَّمك بعد."
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "Refunded after the hold"
@@ -8964,7 +8964,7 @@ msgstr "هذا الشهر، كل البائعين"
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "No ladder sales this month yet."
-msgstr "لا توجد مبيعات على السلّم هذا الشهر بعد."
+msgstr "لا توجد مبيعات على السُّلَّم هذا الشهر بعد."
 
 #: app/i18n_labels.py
 msgid "Share of a payment"
@@ -8972,7 +8972,7 @@ msgstr "حصة من دفعة"
 
 #: app/i18n_labels.py
 msgid "Monthly ladder"
-msgstr "السلّم الشهري"
+msgstr "السُّلَّم الشهري"
 
 #: app/templates/commercial_sales/commissions_list.html
 msgid "On hold until"
@@ -9081,7 +9081,7 @@ msgstr "فقط المشرف العام يمكنه السماح بالاسترد�
 
 #: app/i18n_labels.py
 msgid "Write why this refund is allowed after the 30 days -- at least 10 characters."
-msgstr "اكتب سبب السماح بهذا الاسترداد بعد مرور 30 يومًا -- 10 أحرف على الأقل."
+msgstr "اكتب سبب السماح بهذا الاسترداد بعد مرور 30 يومًا — 10 أحرف على الأقل."
 
 #: app/i18n_labels.py
 msgid "This commission was taken back (a refund or a correction) and nothing is left to pay."
@@ -9120,7 +9120,7 @@ msgstr "الشهر الماضي"
 
 #: app/templates/commercial_sales/leaderboard.html
 msgid "Ranked by sales counted on the ladder, then by ladder total. Months are Jordan calendar months."
-msgstr "الترتيب حسب المبيعات المحتسبة على السلّم، ثم حسب مجموع السلّم. الأشهر أشهر تقويمية بتوقيت الأردن."
+msgstr "الترتيب حسب المبيعات المحتسبة على السُّلَّم، ثم حسب مجموع السُّلَّم. الأشهر أشهر تقويمية بتوقيت الأردن."
 
 #: app/templates/commercial_sales/leaderboard.html
 msgid "Only your own money is shown. Other sellers' earnings are private."
@@ -9140,7 +9140,7 @@ msgstr "عمولة التجديد"
 
 #: app/templates/commercial_sales/leaderboard.html
 msgid "No sellers on the ladder yet."
-msgstr "لا يوجد بائعون على السلّم بعد."
+msgstr "لا يوجد بائعون على السُّلَّم بعد."
 
 #: app/push/worker.py
 msgid "New sale waiting for confirmation"
@@ -9189,7 +9189,7 @@ msgstr "إشعارات الهاتف"
 
 #: app/templates/licensing/_push_optin.html
 msgid "Get a notification on this device when a seller records a sale you can confirm. It shows only the seller's first name -- never the customer or the money."
-msgstr "استلم إشعارًا على هذا الجهاز عندما يسجّل بائع بيعًا يمكنك تأكيده. يظهر فيه الاسم الأول للبائع فقط -- ولا يظهر العميل أو المبلغ أبدًا."
+msgstr "استلم إشعارًا على هذا الجهاز عندما يسجّل بائع بيعًا يمكنك تأكيده. يظهر فيه الاسم الأول للبائع فقط — ولا يظهر العميل أو المبلغ أبدًا."
 
 #: app/templates/licensing/_push_optin.html
 msgid "Notifications are off on this device."
@@ -9246,15 +9246,15 @@ msgstr "زوج أجهزة إضافي (جهاز مكتبي + هاتف)"
 
 #: app/employees/routes.py
 msgid "Assign monthly ladder plan"
-msgstr "تعيين خطة السلّم الشهري"
+msgstr "تعيين خطة السُّلَّم الشهري"
 
 #: app/employees/routes.py
 msgid "Already on the monthly ladder plan."
-msgstr "الموظف على خطة السلّم الشهري بالفعل."
+msgstr "الموظف على خطة السُّلَّم الشهري بالفعل."
 
 #: app/employees/routes.py
 msgid "Moved to the monthly ladder plan."
-msgstr "تم نقل الموظف إلى خطة السلّم الشهري."
+msgstr "تم نقل الموظف إلى خطة السُّلَّم الشهري."
 
 #: app/employees/routes.py
 msgid "Commission plan assigned"
@@ -9270,15 +9270,15 @@ msgstr "الباقات الشهرية"
 
 #: app/employees/routes.py
 msgid "Moved to both ladder plans (Package 1 and monthly packages)."
-msgstr "تم نقل الموظف إلى خطتي السلّم (الباقة 1 والباقات الشهرية)."
+msgstr "تم نقل الموظف إلى خطتي السُّلَّم (الباقة 1 والباقات الشهرية)."
 
 #: app/employees/routes.py
 msgid "Already on both ladder plans."
-msgstr "الموظف على خطتي السلّم بالفعل."
+msgstr "الموظف على خطتي السُّلَّم بالفعل."
 
 #: app/templates/employees/detail.html
 msgid "Assign both ladder plans"
-msgstr "تعيين خطتي السلّم"
+msgstr "تعيين خطتي السُّلَّم"
 
 msgid "Package 1: 1 sale = 20, 2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD in a month; each sale after the 5th adds 30."
 msgstr "الباقة 1: بيع واحد = 20، بيعتان = 50، 3 = 100، 4 = 200، 5 = 350 دينارًا في الشهر؛ كل بيع بعد الخامس يضيف 30."
@@ -9460,7 +9460,7 @@ msgstr "يصل العميل رابط لاختيار كلمة المرور. ال�
 
 #: app/templates/customer_accounts
 msgid "Invited -- password not set yet"
-msgstr "مدعو -- لم تُحدَّد كلمة المرور بعد"
+msgstr "مدعو — لم تُحدَّد كلمة المرور بعد"
 
 #: app/templates/customer_accounts
 msgid "Last sign-in"
@@ -9957,11 +9957,11 @@ msgstr "تم الإنشاء سابقاً"
 
 #: app/customer_onboarding
 msgid "This form was already submitted -- nothing new was created. The licence key was shown once, then, and cannot be shown again."
-msgstr "سبق إرسال هذا النموذج -- لم يُنشأ شيء جديد. عُرض مفتاح الترخيص مرة واحدة حينها ولا يمكن عرضه مرة أخرى."
+msgstr "سبق إرسال هذا النموذج — لم يُنشأ شيء جديد. عُرض مفتاح الترخيص مرة واحدة حينها ولا يمكن عرضه مرة أخرى."
 
 #: app/customer_onboarding
 msgid "Customer created -- the 7-day trial is ready"
-msgstr "تم إنشاء العميل -- التجربة لمدة 7 أيام جاهزة"
+msgstr "تم إنشاء العميل — التجربة لمدة 7 أيام جاهزة"
 
 #: app/customer_onboarding
 msgid "Tell the customer to sign in at actionaura.me with their email and the temporary password you typed. They will choose their own password first."
@@ -9973,7 +9973,7 @@ msgstr "ثم يفتح صفحة التنزيلات ويثبّت التطبيق و
 
 #: app/customer_onboarding
 msgid "Their 7 days start when the app is first opened -- not before."
-msgstr "تبدأ الأيام السبعة عند أول فتح للتطبيق -- وليس قبل ذلك."
+msgstr "تبدأ الأيام السبعة عند أول فتح للتطبيق — وليس قبل ذلك."
 
 #: app/customer_onboarding
 msgid "We emailed them a welcome message with a link to confirm their email address."
@@ -9985,7 +9985,7 @@ msgstr "البريد الإلكتروني غير مُعدّ على هذا الخ
 
 #: app/customer_onboarding
 msgid "Licence key -- a backup, shown once"
-msgstr "مفتاح الترخيص -- نسخة احتياطية، يظهر مرة واحدة"
+msgstr "مفتاح الترخيص — نسخة احتياطية، يظهر مرة واحدة"
 
 #: app/customer_onboarding
 msgid "The customer does not need this key if they sign in with their account. Keep it only in case the sign-in cannot be used. It will never be displayed again."
@@ -10005,7 +10005,7 @@ msgstr "التجربة"
 
 #: app/customer_onboarding
 msgid "Paid -- the trial became a subscription"
-msgstr "تم الدفع -- أصبحت التجربة اشتراكاً"
+msgstr "تم الدفع — أصبحت التجربة اشتراكاً"
 
 #: app/customer_onboarding
 msgid "Waiting for the first app sign-in"
@@ -10013,7 +10013,7 @@ msgstr "بانتظار أول تسجيل دخول في التطبيق"
 
 #: app/customer_onboarding
 msgid "Trial over -- the till is locked until the package is paid"
-msgstr "انتهت التجربة -- الصندوق مقفل حتى تُدفع الباقة"
+msgstr "انتهت التجربة — الصندوق مقفل حتى تُدفع الباقة"
 
 #: app/customer_onboarding
 msgid "%(n)s day(s) left"
@@ -10093,7 +10093,7 @@ msgstr "توجد دفعة لهذه التجربة بانتظار المدير. �
 
 #: app/commercial_sales
 msgid "The customer is paying -- record the payment"
-msgstr "العميل يدفع -- سجّل الدفعة"
+msgstr "العميل يدفع — سجّل الدفعة"
 
 #: app/commercial_sales
 msgid "this payment is for their trial. When a manager confirms it, their shop is unlocked with the same licence; no new key is made."
@@ -10113,7 +10113,7 @@ msgstr "CliQ أو حوالة أو إيداع: أرفق صورة الإيصال. 
 
 #: app/commercial_sales
 msgid "Trial paid -- the shop is unlocked"
-msgstr "تم دفع التجربة -- فُتح المحل"
+msgstr "تم دفع التجربة — فُتح المحل"
 
 #: app/commercial_sales
 msgid "The shop keeps the same licence and key. Its tills unlock at their next check-in with Owner. No new key was made."
@@ -10133,12 +10133,12 @@ msgstr "لا توجد صورة إيصال"
 
 #: app/commercial_sales
 msgid "Money received -- confirm and unlock the shop"
-msgstr "وصل المال -- أكّد وافتح المحل"
+msgstr "وصل المال — أكّد وافتح المحل"
 
 
 #: app/contracts
 msgid "A lawyer approved this exact text -- who and when"
-msgstr "وافق محامٍ على هذا النص نفسه -- من ومتى"
+msgstr "وافق محامٍ على هذا النص نفسه — من ومتى"
 
 #: app/contracts
 msgid "A lawyer has read this exact text and approved it"
@@ -10198,7 +10198,7 @@ msgstr "العميل (صاحب المحل، داخل التطبيق)"
 
 #: app/contracts
 msgid "DRAFT -- not yet approved by a lawyer"
-msgstr "مسودة -- لم يوافق عليها محامٍ بعد"
+msgstr "مسودة — لم يوافق عليها محامٍ بعد"
 
 #: app/contracts
 msgid "Download"
@@ -10532,7 +10532,7 @@ msgstr "اعتراضات متأخرة"
 
 #: app/commissions
 msgid "Place on the ladder"
-msgstr "الترتيب على السلّم"
+msgstr "الترتيب على السُّلَّم"
 
 #: app/commissions
 msgid "Reject the objection"
@@ -10572,7 +10572,7 @@ msgstr "الاشتراكات المؤكدة"
 
 #: app/commissions
 msgid "Subscriptions confirmed in this month, their place on the ladder, and what is held, payable, paid and taken back."
-msgstr "الاشتراكات المؤكدة في هذا الشهر وترتيبها على السلّم، وما هو محجوز ومستحق ومدفوع ومسترد."
+msgstr "الاشتراكات المؤكدة في هذا الشهر وترتيبها على السُّلَّم، وما هو محجوز ومستحق ومدفوع ومسترد."
 
 #: app/commissions
 msgid "That objection does not exist."

@@ -1047,7 +1047,7 @@ def test_the_seller_sees_their_own_month_count_total_held_and_payable_in_arabic_
     assert 'data-ladder-total="20.00"' not in html  # the other seller's month is not shown
     client.get("/locale/ar?next=/")
     ar = client.get("/commissions").get_data(as_text=True)
-    for arabic in ("سلّم العمولة الشهري", "المبيعات المحتسبة", "مجموع السلّم", "محجوزة", "مستحقة الدفع"):
+    for arabic in ("سُلَّم العمولة الشهري", "المبيعات المحتسبة", "مجموع السُّلَّم", "محجوزة", "مستحقة الدفع"):
         assert arabic in ar, arabic
     for english in ("Monthly commission ladder", "Sales counted"):
         assert english not in ar, english

@@ -354,3 +354,43 @@ def test_the_new_customer_result_shows_the_temporary_password_once_with_a_copy_b
     # deny twin: pressing the same form again (same key) is a replay and shows no password
     again = _post_form(client, w, temp_password="Another-Pass-55!!", **same).get_data(as_text=True)
     assert "Already created" in again and "data-temp-password" not in again and "Another-Pass-55" not in again
+
+
+# ----------------------------------------------------------- 8. Arabic wording
+
+def _ar_catalog():
+    from babel.messages.pofile import read_po
+    import os
+
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "translations", "ar", "LC_MESSAGES", "messages.po")
+    with open(path, "rb") as handle:
+        return [m for m in read_po(handle) if m.id and isinstance(m.string, str) and m.string]
+
+
+def test_arabic_strings_use_the_em_dash_and_spell_the_ladder_noun_with_its_vowels():
+    catalog = _ar_catalog()
+    # deny: no lone "--" (two hyphens standing in for a dash) is left in any Arabic translation
+    assert [m.id for m in catalog if re.search(r"(?:(?<=\s)|^)--(?=\s|$)", m.string)] == []
+    # deny: the ladder noun is never the misreadable "سلّم" glued to its noun ...
+    assert [m.id for m in catalog if re.search(r"سلّم العمولة|السلّم|سلّمك", m.string)] == []
+    # ... while the verb "hand over" (cash rule) is untouched, and the noun reads right where it is meant
+    by_id = {m.id: m.string for m in catalog}
+    assert "سُلَّم العمولة" in by_id["Monthly commission ladder"]
+    assert "سلّم النقد كله" in by_id["Hand over ALL of the cash to the company within 24 hours, by bank transfer or at the office, with no deduction. Record the sale now, before you hand it over."]
+    assert by_id["The customer is paying -- record the payment"] == "العميل يدفع — سجّل الدفعة"
+
+
+def test_the_arabic_plan_cards_show_the_dinar_sign_and_an_arabic_comma_not_a_latin_jod(app, client, seeded):
+    from tests.test_customer_onboarding import _world
+
+    w = _world(app)
+    _first_year_costs_250(app, w)
+    force_login(client, app, w["seller"])
+    client.get("/locale/ar?next=/")
+    html = client.get("/licenses/issuance/new").get_data(as_text=True)
+    option = re.search(r'<option value="%s"[^>]*>(.*?)</option>' % w["plan"], html, re.S).group(1)
+    assert "د.أ" in option and "،" in option and "JOD" not in option and "," not in option.split("(")[0]
+    assert "⁦250.00⁩ د.أ" in option  # the number is isolated so it cannot jumble
+    client.get("/locale/en?next=/")  # allow twin: English keeps "250.00 JOD,"
+    option_en = re.search(r'<option value="%s"[^>]*>(.*?)</option>' % w["plan"], client.get("/licenses/issuance/new").get_data(as_text=True), re.S).group(1)
+    assert "250.00 JOD," in option_en

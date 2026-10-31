@@ -73,8 +73,10 @@ def test_ladder_is_spelled_with_the_shadda_everywhere():
                       rf"(?<![{ARABIC_LETTER}])(?:ال)?سلم(?=ك)")
     offenders = [m.id for m in _catalog("ar") if m.id and isinstance(m.string, str) and bare.search(m.string)]
     assert offenders == []
-    assert _both("Monthly commission ladder") == "سلّم العمولة الشهري"
-    assert _both("Ladder total") == "مجموع السلّم"
+    # 2026-10-31 (rehearsal): "سلّم" read like the verb "hand over" next to "العمولة"; the staircase noun is
+    # written with its vowels, سُلَّم, wherever the ladder is meant. The hand-over verb keeps its own spelling.
+    assert _both("Monthly commission ladder") == "سُلَّم العمولة الشهري"
+    assert _both("Ladder total") == "مجموع السُّلَّم"
 
 
 def test_super_admin_has_one_arabic_name():
