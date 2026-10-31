@@ -124,6 +124,8 @@ DUPLICATE_FIELD_CR = "cr"
 DUPLICATE_FIELD_PHONE = "phone"
 DUPLICATE_FIELD_EMAIL = "email"
 
+_PHONE_TAIL_DIGITS = 8  # normalize_phone_e164 refuses fewer than 8 digits
+
 _NAME_MAX = 255
 _CR_MAX = 128
 _ADDRESS_MAX = 500
@@ -276,9 +278,19 @@ def find_duplicates(*, cr_number: str, phone_e164: str, email: str) -> dict:
         if rows:
             fields.append(DUPLICATE_FIELD_CR)
             ids.update(rows)
+    # The database narrows the field to contacts whose digits END with this number's last
+    # 8 (every valid number has at least 8 digits, and however a local / +962 / 00 form was
+    # typed it ends the same way); only those few rows are normalised in Python for the
+    # exact comparison. Loading every contact of every customer for each new shop did not
+    # scale. The digits are mapped to ASCII in SQL too, for rows stored before the ASCII rule.
+    stored_digits = func.regexp_replace(
+        func.translate(CustomerContact.business_phone, _NON_ASCII_DIGITS, _ASCII_DIGITS_FOR_THEM), r"\D", "", "g")
     phone_hits = [
         contact.customer_id for contact in db_session.execute(
-            select(CustomerContact).where(CustomerContact.business_phone.is_not(None))
+            select(CustomerContact).where(
+                CustomerContact.business_phone.is_not(None),
+                func.right(stored_digits, _PHONE_TAIL_DIGITS) == phone_e164[-_PHONE_TAIL_DIGITS:],
+            )
         ).scalars()
         if _phone_key(contact.business_phone) == phone_e164
     ]

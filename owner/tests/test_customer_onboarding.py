@@ -906,3 +906,42 @@ def test_two_forms_for_the_same_shop_at_the_same_moment_make_one_customer(app, s
     assert isinstance(errors[0], OnboardingError) and errors[0].code == "TRIAL_ALREADY_USED", errors[0]
     assert same in errors[0].params["fields"] or same == "both"
     assert counts(app)["Customer"] == 1 and counts(app)["License"] == 1
+
+
+# ------------------------------------- r32: the phone duplicate check runs in the database
+
+def test_the_phone_check_only_normalises_contacts_that_could_match(app, seeded, kyc, monkeypatch):
+    """The old check loaded EVERY contact of EVERY customer and normalised each in Python.
+    The database now narrows to the contacts ending in the same 8 digits; only those are
+    normalised. Counting normaliser calls tells the two apart (an outcome-only assert
+    cannot: both find the same shop)."""
+    from app.customer_onboarding import service
+
+    w = _world(app)
+    first = onboard(app, w, phone="079 555 0000")
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.customers import Customer, CustomerContact
+
+        for n in range(5):
+            other = Customer(legal_name=f"Bystander {n}")
+            db_session.add(other)
+            db_session.flush()
+            db_session.add(CustomerContact(customer_id=other.id, name="x", business_phone=f"079 600 000{n}"))
+        old_arabic = Customer(legal_name="Stored in Arabic digits")
+        db_session.add(old_arabic)
+        db_session.flush()
+        db_session.add(CustomerContact(customer_id=old_arabic.id, name="x", business_phone=AR("0791239999")))
+        db_session.commit()
+        old_arabic_id = old_arabic.id
+
+        calls = []
+        real = service._phone_key
+        monkeypatch.setattr(service, "_phone_key", lambda raw: calls.append(raw) or real(raw))
+        found = service.find_duplicates(cr_number="NOPE-1", phone_e164="+962795550000", email="nobody@nowhere.example")
+        assert found["fields"] == ["phone"] and found["customer_ids"] == [first.customer_id]
+        assert len(calls) == 1, calls  # the one matching contact, not the 7 on file
+        # allow half: a row stored with Arabic-Indic digits is still found by its ASCII twin
+        calls.clear()
+        found = service.find_duplicates(cr_number="NOPE-2", phone_e164="+962791239999", email="nobody2@nowhere.example")
+        assert found["customer_ids"] == [old_arabic_id]
