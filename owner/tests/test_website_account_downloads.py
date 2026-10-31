@@ -38,14 +38,14 @@ def site(app, world):  # noqa: F811
     return world
 
 
-def release(app, platform_code, version, content, *, channel="STABLE", state="PUBLISHED", build=1):
+def release(app, platform_code, version, content, *, channel="STABLE", state="PUBLISHED", build=1, product_code="AURA_RETAIL"):
     """Writes an artifact and its PUBLISHED row. Returns (row id, content)."""
     from app.extensions import db_session
     from app.models.catalog import Platform, Product, ProductVersion, ReleaseChannel
     from app.releases import storage
 
     with app.app_context():
-        product = db_session.execute(select(Product).where(Product.product_code == "AURA_RETAIL")).scalars().one()
+        product = db_session.execute(select(Product).where(Product.product_code == product_code)).scalars().one()
         platform = db_session.execute(select(Platform).where(Platform.platform_code == platform_code)).scalars().one()
         chan = db_session.execute(select(ReleaseChannel).where(ReleaseChannel.channel_code == channel)).scalars().one()
         suffix = ".exe" if platform_code == "WINDOWS" else ".apk"
@@ -224,6 +224,52 @@ def test_the_download_channels_are_a_server_setting_and_a_pinned_licence_sees_on
             select(ReleaseChannel.id).where(ReleaseChannel.channel_code == "STABLE")).scalar_one()
         db_session.commit()
     assert [o["offer_id"] for o in summary(client, token).get_json()["downloads"]] == [win_id]
+
+
+def _second_licence(app, w, product_code):
+    """Another ACTIVE licence for the SAME customer, on another product."""
+    with app.app_context():
+        from app.extensions import db_session
+        from app.licensing.services import create_license, issue_license_key
+        from app.models.catalog import Plan, Product
+        from app.subscriptions.services import create_subscription, transition_subscription
+
+        product = db_session.execute(select(Product).where(Product.product_code == product_code)).scalars().one()
+        plan = Plan(plan_code=f"SECOND-{uuid.uuid4().hex[:8]}", product_id=product.id, name="Second", billing_model="PILOT", currency="USD")
+        db_session.add(plan)
+        db_session.commit()
+        sub = create_subscription({"customer_id": w["customer_id"], "product_id": product.id, "plan_id": plan.id}, w["admin"])
+        transition_subscription(sub, "ACTIVE", w["admin"])
+        lic = create_license({"customer_id": w["customer_id"], "subscription_id": sub.id, "product_id": product.id,
+                              "plan_id": plan.id, "allowed_platforms": "WINDOWS,ANDROID", "device_limit": 1}, w["admin"])
+        issue_license_key(lic, app.config["LICENSE_PEPPER"], str(uuid.uuid4()), w["admin"])
+
+
+def test_a_pinned_licence_and_an_unpinned_one_each_get_their_own_channels(app, client, site):
+    """r32: channels were merged across ALL the customer's licences, so a Retail licence
+    pinned to RC plus an unpinned Clinic one offered Clinic the RC build and Retail the
+    newer STABLE one. Each product now answers for its own licences."""
+    from app.releases import customer_offers
+
+    retail_rc, _ = release(app, "WINDOWS", "1.0.0-rc.18", WIN_BYTES, channel="RC", build=2)
+    retail_stable, _ = release(app, "WINDOWS", "1.0.0-rc.30", WIN_BYTES, build=3)
+    clinic_stable, _ = release(app, "WINDOWS", "1.0.0-rc.17", WIN_BYTES, product_code="AURA_CLINIC")
+    clinic_rc, _ = release(app, "WINDOWS", "1.0.0-rc.25", WIN_BYTES, channel="RC", build=2, product_code="AURA_CLINIC")
+    _second_licence(app, site, "AURA_CLINIC")
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.catalog import Product, ReleaseChannel
+        from app.models.licensing import License
+
+        retail = db_session.execute(select(Product).where(Product.product_code == "AURA_RETAIL")).scalars().one()
+        lic = db_session.execute(select(License).where(License.product_id == retail.id)).scalars().one()
+        lic.allowed_release_channel_id = db_session.execute(
+            select(ReleaseChannel.id).where(ReleaseChannel.channel_code == "RC")).scalar_one()
+        db_session.commit()
+        offers = {o.release.product_id: o.offer_id for o in customer_offers.offers_for_customer(site["customer_id"])
+                  if o.platform == "windows"}
+        clinic = db_session.execute(select(Product).where(Product.product_code == "AURA_CLINIC")).scalars().one()
+        assert offers == {retail.id: retail_rc, clinic.id: clinic_stable}, (offers, retail_stable, clinic_rc)
 
 
 @pytest.mark.parametrize("status,offered", [("PILOT", True), ("ACTIVE", True), ("PAST_DUE", True), ("EXPIRED", True),

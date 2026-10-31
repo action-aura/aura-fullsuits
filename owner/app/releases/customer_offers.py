@@ -85,12 +85,16 @@ def offers_for_customer(customer_id) -> list[Offer]:
     licences = views.licence_rows(customer_id)
     if not licences:
         return []
-    channel_ids = _channel_ids_for(licences)
-    if not channel_ids:
-        return []
     out: list[Offer] = []
     for product_id in dict.fromkeys(row.product.id for row in licences):
         product = next(row.product for row in licences if row.product.id == product_id)
+        # Channels are worked out PER PRODUCT from that product's own licences. Merged
+        # across the customer's licences, a pinned PILOT Retail plus an unpinned Clinic
+        # offered Clinic the PILOT builds and Retail the newer STABLE ones, breaking the
+        # promise that a pinned licence sees ONLY its channel.
+        channel_ids = _channel_ids_for([row for row in licences if row.product.id == product_id])
+        if not channel_ids:
+            continue
         allowed_platforms = {p for row in licences if row.product.id == product_id
                              for p in (row.license.allowed_platforms or "").split(",")}
         for platform_row in db_session.execute(select(Platform).order_by(Platform.platform_code)).scalars():
