@@ -38,7 +38,7 @@ import hashlib
 import re
 import unicodedata
 import uuid
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -387,7 +387,13 @@ def create_trial_customer(
     # address's (two DIFFERENT forms racing on one email -- the loser would otherwise
     # have committed a customer, its photos and a trial before the account's unique
     # constraint refused it, leaving an orphan customer without an account).
-    with _hold_lock(idempotency_key), _hold_lock("email|" + email_norm):
+    # The shop's own identity is locked too, once it is known (below, still before the
+    # duplicate check): two forms for the SAME shop with different emails and keys
+    # would otherwise both pass find_duplicates before either committed. The order is
+    # fixed -- form key, email, CR, phone -- so two actions can never wait on each other.
+    with ExitStack() as locks:
+        locks.enter_context(_hold_lock(idempotency_key))
+        locks.enter_context(_hold_lock("email|" + email_norm))
         # -- read-only until every check has passed --------------------------
         profile = find_own_profile(actor_staff_user_id)
         if profile is None:
@@ -410,6 +416,8 @@ def create_trial_customer(
             # "---" / only symbols: an empty key would make find_duplicates skip the CR
             # check entirely, i.e. a number that can never clash with anything.
             raise OnboardingError("CR_NUMBER_REQUIRED")
+        locks.enter_context(_hold_lock("cr|" + _cr_key(cr_clean)))
+        locks.enter_context(_hold_lock("phone|" + phone_e164))
         address_clean = _clean_name(address, required_code="ADDRESS_REQUIRED", limit=_ADDRESS_MAX)
         city_clean = _clean_name(city, limit=128) or None
         location_fields = _check_location(latitude, longitude, accuracy_meters)

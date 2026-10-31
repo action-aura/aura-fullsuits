@@ -861,3 +861,48 @@ def test_a_phone_typed_with_a_slip_is_still_a_duplicate(app, seeded, kyc, typed)
         onboard(app, w, who="other_seller", phone=typed)
     assert caught.value.code == "TRIAL_ALREADY_USED" and "phone" in caught.value.params["fields"]
     assert counts(app) == before
+
+
+# ------------------------------------- r32: two forms for the SAME shop cannot both win
+
+@pytest.mark.parametrize("same", ["cr", "phone", "both"])
+def test_two_forms_for_the_same_shop_at_the_same_moment_make_one_customer(app, seeded, kyc, monkeypatch, same):
+    """Different emails, different form keys, same CR and phone. Without a lock on the
+    shop's identity both pass find_duplicates before either commits. The barrier makes
+    that interleaving certain: it holds the first thread inside the duplicate check until
+    the second has had its own look (it times out and carries on when the second is
+    legitimately waiting on the lock -- that is the fixed behaviour)."""
+    from app.customer_onboarding import service
+    from app.customer_onboarding.service import OnboardingError
+
+    w = _world(app)
+    barrier = threading.Barrier(2)
+    real = service.find_duplicates
+
+    def meet_after_looking(**kwargs):
+        found = real(**kwargs)
+        try:
+            barrier.wait(timeout=2)
+        except threading.BrokenBarrierError:
+            pass
+        return found
+
+    monkeypatch.setattr(service, "find_duplicates", meet_after_looking)
+    results, errors = [], []
+
+    def press(n):
+        try:
+            results.append(onboard(
+                app, w, email=f"twin{n}@haddad.example", business_name=f"Twin Market {n}",
+                cr_number="TWIN-4242" if same in ("cr", "both") else f"OTHER-{n}",
+                phone="079 777 4242" if same in ("phone", "both") else f"079 888 000{n}"))
+        except Exception as exc:  # noqa: BLE001 -- recorded and asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=press, args=(n,)) for n in (1, 2)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len(results) == 1 and len(errors) == 1, (results, errors)
+    assert isinstance(errors[0], OnboardingError) and errors[0].code == "TRIAL_ALREADY_USED", errors[0]
+    assert same in errors[0].params["fields"] or same == "both"
+    assert counts(app)["Customer"] == 1 and counts(app)["License"] == 1
