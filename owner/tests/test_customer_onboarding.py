@@ -817,3 +817,47 @@ def test_a_cr_with_nothing_comparable_in_it_is_refused(app, seeded, kyc, typed):
     with pytest.raises(OnboardingError) as caught:
         onboard(app, w, cr_number=typed)
     assert caught.value.code == "CR_NUMBER_REQUIRED" and counts(app) == NOTHING
+
+
+# ------------------------------------- r32: the same phone is always the same string
+
+AR = lambda digits: "".join(chr(0x0660 + int(d)) for d in digits)  # noqa: E731 -- Arabic-Indic digits
+
+
+@pytest.mark.parametrize("typed", [
+    f"+{AR('962')} {AR('79')} {AR('123')} {AR('4567')}",   # plus form, Arabic-Indic digits
+    AR("0791234567"),                                       # local form, Arabic-Indic digits
+    "+962 079 123 4567",                                    # trunk 0 typed after the country code
+    "+962 (0) 79 123 4567",
+    "00962 0791234567",                                     # same slip with the 00 prefix
+    f"+{AR('962')} {AR('0791234567')}",                     # both slips at once
+])
+def test_the_same_jordan_mobile_is_one_string_however_it_is_typed(typed):
+    from app.customer_onboarding.service import normalize_phone_e164
+
+    assert normalize_phone_e164(typed) == "+962791234567"
+
+
+@pytest.mark.parametrize("typed, expected", [
+    ("+44 7911 123456", "+447911123456"),        # a genuine non-Jordan number is untouched
+    ("+39 06 1234 5678", "+390612345678"),       # Italy keeps its 0: stripping it blindly would corrupt the number
+    ("+971 50 123 4567", "+971501234567"),
+    ("+44 (0)7911 123456", "+447911123456"),     # the UK trunk 0 is dropped
+])
+def test_other_countries_numbers_are_not_mangled(typed, expected):
+    from app.customer_onboarding.service import normalize_phone_e164
+
+    assert normalize_phone_e164(typed) == expected
+
+
+@pytest.mark.parametrize("typed", ["+962 079 555 0000", f"+{AR('962')} {AR('0795550000')}", AR("0795550000")])
+def test_a_phone_typed_with_a_slip_is_still_a_duplicate(app, seeded, kyc, typed):
+    from app.customer_onboarding.service import OnboardingError
+
+    w = _world(app)
+    onboard(app, w, phone="079 555 0000")
+    before = counts(app)
+    with pytest.raises(OnboardingError) as caught:
+        onboard(app, w, who="other_seller", phone=typed)
+    assert caught.value.code == "TRIAL_ALREADY_USED" and "phone" in caught.value.params["fields"]
+    assert counts(app) == before

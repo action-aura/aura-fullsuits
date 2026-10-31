@@ -184,12 +184,21 @@ def _hold_lock(key: str):
         conn.close()
 
 
+# Countries whose numbers are routinely typed WITH the national trunk 0 after the
+# country code ("+962 0791..."); E.164 never carries it. Not applied to every code
+# on purpose: Italy keeps its 0 (+39 06...), so stripping blindly would corrupt it.
+_TRUNK_ZERO_COUNTRY_CODES = ("962", "963", "964", "966", "970", "971", "961", "965", "968", "974", "973", "20", "44")
+
+
 def normalize_phone_e164(raw: str | None, default_country_code: str = "962") -> str:
     """'079 123 4567' / '+962 79 123 4567' / '00962791234567' -> '+962791234567'.
     A number with a plus or 00 prefix is taken as typed; a number starting 0 is a
     local Jordan number; a bare 9-digit number starting 7 is a Jordan mobile.
-    Anything else, or fewer than 8 / more than 15 digits, is refused."""
-    text_in = (raw or "").strip()
+    Digits typed in any script (Arabic-Indic, Persian) are read as ASCII, and a
+    trunk 0 typed after the country code ('+962 0791...') is dropped, so the same
+    phone is always the same string. Anything else, or fewer than 8 / more than 15
+    digits, is refused."""
+    text_in = _ascii_digits(raw).strip()
     digits = re.sub(r"\D", "", text_in)
     if not digits:
         raise OnboardingError("PHONE_INVALID")
@@ -203,6 +212,10 @@ def normalize_phone_e164(raw: str | None, default_country_code: str = "962") -> 
         e164_digits = default_country_code + digits
     else:
         raise OnboardingError("PHONE_INVALID")
+    for code in _TRUNK_ZERO_COUNTRY_CODES:
+        if e164_digits.startswith(code + "0"):
+            e164_digits = code + e164_digits[len(code) + 1:]
+            break
     if not 8 <= len(e164_digits) <= 15 or e164_digits.startswith("0"):
         raise OnboardingError("PHONE_INVALID")
     return "+" + e164_digits
@@ -212,7 +225,7 @@ def _phone_key(raw: str | None) -> str | None:
     try:
         return normalize_phone_e164(raw)
     except OnboardingError:
-        digits = re.sub(r"\D", "", raw or "")
+        digits = re.sub(r"\D", "", _ascii_digits(raw))
         return digits or None
 
 
