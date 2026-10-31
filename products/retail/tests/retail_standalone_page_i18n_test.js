@@ -384,7 +384,7 @@ function findHardcodedProseFieldLiterals(src, excludedSpans) {
 const TRANSLATION_SOURCE_CONSTS = {
   'einvoicing.js': ['OUTBOX_STATE_LABELS', 'PROVIDER_LABELS'],
   'licensing.js': ['STATE_LABELS', 'REASON_MESSAGES', 'LOCAL_VERIFICATION_MESSAGE', 'PRODUCT_NAMES'],
-  'licensing-account.js': ['MESSAGES', 'POLICY_MESSAGES'],
+  'licensing-account.js': ['MESSAGES', 'POLICY_MESSAGES', 'MIDFLOW_MESSAGES'],
   'whatsapp.js': ['REPORT_TYPES', 'OUTBOX_STATE_LABELS'],
 };
 
@@ -407,6 +407,10 @@ const EXCLUDED_CONSTS = {
   'licensing-account.js': {
     ROLE_PENDING_KEY: 'an internal localStorage key (the which-computer-is-this marker), never rendered to a user.',
     MIN_PASSWORD_LENGTH: 'a numeric constant.',
+    PLAN_NAMES: 'a code -> {en, ar} table that picks the language itself (planDisplayName); it never goes through t(), ' +
+      'so the Arabic is written beside the English there rather than in the catalog.',
+    MIDFLOW_KEY: 'an internal localStorage key (the reloaded-mid-sign-in note), never rendered to a user.',
+    MIDFLOW_MAX_AGE_MS: 'a numeric constant.',
   },
   'whatsapp.js': {},
 };

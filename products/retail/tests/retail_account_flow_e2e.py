@@ -71,6 +71,10 @@ MUTANTS = {
     "role_step_skipped": ("**/app-shell.js", "if (roleStep && !this._needsActivation(lic)) {", "if (false) {"),
     # rc.19: the step lives on the device's backend, not only in localStorage. Blind the server read and a
     # reload with a wiped localStorage must go RED (A6f).
+    # rc.19: the raw plan code must never be the name on the activation screen (A5b).
+    "plan_code_shown_raw": ("**/licensing-account.js", "return local ? (ar ? local.ar : local.en) : '';", "return lic.plan_code || '';"),
+    # rc.19: a reload on the forced-password step must explain itself (A3a).
+    "midflow_silent": ("**/licensing-account.js", "if (lost) api.say(t(MIDFLOW_MESSAGES[lost]), 'info');", ""),
     "role_server_ignored": ("**/app-shell.js", "if (body && body.role_step && body.role_step.state) return body.role_step;", ""),
     # rc.19: a reload AFTER choosing boss resumes the create-account form, not the join wait screen (A7e).
     "admin_resume_lost": ("**/app-shell.js", "if (roleStep.state === 'ADMIN') {", "if (false) {"),
@@ -195,6 +199,16 @@ def scenario_admin(pw, fake, backend):
     # A3: the temporary password -> forced password change
     sign_in(page, TEMP_PW)
     check("A3 the temporary password leads to the forced password change", visible(page, "#account-new-password"))
+    # A3a (rc.19): a reload here cannot resume (the ticket is memory-only, never on disk) -- but it must
+    # SAY so, not silently show a fresh form. And signing in again with the same temporary password works.
+    page.reload(wait_until="domcontentloaded")
+    check("A3a reload on the forced-password step: back at sign-in WITH an explanation",
+          visible(page, "#account-email") and "reloaded" in page.locator("#message-area").inner_text(),
+          page.locator("#message-area").inner_text())
+    sign_in(page, TEMP_PW)
+    check("A3a2 signing in again with the temporary password reaches the same step", visible(page, "#account-new-password"))
+    stored = page.evaluate("() => JSON.stringify(Object.entries(localStorage))")
+    check("A3a3 the note kept for that message holds no secret", TEMP_PW not in stored, stored[:200])
     page.fill("#account-new-password", "short")
     page.fill("#account-new-password2", "short")
     page.click("#account-password-btn")
@@ -236,6 +250,9 @@ def scenario_admin(pw, fake, backend):
 
     # A5: activate
     check("A5 one licence -> ready to activate", visible(page, "#account-activate-btn"))
+    ready = page.inner_text("#ready-licence")
+    check("A5b the activation screen names the package, never the raw plan code",
+          "Package 1" in ready and "AURA_RETAIL" not in ready and "P1_YEARLY" not in ready, ready)
     page.click("#account-activate-btn")
 
     # A6: role step

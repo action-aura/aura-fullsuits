@@ -34,6 +34,76 @@
   // succeeds; app-shell.js reads it to show the "which computer is this?" step.
   const ROLE_PENDING_KEY = 'aura.firstrun.rolePending';
 
+  // Best effort: the backend refuses once a shop has an admin (409), and a
+  // network hiccup must never block an activation that already succeeded.
+  function postRolePending(email) {
+    return fetch('/api/onboarding/role-step', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state: 'pending', email: email || '' }),
+    }).catch(function () { /* the localStorage copy still stands */ });
+  }
+
+  // rc.19 (dress rehearsal 2026-10-31): the activation screen printed the raw plan
+  // code "AURA_RETAIL_P1_YEARLY". Owner now sends `plan_name` (and `plan_name_ar`)
+  // next to `plan_code`; these are the fallback for an Owner that does not yet,
+  // and the same three names the Android app maps (AccountFlow.kt planDisplayName).
+  const PLAN_NAMES = {
+    AURA_RETAIL_P1_YEARLY: { en: 'Package 1 (yearly)', ar: 'الباقة 1 (سنوية)' },
+    AURA_RETAIL_P2_MONTHLY_12: { en: 'Package 2 (monthly, 12-month contract)', ar: 'الباقة 2 (شهرية، عقد 12 شهراً)' },
+    AURA_RETAIL_P3_MONTHLY_24: { en: 'Package 3 (monthly, 24-month contract)', ar: 'الباقة 3 (شهرية، عقد 24 شهراً)' },
+  };
+
+  function planDisplayName(lic) {
+    const ar = !!(window.AuraI18n && window.AuraI18n.current === 'ar');
+    const sent = ar ? (lic.plan_name_ar || lic.plan_name) : (lic.plan_name || lic.plan_name_ar);
+    if (sent) return sent;
+    const local = PLAN_NAMES[lic.plan_code];
+    // An unknown code is never shown raw: a code is not a name.
+    return local ? (ar ? local.ar : local.en) : '';
+  }
+
+  // "<shop or branch label> · <package name>"; either half may be missing. The
+  // placeholder ("your shop" / "Branch 2") is used only when there is neither a
+  // label nor a package name -- or always, in the branch picker, where several
+  // licences of one package must stay tellable apart.
+  function licenceLabel(lic, fallbackLabel, alwaysFallback) {
+    const parts = [lic.branch_label || (alwaysFallback ? fallbackLabel : ''), planDisplayName(lic)].filter(Boolean);
+    return parts.length ? parts.join(' · ') : fallbackLabel;
+  }
+
+  // rc.19 (dress rehearsal 2026-10-31): reloading on the forced-password step silently
+  // dropped the person back on the sign-in form. The ticket cannot be kept (memory only,
+  // by design), so we keep only a NON-SECRET note -- which step, and when -- and explain
+  // after the reload. Nothing here is a credential, a ticket or a flow id.
+  const MIDFLOW_KEY = 'aura.licensing.accountMidFlow';
+  const MIDFLOW_MAX_AGE_MS = 30 * 60 * 1000;
+  const MIDFLOW_MESSAGES = {
+    password: 'The page was reloaded before your new password was saved, so please sign in again. Use the same email and the temporary password your seller gave you.',
+    contract: 'The page was reloaded before the agreement was accepted, so please sign in again. Use the email and the new password you chose.',
+    activate: 'The page was reloaded before this computer was activated, so please sign in again. Use the email and the password you chose.',
+  };
+
+  function markMidFlow(step) {
+    try { localStorage.setItem(MIDFLOW_KEY, JSON.stringify({ v: 1, at: Date.now(), step: step })); } catch (e) { /* storage blocked: no note, nothing lost */ }
+  }
+
+  function clearMidFlow() {
+    try { localStorage.removeItem(MIDFLOW_KEY); } catch (e) { /* storage blocked */ }
+  }
+
+  // The step the person was on when the page went away, or '' -- and the note is consumed.
+  function readMidFlow() {
+    let step = '';
+    try {
+      const rec = JSON.parse(localStorage.getItem(MIDFLOW_KEY) || 'null');
+      if (rec && rec.v === 1 && typeof rec.at === 'number' && Date.now() - rec.at < MIDFLOW_MAX_AGE_MS
+          && Object.prototype.hasOwnProperty.call(MIDFLOW_MESSAGES, rec.step)) step = rec.step;
+    } catch (e) { /* unreadable note: treat as none */ }
+    clearMidFlow();
+    return step;
+  }
+
   const MIN_PASSWORD_LENGTH = 10;   // Owner's customer policy; Owner stays the authority.
 
   const MESSAGES = {
@@ -107,7 +177,7 @@
     let email = '';
     let chosenLicence = null;
 
-    function reset() { flowId = null; view = null; chosenLicence = null; showSignIn(); }
+    function reset() { flowId = null; view = null; chosenLicence = null; clearMidFlow(); showSignIn(); }
 
     function busy(button, on, label) {
       button.disabled = on;
@@ -169,8 +239,9 @@
     // The order is fixed here AND enforced by the local routes: password, then
     // contract, then branch, then activate.
     function next() {
-      if (view.password_change_required) return showPasswordChange();
-      if (view.contract && view.contract.required) return showContract();
+      if (view.password_change_required) { markMidFlow('password'); return showPasswordChange(); }
+      if (view.contract && view.contract.required) { markMidFlow('contract'); return showContract(); }
+      markMidFlow('activate');
       return showBranchOrActivate();
     }
 
@@ -339,8 +410,7 @@
         radio.name = 'branch';
         radio.value = lic.license_public_id;
         radio.addEventListener('change', function () { chosenLicence = lic.license_public_id; go.disabled = false; });
-        const label = (lic.branch_label || t('Branch') + ' ' + (i + 1))
-          + (lic.plan_code ? ' · ' + lic.plan_code : '')
+        const label = licenceLabel(lic, t('Branch') + ' ' + (i + 1), true)
           + ((lic.trial && lic.trial.ends_on) ? ' · ' + t('trial ends') + ' ' + lic.trial.ends_on : '');
         list.appendChild(el('label', { htmlFor: 'branch-' + i, className: 'branch-row' }, [radio, el('span', { text: ' ' + label })]));
       });
@@ -353,7 +423,7 @@
     function showReadyToActivate(lic) {
       clear(host);
       host.appendChild(el('p', { text: t('Signed in. This computer is ready to be activated for:') }));
-      const what = (lic.branch_label || t('your shop')) + (lic.plan_code ? ' · ' + lic.plan_code : '');
+      const what = licenceLabel(lic, t('your shop'));
       host.appendChild(el('p', { id: 'ready-licence', className: 'step-title', text: what }));
       if (lic.trial && lic.trial.ends_on) {
         host.appendChild(el('p', { text: t('Your free trial runs until') + ' ' + lic.trial.ends_on + '.' }));
@@ -378,7 +448,12 @@
       if (res.status === 200 && res.body && res.body.result === 'SUCCESS') {
         try {
           localStorage.setItem(ROLE_PENDING_KEY, JSON.stringify({ v: 1, at: Date.now(), email: email }));
-        } catch (err) { /* storage blocked: the role step simply falls back to the join wait screen */ }
+        } catch (err) { /* storage blocked: the server copy below still holds the step */ }
+        // rc.19: ALSO kept on the device's own backend (config.json), so a reload,
+        // a wiped webview profile or another browser still lands on the role
+        // step. Awaited: the page navigates away right after.
+        await postRolePending(email);
+        clearMidFlow();
         api.onActivated({ email: email, response: res.body });
         return;
       }
@@ -393,7 +468,13 @@
     }
 
     showSignIn();
+    // A reload (or an app restart) in the middle of the steps cannot resume them: the
+    // sign-in ticket lives only in the backend's memory and is never written to disk (that
+    // is the rule A9 of the account e2e pins). Say so plainly instead of silently showing
+    // a fresh sign-in form as if nothing had happened.
+    const lost = readMidFlow();
+    if (lost) api.say(t(MIDFLOW_MESSAGES[lost]), 'info');
   }
 
-  window.AuraAccountSignIn = { mount: mount, ROLE_PENDING_KEY: ROLE_PENDING_KEY };
+  window.AuraAccountSignIn = { mount: mount, ROLE_PENDING_KEY: ROLE_PENDING_KEY, planDisplayName: planDisplayName };
 })();

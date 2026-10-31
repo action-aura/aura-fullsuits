@@ -1141,6 +1141,15 @@
     content.appendChild(panel);
   }
 
+  // The date to show after "Paid until", or '' when this lease is not a paid, running one.
+  function paidUntilDate(status) {
+    const live = status && (status.current_state === 'ACTIVE_ONLINE' || status.current_state === 'ACTIVE_OFFLINE' || status.current_state === 'WARNING');
+    if (!live) return '';
+    if (status.trial && status.trial.is_trial) return '';
+    const end = status.term && status.term.end;
+    return (typeof end === 'string' && /^\d{4}-\d{2}-\d{2}/.test(end)) ? end.slice(0, 10) : '';
+  }
+
   function renderLicenseStatus(status) {
     stopAwaitingPoll();   // screen entry point: never leave a timer behind
     const state = status.current_state;
@@ -1157,6 +1166,12 @@
     if (trial && trial.is_trial && !trial.ended && typeof trial.days_left === 'number' && trial.days_left > 0) {
       addStatusRow(dl, t('Free trial'), trialDaysLeftText(trial.days_left));
     }
+    // rc.19: a shop that has PAID used to see only "Active". Say until when, from the
+    // signed lease's term_end (status.term.end, 'YYYY-MM-DD'). Never beside a trial row,
+    // and only while the licence is live (ACTIVE_ONLINE / ACTIVE_OFFLINE / WARNING): a locked,
+    // lapsed or expired shop is not "paid until".
+    const paidUntil = paidUntilDate(status);
+    if (paidUntil) addStatusRow(dl, t('Paid until'), paidUntil);
     content.appendChild(dl);
 
     if (state === 'RESTRICTED' || state === 'GRACE_PERIOD' || state === 'WARNING') {

@@ -196,6 +196,15 @@ def main():
             check("4 a paid lease unlocks the same running backend (no restart): sale 200",
                   sale["status"] == 200 and chk["body"]["current_state"] != "TRIAL_ENDED",
                   {"state": chk["body"]["current_state"], "sale": sale["status"]})
+            # rc.19: after paying, the licence page said only "Active". It must say until when.
+            st4 = api("GET", "/api/licensing/status")
+            page.goto(backend2.base_url + "/static/licensing.html", wait_until="domcontentloaded")
+            page.wait_for_timeout(2500)
+            card = page.inner_text("#content") if page.locator("#content").count() else page.inner_text("body")
+            page.screenshot(path=str(OUT / "04_paid_licence_page.png"))
+            check("4b a paid shop's licence page says 'Paid until <term_end>' (and no trial countdown)",
+                  ("Paid until" in card) and (nextyear in card) and ("Free trial" not in card),
+                  {"card": card[:200], "state": (st4["body"] or {}).get("current_state")})
         finally:
             browser.close()
             for b in (backend2, backend):

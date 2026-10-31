@@ -38,7 +38,11 @@ def main():
     fake.contract["body"] = fake.contract["body"] + "".join(
         f"{n + 4}. بند تجريبي رقم {n} من عقد الاستخدام، ويجب قراءته حتى النهاية قبل الموافقة.\n"
         for n in range(70))
-    fake.add_account(email, temp_password, must_change=True)
+    # rc.19: the REAL launch plan code (the rehearsal screen printed it raw), no plan_name -- the
+    # older-Owner case, so the screen must map the code itself.
+    fake.add_account(email, temp_password, must_change=True, licences=[
+        {"license_public_id": "lic-1", "product_code": "AURA_RETAIL", "plan_code": "AURA_RETAIL_P1_YEARLY",
+         "branch_label": None, "trial": {"state": "TRIAL", "ends_on": "2026-11-09"}}])
 
     @fake.app.route("/__state")
     def state():
