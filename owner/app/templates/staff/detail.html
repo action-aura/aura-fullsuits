@@ -10,6 +10,15 @@
     <dt>{{ _("MFA") }}</dt><dd>{% if staff.mfa_credential and staff.mfa_credential.confirmed %}<span class="badge active">{{ mfa_status_label(enrolled=True, required=False) }}</span>{% else %}<span class="badge warn">{{ mfa_status_label(enrolled=False, required=False) }}</span>{% endif %}</dd>
     <dt>{{ _("Roles") }}</dt><dd>{% for a in staff.role_assignments %}<span class="badge">{{ role_label(a.role.code) }}</span> {% else %}<span class="empty">{{ _("None") }}</span>{% endfor %}</dd>
     <dt>{{ _("Last login") }}</dt><dd>{{ format_owner_datetime(staff.last_login_at) if staff.last_login_at else _("Never") }}</dd>
+    {% if id_photo or is_seller %}
+    <dt>{{ _("ID photo") }}</dt>
+    <dd data-id-photo-row="1">
+      {% if id_photo %}
+        {{ _("ID photo on file since %(date)s", date=format_owner_date(id_photo.uploaded_at)) }}
+        {% if has_permission('staff_documents.view') %}<a data-id-photo-link="1" href="{{ url_for('seller_id.view_photo', document_id=id_photo.id) }}" target="_blank" rel="noopener">{{ _("Open the ID photo") }}</a>{% endif %}
+      {% else %}<span class="empty">{{ _("Not on file") }}</span>{% endif %}
+    </dd>
+    {% endif %}
   </dl>
 </div>
 

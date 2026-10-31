@@ -8293,3 +8293,86 @@ msgstr ""
 #: app/commissions/clawback.py
 msgid "No take-backs are waiting to be deducted."
 msgstr ""
+
+#: app/templates/seller_id/upload.html
+msgid "Upload your ID photo"
+msgstr ""
+
+#: app/templates/seller_id/upload.html
+msgid "Before you start, upload a clear photo of your personal ID. Only the Sales Manager can see it."
+msgstr ""
+
+#: app/templates/seller_id/upload.html
+#, python-format
+msgid "ID photo on file since %(date)s"
+msgstr ""
+
+#: app/templates/seller_id/upload.html
+msgid "Go to the dashboard"
+msgstr ""
+
+#: app/templates/seller_id/upload.html
+msgid "ID photo"
+msgstr ""
+
+#: app/templates/seller_id/upload.html
+msgid "A JPEG or PNG picture, up to 10 MB. It is stored encrypted."
+msgstr ""
+
+#: app/templates/seller_id/upload.html
+msgid "Upload"
+msgstr ""
+
+#: app/seller_id/messages.py
+msgid "ID photos cannot be stored on this server yet (no encryption key is set). Nothing was saved. Ask the administrator."
+msgstr ""
+
+#: app/seller_id/messages.py
+msgid "Choose a photo of the ID."
+msgstr ""
+
+#: app/seller_id/messages.py
+msgid "The ID photo must be a JPEG or PNG picture."
+msgstr ""
+
+#: app/seller_id/messages.py
+#, python-format
+msgid "The ID photo is too large (at most %(max_mb)s MB)."
+msgstr ""
+
+#: app/seller_id/messages.py
+msgid "The ID photo file is empty."
+msgstr ""
+
+#: app/seller_id/messages.py
+msgid "The ID photo file is damaged. Take it again."
+msgstr ""
+
+#: app/seller_id/messages.py
+msgid "An ID photo is already on file. Ask a Sales Manager if it has to be replaced."
+msgstr ""
+
+#: app/seller_id/messages.py
+msgid "Another upload happened at the same moment. Try again."
+msgstr ""
+
+#: app/templates/employees/new.html
+msgid "ID photo (optional)"
+msgstr ""
+
+#: app/templates/employees/new.html
+msgid "A JPEG or PNG picture, up to 10 MB. Stored encrypted. Without one, the seller is asked to upload it at first sign-in."
+msgstr ""
+
+#: app/templates/employees/detail.html
+msgid "Open the ID photo"
+msgstr ""
+
+#: app/templates/employees/detail.html
+msgid "Not on file"
+msgstr ""
+
+#: app/templates/employees/detail.html
+msgid "Choose a new photo to replace the one on file. Leave it empty to keep it."
+msgstr ""
+

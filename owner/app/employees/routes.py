@@ -32,6 +32,9 @@ from app.models.staff import Role, StaffInvitation, StaffSession, StaffUser
 from app.security.rbac import require_permission, require_recent_auth
 from app.security.super_admin_guard import LastSuperAdminError
 from app.mail.invitations import queue_invitation_email
+from app.seller_id import documents as seller_id_documents
+from app.seller_id import service as seller_id_service
+from app.seller_id.messages import photo_error_message
 from app.staff.services import EmployeeDraftValidationError, create_employee_invitation, reissue_employee_invitation
 
 bp = Blueprint("employees", __name__, url_prefix="/employees")
@@ -104,12 +107,32 @@ def create():
         "commission_plan_id": request.form.get("commission_plan_id") or None,
     }
     mfa_required = "mfa_required" in request.form
+    # Optional ID photo of the new seller. Judged BEFORE the invitation is made, so a bad
+    # photo (wrong type, too big, no encryption key) leaves nothing behind.
+    photo = request.files.get("id_photo")
+    photo_bytes = photo.read() if photo and photo.filename else b""
+    if photo_bytes:
+        try:
+            seller_id_service.precheck(photo_bytes)
+        except seller_id_service.PhotoError as exc:
+            return render_template(
+                "employees/new.html", error=photo_error_message(exc.code, **exc.params), roles=_role_options(),
+                managers=_manager_options(), plans=_commission_plan_options()
+            ), 400
     try:
         invitation, raw_token = create_employee_invitation(email, role_codes, employee_fields, actor.id, mfa_required=mfa_required)
     except EmployeeDraftValidationError as exc:
         return render_template(
             "employees/new.html", error=str(exc), roles=_role_options(), managers=_manager_options(), plans=_commission_plan_options()
         ), 400
+    if photo_bytes:
+        # The seller has no StaffUser yet: the photo belongs to the invitation and is bound
+        # to the account at acceptance (staff/services.py), so it satisfies the ID gate at
+        # their first sign-in.
+        try:
+            seller_id_service.save_photo(content=photo_bytes, uploaded_by_staff_user_id=actor.id, invitation_id=invitation.id)
+        except seller_id_service.PhotoError as exc:
+            flash(photo_error_message(exc.code, **exc.params), "error")
     link = url_for("auth.accept_invitation_form", token=raw_token, _external=True)
     email_queued = queue_invitation_email(invitation, link)
     return render_template("employees/invitation_created.html", invitation=invitation, link=link, email_queued=email_queued)
@@ -155,7 +178,7 @@ def detail(employee_id):
         "employees/detail.html", current_plan=current_plan, held_plan_codes=held_codes,
         both_ladders=all(code in held_codes for code in LADDER_PLAN_CODES), profile=profile, staff=staff, presence=presence, sessions=sessions,
         roles=_role_options(), managers=[m for m in _manager_options() if m.id != profile.id], plans=_commission_plan_options(),
-        audit_events=audit_events,
+        audit_events=audit_events, id_photo=seller_id_documents.current_photo(profile.staff_user_id),
     )
 
 
@@ -205,7 +228,23 @@ def edit(employee_id):
     expected_version = request.form.get("version", type=int)
     if expected_version is not None and expected_version != profile.version:
         return jsonify({"error": "version_conflict"}), 409
+    # Optional new ID photo (replaces the one on file; the old row is kept, superseded).
+    # Judged before the profile changes so a refused photo does not half-apply the form.
+    photo = request.files.get("id_photo")
+    photo_bytes = photo.read() if photo and photo.filename else b""
+    if photo_bytes:
+        try:
+            seller_id_service.precheck(photo_bytes)
+        except seller_id_service.PhotoError as exc:
+            flash(photo_error_message(exc.code, **exc.params), "error")
+            return redirect(url_for("employees.detail", employee_id=employee_id))
     update_employee_profile(profile, fields, actor_staff_user_id=actor.id)
+    if photo_bytes:
+        try:
+            seller_id_service.save_photo(
+                content=photo_bytes, uploaded_by_staff_user_id=actor.id, staff_user_id=profile.staff_user_id)
+        except seller_id_service.PhotoError as exc:
+            flash(photo_error_message(exc.code, **exc.params), "error")
     return redirect(url_for("employees.detail", employee_id=employee_id))
 
 

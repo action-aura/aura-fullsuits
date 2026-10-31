@@ -204,6 +204,12 @@ def create_staff_from_invitation(
         )
         db_session.add(profile)
 
+    # A seller ID photo a manager attached when creating the invitation becomes this
+    # account's photo, in the SAME transaction as the account, so the ID gate is already
+    # satisfied at the first sign-in.
+    from app.seller_id.documents import bind_invitation_photo
+
+    bind_invitation_photo(invitation.id, staff.id)
     db_session.commit()
     return staff, profile
 
@@ -247,8 +253,15 @@ def reissue_employee_invitation(invitation: StaffInvitation, actor_staff_user_id
     if invitation.employee_profile_draft:
         draft = json.loads(invitation.employee_profile_draft)
         mfa_required = draft.pop("mfa_required", True)
-        return create_employee_invitation(invitation.email, role_codes, draft, actor_staff_user_id, mfa_required=mfa_required)
-    return create_invitation(invitation.email, role_codes, actor_staff_user_id)
+        fresh, raw_token = create_employee_invitation(invitation.email, role_codes, draft, actor_staff_user_id, mfa_required=mfa_required)
+    else:
+        fresh, raw_token = create_invitation(invitation.email, role_codes, actor_staff_user_id)
+    # The ID photo attached to the old (now revoked) invitation follows the person.
+    from app.seller_id.documents import move_invitation_photo
+
+    if move_invitation_photo(invitation.id, fresh.id):
+        db_session.commit()
+    return fresh, raw_token
 
 
 def revoke_invitation(invitation: StaffInvitation, actor_staff_user_id: uuid.UUID) -> None:

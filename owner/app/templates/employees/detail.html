@@ -10,6 +10,13 @@
     <dt>{{ _('Manager') }}</dt><dd>{{ profile.manager.full_name if profile.manager else "-" }}</dd>
     <dt>{{ _('Employment start date') }}</dt><dd>{{ format_owner_date(profile.employment_start_date) }}</dd>
     <dt>{{ _('Phone') }}</dt><dd>{{ profile.phone|bidi_isolate if profile.phone else "-" }}</dd>
+    <dt>{{ _('ID photo') }}</dt>
+    <dd data-id-photo-row="1">
+      {% if id_photo %}
+        {{ _('ID photo on file since %(date)s', date=format_owner_date(id_photo.uploaded_at)) }}
+        {% if has_permission('staff_documents.view') %}<a data-id-photo-link="1" href="{{ url_for('seller_id.view_photo', document_id=id_photo.id) }}" target="_blank" rel="noopener">{{ _('Open the ID photo') }}</a>{% endif %}
+      {% else %}<span class="empty">{{ _('Not on file') }}</span>{% endif %}
+    </dd>
     <dt>{{ _('Presence') }}</dt><dd><span class="badge {{ presence_badge_class(presence) }}">{{ presence_label(presence) }}</span> <span class="empty">({{ _('application usage only -- not attendance/working hours') }})</span></dd>
   </dl>
 </div>
@@ -51,7 +58,7 @@
 <div class="card">
   <h3>{{ _('Edit profile') }}</h3>
   {% if has_permission('employees.update') %}
-  <form method="post" action="{{ url_for('employees.edit', employee_id=profile.id) }}">
+  <form method="post" action="{{ url_for('employees.edit', employee_id=profile.id) }}" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ profile.version }}">
     <label for="full_name">{{ _('Full name') }}</label>
@@ -65,6 +72,9 @@
       <option value="">{{ _('None') }}</option>
       {% for m in managers %}<option value="{{ m.id }}" {% if profile.manager_employee_profile_id == m.id %}selected{% endif %}>{{ m.full_name }} ({{ m.employee_number }})</option>{% endfor %}
     </select>
+    <label for="id_photo">{{ _('ID photo (optional)') }}</label>
+    <input id="id_photo" type="file" name="id_photo" accept="image/jpeg,image/png">
+    <p class="empty">{{ _('Choose a new photo to replace the one on file. Leave it empty to keep it.') }}</p>
     <div style="margin-top:1rem;"><button type="submit" class="secondary">{{ _('Save changes') }}</button></div>
   </form>
   {% else %}
