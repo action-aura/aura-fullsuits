@@ -225,9 +225,12 @@ def signing_key(app):
         return row.key_id
 
 
-def make_license(app, actor_id, *, device_limit=1, product_code="AURA_CLINIC", plan_code=None):
+def make_license(app, actor_id, *, device_limit=1, product_code="AURA_CLINIC", plan_code=None,
+                 extra_desktop_slots=0, extra_phone_slots=0):
     """Creates a real customer -> subscription(ACTIVE) -> issued license chain
-    and returns (license_id, full_key)."""
+    and returns (license_id, full_key). extra_desktop_slots / extra_phone_slots
+    are the typed extras bought (device_limit stays the total, so a package of 2
+    plus one extra phone is device_limit=3, extra_phone_slots=1)."""
     with app.app_context():
         import uuid as uuid_mod
 
@@ -250,7 +253,8 @@ def make_license(app, actor_id, *, device_limit=1, product_code="AURA_CLINIC", p
 
         lic = create_license(
             {"customer_id": customer.id, "subscription_id": sub.id, "product_id": product.id, "plan_id": plan.id,
-             "allowed_platforms": "WINDOWS,ANDROID", "device_limit": device_limit},
+             "allowed_platforms": "WINDOWS,ANDROID", "device_limit": device_limit,
+             "extra_desktop_slots": extra_desktop_slots, "extra_phone_slots": extra_phone_slots},
             actor_id,
         )
         lic, full_key = issue_license_key(lic, app.config["LICENSE_PEPPER"], str(uuid_mod.uuid4()), actor_id)

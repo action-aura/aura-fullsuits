@@ -32,6 +32,10 @@ PUBLIC_REASON_CODES = frozenset(
         "VERSION_NOT_ALLOWED",
         "VERSION_UNSUPPORTED",
         "DEVICE_LIMIT_REACHED",
+        # Typed extras: the licence has room in total but none for this KIND of
+        # device (desktop vs phone). Public like DEVICE_LIMIT_REACHED: the caller
+        # already proved the key, and the app shows a kind-specific message.
+        "DEVICE_TYPE_LIMIT_REACHED",
         "INSTALLATION_NOT_FOUND",
         "INSTALLATION_SUSPENDED",
         "INSTALLATION_DEACTIVATED",

@@ -121,7 +121,8 @@ def test_sales_manager_is_allowed_extend_unsuspend_and_add_devices(app, client, 
     unsuspend = client.post(f"/subscriptions/{suspended_sub}/transition",
                             data={"csrf_token": csrf, "to_status": "ACTIVE", "reason": "manager un-suspend"})
     add_dev = client.post(f"/licenses/{lic}/add-devices",
-                          data={"csrf_token": csrf, "additional_devices": "3", "reason": "manager devices"})
+                          data={"csrf_token": csrf, "additional_devices": "3", "reason": "manager devices",
+                                "slot_kind": "PHONE"})  # the route now needs a kind (typed extras)
 
     assert (renew.status_code, unsuspend.status_code, add_dev.status_code) == (302, 302, 302)
     assert _sub_field(app, active_sub, "end_date") == date(2031, 1, 1)

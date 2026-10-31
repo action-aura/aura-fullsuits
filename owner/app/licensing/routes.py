@@ -171,11 +171,17 @@ def add_devices_route(license_id):
         additional_devices = int(request.form["additional_devices"])
     except (KeyError, ValueError):
         return jsonify({"error": "invalid_additional_devices"}), 400
+    # Typed extras (owner decision 2026-10-31): staff must say WHICH kind they are
+    # adding. A missing/unknown kind is refused, never defaulted to "any kind",
+    # because untyped capacity is exactly what the owner stopped selling.
+    slot_kind = request.form.get("slot_kind")
+    if slot_kind not in ("DESKTOP", "PHONE"):
+        return jsonify({"error": "invalid_slot_kind"}), 400
     idempotency_key = request.form.get("idempotency_key") or request.headers.get("Idempotency-Key")
     try:
         add_license_devices(
             license_row, additional_devices=additional_devices, reason=request.form.get("reason", ""),
-            actor_staff_user_id=actor.id, idempotency_key=idempotency_key,
+            actor_staff_user_id=actor.id, idempotency_key=idempotency_key, slot_kind=slot_kind,
         )
     except DeviceSlotError as exc:
         return jsonify({"error": str(exc)}), 400

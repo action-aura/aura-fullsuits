@@ -36,6 +36,7 @@ class PendingActivationError(StableCodeError):
         "INSTALLATION_NOT_AWAITING_ACTIVATION": "Installation is no longer awaiting activation.",
         "LICENSE_NOT_FOUND": "The license for this pending activation could not be found.",
         "DEVICE_LIMIT_REACHED": "This license has already reached its device limit.",
+        "DEVICE_TYPE_LIMIT_REACHED": "This licence has no free slot for this kind of device (desktop or phone).",
         "INVALID_REJECT_STATUS": "Cannot reject a pending activation in status {status}.",
         "REASON_REQUIRED_TO_REJECT": "A reason is required to reject a pending activation.",
     }
@@ -165,11 +166,19 @@ def approve_pending_activation(pending: PendingActivation, actor_staff_user_id) 
     # Defensive recheck (Part F): the effective device limit may have moved
     # since this request was gated -- another installation activated, or a
     # temporary exception (Part P) expired. Approval is not a rubber stamp.
-    from app.commercial_ops.device_slot_ops import resolve_effective_device_limit
+    from app.commercial_ops.device_slot_ops import resolve_effective_device_limit, typed_slot_available
 
     active_count = count_slot_consuming_installations(license_row.id, exclude_installation_id=installation.id)
-    if active_count >= resolve_effective_device_limit(license_row):
+    effective_limit = resolve_effective_device_limit(license_row)
+    if active_count >= effective_limit:
         raise PendingActivationError("DEVICE_LIMIT_REACHED")
+    # Typed extras: the held device is counted back in by its own platform; the
+    # extras bought since it was held may all be of the other kind.
+    if not typed_slot_available(
+        license_row, installation.platform.platform_code,
+        effective_limit=effective_limit, exclude_installation_id=installation.id,
+    ):
+        raise PendingActivationError("DEVICE_TYPE_LIMIT_REACHED")
 
     transition_installation(
         installation, "ACTIVE", actor_staff_user_id, reason="Activation approved after manual review."

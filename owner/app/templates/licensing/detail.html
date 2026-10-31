@@ -30,6 +30,7 @@
     <dt>{{ _("Masked key") }}</dt><dd>{% if license.key_prefix %}<code class="masked" dir="ltr">{{ license.key_prefix }}-...{{ license.key_suffix_masked }}</code>{% else %}<span class="empty">{{ _("not issued") }}</span>{% endif %}</dd>
     <dt>{{ _("Allowed platforms") }}</dt><dd><bdi dir="ltr">{{ license.allowed_platforms }}</bdi></dd>
     <dt>{{ _("Device limit") }}</dt><dd>{{ format_owner_number(license.device_limit) }}</dd>
+    <dt>{{ _("Extra devices bought") }}</dt><dd>{{ _("Extra desktops bought: %(n)s · Extra phones bought: %(m)s", n=format_owner_number(license.extra_desktop_slots), m=format_owner_number(license.extra_phone_slots)) }}</dd>
     <dt>{{ _("Valid from / until") }}</dt><dd>{{ format_owner_date(license.valid_from) if license.valid_from else "-" }} / {{ format_owner_date(license.valid_until) if license.valid_until else "-" }}</dd>
     {% if license.status == "REVOKED" and license.revocation_reason %}
     <dt>{{ _("Revocation reason") }}</dt><dd>{{ license.revocation_reason }}</dd>
@@ -65,6 +66,11 @@
     <form method="post" action="{{ url_for('licensing.add_devices_route', license_id=license.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="idempotency_key" value="{{ add_devices_idempotency_key }}">
+      <label for="licensing-detail-slot-kind">{{ _("Device type") }}</label>
+      <select id="licensing-detail-slot-kind" name="slot_kind" required>
+        <option value="DESKTOP">{{ _("Desktop (Windows)") }}</option>
+        <option value="PHONE">{{ _("Phone (Android)") }}</option>
+      </select>
       <label for="licensing-detail-additional-devices">{{ _("Devices to add") }}</label>
       <input id="licensing-detail-additional-devices" name="additional_devices" type="number" min="1" required>
       <label for="licensing-detail-add-devices-reason">{{ _("Reason (required)") }}</label>

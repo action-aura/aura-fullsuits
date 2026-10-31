@@ -173,6 +173,10 @@ def replace_license(old_license: License, actor_staff_user_id) -> License:
         allowed_platforms=old_license.allowed_platforms,
         allowed_release_channel_id=old_license.allowed_release_channel_id,
         device_limit=old_license.device_limit,
+        # The typed split travels with the total, or a replaced licence would turn
+        # its bought phones/desktops back into any-kind capacity.
+        extra_desktop_slots=old_license.extra_desktop_slots,
+        extra_phone_slots=old_license.extra_phone_slots,
         valid_from=old_license.valid_from,
         valid_until=old_license.valid_until,
         status="DRAFT",

@@ -18,7 +18,7 @@ from sqlalchemy import select
 from app.audit.services import record as audit_record
 from app.commercial_ops.activation_policy import create_pending_activation, resolve_activation_mode
 from app.customer_accounts import device_flow
-from app.commercial_ops.device_slot_ops import resolve_effective_device_limit
+from app.commercial_ops.device_slot_ops import resolve_effective_device_limit, typed_slot_available
 from app.extensions import db_session
 from app.installations.services import count_slot_consuming_installations
 from app.licensing_service import device_identity, idempotency, replay
@@ -324,8 +324,18 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
             raise ActivationRejected("DEVICE_ALREADY_REGISTERED")
 
         active_count = count_slot_consuming_installations(locked_license.id)
-        if active_count >= resolve_effective_device_limit(locked_license):
+        effective_limit = resolve_effective_device_limit(locked_license)
+        if active_count >= effective_limit:
             raise ActivationRejected("DEVICE_LIMIT_REACHED")
+        # Typed extras (owner decision 2026-10-31): the total has room, but a
+        # bought extra phone admits only a phone and a bought extra desktop only
+        # a desktop. Runs AFTER the total check on purpose -- a full licence keeps
+        # answering DEVICE_LIMIT_REACHED, the new code only appears when the
+        # licence has a free slot of the OTHER kind. Only a brand-new device is
+        # checked: the branch above (same installation_id / same device key)
+        # re-activates without taking a slot and is never blocked.
+        if not typed_slot_available(locked_license, platform.platform_code, effective_limit=effective_limit):
+            raise ActivationRejected("DEVICE_TYPE_LIMIT_REACHED")
         # Part O: a brand-new registration is gated by the product's
         # configured activation mode. AUTOMATIC (the default whenever no
         # ActivationPolicy row exists -- i.e. every installation ever

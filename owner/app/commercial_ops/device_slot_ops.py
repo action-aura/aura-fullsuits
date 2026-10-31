@@ -24,7 +24,11 @@ from app.audit.services import record as audit_record
 from app.commercial_ops.commercial_policy import create_notification
 from app.commercial_ops.errors import StableCodeError
 from app.extensions import db_session
-from app.installations.services import count_slot_consuming_installations, transition_installation
+from app.installations.services import (
+    count_slot_consuming_installations,
+    count_slot_consuming_installations_by_platform,
+    transition_installation,
+)
 from app.models.activation_governance import DeviceSlotException
 from app.models.base import utcnow
 from app.models.commercial_sales import CommercialOperationsIdempotencyKey
@@ -41,6 +45,16 @@ _LICENSE_STATUSES_ELIGIBLE_FOR_SCAN = ("ISSUED", "ACTIVE")
 # keying as LEAD_CREATION_OPERATION_CODE etc. in leads/services.py.
 ADD_DEVICES_OPERATION_CODE = "LICENSE_ADD_DEVICES"
 
+# Typed extras (owner decision 2026-10-31). A desktop is a Windows install, a
+# phone is an Android one; those two platform codes are the only kinds there are
+# (catalog _CANONICAL_PLATFORMS). Any other platform code a catalog might gain
+# is "other": it can only ever use the package's any-kind capacity.
+DESKTOP_PLATFORM_CODE = "WINDOWS"
+PHONE_PLATFORM_CODE = "ANDROID"
+SLOT_KIND_DESKTOP = "DESKTOP"
+SLOT_KIND_PHONE = "PHONE"
+SLOT_KINDS = (SLOT_KIND_DESKTOP, SLOT_KIND_PHONE)
+
 
 class DeviceSlotError(StableCodeError):
     _MESSAGES = {
@@ -54,6 +68,7 @@ class DeviceSlotError(StableCodeError):
         "REASON_REQUIRED_TO_REVOKE": "A reason is required to revoke a device slot exception.",
         "ADDITIONAL_DEVICES_MUST_BE_POSITIVE": "additional_devices must be positive.",
         "REASON_REQUIRED_TO_ADD_DEVICES": "A reason is required to add devices to a license.",
+        "INVALID_SLOT_KIND": "slot_kind must be DESKTOP or PHONE.",
         "DEVICE_LIMIT_BELOW_ACTIVE_COUNT": (
             "Cannot set this license's device limit to {new_limit} -- {active_count} device(s) are "
             "already active on it. Add enough devices to cover current usage."
@@ -141,6 +156,7 @@ def add_devices(
     reason: str,
     actor_staff_user_id,
     idempotency_key: str | None = None,
+    slot_kind: str | None = None,
 ) -> License:
     """Permanently raises a license's device allowance in one act (Phase 8V,
     docs/owner/packages-and-issuance-design.md §C.2 -- "the single most
@@ -169,7 +185,15 @@ def add_devices(
     the resulting over-limit state later, per its own Phase 8V-P2 comment).
     This action refuses outright instead: "Add devices" must never leave a
     license persisted below what is already deployed on it.
+
+    slot_kind (owner decision 2026-10-31, typed extras): "DESKTOP" or "PHONE"
+    also raises that kind's extra column by additional_devices, so the added
+    devices admit only that kind (fits_typed_slots). None keeps the old
+    untyped behaviour (any kind) for callers that predate typing; the staff
+    route always sends one. Anything else is refused.
     """
+    if slot_kind is not None and slot_kind not in SLOT_KINDS:
+        raise DeviceSlotError("INVALID_SLOT_KIND")
     if idempotency_key is not None:
         existing_key = db_session.execute(
             select(CommercialOperationsIdempotencyKey).where(
@@ -210,6 +234,10 @@ def add_devices(
 
     locked_license.device_limit = new_device_limit
     subscription.device_allowance = new_device_limit
+    if slot_kind == SLOT_KIND_DESKTOP:
+        locked_license.extra_desktop_slots += additional_devices
+    elif slot_kind == SLOT_KIND_PHONE:
+        locked_license.extra_phone_slots += additional_devices
 
     if idempotency_key is not None:
         db_session.add(
@@ -219,6 +247,14 @@ def add_devices(
                 result_reference_id=locked_license.id,
             )
         )
+    # Untyped (legacy) calls keep the audit record exactly as it always was; a typed one also
+    # names the kind and the licence's resulting typed totals.
+    after_state = {"device_limit": new_device_limit, "additional_devices": additional_devices}
+    if slot_kind is not None:
+        after_state.update(
+            slot_kind=slot_kind, extra_desktop_slots=locked_license.extra_desktop_slots,
+            extra_phone_slots=locked_license.extra_phone_slots,
+        )
     db_session.commit()
     audit_record(
         actor_staff_user_id=actor_staff_user_id,
@@ -227,7 +263,7 @@ def add_devices(
         entity_type="license",
         entity_public_id=str(locked_license.id),
         before_state={"device_limit": previous_device_limit},
-        after_state={"device_limit": new_device_limit, "additional_devices": additional_devices},
+        after_state=after_state,
         reason=reason,
     )
     return locked_license
@@ -247,6 +283,41 @@ def resolve_effective_device_limit(license_row: License, *, as_of: datetime | No
     )
     extra = sum(e.extra_slots for e in db_session.execute(stmt).scalars().all())
     return license_row.device_limit + extra
+
+
+def fits_typed_slots(counts: dict[str, int], *, extra_desktops: int, extra_phones: int, pool: int) -> bool:
+    """The typed device rule, pure. counts = slot-consuming devices per platform
+    code INCLUDING the one asking; extra_desktops (n) / extra_phones (m) = bought
+    typed extras; pool = devices of ANY kind the licence allows beyond those
+    (effective_limit - n - m, floored at 0).
+
+    Windows devices fill the n desktop slots first and only the overflow uses the
+    pool; Android devices likewise with the m phone slots; other platforms use
+    only the pool. Allowed iff the overflow of all three fits the pool:
+        other + max(0, win - n) + max(0, android - m) <= pool
+    With n = m = 0 this is exactly "total devices <= effective_limit", the check
+    that existed before typing, so a licence with no typed extras behaves as before."""
+    windows = counts.get(DESKTOP_PLATFORM_CODE, 0)
+    android = counts.get(PHONE_PLATFORM_CODE, 0)
+    other = sum(n for code, n in counts.items() if code not in (DESKTOP_PLATFORM_CODE, PHONE_PLATFORM_CODE))
+    return other + max(0, windows - extra_desktops) + max(0, android - extra_phones) <= pool
+
+
+def typed_slot_available(
+    license_row: License, platform_code: str, *, effective_limit: int, exclude_installation_id=None
+) -> bool:
+    """Would one MORE device of platform_code fit this licence? Counts the
+    slot-consuming installations by platform (optionally leaving one out -- the
+    held installation being approved is counted back in by its own platform),
+    adds the asker, and applies fits_typed_slots. The caller has already passed
+    the total check (count < effective_limit), so a False here means "there is
+    room in total, but not for this KIND of device"."""
+    counts = dict(count_slot_consuming_installations_by_platform(
+        license_row.id, exclude_installation_id=exclude_installation_id
+    ))
+    counts[platform_code] = counts.get(platform_code, 0) + 1
+    n, m = license_row.extra_desktop_slots, license_row.extra_phone_slots
+    return fits_typed_slots(counts, extra_desktops=n, extra_phones=m, pool=max(0, effective_limit - n - m))
 
 
 @dataclass

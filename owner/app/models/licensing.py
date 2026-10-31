@@ -13,6 +13,11 @@ from app.models.base import Base, TimestampMixin, UUIDPKMixin
 
 class License(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_licenses"
+    __table_args__ = (
+        # Typed extras (migration a8f2c5d9e317): never negative; device_limit stays the total.
+        CheckConstraint("extra_desktop_slots >= 0", name="ck_owner_licenses_extra_desktop_slots_nonneg"),
+        CheckConstraint("extra_phone_slots >= 0", name="ck_owner_licenses_extra_phone_slots_nonneg"),
+    )
 
     customer_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False
@@ -27,6 +32,14 @@ class License(Base, UUIDPKMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("owner_release_channels.id")
     )
     device_limit: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Owner decision 2026-10-31: extras are strictly typed. A package includes
+    # (device_limit - these two) devices of ANY kind; each bought extra desktop
+    # lets one MORE Windows device in, each bought extra phone one MORE Android
+    # device -- never the other way round. device_limit stays the TOTAL every
+    # existing reader uses; these only say how many of the extras are typed.
+    # Rule in commercial_ops/device_slot_ops.py::fits_typed_slots.
+    extra_desktop_slots: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    extra_phone_slots: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     valid_from: Mapped[date | None] = mapped_column(Date)
     valid_until: Mapped[date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(32), default="DRAFT", nullable=False)
@@ -159,6 +172,11 @@ class LicenseScheduledStop(Base, UUIDPKMixin, TimestampMixin):
     effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     to_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     devices_removed: Mapped[int | None] = mapped_column(nullable=True)
+    # Typed split of devices_removed (migration a8f2c5d9e317): how many of the
+    # removed devices were extra desktops / extra phones. devices_removed stays
+    # the total; any remainder is untyped (single EXTRA_DEVICE) capacity.
+    desktops_removed: Mapped[int | None] = mapped_column(nullable=True)
+    phones_removed: Mapped[int | None] = mapped_column(nullable=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     source_refund_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_commercial_refunds.id"), nullable=False

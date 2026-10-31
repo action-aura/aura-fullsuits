@@ -1,11 +1,12 @@
 """Installation, device, and activation-event services (Part P/Q)."""
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.audit.services import record as audit_record
 from app.extensions import db_session
 from app.models.base import utcnow
+from app.models.catalog import Platform
 from app.models.installations import ActivationEvent, DeviceRecord, Installation, InstallationStatusHistory
 
 # Statuses that occupy a License's device_limit slot. Shared by the
@@ -114,6 +115,22 @@ def count_slot_consuming_installations(license_id, *, exclude_installation_id=No
     if exclude_installation_id is not None:
         stmt = stmt.where(Installation.id != exclude_installation_id)
     return len(db_session.execute(stmt).scalars().all())
+
+
+def count_slot_consuming_installations_by_platform(license_id, *, exclude_installation_id=None) -> dict[str, int]:
+    """The same installations count_slot_consuming_installations() counts, split by
+    platform_code ({"WINDOWS": 1, "ANDROID": 2}); a platform with none is absent.
+    Typed extras (commercial_ops/device_slot_ops.py::fits_typed_slots) need the split,
+    the plain total cannot say which kind of device is asking for a slot."""
+    stmt = (
+        select(Platform.platform_code, func.count(Installation.id))
+        .join(Platform, Platform.id == Installation.platform_id)
+        .where(Installation.license_id == license_id, Installation.status.in_(SLOT_CONSUMING_STATUSES))
+        .group_by(Platform.platform_code)
+    )
+    if exclude_installation_id is not None:
+        stmt = stmt.where(Installation.id != exclude_installation_id)
+    return {code: int(n) for code, n in db_session.execute(stmt).all()}
 
 
 def register_device(installation: Installation, device_label: str | None, fingerprint_hash: str | None, actor_staff_user_id) -> DeviceRecord:
