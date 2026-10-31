@@ -55,9 +55,12 @@ LATE-REFUND OVERRIDE. The one place both rules are decided.
    stops counting (REFUND_LATE_OVERRIDE) and its month is re-derived -- a row
    still only EARNED is cancelled, an APPROVED or PAID row gets a take-back
    (REVERSED) row, and an approved row that was taken back is never paid out
-   (ledger.record_payout pays only what is left). The ledger has no "net it
-   against the seller's next earnings": a take-back of money already PAID is
-   a REVERSED row on the seller's record that the owner settles by hand.
+   (ledger.record_payout pays only what is left). A take-back of money
+   already PAID is a REVERSED row on the seller's record (a debt) that is
+   deducted automatically from the seller's NEXT pay-out, oldest first
+   (Step 1, 2026-10-25, commissions/clawback.py); a Super Admin may instead
+   settle it by hand in the app, with a written reason
+   (clawback.settle_by_hand, audited COMMISSION_CLAWBACK_SETTLED_BY_HAND).
 """
 from __future__ import annotations
 

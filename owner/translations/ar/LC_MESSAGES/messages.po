@@ -9582,3 +9582,67 @@ msgstr "تم تغيير كلمة مرور حساب الموقع"
 #: app/templates/customer_accounts
 msgid "Branch name changed"
 msgstr "تم تغيير اسم الفرع"
+
+#: app/commissions/clawback.py
+msgid "Only a Super Admin can settle a take-back by hand."
+msgstr "يمكن للمشرف العام فقط تسوية الاسترجاع يدويًا."
+
+#: app/commissions/clawback.py
+msgid "A written reason is required to settle a take-back by hand."
+msgstr "السبب المكتوب مطلوب لتسوية الاسترجاع يدويًا."
+
+#: app/commissions/clawback.py
+msgid "This is not a take-back of money that was already paid out."
+msgstr "هذا ليس استرجاعًا لمبلغ سبق دفعه."
+
+#: app/commissions/clawback.py
+msgid "Nothing remains of this take-back; it is already settled."
+msgstr "لم يتبقَّ شيء من هذا الاسترجاع؛ فقد تمت تسويته."
+
+#: app/commissions/clawback.py
+msgid "The amount to settle must be greater than 0."
+msgstr "يجب أن يكون المبلغ المراد تسويته أكبر من 0."
+
+#: app/commissions/clawback.py
+msgid "The amount is more than what remains of this take-back."
+msgstr "المبلغ أكبر من المتبقي من هذا الاسترجاع."
+
+#: app/commissions/clawback.py
+msgid "Deducted: earlier refund take-back"
+msgstr "مخصوم: استرجاع عمولة سابق بسبب مبلغ مردود"
+
+#: app/commissions/clawback.py
+msgid "Settled by hand: earlier refund take-back"
+msgstr "مسوّى يدويًا: استرجاع عمولة سابق بسبب مبلغ مردود"
+
+#: app/commissions/clawback.py
+msgid "Still to be deducted from your next pay-out"
+msgstr "لا يزال سيُخصم من دفعتك القادمة"
+
+#: app/commissions/clawback.py
+msgid "Earlier refund take-backs still owed by sellers"
+msgstr "استرجاعات عمولات سابقة لا تزال مستحقة على البائعين"
+
+#: app/commissions/clawback.py
+msgid "These are commissions taken back after the seller was already paid. They are deducted automatically from the seller's next pay-out."
+msgstr "هذه عمولات استُرجعت بعد أن قُبضت من البائع. تُخصم تلقائيًا من دفعته القادمة."
+
+#: app/commissions/clawback.py
+msgid "Taken back"
+msgstr "المسترجع"
+
+#: app/commissions/clawback.py
+msgid "Still owed"
+msgstr "المتبقي المستحق"
+
+#: app/commissions/clawback.py
+msgid "Amount (empty = all that remains)"
+msgstr "المبلغ (اتركه فارغًا لتسوية كل المتبقي)"
+
+#: app/commissions/clawback.py
+msgid "Settle by hand"
+msgstr "تسوية يدوية"
+
+#: app/commissions/clawback.py
+msgid "No take-backs are waiting to be deducted."
+msgstr "لا توجد استرجاعات بانتظار الخصم."

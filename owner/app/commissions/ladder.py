@@ -698,6 +698,16 @@ def _recompute_months(employee_profile_id: uuid.UUID, months: set[date], *, now:
             })
 
 
+def _stamp(reversal_of, now):
+    """Step 1 (2026-10-25): a take-back row against a PAID parent must be stamped
+    after that payment so it counts as a debt (clawback.take_back_stamp)."""
+    if reversal_of is None:
+        return now
+    from app.commissions.clawback import take_back_stamp
+
+    return take_back_stamp(reversal_of, now)
+
+
 def _ladder_entry(sale: CommissionLadderSale, amount: Decimal, *, month: date, position, month_total: Decimal,
                   share: Decimal, status: str, now: datetime, reversal_of=None) -> CommissionLedgerEntry:
     entry = CommissionLedgerEntry(
@@ -707,7 +717,7 @@ def _ladder_entry(sale: CommissionLadderSale, amount: Decimal, *, month: date, p
         # For a ladder row: base = the month's ladder total at posting, the
         # "rate" = this sale's whole share at its position.
         base_amount=month_total, rate_or_fixed_applied=share, commission_amount=amount, currency=sale.currency,
-        status=status, earned_at=now, entry_kind="LADDER", ladder_sale_id=sale.id, ladder_month=month,
+        status=status, earned_at=_stamp(reversal_of, now), entry_kind="LADDER", ladder_sale_id=sale.id, ladder_month=month,
         ladder_position=position, payable_after=sale.hold_ends_at if status == "EARNED" else now,
         reversal_of_ledger_entry_id=reversal_of,
     )
@@ -837,7 +847,7 @@ def _take_back_renewal(payment: PaymentRecord, rows: list[CommissionLedgerEntry]
             source_commercial_invoice_id=target.source_commercial_invoice_id, source_payment_record_id=payment.id,
             source_payment_allocation_id=None, base_amount=target.base_amount,
             rate_or_fixed_applied=target.rate_or_fixed_applied, commission_amount=-settled, currency=target.currency,
-            status="REVERSED", earned_at=now, entry_kind="RENEWAL", ladder_month=target.ladder_month,
+            status="REVERSED", earned_at=_stamp(target.id, now), entry_kind="RENEWAL", ladder_month=target.ladder_month,
             payable_after=now, reversal_of_ledger_entry_id=target.id,
         ))
         db_session.flush()

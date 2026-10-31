@@ -30,3 +30,12 @@ Every other mutable commercial-sales document this phase (`Quote`, `SalesOrder`,
 ## Test coverage
 
 `tests/test_phase9_5d_commission_ledger.py` — 13 tests, one per Commission Non-Negotiable Rule (see `commission-attribution-policy.md` for the full rule-to-test map), including a real 8-thread concurrency race proving duplicate earning is structurally impossible, not just usually-avoided.
+
+## Step 1 (2026-10-25): a take-back of money already paid is deducted from the next pay-out
+
+Owner decision: a commission taken back after the seller was already paid is deducted automatically from the seller's next pay-out.
+
+- **Debt** = a REVERSED row whose parent entry is PAID and whose `earned_at` is after the parent's `paid_at`. A REVERSED row posted before the payment is already netted by `record_payout`; one whose parent was never PAID is not a debt. Writers of take-back rows (`reverse_commission_entry`, the ladder's shrunk-share row, the renewal take-back) take the seller lock and stamp the row through `clawback.take_back_stamp`, so a payout racing a take-back can never make a real debt look earlier than the payment.
+- **Record** = `owner_commission_clawback_deductions` (revision `c7d41e90b2a5`): one row per amount taken off a debt, kind `PAYOUT` (from a pay-out line, whose `amount` is already net) or `HAND`. Remaining = |debt| - sum of its deductions, so a debt larger than one pay-out carries over.
+- **`record_payout`**: seller lock first, then the entry row; debts of the same seller and currency are taken oldest first (`created_at`, `id`), never more than the pay-out holds. If the debt eats the whole payable the line is written with amount 0 (the commission IS settled; `uq_commission_payout_one_per_entry` still prevents a second payment; cash-closing and report sums add a 0). Audit: `COMMISSION_CLAWBACK_DEDUCTED` per deduction.
+- **Hand settlement** (`clawback.settle_by_hand`, Commission pay-outs page): a real Super Admin only, written reason required, never above what remains, serialised with pay-outs on the seller lock. Audit: `COMMISSION_CLAWBACK_SETTLED_BY_HAND`.

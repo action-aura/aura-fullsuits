@@ -42,4 +42,11 @@ class CommissionError(StableCodeError):
         # (REVERSED rows) before it was paid out pays only what is left.
         "COMMISSION_TAKEN_BACK": "This commission was taken back (a refund or a correction) and nothing is left to pay.",
         "INVALID_LADDER_RULE": "The monthly ladder rule is in JOD and takes no rate or fixed amount.",
+        # Step 1 (2026-10-25): settling an earlier take-back by hand.
+        "COMMISSION_CLAWBACK_SUPER_ADMIN_ONLY": "Only a Super Admin can settle a take-back by hand.",
+        "COMMISSION_CLAWBACK_REASON_REQUIRED": "A written reason is required to settle a take-back by hand.",
+        "COMMISSION_CLAWBACK_NOT_A_DEBT": "This is not a take-back of money that was already paid out.",
+        "COMMISSION_CLAWBACK_NOTHING_REMAINING": "Nothing remains of this take-back; it is already settled.",
+        "COMMISSION_CLAWBACK_AMOUNT_INVALID": "The amount to settle must be greater than 0.",
+        "COMMISSION_CLAWBACK_AMOUNT_TOO_LARGE": "The amount is more than what remains of this take-back.",
     }

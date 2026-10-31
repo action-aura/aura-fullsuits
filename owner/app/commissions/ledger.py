@@ -28,6 +28,7 @@ from app.extensions import db_session
 from app.models.base import utcnow
 from app.models.commercial_sales import CommercialInvoice, PaymentAllocation
 from app.models.commissions import (
+    CommissionClawbackDeduction,
     CommissionLedgerEntry,
     CommissionPayoutBatch,
     CommissionPayoutLine,
@@ -247,6 +248,16 @@ def reverse_commission_entry(
     if reversal_amount <= 0 or reversal_amount > entry.commission_amount:
         raise CommissionError("INVALID_COMMISSION_RATE")
 
+    # Step 1 (2026-10-25): serialise with record_payout on the seller lock, so
+    # this take-back is either wholly before a payout (it nets it) or wholly
+    # after (it is a debt the next payout deducts), and stamp it so the two
+    # can be told apart (clawback.take_back_stamp).
+    from app.commissions import clawback
+    from app.commissions.ladder import lock_seller
+
+    lock_seller(entry.employee_profile_id)
+    earned_at = clawback.take_back_stamp(entry.id, utcnow())
+
     reversal = CommissionLedgerEntry(
         employee_profile_id=entry.employee_profile_id,
         commission_rule_version_id=entry.commission_rule_version_id,
@@ -258,7 +269,7 @@ def reverse_commission_entry(
         commission_amount=-reversal_amount,
         currency=entry.currency,
         status="REVERSED",
-        earned_at=utcnow(),
+        earned_at=earned_at,
         reversal_of_ledger_entry_id=entry.id,
         entry_kind=entry.entry_kind,
     )
@@ -426,24 +437,50 @@ def record_payout(
     # nothing when nothing is. The row lock comes first: a reversal is an
     # INSERT whose FK takes FOR KEY SHARE on this row, so it waits for this
     # payout (and is then a take-back of PAID money) or this payout waits for
-    # it (and sees it). Nothing here asks for the seller lock afterwards, so
-    # the lock order of ladder.py is kept.
+    # it (and sees it). The seller lock (Step 1, below) is taken BEFORE the
+    # row lock, the lock order of ladder.py.
+    #
+    # Step 1 (2026-10-25) -- the owner's rule "a commission taken back after the
+    # seller was paid is deducted from the seller's next pay-out"
+    # (clawback.py). Lock order: the SELLER lock first (the order of
+    # approve_commission_entry and ladder.py), THEN the entry row. The earlier
+    # draft took the row first; a ladder recompute holds the seller lock and
+    # then needs this row (its reversal INSERT's FK), so row-then-seller here
+    # would deadlock against it.
+    from app.commissions import clawback
+    from app.commissions.ladder import lock_seller
+
+    lock_seller(entry.employee_profile_id)
     entry = db_session.execute(
         select(CommissionLedgerEntry).where(CommissionLedgerEntry.id == entry.id).with_for_update()
         .execution_options(populate_existing=True)
     ).scalars().one()
     if entry.status != "APPROVED":
+        # rollback: the seller lock is held until the transaction ends.
+        db_session.rollback()
         raise CommissionError("COMMISSION_INVALID_TRANSITION", from_status=entry.status, to_status="PAID")
     payable = Decimal(entry.commission_amount) - _already_reversed_amount(entry)
     if payable <= 0:
         db_session.rollback()
         raise CommissionError("COMMISSION_TAKEN_BACK")
 
+    # Earlier take-backs of money ALREADY paid to this seller come off this
+    # pay-out, oldest first, never more than it holds. If the debt is larger
+    # than what is payable the line is 0 and the rest carries to the next
+    # pay-out. The line is still written, with amount 0: the commission IS
+    # settled (it went to the debt), uq_commission_payout_one_per_entry is what
+    # stops it being paid again, and every sum over lines (cash_closing's cash
+    # commission payouts, the operational report) adds a 0 -- no cash left the
+    # till, which is correct.
+    plan = clawback.plan_payout_deductions(entry.employee_profile_id, entry.currency, payable)
+    deducted = sum((take for _debt, take in plan), Decimal("0.00"))
+    net = payable - deducted
+
     line = CommissionPayoutLine(
         commission_payout_batch_id=batch.id,
         employee_profile_id=entry.employee_profile_id,
         commission_ledger_entry_id=entry.id,
-        amount=payable,
+        amount=net,
         currency=entry.currency,
     )
     db_session.add(line)
@@ -453,6 +490,15 @@ def record_payout(
         db_session.rollback()
         raise CommissionError("COMMISSION_ALREADY_IN_PAYOUT_BATCH") from exc
 
+    deduction_rows = [
+        CommissionClawbackDeduction(
+            debt_ledger_entry_id=debt.id, payout_line_id=line.id, commission_payout_batch_id=batch.id,
+            employee_profile_id=entry.employee_profile_id, amount=take, currency=entry.currency, kind="PAYOUT",
+            created_by_staff_user_id=actor_staff_user_id,
+        )
+        for debt, take in plan
+    ]
+    db_session.add_all(deduction_rows)
     entry.status = "PAID"
     entry.paid_at = utcnow()
     db_session.commit()
@@ -463,7 +509,9 @@ def record_payout(
         action_code="COMMISSION_PAID",
         entity_type="commission_ledger_entry",
         entity_public_id=str(entry.id),
-        after_state={"payout_batch_reference": batch.batch_reference, "amount": str(payable),
-                     "taken_back_before_payout": str(Decimal(entry.commission_amount) - payable)},
+        after_state={"payout_batch_reference": batch.batch_reference, "amount": str(net),
+                     "taken_back_before_payout": str(Decimal(entry.commission_amount) - payable),
+                     "clawback_deducted": str(deducted)},
     )
+    clawback.audit_deductions(deduction_rows, batch_reference=batch.batch_reference, actor_staff_user_id=actor_staff_user_id)
     return line

@@ -8225,3 +8225,67 @@ msgstr ""
 #: app/templates/customer_accounts
 msgid "Branch name changed"
 msgstr ""
+
+#: app/commissions/clawback.py
+msgid "Only a Super Admin can settle a take-back by hand."
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "A written reason is required to settle a take-back by hand."
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "This is not a take-back of money that was already paid out."
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "Nothing remains of this take-back; it is already settled."
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "The amount to settle must be greater than 0."
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "The amount is more than what remains of this take-back."
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "Deducted: earlier refund take-back"
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "Settled by hand: earlier refund take-back"
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "Still to be deducted from your next pay-out"
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "Earlier refund take-backs still owed by sellers"
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "These are commissions taken back after the seller was already paid. They are deducted automatically from the seller's next pay-out."
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "Taken back"
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "Still owed"
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "Amount (empty = all that remains)"
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "Settle by hand"
+msgstr ""
+
+#: app/commissions/clawback.py
+msgid "No take-backs are waiting to be deducted."
+msgstr ""
