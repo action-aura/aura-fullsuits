@@ -45,8 +45,13 @@ MAX_SNAPSHOT_DEPTH = 4
 MAX_QUESTION_CHARS = 1000
 MAX_HISTORY_ITEMS = 10
 MAX_HISTORY_CONTENT_CHARS = 2000
-REPORT_MAX_TOKENS = 2500
-CHAT_MAX_TOKENS = 1200
+# Arabic is token-heavy, and adaptive thinking counts against max_tokens: a
+# full seven-section Arabic report could hit 2,500 and come back cut off ->
+# AI_BAD_OUTPUT, no fallback, the shop's monthly slot already spent
+# (adversarial review 2026-10-31). Output on Haiku 5.5 is $0.50 per million
+# tokens, so headroom costs well under a fil per report.
+REPORT_MAX_TOKENS = 6000
+CHAT_MAX_TOKENS = 2500
 _REQUIRED_FIELDS = ("installation_id", "timestamp", "nonce", "signature", "request_id", "kind", "snapshot")
 
 

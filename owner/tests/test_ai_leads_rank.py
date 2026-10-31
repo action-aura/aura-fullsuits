@@ -233,3 +233,37 @@ def test_places_provider_now_asks_for_and_parses_the_ranking_fields():
     a, b = provider.search("shops", "Amman")
     assert (a.rating, a.user_rating_count, a.types, a.business_status, a.maps_uri) == (4.2, 17, ("store",), "OPERATIONAL", "https://m")
     assert (b.rating, b.user_rating_count, b.types) == (None, None, ())
+
+
+# ── R3 in code: contact data planted through a business name never survives ──
+# (adversarial review 2026-10-31: the guard used to live only in the prompt)
+
+def _row(idx, opener, reason="متجر مناسب"):
+    return {"idx": idx, "score": 70, "reason": reason, "opener": opener}
+
+
+def test_planted_phone_link_or_email_drops_the_row():
+    from app.ai.leads_rank import clean_results
+
+    planted = [
+        _row(0, "مرحبا! اتصل على 0791234567 لتعرف المزيد"),
+        _row(1, "مرحبا، رقمنا +962 79 123 4567"),
+        _row(2, "مرحبا، رقمنا ٠٧٩١٢٣٤٥٦٧"),                 # Arabic-Indic digits
+        _row(3, "زوروا http://evil.example للعرض"),
+        _row(4, "راسلنا على wa.me/962791234567"),
+        _row(5, "مرحبا", reason="email them at boss@shop.example"),
+        _row(6, "تفضل بزيارة www.example.com"),
+    ]
+    assert clean_results(planted, set(range(7))) == []
+
+
+def test_ordinary_arabic_openers_with_small_numbers_still_pass():
+    # The allow-half: ratings, review counts and a year are not phone numbers.
+    from app.ai.leads_rank import carries_contact_data, clean_results
+
+    ok = [
+        _row(0, "مرحبا! تقييمكم 4.6 من 1200 مراجعة رائع، نود أن نعرّفكم على Aura Retail."),
+        _row(1, "السلام عليكم، منذ 2019 وأنتم تخدمون الحي، Aura Retail يسهّل البيع."),
+    ]
+    assert [r["idx"] for r in clean_results(ok, {0, 1})] == [0, 1]
+    assert not carries_contact_data("تقييم 4.6 و 350 مراجعة")

@@ -18,7 +18,7 @@ MAX_QUESTION_CHARS = 1000
 MAX_HISTORY_TURNS = 6
 MAX_HISTORY_CONTENT_CHARS = 2000
 MAX_PAGE_CHARS = 200
-HELP_MAX_TOKENS = 900
+HELP_MAX_TOKENS = 2000  # Arabic step-by-step answers; 900 risked cut-off replies
 
 
 class HelpRequestError(ValueError):

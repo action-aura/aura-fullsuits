@@ -112,6 +112,17 @@ def preflight(purpose: str, config, *, providers: dict | None = None) -> None:
     _resolve(purpose, config, providers)
 
 
+def from_first_user_turn(messages: list[dict]) -> list[dict]:
+    """Drop leading assistant turns. A client keeps the LAST N turns of a
+    chat, and that slice can begin with the assistant's reply; the Messages
+    API requires the first message to be the user's, so such a request would
+    fail upstream and read as "AI busy" on every later turn of a long chat
+    (adversarial review 2026-10-31). Only the head is trimmed; the question
+    being asked is always the final user turn, so it is never dropped."""
+    start = next((i for i, m in enumerate(messages) if m.get("role") == "user"), len(messages))
+    return messages[start:]
+
+
 def run(
     purpose: str,
     *,
@@ -123,6 +134,7 @@ def run(
     providers: dict | None = None,
 ) -> AIResult:
     eligible = _resolve(purpose, config, providers)
+    messages = from_first_user_turn(messages)
 
     last_error: AIError | None = None
     for provider in eligible:

@@ -122,3 +122,12 @@ def test_is_available_applies_the_privacy_filter():
 def test_unknown_purpose_is_a_programming_error():
     with pytest.raises(ValueError):
         brain.run("nope", system="S", messages=[], max_tokens=1, json_schema=None, config={}, providers={})
+
+
+def test_chat_slice_starting_with_an_assistant_turn_is_trimmed_to_the_first_user_turn():
+    # A "last N turns" slice can begin with the assistant; the Messages API
+    # requires the user first (adversarial review 2026-10-31).
+    msgs = [{"role": "assistant", "content": "a"}, {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"}, {"role": "user", "content": "q2"}]
+    assert brain.from_first_user_turn(msgs) == msgs[1:]
+    assert brain.from_first_user_turn(msgs[1:]) == msgs[1:]

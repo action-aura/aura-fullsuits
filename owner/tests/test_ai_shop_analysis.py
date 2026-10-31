@@ -78,7 +78,7 @@ def test_report_is_accepted_and_the_licence_comes_from_the_installation(app, cli
     # metered against the licence the INSTALLATION belongs to
     assert _slots(app, f"ai:shop:{lic}:%") == 1
     call = claude.calls[0]
-    assert "Arabic" in call["system"] and call["json_schema"] is not None and call["max_tokens"] == 2500
+    assert "Arabic" in call["system"] and call["json_schema"] is not None and call["max_tokens"] == 6000  # raised from 2500: Arabic reports were cut off
     assert "Olive oil" in call["messages"][0]["content"]
 
 
@@ -90,7 +90,7 @@ def test_chat_returns_a_reply_and_passes_history(app, client, seeded, signing_ke
     assert resp.get_json()["reply"].startswith("Tuesday")
     messages = claude.calls[0]["messages"]
     assert messages[:2] == history and "Why did sales drop" in messages[2]["content"] and "Olive oil" in messages[2]["content"]
-    assert claude.calls[0]["json_schema"] is None and claude.calls[0]["max_tokens"] == 1200
+    assert claude.calls[0]["json_schema"] is None and claude.calls[0]["max_tokens"] == 2500  # raised from 1200
 
 
 # -- validation happens BEFORE the nonce is consumed ---------------------------
