@@ -1384,6 +1384,13 @@ const SubsystemApp = {
         // the books, and would otherwise be invited into a screen whose first read is a 403.
         // Recording and voiding need retail.books.record, checked again inside the screen.
         { id: 'expenses', label: 'Expenses', icon: '💸', capability: 'retail.books.view' },
+        // AI-BRAIN (2026-10-31): "Smart analysis" -- an AI-written report on the shop's last 30 days
+        // (docs/superpowers/specs/2026-10-31-ai-brain-design.md). Rendered by ai-insights.js
+        // (RetailAiInsights), dispatched in _navigateNow's _safeRender like Expenses. Gate is
+        // retail.reports: its three routes (/ai/status, /ai/insights, /ai/insights/latest) all carry
+        // CAP_REPORTS, because the report is a digest of the Reports screens' own figures. The
+        // screen itself explains the opt-in; it never sends anything until the owner switches it on.
+        { id: 'ai-insights', label: 'Smart analysis', icon: '✨', capability: 'retail.reports' },
       ],
 
       // Sidebar section grouping (launch-readiness 2026-08-29: "the left
@@ -1476,7 +1483,7 @@ const SubsystemApp = {
         // ONE 'Reports & Books' entry below (see `navTabs`). They stay in `nav` (so they keep
         // their own capability gate, palette row and deep link) but are deliberately not
         // navGroups members; retail_nav_groups_test.js names them in TAB_ONLY.
-        { label: 'Reports', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
+        { label: 'Reports', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'ai-insights'] },
         { label: 'Connected services', key: 'connected', items: ['whatsapp', 'einvoicing', 'email-notifications', 'site-relay'] },
       ],
 
@@ -5301,6 +5308,11 @@ const SubsystemApp = {
         // retail screen only; tolerated ABSENT (the script not loaded) like SyncReview is.
         if (sectionId === 'expenses' && this.active === 'retail' && window.RetailExpenses) {
           await window.RetailExpenses.render(document.getElementById('sub-content'));
+          return;
+        }
+        // AI-BRAIN: same arrangement as Expenses above -- its own file, dispatched here.
+        if (sectionId === 'ai-insights' && this.active === 'retail' && window.RetailAiInsights) {
+          await window.RetailAiInsights.render(document.getElementById('sub-content'));
           return;
         }
         const rendererName = _RENDERERS[this.active];

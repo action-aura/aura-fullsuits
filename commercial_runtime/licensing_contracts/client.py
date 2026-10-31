@@ -274,6 +274,56 @@ class LicensingClient:
         # 2026-10-10), so sending one would make the whole request a 400.
         return self._post_signed("/mail", body, signer)
 
+    def ai_shop_analysis(
+        self,
+        *,
+        installation_id: str,
+        signer: DeviceSigner,
+        app_version: str,
+        platform: str,
+        kind: str,
+        lang: str,
+        snapshot: dict,
+        question: Optional[str] = None,
+        history: Optional[list] = None,
+        request_id: Optional[str] = None,
+    ) -> dict:
+        """AI shop analysis: "write me a report / answer this question about my
+        shop's figures". Device-signed like `send_mail`, so Owner attributes the
+        call (and its monthly cap) to the licence behind this installation.
+
+        `kind` is "report" or "chat"; `question`/`history` ride only on a chat.
+        The snapshot is whatever the till built -- Owner does not validate it
+        field by field -- and it must never contain a customer name (the till's
+        ai_snapshot guarantees that; this transport just carries it).
+
+        NO TRANSPORT RETRY ON AN HTTP STATUS, unlike every other method here.
+        Owner answers an AI refusal with a meaningful 429
+        (AI_BUDGET_EXHAUSTED) or 503 (AI_NOT_CONFIGURED / AI_UPSTREAM_ERROR /
+        AI_PRIVACY_REFUSED) and a JSON body naming it. The default policy
+        would swallow that body into a generic NetworkError, hiding WHY from
+        the shopkeeper, and would re-send the identical signed request (same
+        nonce) to a paid upstream. So every status returns its body and the
+        caller reads `reason_code`; only a real network failure is retried.
+        """
+        body = {
+            "contract_version": CONTRACT_VERSION,
+            "request_id": request_id or str(uuid.uuid4()),
+            "correlation_id": str(uuid.uuid4()),
+            "timestamp": _now_iso(),
+            "nonce": _new_nonce(),
+            "installation_id": installation_id,
+            "app_version": app_version,
+            "platform": platform,
+            "kind": kind,
+            "lang": lang,
+            "snapshot": snapshot,
+        }
+        if kind == "chat":
+            body["question"] = question
+            body["history"] = list(history or [])
+        return self._post_signed("/ai/shop-analysis", body, signer, retryable_statuses=frozenset())
+
     def authorize_release_download(
         self,
         *,
@@ -368,15 +418,30 @@ class LicensingClient:
     def fetch_service_info(self) -> dict:
         return self._get("/service-info")
 
-    def _post_signed(self, path: str, body: dict, signer: DeviceSigner) -> dict:
+    def _post_signed(
+        self,
+        path: str,
+        body: dict,
+        signer: DeviceSigner,
+        retryable_statuses: Optional[frozenset] = None,
+    ) -> dict:
         canonical_bytes = canonicalize_bytes(body)
         body_with_signature = {**body, "signature": signer.sign(canonical_bytes)}
-        return self._request("POST", path, json_body=body_with_signature)
+        return self._request(
+            "POST", path, json_body=body_with_signature, retryable_statuses=retryable_statuses
+        )
 
     def _get(self, path: str) -> dict:
         return self._request("GET", path, json_body=None)
 
-    def _request(self, method: str, path: str, json_body: Optional[dict]) -> dict:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        json_body: Optional[dict],
+        retryable_statuses: Optional[frozenset] = None,
+    ) -> dict:
+        retryable = _RETRYABLE_STATUS_CODES if retryable_statuses is None else retryable_statuses
         url = self._config.base_url.rstrip("/") + path
         last_error: Optional[Exception] = None
 
@@ -406,7 +471,7 @@ class LicensingClient:
                 last_error = NetworkError("NETWORK_UNAVAILABLE", str(exc))
                 continue
 
-            if response.status_code in _RETRYABLE_STATUS_CODES:
+            if response.status_code in retryable:
                 retry_after = response.headers.get("Retry-After")
                 if retry_after:
                     try:

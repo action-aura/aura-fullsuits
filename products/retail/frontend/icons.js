@@ -932,6 +932,10 @@ window.AuraIcons = (function () {
     "📦": "package",
     "📋": "clipboard-list",
     "📊": "bar-chart-3",
+    // Smart analysis nav entry (2026-10-31). Without this row the sidebar drew
+    // the unknown-glyph fallback (a "?" in a circle) -- seen in a screenshot,
+    // missed by every source-reading suite.
+    "✨": "sparkles",
     "📅": "calendar",
     "👥": "users",
     "🎯": "target",

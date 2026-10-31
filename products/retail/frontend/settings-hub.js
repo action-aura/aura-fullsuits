@@ -145,7 +145,9 @@
     credit: {
       section: 'credit',
       fields: ['credit-mode', 'credit-limit', 'credit-enforce', 'credit-loyalty', 'credit-loyalty-earn', 'credit-cashier-disc',
-        'cash-rounding-interval', 'cash-rounding-rule', 'allow-negative-stock'],
+        'cash-rounding-interval', 'cash-rounding-rule', 'allow-negative-stock',
+        // AI-BRAIN opt-in (default Off): rides the same owner-only POST /settings/credit.
+        'ai-analysis-enabled'],
       save: () => saveCredit(),
     },
     deviceBranch: { section: 'tills', fields: ['device-branch-select'], save: () => R()._saveDeviceBranch() },
@@ -482,6 +484,7 @@
         cash_rounding_interval: $('cash-rounding-interval').value,
         cash_rounding_rule: $('cash-rounding-rule').value,
         allow_negative_stock: $('allow-negative-stock').value === '1' ? '1' : '0',
+        ai_analysis_enabled: $('ai-analysis-enabled').value === '1' ? '1' : '0',
       });
       if (!resp || resp.status !== 'success') {
         toast((resp && resp.message) || t('Could not save the credit settings.'), 'error');
@@ -519,6 +522,7 @@
       $('cash-rounding-interval').value = ['0', '0.005', '0.010', '0.050', '0.100'].includes(d.cash_rounding_interval) ? d.cash_rounding_interval : '0';
       $('cash-rounding-rule').value = ['nearest', 'down', 'up'].includes(d.cash_rounding_rule) ? d.cash_rounding_rule : 'nearest';
       $('allow-negative-stock').value = d.allow_negative_stock === '1' ? '1' : '0';
+      $('ai-analysis-enabled').value = d.ai_analysis_enabled === '1' ? '1' : '0';
     } catch (e) { console.error(e); }
     syncCreditLimitVisibility();
     rebaseline('credit');
@@ -1917,6 +1921,12 @@
           <select id="allow-negative-stock">
             <option value="0">${esc(t('Not allowed'))}</option>
             <option value="1">${esc(t('Allowed, and flagged'))}</option>
+          </select></div>
+        <p class="sh-card-lead" style="margin-top:12px">${esc(t("Your shop's sales figures (never customer names) are sent to our server and an AI service to write your analysis."))}</p>
+        <div class="ret-field" style="margin:0"><label for="ai-analysis-enabled">${esc(t('Smart analysis'))}</label>
+          <select id="ai-analysis-enabled">
+            <option value="0">${esc(t('Off'))}</option>
+            <option value="1">${esc(t('On'))}</option>
           </select></div>
       </div>`;
   }

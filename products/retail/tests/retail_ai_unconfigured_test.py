@@ -72,6 +72,19 @@ CHAT_URL = '/api/sub/retail/ai/chat'
 MESSAGE = 'How do I add a new product?'
 
 
+@pytest.fixture(autouse=True)
+def _no_owner_relay(monkeypatch):
+    """AI-BRAIN (2026-10-31) UPDATE. This file pins the LEGACY assistant (AURA_AI_ENDPOINT_URL,
+    Ollama-shaped). Since the Owner-relayed Smart analysis shipped, a licensed till with an Owner
+    URL takes the Owner path first (409 AI_NOT_ENABLED until the shop opts in -- spec "POST
+    /ai/chat" order), and the test harness's seeded licence + baked Owner URL make a till look
+    exactly like that. These tests are about the path WITHOUT an Owner, so the Owner URL is
+    emptied; every assertion below is unchanged. What this no longer pins: nothing about the legacy
+    path -- the Owner-first ordering is pinned in retail_ai_insights_routes_test.py."""
+    import config
+    monkeypatch.setattr(config, 'OWNER_LICENSING_BASE_URL', '')
+
+
 def teardown_module(module):
     shutil.rmtree(DATA, ignore_errors=True)
 

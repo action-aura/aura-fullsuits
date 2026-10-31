@@ -196,6 +196,8 @@ from core.retail import loyalty as loyalty_core
 from core.retail import customer_spend  # REHEARSAL-1007 B6
 from commercial_runtime.stock_cost import blended_unit_cost as _blended_unit_cost
 from core.retail import today_cards
+from core.retail import ai_snapshot   # AI-BRAIN: the figures (never customer names) the analysis sees
+from core.retail import ai_remote     # AI-BRAIN: the device-signed call to Owner (no key on the till)
 from config import (
     DATABASE_DIR, APP_VERSION, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
     AURA_AI_MODEL_NAME,
@@ -16960,6 +16962,11 @@ _DEFAULT_SETTINGS = {
     # is NOT behind on sync -- the same path `behind_on_sync` takes (allow, flag the sale oversold,
     # write the stock exception). '0' = the historic hard refusal. Owner-only (credit_settings_set).
     'allow_negative_stock': '0',
+    # AI-BRAIN opt-in (spec R5/R6). '1' lets this shop's sales figures -- never customer names -- leave
+    # the till for Owner and an AI service to write the "Smart analysis". '0' (default) means
+    # nothing ever leaves and /ai/insights + the Owner path of /ai/chat refuse with 409. Owner-only
+    # (credit_settings_set), exactly like allow_negative_stock.
+    'ai_analysis_enabled': '0',
     # 'after_discount' (default) | 'before_discount' -- see core/retail/pricing.py,
     # the single source of truth for what these two modes mean and compute.
     'tax_calculation_mode': tax_engine.DEFAULT_MODE,
@@ -17651,6 +17658,18 @@ def credit_settings_set():
         if _old_an != data['allow_negative_stock']:
             _audit(conn, 'ALLOW_NEGATIVE_STOCK_CHANGED', 'retail_setting', 'allow_negative_stock',
                    f"{_old_an} -> {data['allow_negative_stock']}")
+    if 'ai_analysis_enabled' in data:
+        _ai = str(data['ai_analysis_enabled']).strip().lower()
+        if _ai not in ('0', '1', 'true', 'false'):
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'AI_ANALYSIS_ENABLED_INVALID',
+                            'message': 'ai_analysis_enabled must be 0 or 1.'}), 400
+        data['ai_analysis_enabled'] = '1' if _ai in ('1', 'true') else '0'
+        _old_ai = '1' if str(_settings(conn, cid).get('ai_analysis_enabled')) == '1' else '0'
+        if _old_ai != data['ai_analysis_enabled']:
+            # Turning this on is a data-sharing decision; leave a trail of who/when.
+            _audit(conn, 'AI_ANALYSIS_ENABLED_CHANGED', 'retail_setting', 'ai_analysis_enabled',
+                   f"{_old_ai} -> {data['ai_analysis_enabled']}")
     # LOYALTY-EARN: validated before any write, like the two above; stored as a
     # canonical plain-decimal string ('5', '2.5', '0') so it round-trips.
     if 'loyalty_earn_spend' in data:
@@ -17692,7 +17711,8 @@ def credit_settings_set():
         data['pos_favourites'] = json.dumps(_favs, separators=(',', ':'))
     for k in ('base_currency', 'default_credit_mode', 'default_credit_limit', 'enforce_credit_limit',
               'loyalty_point_value', 'cashier_discount_limit_pct', 'loyalty_earn_spend', 'pos_favourites',
-              'cash_rounding_interval', 'cash_rounding_rule', 'allow_negative_stock'):
+              'cash_rounding_interval', 'cash_rounding_rule', 'allow_negative_stock',
+              'ai_analysis_enabled'):
         if k in data:
             conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
                          "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
@@ -27556,7 +27576,220 @@ def ai_status():
     reachable" -- the panel's own 'Unavailable' state (after a failed reply)
     is what covers that second, live question.
     """
-    return jsonify({'configured': bool(AURA_AI_ENDPOINT_URL)})
+    # AI-BRAIN (2026-10-31): `configured` now also covers the Owner-relayed path
+    # (`remote`), and `enabled` is the shop owner's opt-in. A frontend that only
+    # reads `configured` (the sidebar button gate) therefore lights up on a
+    # licensed till with no legacy endpoint -- the chat itself then explains
+    # the opt-in (409 AI_NOT_ENABLED) instead of pretending to work.
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        enabled = _ai_enabled(conn, cid)
+    finally:
+        conn.close()
+    remote = ai_remote.available()
+    return jsonify({'configured': bool(remote or AURA_AI_ENDPOINT_URL),
+                    'enabled': enabled, 'remote': remote})
+
+
+# ── AI "Smart analysis" (2026-10-31, docs/superpowers/specs/2026-10-31-ai-brain-design.md)
+# The shop's figures (core/retail/ai_snapshot.py -- no customer names, R6) go
+# to Owner (core/retail/ai_remote.py), which holds the only AI key (R2). Every
+# route below refuses unless the shop owner opted in (R5): an install that
+# never turns it on sends nothing, ever.
+
+def _ai_enabled(conn, cid):
+    """The opt-in. Strict '1' compare, like allow_negative_stock: anything
+    else -- missing row, junk, 'true' (the writer canonicalises to '1') -- is
+    OFF. Fails closed."""
+    return str(_settings(conn, cid).get('ai_analysis_enabled')) == '1'
+
+
+def _ai_error(code, lang, extra=None):
+    body = {'success': False, 'error': ai_remote.message(code, lang), 'code': code}
+    if extra:
+        body.update(extra)
+    return jsonify(body), ai_remote.STATUS.get(code, 503)
+
+
+def _ai_insights_path(cid):
+    safe = re.sub(r'[^A-Za-z0-9_-]', '_', str(cid))
+    return os.path.join(os.path.dirname(os.path.abspath(DATABASE_DIR)), 'ai', f'insights_{safe}.json')
+
+
+def _ai_read_cached_insights(cid):
+    try:
+        with open(_ai_insights_path(cid), 'r', encoding='utf-8') as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _ai_write_cached_insights(cid, payload):
+    """Atomic: temp file in the same folder, then os.replace, so a crash or a
+    concurrent reader never sees half a JSON file."""
+    path = _ai_insights_path(cid)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f'{path}.{_uuid.uuid4().hex}.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh, ensure_ascii=False)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+@retail_bp.route('/ai/insights', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+# retail.reports: the report is a digest of the very figures the Reports
+# screens are gated on.
+@mt_require_capability(CAP_REPORTS)
+def ai_insights():
+    """Generate (and cache) the shop's AI report. Opt-in required (409
+    AI_NOT_ENABLED otherwise -- checked BEFORE the snapshot is even built, so
+    a shop that never opted in does not even have its figures read here)."""
+    cid = _cid()
+    data = request.get_json(silent=True) or {}
+    lang = _resolve_ai_language(data.get('lang'), '')
+    conn = get_retail_conn()
+    try:
+        if not _ai_enabled(conn, cid):
+            return _ai_error(ai_remote.NOT_ENABLED, lang)
+        if not ai_remote.available():
+            return _ai_error(ai_remote.NOT_AVAILABLE, lang)
+        branch_id, scope_err = _coerce_branch_id_for_scope(conn, cid, data.get('branch_id'))
+        if scope_err:
+            return scope_err
+        snapshot = ai_snapshot.build_snapshot(conn, cid, branch_id)
+        business_date = snapshot.get('as_of')
+    finally:
+        conn.close()
+    try:
+        result = ai_remote.request('report', lang, snapshot)
+    except ai_remote.AiRemoteError as exc:
+        return _ai_error(exc.code, lang)
+    report = result.get('report')
+    if not isinstance(report, dict):
+        return _ai_error(ai_remote.BAD_REPLY, lang)
+    payload = {
+        # A UTC INSTANT, not the business-clock string: the screen compares it
+        # to "now" to decide whether the cache is older than 24 h, which needs
+        # an unambiguous instant. `business_date` is the shop-clock day.
+        'generated_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+        'business_date': business_date,
+        'report': report,
+        'model': result.get('model'),
+        'lang': lang,
+    }
+    try:
+        _ai_write_cached_insights(cid, payload)
+    except OSError:
+        log.warning('ai insights: could not write the local cache')
+    return jsonify({'success': True, 'data': payload})
+
+
+@retail_bp.route('/ai/insights/latest', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def ai_insights_latest():
+    """The cached report, or `{"report": null}`. Local read only -- no Owner
+    call, no opt-in needed (it only ever shows what this shop already chose
+    to generate)."""
+    cached = _ai_read_cached_insights(_cid())
+    if not cached or not isinstance(cached.get('report'), dict):
+        return jsonify({'success': True, 'data': {'report': None}})
+    return jsonify({'success': True, 'data': cached})
+
+
+_AI_OWNER_QUESTION_MAX = 1000        # Owner's own bound on `question`
+_AI_OWNER_HISTORY_TURNS = 10         # ...and on `history`
+_AI_OWNER_HISTORY_CONTENT_MAX = 2000
+
+
+def _ai_owner_history(history):
+    """Shape the client's history into exactly what Owner validates:
+    [{role: user|assistant, content: 1..2000 chars}], at most the last 10."""
+    out = []
+    for turn in (history if isinstance(history, list) else []):
+        if not isinstance(turn, dict):
+            continue
+        content = str(turn.get('content') or '').strip()[:_AI_OWNER_HISTORY_CONTENT_MAX]
+        if content:
+            out.append({'role': 'user' if turn.get('role') == 'user' else 'assistant', 'content': content})
+    # Slice AFTER dropping blanks so a blank turn never costs a real one its place.
+    return out[-_AI_OWNER_HISTORY_TURNS:]
+
+
+# Owner refuses a whole body over 60 KB (INVALID_REQUEST), measured on the
+# parsed body as compact UTF-8 JSON -- the same way _ai_json_size measures.
+# Each per-turn bound above is honoured, but ten 2,000-character Arabic turns
+# are ~40 KB on their own, and the snapshot may take up to 40 KB: a long chat
+# on a busy shop would have crossed 60 KB on its fifth or sixth question and
+# turned every later turn into a 400 the cashier sees as "AI unavailable".
+# 56 KB leaves room for the envelope (ids, nonce, timestamp, signature).
+_AI_OWNER_BODY_BUDGET = 56 * 1024
+
+
+def _ai_json_size(value):
+    return len(json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+
+
+def _ai_fit_history(snapshot, question, history):
+    """Drop the OLDEST turns until snapshot + question + history fit Owner's
+    body limit. The newest turns are the ones the current question refers to,
+    and the snapshot is what the answer must be grounded in, so history is
+    what gives way."""
+    fixed = _ai_json_size(snapshot) + _ai_json_size(question)
+    while history and fixed + _ai_json_size(history) > _AI_OWNER_BODY_BUDGET:
+        history = history[1:]
+    return history
+
+
+def _ai_chat_via_owner(cid, data, message):
+    """Cases 1 and 2 of ai_chat: the Owner-relayed chat. Keeps the route's
+    response shapes (JSON `{success, data:{reply}}`, or NDJSON when
+    `stream` is true: the whole reply as ONE delta line, then done)."""
+    lang = _resolve_ai_language(data.get('lang'), message)
+    want_stream = data.get('stream') is True
+    conn = get_retail_conn()
+    try:
+        if not _ai_enabled(conn, cid):
+            return _ai_error(ai_remote.NOT_ENABLED, lang)
+        branch_id, scope_err = _coerce_branch_id_for_scope(conn, cid, data.get('branch_id'))
+        if scope_err:
+            return scope_err
+        snapshot = ai_snapshot.build_snapshot(conn, cid, branch_id)
+    finally:
+        conn.close()
+    question = message[:_AI_OWNER_QUESTION_MAX]
+    history = _ai_fit_history(snapshot, question, _ai_owner_history(data.get('history')))
+    try:
+        result = ai_remote.request('chat', lang, snapshot, question=question, history=history)
+    except ai_remote.AiRemoteError as exc:
+        if want_stream:
+            line = json.dumps({'error': ai_remote.message(exc.code, lang)}) + '\n'
+            return Response(line, content_type='application/x-ndjson; charset=utf-8',
+                            headers={'Cache-Control': 'no-store'})
+        return _ai_error(exc.code, lang)
+    reply = str(result.get('reply') or '').strip()
+    if not reply:
+        if want_stream:
+            line = json.dumps({'error': ai_remote.message(ai_remote.BAD_REPLY, lang)}) + '\n'
+            return Response(line, content_type='application/x-ndjson; charset=utf-8',
+                            headers={'Cache-Control': 'no-store'})
+        return _ai_error(ai_remote.BAD_REPLY, lang)
+    if want_stream:
+        body = json.dumps({'delta': reply}) + '\n' + json.dumps({'done': True}) + '\n'
+        return Response(body, content_type='application/x-ndjson; charset=utf-8',
+                        headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
+    return jsonify({'success': True, 'data': {'reply': reply}})
 
 
 @retail_bp.route('/ai/chat', methods=['POST'])
@@ -27598,6 +27831,18 @@ def ai_chat():
     message = str(data.get('message') or '').strip()[:_AI_MESSAGE_MAX_CHARS]
     if not message:
         return jsonify({'success': False, 'error': 'Message is required.'}), 400
+
+    # AI-BRAIN (2026-10-31): the Owner-relayed path takes precedence over the
+    # legacy Ollama endpoint, in this exact order (spec "POST /ai/chat"):
+    #   1. remote available + shop opted in  -> ask Owner (snapshot + question)
+    #   2. remote available + NOT opted in   -> 409 AI_NOT_ENABLED. Deliberately
+    #      does NOT fall through to the legacy endpoint: the shop owner should
+    #      be told what switch exists, and the legacy path's own RAG context
+    #      is business data too.
+    #   3. no remote -> the legacy path below, byte for byte unchanged
+    #   4. nothing configured -> the existing 503 below.
+    if ai_remote.available():
+        return _ai_chat_via_owner(cid, data, message)
 
     # Refuse BEFORE building a prompt or opening a socket, and before the
     # stream/non-stream split below so both branches are covered.

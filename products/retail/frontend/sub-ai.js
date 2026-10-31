@@ -287,6 +287,15 @@
 
         if (!res.ok) {
           const errBody = await res.json().catch(() => ({}));
+          // AI-BRAIN: the Owner-relayed path answers with a coded, already-localized
+          // message (AI_NOT_ENABLED = the shop owner has not opted in, AI_BUDGET_EXHAUSTED, ...).
+          // Say THAT in the chat instead of the generic "unavailable", which would send the
+          // owner to wait for something that needs a setting changed.
+          if (errBody && typeof errBody.code === 'string' && errBody.code.indexOf('AI_') === 0 && errBody.error) {
+            this._removeTyping();
+            this._appendMessage('assistant', errBody.error);
+            return;
+          }
           throw new Error((errBody && errBody.error) || 'unavailable');
         }
 

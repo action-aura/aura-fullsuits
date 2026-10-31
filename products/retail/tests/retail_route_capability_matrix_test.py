@@ -275,6 +275,12 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'report_summary_email': CAP_REPORTS,
     'report_whatsapp': CAP_REPORTS,
     'ai_chat': CAP_REPORTS,
+    # AI-BRAIN (2026-10-31): POST /ai/insights generates the shop's AI report
+    # from the same figures the Reports screens disclose, so it sits on the
+    # same capability as ai_chat. (It is a POST because it spends the shop's
+    # monthly AI allowance and writes the local cache, not because it edits
+    # business data.)
+    'ai_insights': CAP_REPORTS,
 
     # ── Owner administration of the shop itself: retail.employees ────────────
     'create_branch': CAP_EMPLOYEES,
@@ -710,6 +716,9 @@ EXPECTED_READ_CAPABILITIES = {
     # assistant is configured at all is the same disclosure tier as using
     # it.
     'ai_status': CAP_REPORTS,
+    # AI-BRAIN (2026-10-31): the cached AI report is a digest of the Reports
+    # screens' own figures, so reading it is the same disclosure tier as them.
+    'ai_insights_latest': CAP_REPORTS,
 
     # ── Customer display relay, P0 item #11(b) (interface I-1): retail.sell
     # ────────────────────────────────────────────────────────────────────

@@ -67,7 +67,10 @@ const GROUPS = [
   // five rows' presence in the sidebar list (they are not there on purpose). What still catches them:
   // TAB_ONLY below (each must be a `navTabs` tab of source) and retail_ui3b_nav_test.js (each must be an
   // openable tab for the roles that could open it before).
-  { label: 'Reports', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
+  // AI-BRAIN CHANGE: 'ai-insights' ("Smart analysis") joined the Reports group at the end, as the spec
+  // says. Same exact-list pin, one item longer; it still catches any other item appearing, vanishing or
+  // moving in the group.
+  { label: 'Reports', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'ai-insights'] },
   { label: 'Connected services', key: 'connected', items: ['whatsapp', 'einvoicing', 'email-notifications', 'site-relay'] },
 ];
 // Ungrouped BY DESIGN, i.e. NOT a bug this file should catch: every id here
@@ -436,7 +439,9 @@ function testAllDestinationsReachableForOwner() {
   // failure it is supposed to make loud.
   // STOCK-TAKE UPDATE: 25 -> 26, because 'stocktake' joined the Stock group (24 grouped entries now). Same exact
   // count pin, one higher; it still fails on any other entry appearing or vanishing.
-  assert.strictEqual(ALL_DESTINATIONS.length, 26, "sanity: this file's own expectation list drifted from 26 reachable destinations");
+  // AI-BRAIN UPDATE: 26 -> 27, because 'ai-insights' (Smart analysis) joined the Reports group. Same exact
+  // count pin, one higher; it still fails on any other entry appearing or vanishing.
+  assert.strictEqual(ALL_DESTINATIONS.length, 27, "sanity: this file's own expectation list drifted from 27 reachable destinations");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -733,8 +738,8 @@ function testAdminCenterGroupLeakIsCaught() {
   // into a group" would look like.
   const mutated = mutateSource(
     src,
-    "{ label: 'Reports', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },",
-    "{ label: 'Reports', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'admin-center'] },"
+    "{ label: 'Reports', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'ai-insights'] },",
+    "{ label: 'Reports', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'ai-insights', 'admin-center'] },"
   );
   let threw = null;
   try {

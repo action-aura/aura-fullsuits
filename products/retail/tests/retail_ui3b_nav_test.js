@@ -211,7 +211,11 @@ function assertTableEqualsBefore(shellSrc, hubSrc) {
     // ('retail.stock.adjust'). It is expected EXACTLY for the roles that could open 'transfers' before, and
     // missing for such a role counts as LOST -- so the new door can neither leak to a cashier nor be absent
     // from a stock-adjust role. What this stops catching: nothing; it is the same equality, with one named twin.
-    const TWINS = { 'hub:branches': 'branches', 'hub:plan-devices': 'plan-devices', 'stocktake': 'transfers' };
+    // AI-BRAIN UPDATE: 'ai-insights' (Smart analysis) is a NEW sidebar destination gated by the SAME capability
+    // as 'reports' ('retail.reports', and its routes carry CAP_REPORTS). Same twin rule: expected EXACTLY for the
+    // roles that could open 'reports' before, missing for such a role counts as LOST, and it can never reach a
+    // cashier or the expenses-only role. What this stops catching: nothing; same equality, one more named twin.
+    const TWINS = { 'hub:branches': 'branches', 'hub:plan-devices': 'plan-devices', 'stocktake': 'transfers', 'ai-insights': 'reports' };
     const gained = sorted(after).filter((d) => !before.has(d) && !(TWINS[d] && before.has(TWINS[d])));
     for (const [hubName, old] of Object.entries(TWINS)) if (before.has(old) && !after.has(hubName)) lost.push(hubName);
     assert.deepStrictEqual({ lost, gained }, { lost: [], gained: [] },
