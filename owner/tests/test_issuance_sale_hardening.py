@@ -553,21 +553,21 @@ def test_absurd_extra_device_count_is_refused_before_any_write(app, seeded):
     -- "numeric field overflow" (a 500) -- with the inline customer already
     committed. Now refused before any write, with nothing left behind."""
     w = _world(app)
-    # Step 0 packages: the screen sells pairs, so the cap is in pairs.
-    from app.commercial_sales.direct_sale import MAX_EXTRA_DEVICE_PAIRS_PER_SALE as MAX_PAIRS
+    # Typed extras (2026-10-31): the cap is per kind (phones, desktops) and the screen sells
+    # one device per unit. Each kind is capped on its own, so each is tested on its own.
+    from app.commercial_sales.direct_sale import MAX_EXTRA_DEVICES_PER_KIND_PER_SALE as MAX_EXTRA
     from app.commercial_sales.direct_sale import DirectSaleError
 
     n = 10**9
-    with pytest.raises(DirectSaleError, match="at most"):
-        _record(app, w, extra_device_pairs=n, amount=Decimal("100.00") + Decimal("50.00") * n)
-    with pytest.raises(DirectSaleError, match="at most"):
-        _record(app, w, extra_device_pairs=MAX_PAIRS + 1,
-                amount=Decimal("100.00") + Decimal("50.00") * (MAX_PAIRS + 1))
+    for field in ("extra_phones", "extra_desktops"):
+        with pytest.raises(DirectSaleError, match="at most"):
+            _record(app, w, amount=Decimal("100.00") + Decimal("50.00") * n, **{field: n})
+        with pytest.raises(DirectSaleError, match="at most"):
+            _record(app, w, amount=Decimal("100.00") + Decimal("50.00") * (MAX_EXTRA + 1), **{field: MAX_EXTRA + 1})
     assert _counts(app) == NOTHING
     # the allow half: the maximum itself is a sale
-    result, _ = _record(app, w, extra_device_pairs=MAX_PAIRS,
-                        amount=Decimal("100.00") + Decimal("50.00") * MAX_PAIRS)
-    assert result["total"] == Decimal("100.00") + Decimal("50.00") * MAX_PAIRS
+    result, _ = _record(app, w, extra_phones=MAX_EXTRA, amount=Decimal("100.00") + Decimal("50.00") * MAX_EXTRA)
+    assert result["total"] == Decimal("100.00") + Decimal("50.00") * MAX_EXTRA
     assert _counts(app) == RECORDED
 
 
@@ -579,7 +579,7 @@ def test_a_total_too_large_to_store_is_refused_before_any_write(app, seeded):
     from app.commercial_sales.direct_sale import DirectSaleError
 
     with pytest.raises(DirectSaleError, match="too large"):
-        _record(app, w, extra_device_pairs=1, amount=Decimal("10000000049.00"))
+        _record(app, w, extra_phones=1, amount=Decimal("10000000049.00"))
     assert _counts(app) == NOTHING
 
 
@@ -763,7 +763,7 @@ def test_sale_form_error_is_shown_in_arabic(app, client, seeded):
     page = client.get("/licenses/issuance/new")
     resp = client.post("/licenses/issuance/sale", data={
         "csrf_token": get_csrf(page.get_data(as_text=True)), "idempotency_key": str(uuid.uuid4()),
-        "new_customer_legal_name": "Corner Shop LLC", "plan_id": str(w["plan"]), "extra_device_pairs": "0",
+        "new_customer_legal_name": "Corner Shop LLC", "plan_id": str(w["plan"]), "extra_phones": "0", "extra_desktops": "0",
         # CASH: this test is about the Arabic AMOUNT message, and a transfer without a slip would be
         # refused for the slip first (the slip rule has its own tests, test_rehearsal_owner_fixes.py).
         "amount": "99.99", "method": "CASH", "reference": "CLIQ-1", "payment_date": date.today().isoformat(),
@@ -777,14 +777,17 @@ def test_sale_form_error_is_shown_in_arabic(app, client, seeded):
 
 def test_waiting_list_shows_a_status_label_and_a_correct_device_count(app, client, seeded):
     """RED on 580cd65a: the list printed the raw status code (PENDING) and
-    "1 extra devices". Step 0 packages: the sale screen sells pairs, so the
-    count is now of pairs ("+ 1 extra pair", "+ 2 extra pairs")."""
+    "1 extra devices". Typed since 2026-10-31: the count is of phones and desktops
+    ("+ 1 extra phone", "+ 2 extra phones", "+ 1 extra desktop", "+ 2 extra desktops")."""
     w = _world(app)
-    _record(app, w, extra_device_pairs=1, amount=Decimal("150.00"))
-    _record(app, w, extra_device_pairs=2, amount=Decimal("200.00"), new_customer_legal_name="Second Shop")
+    _record(app, w, extra_phones=1, amount=Decimal("150.00"))
+    _record(app, w, extra_phones=2, amount=Decimal("200.00"), new_customer_legal_name="Second Shop")
+    _record(app, w, extra_desktops=1, amount=Decimal("150.00"), new_customer_legal_name="Third Shop")
+    _record(app, w, extra_desktops=2, amount=Decimal("200.00"), new_customer_legal_name="Fourth Shop")
     force_login(client, app, w["manager"])
     body = client.get("/licenses/issuance/sales").get_data(as_text=True)
-    assert "1 extra pairs" not in body
-    assert "+ 1 extra pair" in body and "+ 2 extra pairs" in body
+    assert "1 extra phones" not in body and "1 extra desktops" not in body
+    assert "+ 1 extra phone" in body and "+ 2 extra phones" in body
+    assert "+ 1 extra desktop" in body and "+ 2 extra desktops" in body
     assert "&middot; PENDING" not in body
     assert "&middot; Pending" in body

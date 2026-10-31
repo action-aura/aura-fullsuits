@@ -91,9 +91,12 @@ def schedule_stops_after_refund(refund, subscription: Subscription, *, actor_sta
 
 
 def schedule_device_removal_after_refund(refund, subscription: Subscription, *, devices: int,
+                                        desktops: int = 0, phones: int = 0,
                                         actor_staff_user_id) -> list[LicenseScheduledStop]:
-    """Flush only, like schedule_stops_after_refund: `devices` taken off each
-    live licence of the subscription at the refund's paid_at + 2 days."""
+    """Flush only, like schedule_stops_after_refund: `devices` (the TOTAL; of
+    which `desktops` extra desktops and `phones` extra phones, the rest untyped)
+    taken off each live licence of the subscription at the refund's paid_at + 2
+    days."""
     if devices <= 0:
         return []
     effective_at = refund.paid_at.astimezone(timezone.utc) + STOP_AFTER_REFUND
@@ -112,7 +115,7 @@ def schedule_device_removal_after_refund(refund, subscription: Subscription, *, 
             continue
         row = LicenseScheduledStop(
             license_id=licence.id, subscription_id=subscription.id, effective_at=effective_at, to_status=None,
-            devices_removed=devices,
+            devices_removed=devices, desktops_removed=desktops, phones_removed=phones,
             reason=f"Refund {refund.id} gave back the extra-device money; {devices} devices are removed 2 days later.",
             source_refund_id=refund.id, created_by_staff_user_id=actor_staff_user_id,
         )
@@ -122,13 +125,18 @@ def schedule_device_removal_after_refund(refund, subscription: Subscription, *, 
     return rows
 
 
-def devices_already_scheduled_off(subscription_id: uuid.UUID, refund_ids: list) -> int:
-    """Devices this subscription's licences already lose (or lost) for these
-    refunds -- per licence, so the largest of them."""
+def devices_already_scheduled_off(subscription_id: uuid.UUID, refund_ids: list) -> tuple[int, int, int]:
+    """(desktops, phones, untyped) this subscription's licences already lose
+    (or lost) for these refunds -- per licence, so the largest of them, each
+    kind on its own. A row's untyped share is what its total leaves after its
+    typed shares (an old row without a typed split is all untyped)."""
     if not refund_ids:
-        return 0
+        return 0, 0, 0
     rows = db_session.execute(
-        select(LicenseScheduledStop.license_id, LicenseScheduledStop.devices_removed).where(
+        select(
+            LicenseScheduledStop.license_id, LicenseScheduledStop.devices_removed,
+            LicenseScheduledStop.desktops_removed, LicenseScheduledStop.phones_removed,
+        ).where(
             LicenseScheduledStop.subscription_id == subscription_id,
             LicenseScheduledStop.source_refund_id.in_(refund_ids),
             LicenseScheduledStop.devices_removed.is_not(None),
@@ -136,9 +144,11 @@ def devices_already_scheduled_off(subscription_id: uuid.UUID, refund_ids: list) 
         )
     ).all()
     per_licence: dict = {}
-    for license_id, devices in rows:
-        per_licence[license_id] = per_licence.get(license_id, 0) + devices
-    return max(per_licence.values(), default=0)
+    for license_id, devices, desktops, phones in rows:
+        desktops, phones = desktops or 0, phones or 0
+        d, p, u = per_licence.get(license_id, (0, 0, 0))
+        per_licence[license_id] = (d + desktops, p + phones, u + max(0, devices - desktops - phones))
+    return tuple(max((v[i] for v in per_licence.values()), default=0) for i in range(3))
 
 
 def pending_stop_for_subscription(subscription_id: uuid.UUID) -> LicenseScheduledStop | None:
@@ -232,8 +242,9 @@ def apply_due_licence_stops(*, now: datetime | None = None, license_id: uuid.UUI
             audit_record(
                 actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None,
                 action_code="LICENSE_DEVICES_REMOVED_AFTER_REFUND", entity_type=entity_type.removesuffix("_devices"),
-                entity_public_id=str(entity_id), before_state={"devices": from_status[0]},
-                after_state={"devices": from_status[1]}, reason=stop.reason,
+                entity_public_id=str(entity_id),
+                before_state={"devices": from_status[0], **_typed_state(from_status, 2)},
+                after_state={"devices": from_status[1], **_typed_state(from_status, 3)}, reason=stop.reason,
             )
             continue
         audit_record(
@@ -255,16 +266,38 @@ def apply_due_licence_stops(*, now: datetime | None = None, license_id: uuid.UUI
     return len(stops)
 
 
+def _typed_state(change: tuple, start: int) -> dict:
+    """The typed-extras part of a device-removal audit state: the licence tuple
+    carries (limit_before, limit_after, desktops_before, desktops_after,
+    phones_before, phones_after); the subscription's carries only the first two."""
+    if len(change) < 6:
+        return {}
+    return {"extra_desktop_slots": change[start], "extra_phone_slots": change[start + 2]}
+
+
 def _remove_devices(stop: LicenseScheduledStop, licence: License, subscription: Subscription | None, changes: list) -> None:
-    """A pair-only refund's removal: the licence's device_limit (what
+    """An extra-device refund's removal: the licence's device_limit (what
     activation enforces and the product's assertion carries) and the
     subscription's device_allowance each lose the refunded devices, never
-    below 1. Only a live licence; a stopped or replaced one is left as it is."""
+    below 1; the licence's typed extra_desktop_slots / extra_phone_slots lose
+    their share (desktops_removed / phones_removed), never below 0, so a
+    refunded phone cannot leave a desktop slot behind or take one away. Only a
+    live licence; a stopped or replaced one is left as it is."""
     if licence.status in _STOPPABLE_LICENCE_STATUSES and licence.device_limit is not None:
         after = max(1, licence.device_limit - stop.devices_removed)
-        if after != licence.device_limit:
-            changes.append(("license_devices", licence.id, (licence.device_limit, after), stop))
+        desktops_after = max(0, licence.extra_desktop_slots - (stop.desktops_removed or 0))
+        phones_after = max(0, licence.extra_phone_slots - (stop.phones_removed or 0))
+        if after != licence.device_limit or (desktops_after, phones_after) != (
+            licence.extra_desktop_slots, licence.extra_phone_slots
+        ):
+            changes.append((
+                "license_devices", licence.id,
+                (licence.device_limit, after, licence.extra_desktop_slots, desktops_after,
+                 licence.extra_phone_slots, phones_after), stop,
+            ))
             licence.device_limit = after
+            licence.extra_desktop_slots = desktops_after
+            licence.extra_phone_slots = phones_after
     if subscription is not None and subscription.device_allowance is not None:
         after = max(1, subscription.device_allowance - stop.devices_removed)
         if after != subscription.device_allowance:

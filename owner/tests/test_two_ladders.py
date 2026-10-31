@@ -103,10 +103,10 @@ def test_a_package_1_sale_never_moves_the_monthly_ladder_and_vice_versa(app, see
     assert (third["yearly_total"], third["monthly_total"]) == (D("50.00"), D("5.00"))
 
 
-def test_the_extra_pair_never_counts_on_either_ladder(app, seeded):
+def test_the_extra_devices_never_count_on_either_ladder(app, seeded):
     w = _world(app)
-    _sell(app, w, "p1", pairs=1)
-    _sell_counted(app, w, "p2", pairs=2)
+    _sell(app, w, "p1", phones=1)
+    _sell_counted(app, w, "p2", desktops=1, phones=1)
     summary = _summary(app, w["seller_profile"])
     assert (summary["yearly_count"], summary["yearly_total"]) == (1, D("20.00"))
     assert (summary["monthly_count"], summary["monthly_total"]) == (1, D("5.00"))

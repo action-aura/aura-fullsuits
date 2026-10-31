@@ -61,13 +61,15 @@
       {% for pkg in packages %}
       {# Step 0 packages: what the customer pays now (the first period + any
          first-time fee), what each later period costs, and the contract. #}
-      <option value="{{ pkg.plan_id }}" data-first-payment="{{ pkg.first_sale_unit_price }}" data-pair-price="{{ pkg.extra_pair_price if pkg.extra_pair_price is not none else 0 }}" data-breakdown="{{ pkg.breakdown }}" {% if (fv.get("plan_id") or convert_plan_id) == pkg.plan_id|string %}selected{% endif %}>{{ catalog_label(pkg.name) }} {{ "—" }} {{ _("first payment") }} {{ format_owner_money(pkg.first_sale_unit_price, pkg.currency) }}{{ owner_comma() }} {{ _("then") }} {{ format_owner_money(pkg.renewal_unit_price, pkg.currency) }} {% if pkg.billing_model == "MONTHLY" %}{{ _("a month") }}{% if pkg.yearly_activation_fee %}{{ owner_comma() }} + {{ format_owner_money(pkg.yearly_activation_fee, pkg.currency) }} {{ _("activation every year") }}{% endif %}{% elif pkg.billing_model == "ANNUAL" %}{{ _("a year") }}{% else %}{{ billing_model_label(pkg.billing_model) }}{% endif %}{% if pkg.contract_term_months %}; {{ _("%(months)s-month contract", months=pkg.contract_term_months) }}{% endif %} ({{ pkg.included_device_count }} {{ _("devices included") }}{% if pkg.extra_pair_price is not none %}; {{ _("extra pair (1 desktop + 1 phone)") }} {{ format_owner_money(pkg.extra_pair_price, pkg.currency) }}{% endif %})</option>
+      <option value="{{ pkg.plan_id }}" data-first-payment="{{ pkg.first_sale_unit_price }}" data-phone-price="{{ pkg.extra_phone_price if pkg.extra_phone_price is not none else 0 }}" data-desktop-price="{{ pkg.extra_desktop_price if pkg.extra_desktop_price is not none else 0 }}" data-breakdown="{{ pkg.breakdown }}" {% if (fv.get("plan_id") or convert_plan_id) == pkg.plan_id|string %}selected{% endif %}>{{ catalog_label(pkg.name) }} {{ "—" }} {{ _("first payment") }} {{ format_owner_money(pkg.first_sale_unit_price, pkg.currency) }}{{ owner_comma() }} {{ _("then") }} {{ format_owner_money(pkg.renewal_unit_price, pkg.currency) }} {% if pkg.billing_model == "MONTHLY" %}{{ _("a month") }}{% if pkg.yearly_activation_fee %}{{ owner_comma() }} + {{ format_owner_money(pkg.yearly_activation_fee, pkg.currency) }} {{ _("activation every year") }}{% endif %}{% elif pkg.billing_model == "ANNUAL" %}{{ _("a year") }}{% else %}{{ billing_model_label(pkg.billing_model) }}{% endif %}{% if pkg.contract_term_months %}; {{ _("%(months)s-month contract", months=pkg.contract_term_months) }}{% endif %} ({{ pkg.included_device_count }} {{ _("devices included") }}{% if pkg.extra_phone_price is not none %}; {{ _("extra phone") }} {{ format_owner_money(pkg.extra_phone_price, pkg.currency) }}{% endif %}{% if pkg.extra_desktop_price is not none %}{% if pkg.extra_phone_price is not none %}{{ owner_comma() }}{% else %};{% endif %} {{ _("extra desktop") }} {{ format_owner_money(pkg.extra_desktop_price, pkg.currency) }}{% endif %})</option>
       {% else %}
       <option value="" disabled>{{ _("No sellable packages yet -- set an effective date and current price on a plan first.") }}</option>
       {% endfor %}
     </select>
-    <label for="sale-extra-device-pairs">{{ _("Extra device pairs (each pair is 1 desktop + 1 phone, paid once, not on the renewal)") }}</label>
-    <input id="sale-extra-device-pairs" name="extra_device_pairs" type="number" value="{{ fv.get("extra_device_pairs", "0") }}" min="0" step="1">
+    <label for="sale-extra-phones">{{ _("Extra phones (Android only; each paid once, not on the renewal)") }}</label>
+    <input id="sale-extra-phones" name="extra_phones" type="number" value="{{ fv.get("extra_phones", "0") }}" min="0" step="1">
+    <label for="sale-extra-desktops">{{ _("Extra desktops (Windows only; each paid once, not on the renewal)") }}</label>
+    <input id="sale-extra-desktops" name="extra_desktops" type="number" value="{{ fv.get("extra_desktops", "0") }}" min="0" step="1">
 
     <h3>{{ _("3. Seller") }}</h3>
     {% if may_choose_seller %}
@@ -83,7 +85,7 @@
     {% endif %}
 
     <h3>{{ _("4. Payment") }}</h3>
-    <label for="sale-amount">{{ _("Amount paid (the full first payment, extra pairs included)") }}</label>
+    <label for="sale-amount">{{ _("Amount paid (the full first payment, extra phones and desktops included)") }}</label>
     <input id="sale-amount" name="amount" inputmode="decimal" value="{{ fv.get("amount", prefill_amount if prefill_amount is not none else "") }}" required dir="ltr">
     {% if convert %}
     <p class="hint" id="sale-amount-breakdown" data-amount-breakdown="1">{% for pkg in packages %}{% if (fv.get("plan_id") or convert_plan_id) == pkg.plan_id|string %}{{ pkg.breakdown }}{% endif %}{% endfor %}</p>

@@ -285,6 +285,7 @@ def confirm_refund(
             entity_type="license",
             entity_public_id=str(stop.license_id),
             after_state={"to_status": stop.to_status, "devices_removed": stop.devices_removed,
+                         "desktops_removed": stop.desktops_removed, "phones_removed": stop.phones_removed,
                          "effective_at": stop.effective_at.isoformat(),
                          "subscription_id": str(stop.subscription_id) if stop.subscription_id else None},
         )
@@ -360,16 +361,27 @@ def _schedule_entitlement_consequence(refund: CommercialRefund, invoice: Commerc
         select(CommercialRefund.id).where(CommercialRefund.commercial_invoice_id == invoice.id,
                                           CommercialRefund.status == "PAID")
     ).scalars().all()
-    devices = _refunded_devices(invoice, refunded) - devices_already_scheduled_off(subscription.id, refund_ids)
-    return schedule_device_removal_after_refund(refund, subscription, devices=devices,
-                                                actor_staff_user_id=actor_staff_user_id)
+    refunded_slots = _refunded_devices(invoice, refunded)
+    already_off = devices_already_scheduled_off(subscription.id, refund_ids)
+    # Typed (2026-10-31): desktops, phones and untyped devices are taken off
+    # separately, each net of what an earlier refund of the same invoice already
+    # scheduled, so a phone refund can never remove a desktop.
+    desktops, phones, untyped = (max(0, got - gone) for got, gone in zip(refunded_slots, already_off))
+    return schedule_device_removal_after_refund(
+        refund, subscription, devices=desktops + phones + untyped, desktops=desktops, phones=phones,
+        actor_staff_user_id=actor_staff_user_id,
+    )
 
 
-def _refunded_devices(invoice: CommercialInvoice, refunded: Decimal) -> int:
-    """How many extra devices the refunded extra-device money paid for: the
-    invoice's device lines in order, a unit counted only once its whole price
-    is given back (25 of a 50 JOD pair removes nothing)."""
-    from app.commercial_sales.catalog_for_sales import DEVICES_PER_UNIT_BY_ADDON_CODE
+def _refunded_devices(invoice: CommercialInvoice, refunded: Decimal) -> tuple[int, int, int]:
+    """Which extra devices the refunded extra-device money paid for, as
+    (desktops, phones, untyped): the invoice's device lines in INVOICE LINE
+    ORDER (desktops are sold before phones), a unit counted only once its whole
+    price is given back (25 of a 50 JOD phone removes nothing). Money is not
+    tagged with the line it is "for", so a partial refund is applied to the
+    lines in that fixed order -- a named limitation: refunding 50 of an invoice
+    that bought a desktop and a phone removes the desktop (the first line)."""
+    from app.commercial_sales.catalog_for_sales import DEVICE_SLOTS_BY_ADDON_CODE
     from app.models.catalog import Addon
     from app.models.commercial_sales import CommercialInvoiceItem
 
@@ -377,20 +389,23 @@ def _refunded_devices(invoice: CommercialInvoice, refunded: Decimal) -> int:
         select(CommercialInvoiceItem.line_total, CommercialInvoiceItem.quantity, Addon.addon_code)
         .join(Addon, Addon.id == CommercialInvoiceItem.addon_id)
         .where(CommercialInvoiceItem.commercial_invoice_id == invoice.id,
-               Addon.addon_code.in_(tuple(DEVICES_PER_UNIT_BY_ADDON_CODE)))
+               Addon.addon_code.in_(tuple(DEVICE_SLOTS_BY_ADDON_CODE)))
         .order_by(CommercialInvoiceItem.sort_order, CommercialInvoiceItem.id)
     ).all()
-    remaining, devices = Decimal(refunded), 0
+    remaining, desktops, phones, untyped = Decimal(refunded), 0, 0, 0
     for line_total, quantity, code in lines:
         if quantity <= 0 or Decimal(line_total) <= 0:
             continue
         unit = Decimal(line_total) / quantity
         units = min(quantity, int(remaining // unit))
-        devices += units * DEVICES_PER_UNIT_BY_ADDON_CODE[code]
+        per_desktop, per_phone, per_untyped = DEVICE_SLOTS_BY_ADDON_CODE[code]
+        desktops += units * per_desktop
+        phones += units * per_phone
+        untyped += units * per_untyped
         remaining -= unit * units
         if units < quantity:
             break
-    return devices
+    return desktops, phones, untyped
 
 
 def void_refund(refund: CommercialRefund, *, actor_staff_user_id: uuid.UUID, expected_version: int | None = None) -> CommercialRefund:

@@ -39,14 +39,19 @@ from flask_babel import gettext as _
 from sqlalchemy import select
 
 from app.auth.session import has_recent_auth, load_current_staff
-from app.commercial_sales.catalog_for_sales import describe_plan_for_sale, open_to_sellers
+from app.commercial_sales.catalog_for_sales import (
+    EXTRA_DESKTOP_ADDON_CODE,
+    EXTRA_PHONE_ADDON_CODE,
+    describe_plan_for_sale,
+    open_to_sellers,
+)
 from app.commercial_sales.direct_sale import (
     CHOOSE_SELLER_PERMISSION,
     CONFIRM_SALE_PERMISSIONS,
     DIRECT_SALE_PAYMENT_METHODS,
     DirectSaleError,
     confirm_direct_sale,
-    extra_device_pair_offer,
+    extra_device_offer,
     list_sales_awaiting_confirmation,
     parse_amount,
     record_direct_sale,
@@ -154,8 +159,9 @@ def _render_sale_form(*, error: str | None, idempotency_key: str, form_values=No
     may_choose_seller = CHOOSE_SELLER_PERMISSION in codes
     packages = _sellable_packages()
     for package in packages:
-        offer = extra_device_pair_offer(uuid.UUID(package["product_id"]))
-        package["extra_pair_price"] = offer["unit_price"] if offer and offer["currency"] == package["currency"] else None
+        for key, addon_code in (("extra_phone_price", EXTRA_PHONE_ADDON_CODE), ("extra_desktop_price", EXTRA_DESKTOP_ADDON_CODE)):
+            offer = extra_device_offer(uuid.UUID(package["product_id"]), addon_code)
+            package[key] = offer["unit_price"] if offer and offer["currency"] == package["currency"] else None
         # What the customer pays first (the first period + any first-time fee) and what that is
         # made of -- the trial-conversion page pre-fills the amount with it and says so, the way
         # 7e223f38 did for the other payment screens. For a trial nothing has been paid yet, so
@@ -209,13 +215,19 @@ def record_sale():
     idempotency_key = form.get("idempotency_key")
     if not idempotency_key:
         return _sale_error(_("An idempotency key is required to record a sale."), str(uuid.uuid4()))
-    # Step 0 packages: extra devices are sold only as PAIRS (1 desktop + 1
-    # phone). The old single-device field is no longer read: a form posting
-    # it sells no device.
+    # Owner decision 2026-10-31: extra devices are sold TYPED -- extra phones
+    # (Android only) and extra desktops (Windows only). The old pair field is
+    # refused, not read: a page loaded before this change would otherwise submit
+    # "1 pair", sell nothing, and charge the seller the wrong total with a
+    # confusing "amount does not match" message. "" and "0" are the old form's
+    # untouched default and pass.
+    if (form.get("extra_device_pairs") or "0").strip() not in ("", "0"):
+        return _sale_error(localize_direct_sale_error("FORM_OUT_OF_DATE"), idempotency_key)
     try:
-        extra_device_pairs = int(form.get("extra_device_pairs") or "0")
+        extra_phones = int(form.get("extra_phones") or "0")
+        extra_desktops = int(form.get("extra_desktops") or "0")
     except ValueError:
-        return _sale_error(localize_direct_sale_error("EXTRA_PAIRS_NOT_A_NUMBER"), idempotency_key)
+        return _sale_error(localize_direct_sale_error("EXTRA_DEVICES_NOT_A_NUMBER"), idempotency_key)
     try:
         payment_date = date.fromisoformat(form.get("payment_date") or "")
     except ValueError:
@@ -231,7 +243,8 @@ def record_sale():
             customer_id=form.get("customer_id") or None,
             new_customer_legal_name=form.get("new_customer_legal_name") or None,
             plan_id=form.get("plan_id") or None,
-            extra_device_pairs=extra_device_pairs,
+            extra_desktops=extra_desktops,
+            extra_phones=extra_phones,
             sales_owner_employee_profile_id=form.get("sales_owner_employee_profile_id") or None,
             amount=amount,
             method=form.get("method") or "",

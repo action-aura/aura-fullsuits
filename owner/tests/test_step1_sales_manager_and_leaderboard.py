@@ -64,7 +64,7 @@ def _record_only(app, w, *, recorder, seller_profile=None):
         from tests.test_issuance_sale import _codes
 
         result = record_direct_sale(
-            new_customer_legal_name=f"Shop {uuid.uuid4().hex[:6]}", plan_id=w["p1"], extra_device_pairs=0,
+            new_customer_legal_name=f"Shop {uuid.uuid4().hex[:6]}", plan_id=w["p1"], extra_desktops=0, extra_phones=0,
             amount=Decimal("250.00"), method="BANK_TRANSFER", reference=f"CLIQ-{uuid.uuid4().hex[:6]}",
             payment_date=jordan_today(), idempotency_key=str(uuid.uuid4()), actor_staff_user_id=recorder,
             actor_permission_codes=_codes(recorder), as_of=jordan_today(),

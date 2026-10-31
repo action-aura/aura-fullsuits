@@ -86,7 +86,7 @@ def _sale_post(client, app, who_id, w, *, method, slip=None, customer_id=None, a
     page = client.get("/licenses/issuance/new").get_data(as_text=True)
     data = {
         "csrf_token": get_csrf(page), "idempotency_key": re.search(r'name="idempotency_key" value="([^"]+)"', page).group(1),
-        "plan_id": str(plan or w["plan"]), "extra_device_pairs": "0", "amount": amount, "method": method,
+        "plan_id": str(plan or w["plan"]), "extra_phones": "0", "extra_desktops": "0", "amount": amount, "method": method,
         "reference": "REF-" + uuid.uuid4().hex[:6], "payment_date": jordan_today().isoformat(),
     }
     if converts:

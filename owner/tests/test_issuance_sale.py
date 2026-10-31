@@ -47,8 +47,8 @@ def _world(app, *, plan_price=Decimal("100.00"), extra_device_price=Decimal("50.
     """A seller (SALES), a manager (FINANCE), a Super Admin, each with an
     ACTIVE employee profile; a sellable Aura Retail package priced in JOD;
     the seeded EXTRA_DEVICE add-on (the quote pipeline's single device) and
-    the EXTRA_DEVICE_PAIR add-on (the one-screen sale's only extra item since
-    the Step 0 packages) made sellable at extra_device_price; a 10%
+    the EXTRA_PHONE / EXTRA_DESKTOP add-ons (the one-screen sale's only extra items
+    since 2026-10-31; before that EXTRA_DEVICE_PAIR) made sellable at extra_device_price; a 10%
     commission plan assigned to the seller."""
     w = {}
     w["seller"] = make_staff(app, f"seller-{uuid.uuid4().hex[:6]}@example.com", role_codes=["SALES"], mfa=True)
@@ -72,7 +72,7 @@ def _world(app, *, plan_price=Decimal("100.00"), extra_device_price=Decimal("50.
         product = db_session.execute(select(Product).where(Product.product_code == "AURA_RETAIL")).scalars().one()
         product.is_sellable = True
         product.is_active = True
-        for code in ("EXTRA_DEVICE", "EXTRA_DEVICE_PAIR"):
+        for code in ("EXTRA_DEVICE", "EXTRA_DEVICE_PAIR", "EXTRA_PHONE", "EXTRA_DESKTOP"):
             addon = db_session.execute(select(Addon).where(Addon.addon_code == code)).scalars().one()
             if extra_device_price is not None:
                 addon.availability_status = "AVAILABLE"
@@ -112,7 +112,7 @@ def _record(app, w, *, actor=None, key=None, **overrides):
     actor = actor or w["seller"]
     key = key or str(uuid.uuid4())
     fields = dict(
-        new_customer_legal_name="Corner Shop LLC", plan_id=w["plan"], extra_device_pairs=0,
+        new_customer_legal_name="Corner Shop LLC", plan_id=w["plan"], extra_desktops=0, extra_phones=0,
         amount=Decimal("100.00"), method="BANK_TRANSFER", reference="CLIQ-778899",
         payment_date=date.today(),
     )
@@ -648,8 +648,10 @@ def test_manager_recording_must_name_an_active_seller(app, seeded):
     {"reference": "   "},                               # proof required
     {"payment_date": jordan_today() + timedelta(days=1)},  # money from the future (Jordan's tomorrow)
     {"payment_date": None},
-    {"extra_device_pairs": -1},
-], ids=["short", "over", "card", "cheque", "no-reference", "future-date", "no-date", "negative-pairs"])
+    {"extra_phones": -1},
+    {"extra_desktops": -1},
+], ids=["short", "over", "card", "cheque", "no-reference", "future-date", "no-date", "negative-phones",
+        "negative-desktops"])
 def test_money_rules_refuse_before_any_write(app, seeded, overrides):
     w = _world(app)
     from app.commercial_sales.direct_sale import DirectSaleError
@@ -675,13 +677,14 @@ def test_zero_price_package_is_not_a_sale(app, seeded):
     assert _counts(app) == NOTHING
 
 
-def test_extra_pairs_are_priced_from_the_catalog_and_reach_the_licence(app, seeded):
-    # Step 0 packages: was extra_devices=2 -> 200.00 and 4 devices; the sale
-    # screen now sells PAIRS only (2 devices each, owner 2026-10-24).
+def test_extra_devices_are_priced_from_the_catalog_and_reach_the_licence(app, seeded):
+    # Step 0 packages: was extra_devices=2 -> 200.00 and 4 devices; since
+    # 2026-10-31 the sale screen sells extra PHONES and DESKTOPS (1 device each,
+    # typed, 50 JOD) instead of pairs.
     w = _world(app)
     with pytest.raises(Exception):
-        _record(app, w, extra_device_pairs=2)  # 100.00 is no longer the full price
-    result, _ = _record(app, w, extra_device_pairs=2, amount=Decimal("200.00"))
+        _record(app, w, extra_phones=1, extra_desktops=1)  # 100.00 is no longer the full price
+    result, _ = _record(app, w, extra_phones=1, extra_desktops=1, amount=Decimal("200.00"))
     assert result["total"] == Decimal("200.00")
     done = _confirm(app, result["order_id"], w["manager"])
     with app.app_context():
@@ -691,15 +694,17 @@ def test_extra_pairs_are_priced_from_the_catalog_and_reach_the_licence(app, seed
 
         licence = db_session.get(License, done["license_id"])
         subscription = db_session.get(Subscription, licence.subscription_id)
-        assert (licence.device_limit, subscription.device_allowance) == (6, 6)  # 2 included + 2 pairs x 2
+        assert (licence.device_limit, subscription.device_allowance) == (4, 4)  # 2 included + 1 phone + 1 desktop
+        assert (licence.extra_phone_slots, licence.extra_desktop_slots) == (1, 1)
 
 
-def test_extra_pairs_refused_while_the_add_on_is_not_on_sale(app, seeded):
-    w = _world(app, extra_device_price=None)  # EXTRA_DEVICE_PAIR stays PLANNED, unpriced
+@pytest.mark.parametrize("field,match", [("extra_phones", "Extra phones"), ("extra_desktops", "Extra desktops")])
+def test_extra_devices_refused_while_the_add_on_is_not_on_sale(app, seeded, field, match):
+    w = _world(app, extra_device_price=None)  # EXTRA_PHONE / EXTRA_DESKTOP stay PLANNED, unpriced
     from app.commercial_sales.direct_sale import DirectSaleError
 
-    with pytest.raises(DirectSaleError, match="Extra device pairs"):
-        _record(app, w, extra_device_pairs=1, amount=Decimal("150.00"))
+    with pytest.raises(DirectSaleError, match=match):
+        _record(app, w, amount=Decimal("150.00"), **{field: 1})
     assert _counts(app) == NOTHING
 
 
@@ -736,8 +741,9 @@ def test_same_form_twice_is_one_sale(app, seeded):
 @pytest.mark.parametrize("change", [
     {"amount": Decimal("100.00"), "reference": "CLIQ-OTHER"},
     {"new_customer_legal_name": "Another Shop"},
-    {"extra_device_pairs": 1, "amount": Decimal("150.00")},
-], ids=["reference", "customer", "pairs"])
+    {"extra_phones": 1, "amount": Decimal("150.00")},
+    {"extra_desktops": 1, "amount": Decimal("150.00")},
+], ids=["reference", "customer", "phones", "desktops"])
 def test_same_key_different_sale_is_refused(app, seeded, change):
     w = _world(app)
     _first, key = _record(app, w)

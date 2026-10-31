@@ -474,7 +474,7 @@ def _record_direct_sale(app, w, *, payment_date, as_of=None):
         from app.commercial_sales.direct_sale import record_direct_sale
 
         return record_direct_sale(
-            new_customer_legal_name=f"Night shop {uuid.uuid4().hex[:6]}", plan_id=w["p1"], extra_device_pairs=0,
+            new_customer_legal_name=f"Night shop {uuid.uuid4().hex[:6]}", plan_id=w["p1"], extra_desktops=0, extra_phones=0,
             amount=D("250.00"), method="BANK_TRANSFER", reference=f"CLIQ-{uuid.uuid4().hex[:6]}",
             payment_date=payment_date, idempotency_key=str(uuid.uuid4()), actor_staff_user_id=w["seller"],
             actor_permission_codes=_codes(w["seller"]), as_of=as_of,
@@ -703,20 +703,20 @@ def _stops(app):
 
 
 def test_a_partial_refund_of_package_money_schedules_the_licence_stop(app, seeded):
-    """Verifier probe v9: refund 250 of a 300 Package 1 + pair sale. The sale
+    """Verifier probe v9: refund 250 of a 300 Package 1 + extra phone sale. The sale
     stops counting (its package money is no longer fully paid) -- and on
     d15d11f0 no stop was scheduled, so the shop kept the package for 50 JOD
     forever."""
     w = _world(app)
-    sale = _sell(app, w, "p1", pairs=1)["order_id"]
+    sale = _sell(app, w, "p1", phones=1)["order_id"]
     _refund(app, w, sale, "250.00")
     assert [s["status"] for s in _ladder_sales(app, w["seller_profile"])] == ["UNCOUNTED"]
     assert _stops(app) == [(_rows(app, sale)["license_id"], "SUSPENDED", None)]
 
 
-def test_a_refund_of_only_the_pair_removes_its_two_devices_after_two_days_and_keeps_the_licence(app, seeded):
+def test_a_refund_of_only_the_extra_phone_removes_its_device_after_two_days_and_keeps_the_licence(app, seeded):
     w = _world(app, rule="PERCENT")
-    sale = _sell(app, w, "p1", pairs=1)["order_id"]
+    sale = _sell(app, w, "p1", phones=1)["order_id"]
     rows = _rows(app, sale)
     with app.app_context():
         from app.extensions import db_session
@@ -726,7 +726,7 @@ def test_a_refund_of_only_the_pair_removes_its_two_devices_after_two_days_and_ke
         limit_before = db_session.get(License, rows["license_id"]).device_limit
         allowance_before = db_session.get(Subscription, rows["subscription_id"]).device_allowance
     _refund(app, w, sale, "50.00")
-    assert _stops(app) == [(rows["license_id"], None, 2)]  # no stop: the devices go
+    assert _stops(app) == [(rows["license_id"], None, 1)]  # no stop: the device goes
     with app.app_context():
         from app.extensions import db_session
         from app.licensing.scheduled_stops import apply_due_licence_stops
@@ -742,13 +742,14 @@ def test_a_refund_of_only_the_pair_removes_its_two_devices_after_two_days_and_ke
         db_session.expire_all()
         licence = db_session.get(License, rows["license_id"])
         subscription = db_session.get(Subscription, rows["subscription_id"])
-        assert (licence.device_limit, licence.status) == (limit_before - 2, "ISSUED")
-        assert (subscription.device_allowance, subscription.status) == (allowance_before - 2, "ACTIVE")
+        assert (licence.device_limit, licence.status) == (limit_before - 1, "ISSUED")
+        assert (licence.extra_phone_slots, licence.extra_desktop_slots) == (0, 0)  # the phone slot goes with it
+        assert (subscription.device_allowance, subscription.status) == (allowance_before - 1, "ACTIVE")
 
 
-def test_half_a_pair_refunded_removes_no_device(app, seeded):
+def test_half_an_extra_phone_refunded_removes_no_device(app, seeded):
     w = _world(app, rule="PERCENT")
-    sale = _sell(app, w, "p1", pairs=1)["order_id"]
+    sale = _sell(app, w, "p1", phones=1)["order_id"]
     _refund(app, w, sale, "25.00")
     assert _stops(app) == []
 

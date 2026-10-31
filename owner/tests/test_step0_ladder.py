@@ -5,7 +5,7 @@ additions; the 2-day licence rule from the owner's brief):
   - per seller, per calendar month in Jordan time (Asia/Amman), the count
     restarts each month and the ladder numbers are TOTALS: 1 sale = 20,
     2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD, each sale after the 5th +30;
-  - a sale is a new package sale for a branch; extra devices (the pair) never
+  - a sale is a new package sale for a branch; extra devices (phones and desktops) never
     count and earn nothing; Package 1 counts when its 250 is confirmed;
     a monthly package counts once about 100 JOD is paid -- Package 2 at its
     3rd payment, Package 3 at its 5th -- in the month THAT payment is
@@ -43,7 +43,7 @@ MONTHLY_LADDER = "MONTHLY_PKG_LADDER"
 def _world(app, *, rule=LADDER, rate=Decimal("10.0"), rule_from_days_ago=120):
     """A seller (SALES) and a second seller, a manager (FINANCE), a Super
     Admin -- each with an employee profile; the owner's three packages; the
-    pair add-on at 50 JOD; the seller (and the second seller) on `rule`."""
+    extra phone and extra desktop add-ons at 50 JOD each; the seller (and the second seller) on `rule`."""
     w = {}
     w["seller"] = make_staff(app, f"seller-{uuid.uuid4().hex[:6]}@example.com", role_codes=["SALES"], mfa=True)
     w["seller2"] = make_staff(app, f"seller2-{uuid.uuid4().hex[:6]}@example.com", role_codes=["SALES"], mfa=True)
@@ -71,8 +71,9 @@ def _world(app, *, rule=LADDER, rate=Decimal("10.0"), rule_from_days_ago=120):
                              interval=1, base=Decimal("20.00"), setup=Decimal("0"), contract=24)
         for key in ("p1", "p2", "p3"):  # sellable since long enough for the back-dated tests
             db_session.get(Plan, w[key]).effective_date = since
-        pair = db_session.execute(select(Addon).where(Addon.addon_code == "EXTRA_DEVICE_PAIR")).scalars().one()
-        pair.price, pair.currency, pair.availability_status = Decimal("50.00"), JOD, "AVAILABLE"
+        for code in ("EXTRA_PHONE", "EXTRA_DESKTOP"):
+            extra = db_session.execute(select(Addon).where(Addon.addon_code == code)).scalars().one()
+            extra.price, extra.currency, extra.availability_status = Decimal("50.00"), JOD, "AVAILABLE"
         db_session.commit()
     w["rule_plan"] = _assign(app, w, [w["seller_profile"], w["seller2_profile"]], rule=rule, rate=rate, since=since)
     return w
@@ -122,7 +123,7 @@ def _backdate_confirmation(payment_id, when: datetime):
     db_session.commit()
 
 
-def _sell(app, w, plan_key, *, pairs=0, seller="seller", confirmed_at: datetime | None = None,
+def _sell(app, w, plan_key, *, phones=0, desktops=0, seller="seller", confirmed_at: datetime | None = None,
           finished_late: bool = False, second_payment: bool = False):
     """One sale through the one-screen sale: recorded by the seller, confirmed
     by the manager. With confirmed_at, the manager confirms the payment on
@@ -143,7 +144,7 @@ def _sell(app, w, plan_key, *, pairs=0, seller="seller", confirmed_at: datetime 
     "a monthly sale that counts" case. Package 1 is unchanged."""
     from unittest.mock import patch
 
-    amount = _PRICES[plan_key] + Decimal("50.00") * pairs
+    amount = _PRICES[plan_key] + Decimal("50.00") * (phones + desktops)
     with app.app_context():
         from app.commercial_sales.direct_sale import confirm_direct_sale, record_direct_sale
         from app.commercial_sales.payments import confirm_payment
@@ -151,7 +152,8 @@ def _sell(app, w, plan_key, *, pairs=0, seller="seller", confirmed_at: datetime 
         from app.models.subscriptions import PaymentRecord
 
         result = record_direct_sale(
-            new_customer_legal_name=f"Shop {uuid.uuid4().hex[:6]}", plan_id=w[plan_key], extra_device_pairs=pairs,
+            new_customer_legal_name=f"Shop {uuid.uuid4().hex[:6]}", plan_id=w[plan_key], extra_phones=phones,
+            extra_desktops=desktops,
             amount=amount, method="BANK_TRANSFER", reference=f"CLIQ-{uuid.uuid4().hex[:6]}",
             payment_date=jordan_today(),
             idempotency_key=str(uuid.uuid4()), actor_staff_user_id=w[seller], actor_permission_codes=_codes(w[seller]),
@@ -374,21 +376,21 @@ def test_the_second_seller_has_their_own_ladder(app, seeded):
     assert _summary(app, w["seller2_profile"])["total"] == Decimal("20.00")
 
 
-def test_a_sale_with_an_extra_pair_counts_and_earns_exactly_like_one_without(app, seeded):
+def test_a_sale_with_an_extra_phone_counts_and_earns_exactly_like_one_without(app, seeded):
     w = _world(app)
-    with_pair = _sell(app, w, "p1", pairs=1)["order_id"]
+    with_phone = _sell(app, w, "p1", phones=1)["order_id"]
     plain = _sell(app, w, "p1")["order_id"]
     net = _net_by_order(app, w["seller_profile"])
-    assert (net[with_pair], net[plain]) == (Decimal("20.00"), Decimal("30.00"))
+    assert (net[with_phone], net[plain]) == (Decimal("20.00"), Decimal("30.00"))
     assert _summary(app, w["seller_profile"])["count"] == 2
 
 
-def test_percentage_seller_earns_nothing_on_the_pair_part_and_never_gets_ladder_rows(app, seeded):
+def test_percentage_seller_earns_nothing_on_the_extra_device_part_and_never_gets_ladder_rows(app, seeded):
     """Doc: "Commission follows the rule exactly: no commission on the
     extra-device part of any payment." RED on 1025d626: 30.00 (10% of 300,
-    the pair's 50 included)."""
+    the extra device's 50 included). Holds for BOTH typed kinds."""
     w = _world(app, rule="PERCENT")
-    _sell(app, w, "p1", pairs=1)
+    _sell(app, w, "p1", phones=1)
     _sell(app, w, "p1")
     rule_rows = _entries(app, w["seller_profile"], kind="PAYMENT_RULE")
     assert [r[1] for r in rule_rows] == [Decimal("25.00"), Decimal("25.00")]
@@ -430,9 +432,9 @@ def test_p2_counts_at_its_second_confirmed_payment_in_the_month_that_payment_is_
         assert _summary(app, w["seller_profile"], month=ladder_month_of(second_month))["monthly_total"] == Decimal("5.00")
 
 
-def test_p2_sold_with_a_pair_counts_once_at_its_second_payment(app, seeded):
+def test_p2_sold_with_a_phone_counts_once_at_its_second_payment(app, seeded):
     w = _world(app)
-    sale = _sell_counted(app, w, "p2", pairs=1)
+    sale = _sell_counted(app, w, "p2", phones=1)
     [counted] = _ladder_sales(app, w["seller_profile"])
     assert counted["payment_id"] == sale["second_payment_id"] != sale["payment_id"]
     summary = _summary(app, w["seller_profile"])
@@ -550,9 +552,9 @@ def test_refund_after_the_hold_is_refused_and_one_recorded_before_that_rule_keep
     assert summary["refunded_after_hold"] == 1
 
 
-def test_a_refund_of_only_the_pair_leaves_the_sale_counted_and_the_licence_running(app, seeded):
+def test_a_refund_of_only_the_extra_phone_leaves_the_sale_counted_and_the_licence_running(app, seeded):
     w = _world(app)
-    sale = _sell(app, w, "p1", pairs=1)["order_id"]
+    sale = _sell(app, w, "p1", phones=1)["order_id"]
     _refund(app, w, sale, "50.00")
     [s] = _ladder_sales(app, w["seller_profile"])
     assert s["status"] == "COUNTED"
@@ -562,7 +564,7 @@ def test_a_refund_of_only_the_pair_leaves_the_sale_counted_and_the_licence_runni
         from app.extensions import db_session
         from app.models.licensing import LicenseScheduledStop
 
-        # Fix round (2026-10-25): no STOP -- but the pair's devices are now
+        # Fix round (2026-10-25): no STOP -- but the extra device is now
         # scheduled off (test_step0_ladder_fixes.py); this used to assert no
         # scheduled row of any kind, which can no longer hold.
         assert db_session.execute(

@@ -1,16 +1,18 @@
 """The owner's packages: the rules a price list cannot hold by itself.
 
 Step 0 (2026-10-24). The owner decided three packages, prices PER BRANCH,
-each including 1 desktop + 1 phone (Aura Growth Plan, "Your answers" and the
-2026-10-24 additions):
+each including 2 devices of any kind (2026-10-31; before, 1 desktop + 1 phone)
+(Aura Growth Plan, "Your answers" and the 2026-10-24 additions):
   Package 1  250 JOD the first year (100 a year + 150 first time), then 100 a year
   Package 2  35 JOD a month, 12-month contract
   Package 3  25 JOD a month, 24-month contract
-  extra devices ONLY as a pair (1 desktop + 1 phone), 50 JOD once, every
-  package, never on the renewal.
+  extra devices TYPED (2026-10-31): an extra phone (Android only) and an extra
+  desktop (Windows only), 50 JOD once each, tax-inclusive, every package, never
+  on the renewal. A branch is a separate licence sold as its own package,
+  never an add-on.
 
-They live in the catalog as data (Plan + PlanPrice + the EXTRA_DEVICE_PAIR
-add-on; `flask seed-packages` writes them). What the data alone cannot say
+They live in the catalog as data (Plan + PlanPrice + the EXTRA_PHONE and
+EXTRA_DESKTOP add-ons; `flask seed-packages` writes them). What the data alone cannot say
 is here, in one place, so every path applies it the same way:
   - a NEW sale costs base_price + setup_fee
     (catalog_for_sales.describe_plan_for_sale: first_sale_unit_price);

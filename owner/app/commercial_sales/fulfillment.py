@@ -26,7 +26,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
 
 from app.audit.services import record as audit_record
-from app.commercial_sales.catalog_for_sales import DEVICES_PER_UNIT_BY_ADDON_CODE, describe_plan_for_sale
+from app.commercial_sales.catalog_for_sales import DEVICE_SLOTS_BY_ADDON_CODE, describe_plan_for_sale
 from app.commercial_sales.packages import contract_terms
 from app.commercial_sales.errors import CommercialSalesError
 from app.extensions import db_session, get_engine
@@ -93,23 +93,28 @@ def _check_eligibility(order: SalesOrder) -> tuple[CommercialInvoice, SalesOrder
     return invoice, subscription_line
 
 
-def _extra_device_count(order: SalesOrder) -> int:
-    """Devices this order bought beyond the plan's included count (Step 0,
-    2026-10-24). Before, fulfillment gave every licence
+def _extra_device_slots(order: SalesOrder) -> tuple[int, int, int]:
+    """Devices this order bought beyond the plan's included count, as
+    (extra desktops, extra phones, untyped any-kind devices) (Step 0,
+    2026-10-24; typed 2026-10-31). Before, fulfillment gave every licence
     plan.included_device_count and silently dropped any extra devices the
     customer had paid for.
 
-    Each device add-on line counts quantity x its devices per unit
-    (catalog_for_sales.DEVICES_PER_UNIT_BY_ADDON_CODE): a single
-    EXTRA_DEVICE is 1, an EXTRA_DEVICE_PAIR (the owner's 1 desktop + 1
-    phone, the only way extra devices are sold from the packages on) is 2.
-    The licence counts devices as one total, so a pair is +2."""
+    Each device add-on line counts quantity x its slots per unit
+    (catalog_for_sales.DEVICE_SLOTS_BY_ADDON_CODE): EXTRA_DESKTOP is one
+    desktop, EXTRA_PHONE one phone, a retired EXTRA_DEVICE_PAIR (orders made
+    before the typed extras) one of each, a single EXTRA_DEVICE one untyped.
+    The licence total is included + all three; the first two are also kept
+    typed on the licence so activation admits only the bought kind."""
     rows = db_session.execute(
         select(Addon.addon_code, SalesOrderLine.quantity)
         .join(Addon, Addon.id == SalesOrderLine.addon_id)
-        .where(SalesOrderLine.sales_order_id == order.id, Addon.addon_code.in_(tuple(DEVICES_PER_UNIT_BY_ADDON_CODE)))
+        .where(SalesOrderLine.sales_order_id == order.id, Addon.addon_code.in_(tuple(DEVICE_SLOTS_BY_ADDON_CODE)))
     ).all()
-    return sum(DEVICES_PER_UNIT_BY_ADDON_CODE[code] * quantity for code, quantity in rows)
+    desktops = sum(DEVICE_SLOTS_BY_ADDON_CODE[code][0] * quantity for code, quantity in rows)
+    phones = sum(DEVICE_SLOTS_BY_ADDON_CODE[code][1] * quantity for code, quantity in rows)
+    untyped = sum(DEVICE_SLOTS_BY_ADDON_CODE[code][2] * quantity for code, quantity in rows)
+    return desktops, phones, untyped
 
 
 def _sales_owner_staff_user_id(order: SalesOrder) -> uuid.UUID | None:
@@ -194,7 +199,8 @@ def _hold_fulfillment_lock(order_id: uuid.UUID):
 
 
 def _create_subscription_and_license(
-    order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id, license_pepper, idempotency_key
+    order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id, license_pepper, idempotency_key,
+    extra_desktops=0, extra_phones=0,
 ):
     """The ordinary sale: a NEW subscription and a NEW licence with a new key.
     (Moved here unchanged from fulfill_order's body so the conversion path can
@@ -263,6 +269,8 @@ def _create_subscription_and_license(
                 "plan_id": plan.id,
                 "allowed_platforms": allowed_platforms,
                 "device_limit": device_limit,
+                "extra_desktop_slots": extra_desktops,
+                "extra_phone_slots": extra_phones,
                 "valid_from": start,
                 "valid_until": end,
             },
@@ -303,7 +311,9 @@ def _mark_customer_active(customer_id) -> None:
         customer.lifecycle_status = "ACTIVE"
 
 
-def _convert_trial_in_place(order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id):
+def _convert_trial_in_place(
+    order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id, extra_desktops=0, extra_phones=0
+):
     """New customer flow (NC2): the money for a trial is confirmed. Under the
     order's fulfillment lock (held by the caller) the trial's OWN subscription
     goes PILOT -> ACTIVE with the paid term and package, its licence keeps its
@@ -362,6 +372,10 @@ def _convert_trial_in_place(order, plan, allowed_platforms, device_limit, start,
     license_row.plan_id = plan.id
     license_row.allowed_platforms = allowed_platforms
     license_row.device_limit = device_limit
+    # Absolute, not added: a retry after a crash must land on the same numbers,
+    # and the trial licence carried no typed extras of its own.
+    license_row.extra_desktop_slots = extra_desktops
+    license_row.extra_phone_slots = extra_phones
     license_row.valid_from = start
     license_row.valid_until = end
     db_session.commit()
@@ -373,6 +387,7 @@ def _convert_trial_in_place(order, plan, allowed_platforms, device_limit, start,
         actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="TRIAL_CONVERTED",
         entity_type="subscription", entity_public_id=str(subscription.id),
         after_state={"sales_order_id": str(order.id), "plan_id": str(plan.id), "device_limit": device_limit,
+                     "extra_desktop_slots": extra_desktops, "extra_phone_slots": extra_phones,
                      "term_start": start.isoformat(), "term_end": end.isoformat() if end else None},
     )
     return subscription, license_row
@@ -447,7 +462,8 @@ def fulfill_order(
         if not allowed_platforms:
             raise CommercialSalesError("FULFILLMENT_NOT_ELIGIBLE", reason="plan has no supported platforms configured")
 
-        device_limit = plan.included_device_count + _extra_device_count(order)
+        extra_desktops, extra_phones, extra_untyped = _extra_device_slots(order)
+        device_limit = plan.included_device_count + extra_desktops + extra_phones + extra_untyped
         if plan.max_device_count is not None and device_limit > plan.max_device_count:
             raise CommercialSalesError(
                 "FULFILLMENT_NOT_ELIGIBLE",
@@ -470,12 +486,14 @@ def fulfill_order(
                 # own subscription and licence are converted in place -- no second
                 # subscription, no new licence key (the shop already has the key).
                 subscription, license_row = _convert_trial_in_place(
-                    order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id
+                    order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id,
+                    extra_desktops, extra_phones,
                 )
                 license_key = None
             else:
                 subscription, license_row, license_key = _create_subscription_and_license(
-                    order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id, license_pepper, idempotency_key
+                    order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id, license_pepper, idempotency_key,
+                    extra_desktops, extra_phones,
                 )
 
             _mark_customer_active(order.customer_id)

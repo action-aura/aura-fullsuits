@@ -2,16 +2,18 @@
 
 The owner's decisions (Aura Growth Plan, "Your answers" + the 2026-10-24
 additions) this file holds the code to:
-  - prices are PER BRANCH; each package includes 1 desktop + 1 phone;
+  - prices are PER BRANCH; each package includes 2 devices of ANY kind (2026-10-31;
+    it was "1 desktop + 1 phone");
   - Package 1: 250 JOD the first year (100 a year + 150 first-time), then
-    100 JOD a year -- and the renewal stays 100 however many extra pairs;
+    100 JOD a year -- and the renewal stays 100 however many extra devices;
   - Package 2: 35 JOD a month, 12-month contract; Package 3: 20 JOD a
     month, 24-month contract;
-  - extra devices are sold ONLY as a pair (1 desktop + 1 phone), 50 JOD
-    once, on every package, never on the renewal.
+  - extra devices are sold TYPED (2026-10-31, replacing the 2026-10-24 "pair"): an
+    extra phone (Android only) and an extra desktop (Windows only), 50 JOD once each,
+    on every package, never on the renewal.
 
 Measured on 7571c3df before this change: the sale screen charged base_price
-only (P1 = 100, never 250), had no idea of a pair (it sold the Retail-only
+only (P1 = 100, never 250), had no idea of extra devices (it sold the Retail-only
 EXTRA_DEVICE add-on one device at a time), no plan or subscription carried a
 contract term, and the catalog's own price writer dropped the setup fee.
 
@@ -56,12 +58,12 @@ def _make_plan(db_session, product, *, code, name, billing_model, interval, base
     return plan.id
 
 
-def _world(app, *, pair_price=Decimal("50.00"), single_device_on_sale=False, p1_max_devices=None,
-           commission_rate=Decimal("10.0")):
+def _world(app, *, phone_price=Decimal("50.00"), desktop_price=Decimal("50.00"), single_device_on_sale=False,
+           p1_max_devices=None, commission_rate=Decimal("10.0")):
     """A seller (SALES), a manager (FINANCE), a Super Admin with profiles; a
     10% commission plan for the seller; Aura Retail sellable with the owner's
     three packages written straight into the catalog (the seed command has
-    its own test); the extra PAIR add-on priced 50 JOD and AVAILABLE."""
+    its own test); the extra PHONE and extra DESKTOP add-ons priced 50 JOD and AVAILABLE."""
     from tests.conftest import make_staff
 
     w = {}
@@ -90,15 +92,16 @@ def _world(app, *, pair_price=Decimal("50.00"), single_device_on_sale=False, p1_
                              interval=1, base=Decimal("35.00"), setup=Decimal("0"), contract=12)
         w["p3"] = _make_plan(db_session, product, code="T_P3", name="Aura Retail Package 3", billing_model="MONTHLY",
                              interval=1, base=Decimal("20.00"), setup=Decimal("0"), contract=24)
-        pair = db_session.execute(select(Addon).where(Addon.addon_code == "EXTRA_DEVICE_PAIR")).scalars().first()
-        if pair is None:  # the code before this change never seeded it
-            pair = Addon(addon_code="EXTRA_DEVICE_PAIR", product_id=product.id,
-                         name="Extra device pair (1 desktop + 1 phone)", availability_status="PLANNED")
-            db_session.add(pair)
-        if pair_price is not None:
-            pair.price = pair_price
-            pair.currency = JOD
-            pair.availability_status = "AVAILABLE"
+        for code, name, price in (("EXTRA_PHONE", "Extra phone (Android)", phone_price),
+                                  ("EXTRA_DESKTOP", "Extra desktop (Windows)", desktop_price)):
+            addon = db_session.execute(select(Addon).where(Addon.addon_code == code)).scalars().first()
+            if addon is None:  # the code before this change never seeded it
+                addon = Addon(addon_code=code, product_id=product.id, name=name, availability_status="PLANNED")
+                db_session.add(addon)
+            if price is not None:
+                addon.price = price
+                addon.currency = JOD
+                addon.availability_status = "AVAILABLE"
         if single_device_on_sale:
             # The rehearsal catalogue (scripts/ops/owner_rehearsal_pricing.py)
             # made the single EXTRA_DEVICE add-on AVAILABLE at 50 JOD.
@@ -118,7 +121,7 @@ def _world(app, *, pair_price=Decimal("50.00"), single_device_on_sale=False, p1_
     return w
 
 
-def _post_sale(client, app, w, plan_key, *, amount, pairs=None, key=None, **extra):
+def _post_sale(client, app, w, plan_key, *, amount, phones=None, desktops=None, pairs=None, key=None, **extra):
     """The seller's own form, over HTTP -- what the seller really does."""
     force_login(client, app, w["seller"])
     page = client.get("/licenses/issuance/new")
@@ -126,12 +129,16 @@ def _post_sale(client, app, w, plan_key, *, amount, pairs=None, key=None, **extr
     data = {
         "csrf_token": get_csrf(page.get_data(as_text=True)), "idempotency_key": key or str(uuid.uuid4()),
         "customer_id": "", "new_customer_legal_name": f"Shop {uuid.uuid4().hex[:6]}", "plan_id": str(w[plan_key]),
-        # CASH: these tests are about package prices and device pairs; a transfer would need a slip
+        # CASH: these tests are about package prices and extra devices; a transfer would need a slip
         # photo since 2026-10-31 (rule tested in test_rehearsal_owner_fixes.py), which none of them is about.
         "amount": str(amount), "method": "CASH", "reference": f"CLIQ-{uuid.uuid4().hex[:6]}",
         "payment_date": date.today().isoformat(),
     }
-    if pairs is not None:
+    if phones is not None:
+        data["extra_phones"] = str(phones)
+    if desktops is not None:
+        data["extra_desktops"] = str(desktops)
+    if pairs is not None:  # the retired field: a page loaded before 2026-10-31 still posts it
         data["extra_device_pairs"] = str(pairs)
     data.update(extra)
     return client.post("/licenses/issuance/sale", data=data)
@@ -192,10 +199,11 @@ def _finished(app, order_id):
         items = db_session.execute(
             select(CommercialInvoiceItem).where(CommercialInvoiceItem.commercial_invoice_id == inv.id)
         ).scalars().all()
-        pair_items = [
-            (i.quantity, Decimal(i.line_total)) for i in items
-            if i.addon_id is not None and db_session.get(Addon, i.addon_id).addon_code == "EXTRA_DEVICE_PAIR"
-        ]
+        def _items(code):
+            return [(i.quantity, Decimal(i.line_total)) for i in items
+                    if i.addon_id is not None and db_session.get(Addon, i.addon_id).addon_code == code]
+
+        phone_items, desktop_items = _items("EXTRA_PHONE"), _items("EXTRA_DESKTOP")
         entry = db_session.execute(
             select(CommissionLedgerEntry).where(CommissionLedgerEntry.source_commercial_invoice_id == inv.id)
         ).scalars().one()
@@ -205,7 +213,10 @@ def _finished(app, order_id):
             "valid_from": lic.valid_from, "valid_until": lic.valid_until, "end_date": sub.end_date,
             "contract_term_months": getattr(sub, "contract_term_months", "NO COLUMN"),
             "contract_ends_on": getattr(sub, "contract_ends_on", "NO COLUMN"),
-            "pair_invoice_items": pair_items, "commission": Decimal(entry.commission_amount),
+            "phone_invoice_items": phone_items, "desktop_invoice_items": desktop_items,
+            "extra_desktops": lic.extra_desktop_slots, "extra_phones": lic.extra_phone_slots,
+            "invoice_subtotal": Decimal(inv.subtotal), "invoice_tax": Decimal(inv.tax_total),
+            "commission": Decimal(entry.commission_amount),
         }
 
 
@@ -229,63 +240,67 @@ def test_p1_alone_charges_250_and_issues_a_one_year_two_device_licence(app, clie
     done = _finished(app, order_id)
     assert done["order_status"] == "FULFILLED" and done["invoice_status"] == "PAID"
     assert done["invoice_total"] == Decimal("250.00")
-    assert done["device_limit"] == 2 and done["device_allowance"] == 2      # 1 desktop + 1 phone
+    assert done["device_limit"] == 2 and done["device_allowance"] == 2      # 2 devices of any kind
+    assert (done["extra_desktops"], done["extra_phones"]) == (0, 0)
     assert (done["valid_from"], done["valid_until"]) == (jordan_today(), _months(12))
     assert (done["contract_term_months"], done["contract_ends_on"]) == (None, None)  # P1 has no contract
-    assert done["pair_invoice_items"] == []
+    assert done["phone_invoice_items"] == [] and done["desktop_invoice_items"] == []
     assert done["commission"] == Decimal("25.00")  # commission behaviour unchanged: 10% of what was paid
 
 
-def test_p1_with_one_pair_charges_300_and_the_licence_counts_the_pair_as_two_devices(app, client, seeded):
-    """RED on 7571c3df: no pair field existed (posted pairs were ignored, the
-    sale was priced 100 and the licence had 2 devices)."""
+def test_p1_with_one_phone_charges_300_and_the_licence_gets_one_more_device(app, client, seeded):
+    """RED on 7571c3df: no extras field existed (posted extras were ignored, the
+    sale was priced 100 and the licence had 2 devices). Typed since 2026-10-31:
+    the phone line is EXTRA_PHONE, quantity = phones, and the licence remembers it."""
     w = _world(app)
-    resp = _post_sale(client, app, w, "p1", amount="300.00", pairs=1)
+    resp = _post_sale(client, app, w, "p1", amount="300.00", phones=1)
     assert resp.status_code == 200, resp.get_data(as_text=True)[:1500]
     order_id = _only_order(app)
     assert _order_lines(app, order_id) == [
         ("PLAN", 1, Decimal("250.00"), Decimal("250.00")),
-        ("EXTRA_DEVICE_PAIR", 1, Decimal("50.00"), Decimal("50.00")),   # quantity = pairs
+        ("EXTRA_PHONE", 1, Decimal("50.00"), Decimal("50.00")),   # quantity = phones
     ]
     _confirm(app, order_id, w["manager"])
     done = _finished(app, order_id)
     assert done["invoice_total"] == Decimal("300.00")
-    assert done["device_limit"] == 4 and done["device_allowance"] == 4   # 2 included + 1 pair x 2
-    # The pair line stays identifiable on the invoice the commission ledger
+    assert done["device_limit"] == 3 and done["device_allowance"] == 3   # 2 included + 1 phone
+    assert (done["extra_desktops"], done["extra_phones"]) == (0, 1)
+    # The phone line stays identifiable on the invoice the commission ledger
     # reads, so the ladder can leave it out.
-    assert done["pair_invoice_items"] == [(1, Decimal("50.00"))]
+    assert done["phone_invoice_items"] == [(1, Decimal("50.00"))]
 
 
-def test_two_pairs_are_four_extra_devices(app, client, seeded):
+def test_two_desktops_are_two_extra_devices(app, client, seeded):
     w = _world(app)
-    resp = _post_sale(client, app, w, "p1", amount="350.00", pairs=2)
+    resp = _post_sale(client, app, w, "p1", amount="350.00", desktops=2)
     assert resp.status_code == 200, resp.get_data(as_text=True)[:1500]
     order_id = _only_order(app)
     _confirm(app, order_id, w["manager"])
-    assert _finished(app, order_id)["device_limit"] == 6
+    done = _finished(app, order_id)
+    assert (done["device_limit"], done["extra_desktops"], done["extra_phones"]) == (4, 2, 0)
 
 
-@pytest.mark.parametrize("amount,pairs", [
+@pytest.mark.parametrize("amount,phones", [
     ("100.00", None),    # base price alone: the 150 first-time fee is owed
     ("150.00", None),    # setup fee alone
-    ("300.00", None),    # a pair's money without the pair
-    ("250.00", 1),       # a pair without its money
+    ("300.00", None),    # a phone's money without the phone
+    ("250.00", 1),       # a phone without its money
     ("299.99", 1),
 ])
-def test_wrong_amount_for_the_package_is_refused_and_writes_nothing(app, client, seeded, amount, pairs):
+def test_wrong_amount_for_the_package_is_refused_and_writes_nothing(app, client, seeded, amount, phones):
     """Both directions of the full-price rule with the new prices. RED on
     7571c3df for 100.00 (accepted there: base price only)."""
     w = _world(app)
-    resp = _post_sale(client, app, w, "p1", amount=amount, pairs=pairs)
+    resp = _post_sale(client, app, w, "p1", amount=amount, phones=phones)
     assert resp.status_code == 400
     assert _counts(app) == NOTHING
 
 
-def test_renewal_price_is_the_yearly_price_whatever_the_pairs(app, client, seeded):
-    """The owner: the 100 JOD renewal never grows with extra pairs, and the
+def test_renewal_price_is_the_yearly_price_whatever_the_extra_devices(app, client, seeded):
+    """The owner: the 100 JOD renewal never grows with extra devices, and the
     150 first-time fee is never charged again."""
     w = _world(app)
-    resp = _post_sale(client, app, w, "p1", amount="400.00", pairs=3)
+    resp = _post_sale(client, app, w, "p1", amount="400.00", phones=2, desktops=1)
     assert resp.status_code == 200, resp.get_data(as_text=True)[:1500]
     order_id = _only_order(app)
     _confirm(app, order_id, w["manager"])
@@ -297,7 +312,7 @@ def test_renewal_price_is_the_yearly_price_whatever_the_pairs(app, client, seede
         from app.models.subscriptions import Subscription
 
         sub = db_session.execute(select(Subscription).where(Subscription.sales_order_id == order_id)).scalars().one()
-        assert sub.device_allowance == 8
+        assert sub.device_allowance == 5
         assert renewal_price(sub) == (Decimal("100.00"), JOD)
 
 
@@ -330,16 +345,16 @@ def test_p2_records_the_first_month_and_stores_the_12_month_contract(app, client
     assert (done["contract_term_months"], done["contract_ends_on"]) == (12, _months(12))
 
 
-def test_p2_with_a_pair_is_85_first_month(app, client, seeded):
+def test_p2_with_a_phone_is_85_first_month(app, client, seeded):
     w = _world(app)
-    assert _post_sale(client, app, w, "p2", amount="35.00", pairs=1).status_code == 400
+    assert _post_sale(client, app, w, "p2", amount="35.00", phones=1).status_code == 400
     assert _counts(app) == NOTHING
-    resp = _post_sale(client, app, w, "p2", amount="85.00", pairs=1)
+    resp = _post_sale(client, app, w, "p2", amount="85.00", phones=1)
     assert resp.status_code == 200, resp.get_data(as_text=True)[:1500]
     order_id = _only_order(app)
     _confirm(app, order_id, w["manager"])
     done = _finished(app, order_id)
-    assert done["invoice_total"] == Decimal("85.00") and done["device_limit"] == 4
+    assert done["invoice_total"] == Decimal("85.00") and done["device_limit"] == 3
     assert done["contract_term_months"] == 12
 
 
@@ -356,38 +371,40 @@ def test_p3_is_20_a_month_on_a_24_month_contract(app, client, seeded):
     assert (done["contract_term_months"], done["contract_ends_on"]) == (24, _months(24))
 
 
-# ---------------------------------------------------- pairs, never singles --
+# -------------------------------------- typed extras, never singles or pairs --
 
-def test_pairs_beyond_the_package_maximum_are_refused(app, client, seeded):
-    """Max 4 devices: 1 pair (2 + 2) sells, 2 pairs (2 + 4 = 6) are refused
-    before any write. RED on 7571c3df (the pairs were ignored)."""
+def test_extras_beyond_the_package_maximum_are_refused(app, client, seeded):
+    """Max 4 devices: 1 desktop + 1 phone (2 + 2) sells, one more is refused
+    before any write. RED on 7571c3df (the extras were ignored)."""
     w = _world(app, p1_max_devices=4)
-    assert _post_sale(client, app, w, "p1", amount="350.00", pairs=2).status_code == 400
+    assert _post_sale(client, app, w, "p1", amount="400.00", phones=2, desktops=1).status_code == 400
     assert _counts(app) == NOTHING
-    resp = _post_sale(client, app, w, "p1", amount="300.00", pairs=1)
+    resp = _post_sale(client, app, w, "p1", amount="350.00", phones=1, desktops=1)
     assert resp.status_code == 200, resp.get_data(as_text=True)[:1500]
 
 
-def test_a_pair_is_never_sold_as_a_single_device(app, client, seeded):
+def test_a_phone_or_desktop_is_never_sold_as_a_single_device(app, client, seeded):
     """The single EXTRA_DEVICE add-on on sale at 50 (as in the rehearsal
-    catalogue) must not stand in for a pair: with no pair on sale, a pair is
-    refused; and the old single-device field adds nothing."""
-    w = _world(app, pair_price=None, single_device_on_sale=True)
-    assert _post_sale(client, app, w, "p1", amount="300.00", pairs=1).status_code == 400
+    catalogue) must not stand in for a typed extra: with no phone/desktop add-on on
+    sale, each is refused; and the old single-device field adds nothing."""
+    w = _world(app, phone_price=None, desktop_price=None, single_device_on_sale=True)
+    assert _post_sale(client, app, w, "p1", amount="300.00", phones=1).status_code == 400
+    assert _post_sale(client, app, w, "p1", amount="300.00", desktops=1).status_code == 400
     assert _counts(app) == NOTHING
     resp = _post_sale(client, app, w, "p1", amount="250.00", extra_devices="1")
     assert resp.status_code == 200, resp.get_data(as_text=True)[:1500]
     assert _order_lines(app, _only_order(app)) == [("PLAN", 1, Decimal("250.00"), Decimal("250.00"))]
 
 
-@pytest.mark.parametrize("pairs", ["-1", "two", "1.5"])
-def test_bad_pair_counts_are_refused(app, client, seeded, pairs):
+@pytest.mark.parametrize("field", ["phones", "desktops"])
+@pytest.mark.parametrize("count", ["-1", "two", "1.5"])
+def test_bad_extra_counts_are_refused(app, client, seeded, field, count):
     w = _world(app)
-    assert _post_sale(client, app, w, "p1", amount="250.00", pairs=pairs).status_code == 400
+    assert _post_sale(client, app, w, "p1", amount="250.00", **{field: count}).status_code == 400
     assert _counts(app) == NOTHING
 
 
-def test_same_form_with_a_different_pair_count_is_a_different_sale(app, client, seeded):
+def test_same_form_with_a_different_extras_count_is_a_different_sale(app, client, seeded):
     w = _world(app)
     key = str(uuid.uuid4())
     with app.app_context():
@@ -396,20 +413,20 @@ def test_same_form_with_a_different_pair_count_is_a_different_sale(app, client, 
         fields = dict(new_customer_legal_name="Corner Shop", plan_id=w["p1"], method="BANK_TRANSFER",
                       reference="CLIQ-1", payment_date=date.today(), idempotency_key=key,
                       actor_staff_user_id=w["seller"], actor_permission_codes=_codes(w["seller"]))
-        record_direct_sale(extra_device_pairs=1, amount=Decimal("300.00"), **fields)
+        record_direct_sale(extra_phones=1, amount=Decimal("300.00"), **fields)
         with pytest.raises(DirectSaleError) as exc:
-            record_direct_sale(extra_device_pairs=2, amount=Decimal("350.00"), **fields)
+            record_direct_sale(extra_phones=2, amount=Decimal("350.00"), **fields)
         assert exc.value.code == "KEY_USED_FOR_DIFFERENT_SALE"
-        replay = record_direct_sale(extra_device_pairs=1, amount=Decimal("300.00"), **fields)
+        replay = record_direct_sale(extra_phones=1, amount=Decimal("300.00"), **fields)
         assert replay["replayed"] is True and replay["total"] == Decimal("300.00")
 
 
-def test_resubmit_after_a_crash_with_a_different_pair_count_is_refused(app, seeded, monkeypatch):
-    """The order (1 pair, 300) committed, then the process died before the
-    payment. A resubmit of the same form key asking for 2 pairs -- with the
-    300 that the stored order totals -- must not finish the 1-pair sale.
+def test_resubmit_after_a_crash_with_a_different_extras_count_is_refused(app, seeded, monkeypatch):
+    """The order (1 phone, 300) committed, then the process died before the
+    payment. A resubmit of the same form key asking for 2 phones -- with the
+    300 that the stored order totals -- must not finish the 1-phone sale.
     The amount check alone cannot catch this (300 IS the stored total); only
-    the pair comparison can (mutation M20 survived the test above, whose
+    the extras comparison can (mutation M20 survived the test above, whose
     second call differs in amount too)."""
     w = _world(app)
     import app.commercial_sales.direct_sale as direct_sale_module
@@ -432,37 +449,38 @@ def test_resubmit_after_a_crash_with_a_different_pair_count_is_refused(app, seed
                       reference="CLIQ-1", payment_date=date.today(), idempotency_key=key,
                       actor_staff_user_id=w["seller"], actor_permission_codes=_codes(w["seller"]))
         with pytest.raises(RuntimeError):
-            record_direct_sale(extra_device_pairs=1, amount=Decimal("300.00"), **fields)
+            record_direct_sale(extra_phones=1, amount=Decimal("300.00"), **fields)
         with pytest.raises(DirectSaleError) as exc:
-            record_direct_sale(extra_device_pairs=2, amount=Decimal("300.00"), **fields)
+            record_direct_sale(extra_phones=2, amount=Decimal("300.00"), **fields)
         assert exc.value.code == "KEY_USED_FOR_DIFFERENT_SALE"
     assert _counts(app)["payments"] == 0
     with app.app_context():  # the allow half: the same form finishes its own sale
         from app.commercial_sales.direct_sale import record_direct_sale
 
-        result = record_direct_sale(extra_device_pairs=1, amount=Decimal("300.00"), **fields)
+        result = record_direct_sale(extra_phones=1, amount=Decimal("300.00"), **fields)
         assert result["replayed"] is False and result["total"] == Decimal("300.00")
     assert _counts(app)["payments"] == 1
 
 
-def test_waiting_list_names_the_pairs(app, client, seeded):
+def test_waiting_list_names_the_phones_and_desktops(app, client, seeded):
     w = _world(app)
-    assert _post_sale(client, app, w, "p1", amount="300.00", pairs=1).status_code == 200
+    assert _post_sale(client, app, w, "p1", amount="400.00", phones=1, desktops=2).status_code == 200
     manager = app.test_client()  # a fresh browser: the seller is signed in on `client`
     login_and_verify_mfa(manager, _email(app, w["manager"]))
     body = manager.get("/licenses/issuance/sales").get_data(as_text=True)
-    assert "+ 1 extra pair" in body
+    assert "+ 1 extra phone" in body and "+ 2 extra desktops" in body
 
 
 def test_sale_form_shows_each_package_first_payment_then_and_contract(app, client, seeded):
     w = _world(app)
     force_login(client, app, w["seller"])
     body = client.get("/licenses/issuance/new").get_data(as_text=True)
-    assert 'name="extra_device_pairs"' in body and 'name="extra_devices"' not in body
+    assert 'name="extra_phones"' in body and 'name="extra_desktops"' in body
+    assert 'name="extra_device_pairs"' not in body and 'name="extra_devices"' not in body
     assert "first payment 250.00 JOD, then 100.00 JOD a year" in body
     assert "first payment 35.00 JOD, then 35.00 JOD a month; 12-month contract" in body
     assert "first payment 20.00 JOD, then 20.00 JOD a month; 24-month contract" in body
-    assert "extra pair (1 desktop + 1 phone) 50.00 JOD" in body
+    assert "extra phone 50.00 JOD, extra desktop 50.00 JOD" in body
 
 
 def test_sale_form_and_waiting_list_speak_arabic_for_the_new_words(app, client, seeded):
@@ -471,13 +489,14 @@ def test_sale_form_and_waiting_list_speak_arabic_for_the_new_words(app, client, 
     client.get("/locale/ar?next=/")
     body = client.get("/licenses/issuance/new").get_data(as_text=True)
     for arabic in ("الدفعة الأولى", "ثم", "سنويًا", "شهريًا", "عقد لمدة 12 شهرًا", "عقد لمدة 24 شهرًا",
-                   "زوج إضافي (جهاز مكتبي + هاتف)", "أزواج الأجهزة الإضافية"):
+                   "هاتف إضافي", "جهاز مكتبي إضافي", "هواتف إضافية (أندرويد فقط؛ تُدفع مرة واحدة ولا تدخل في التجديد)",
+                   "أجهزة مكتبية إضافية (ويندوز فقط؛ تُدفع مرة واحدة ولا تدخل في التجديد)"):
         assert arabic in body, arabic
-    for english in ("first payment", "-month contract", "extra pair (1 desktop"):
+    for english in ("first payment", "-month contract", "extra phone ", "extra desktop "):
         assert english not in body, english
-    resp = _post_sale(client, app, w, "p1", amount="300.00", pairs="two")
+    resp = _post_sale(client, app, w, "p1", amount="300.00", phones="two")
     assert resp.status_code == 400
-    assert "يجب أن يكون عدد أزواج الأجهزة الإضافية عددًا صحيحًا." in resp.get_data(as_text=True)
+    assert "يجب أن يكون عدد الهواتف الإضافية وعدد الأجهزة المكتبية الإضافية عددًا صحيحًا." in resp.get_data(as_text=True)
 
 
 # ----------------------------------- the quote path prices it the same way --
@@ -569,7 +588,7 @@ def _retail_packages(app):
         return out
 
 
-def test_seed_packages_puts_the_owners_three_packages_and_the_pair_on_sale(app, seeded):
+def test_seed_packages_puts_the_owners_three_packages_and_the_typed_extras_on_sale(app, seeded):
     _seed_packages(app)
     assert _retail_packages(app) == {
         "AURA_RETAIL_P1_YEARLY": ("ANNUAL", 12, None, 2, Decimal("100.00"), Decimal("150.00"), JOD),
@@ -582,8 +601,12 @@ def test_seed_packages_puts_the_owners_three_packages_and_the_pair_on_sale(app, 
         from app.extensions import db_session
         from app.models.catalog import Addon, Plan, PlanPrice
 
-        pair = db_session.execute(select(Addon).where(Addon.addon_code == "EXTRA_DEVICE_PAIR")).scalars().one()
-        assert (pair.availability_status, Decimal(pair.price), pair.currency) == ("AVAILABLE", Decimal("50.00"), JOD)
+        for code in ("EXTRA_PHONE", "EXTRA_DESKTOP"):
+            extra = db_session.execute(select(Addon).where(Addon.addon_code == code)).scalars().one()
+            assert (extra.availability_status, Decimal(extra.price), extra.currency) == ("AVAILABLE", Decimal("50.00"), JOD)
+        for code in ("EXTRA_DEVICE_PAIR", "EXTRA_BRANCH"):  # no longer sold (owner, 2026-10-31)
+            retired = db_session.execute(select(Addon).where(Addon.addon_code == code)).scalars().one()
+            assert retired.availability_status == "RETIRED", code
         counts = (db_session.execute(select(func.count()).select_from(Plan)).scalar_one(),
                   db_session.execute(select(func.count()).select_from(PlanPrice)).scalar_one())
     _seed_packages(app)  # idempotent: nothing new, nothing changed
@@ -683,7 +706,7 @@ def test_seed_packages_can_retire_the_other_retail_plans_but_not_one_with_an_ope
 
 # ------------------------------- end to end on the seeded catalog --
 
-def test_seeded_p1_with_a_pair_and_seeded_p3_sell_end_to_end(app, client, seeded):
+def test_seeded_p1_with_a_phone_and_seeded_p3_sell_end_to_end(app, client, seeded):
     w = _world(app)
     _seed_packages(app)
     with app.app_context():
@@ -694,7 +717,7 @@ def test_seeded_p1_with_a_pair_and_seeded_p3_sell_end_to_end(app, client, seeded
 
         w["sp1"] = db_session.execute(select(Plan).where(Plan.plan_code == "AURA_RETAIL_P1_YEARLY")).scalars().one().id
         w["sp3"] = db_session.execute(select(Plan).where(Plan.plan_code == "AURA_RETAIL_P3_MONTHLY_24")).scalars().one().id
-    assert _post_sale(client, app, w, "sp1", amount="300.00", pairs=1).status_code == 200
+    assert _post_sale(client, app, w, "sp1", amount="300.00", phones=1).status_code == 200
     assert _post_sale(client, app, w, "sp3", amount="125.00").status_code == 200  # 25 a month + 100 activation
     with app.app_context():
         from sqlalchemy import select
@@ -713,6 +736,6 @@ def test_seeded_p1_with_a_pair_and_seeded_p3_sell_end_to_end(app, client, seeded
         assert resp.status_code == 200 and "AURA-" in resp.get_data(as_text=True)
     p1, p3 = _finished(app, ids[0]), _finished(app, ids[1])
     assert (p1["invoice_total"], p1["device_limit"], p1["valid_until"], p1["contract_term_months"]) == (
-        Decimal("300.00"), 4, _months(12), None)
+        Decimal("300.00"), 3, _months(12), None)
     assert (p3["invoice_total"], p3["device_limit"], p3["valid_until"], p3["contract_term_months"],
             p3["contract_ends_on"]) == (Decimal("125.00"), 2, _months(1), 24, _months(24))  # 25 a month + 100 activation

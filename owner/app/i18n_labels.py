@@ -446,6 +446,7 @@ def localize_device_slot_error(code: str, **params) -> str:
         "REASON_REQUIRED_TO_REVOKE": _("A reason is required to revoke a device slot exception."),
         "ADDITIONAL_DEVICES_MUST_BE_POSITIVE": _("Enter a positive number of devices to add."),
         "REASON_REQUIRED_TO_ADD_DEVICES": _("A reason is required to add devices to a license."),
+        "INVALID_SLOT_KIND": _("slot_kind must be DESKTOP or PHONE."),
         "DEVICE_LIMIT_BELOW_ACTIVE_COUNT": _(
             "Cannot set this license's device limit to %(new_limit)s -- %(active_count)s device(s) are "
             "already active on it. Add enough devices to cover current usage."
@@ -481,6 +482,7 @@ def localize_pending_activation_error(code: str, **params) -> str:
         "INSTALLATION_NOT_AWAITING_ACTIVATION": _("This installation is no longer awaiting activation."),
         "LICENSE_NOT_FOUND": _("The license for this pending activation could not be found."),
         "DEVICE_LIMIT_REACHED": _("This license has already reached its device limit."),
+        "DEVICE_TYPE_LIMIT_REACHED": _("This licence has no free slot for this kind of device (desktop or phone)."),
         "INVALID_REJECT_STATUS": _("Cannot reject a pending activation in status %(status)s."),
         "REASON_REQUIRED_TO_REJECT": _("A reason is required to reject a pending activation."),
     }
@@ -1067,17 +1069,31 @@ def localize_direct_sale_error(code: str, **params) -> str:
         "PACKAGE_NOT_FOUND": _("Selected package was not found."),
         "PACKAGE_NOT_SELLABLE": _("Selected package is not currently sellable (check its effective date and price)."),
         "PACKAGE_NO_PLATFORMS": _("Selected package has no supported platforms configured."),
-        # Step 0 packages: the sale screen sells extra devices only as pairs.
-        "EXTRA_PAIRS_NOT_A_NUMBER": _("Extra device pairs must be a whole number."),
-        "EXTRA_PAIRS_NEGATIVE": _("Extra device pairs must not be negative."),
-        "EXTRA_PAIRS_TOO_MANY": _("One sale can add at most %(max)s extra device pairs. Check the number you typed."),
+        # Owner decision 2026-10-31: the sale screen sells extra devices typed, phones and desktops.
+        "EXTRA_DEVICES_NOT_A_NUMBER": _("Extra phones and extra desktops must each be a whole number."),
+        "EXTRA_DEVICES_NEGATIVE": _("Extra phones and extra desktops must not be negative."),
+        "EXTRA_DEVICES_TOO_MANY": _(
+            "One sale can add at most %(max)s extra phones and at most %(max)s extra desktops. Check the number you typed."
+        ),
         "DEVICE_COUNT_OVER_PACKAGE_MAX": _("Requested device count (%(requested)s) exceeds this package's maximum (%(max)s)."),
-        "EXTRA_PAIRS_NOT_ON_SALE": _(
-            "Extra device pairs are not on sale for this package yet: the Extra Device Pair add-on needs a price "
+        "EXTRA_PHONE_NOT_ON_SALE": _(
+            "Extra phones are not on sale for this package yet: the Extra Phone add-on needs a price "
             "and must be Available in the catalog."
         ),
-        "EXTRA_PAIR_CURRENCY_MISMATCH": _("The Extra Device Pair add-on is priced in a different currency than this package."),
-        "TOTAL_TOO_LARGE": _("This sale's total is too large to record (at most %(max)s). Check the number of extra device pairs."),
+        "EXTRA_DESKTOP_NOT_ON_SALE": _(
+            "Extra desktops are not on sale for this package yet: the Extra Desktop add-on needs a price "
+            "and must be Available in the catalog."
+        ),
+        "EXTRA_DEVICE_CURRENCY_MISMATCH": _(
+            "The Extra Phone or Extra Desktop add-on is priced in a different currency than this package."
+        ),
+        "FORM_OUT_OF_DATE": _(
+            "This sale form is out of date (it still sells device pairs). Reload the page and type extra phones "
+            "and extra desktops instead."
+        ),
+        "TOTAL_TOO_LARGE": _(
+            "This sale's total is too large to record (at most %(max)s). Check the number of extra phones and desktops."
+        ),
         "ZERO_PRICE": _("This package costs nothing, so there is no payment to record. Use a no-charge licence instead."),
         "METHOD_NOT_ALLOWED": _("Choose how the customer paid: CliQ / bank transfer, or cash."),
         "REFERENCE_REQUIRED": _("Type the CliQ or transfer reference number."),

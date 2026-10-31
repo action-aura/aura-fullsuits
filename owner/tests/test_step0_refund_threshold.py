@@ -8,7 +8,7 @@ LATE-REFUND OVERRIDE.
    Super Admin) changes the default and, per customer, an override (empty =
    use the default). Several refunds of one sale add up. The commission
    follows the same line: above it the sale does not count; at or below it the
-   sale still counts. A refund of only the pair keeps today's rule.
+   sale still counts. A refund of only the extra device keeps today's rule.
 2. After the 30 days a refund is refused -- except that a real Super Admin
    (the account itself, not a permission) may allow it with a written reason
    of at least 10 characters, audited once. Its commission effect: the sale
@@ -242,17 +242,17 @@ def test_two_partial_refunds_add_up_and_the_second_crosses_the_threshold(app, se
     assert (_refund_row(app, first)["over"], _refund_row(app, second)["over"]) == (False, True)
 
 
-def test_the_pair_is_refunded_first_and_a_small_package_refund_after_it_keeps_the_licence(app, seeded):
-    """Pair-only refunds keep today's rule (its two devices go after 2 days,
+def test_the_extra_device_is_refunded_first_and_a_small_package_refund_after_it_keeps_the_licence(app, seeded):
+    """Extra-device-only refunds keep today's rule (its device goes after 2 days,
     the licence keeps working); the next 100 is package money -- 40% of the
     250 -- so the licence keeps working and the sale keeps counting."""
     w = _world(app)
-    sale = _sell(app, w, "p1", pairs=1)["order_id"]  # 300
+    sale = _sell(app, w, "p1", phones=1)["order_id"]  # 300
     licence = _rows(app, sale)["license_id"]
-    pair_refund = _refund(app, w, sale, "50.00")
-    assert _stops(app) == [(licence, None, 2, pair_refund)]
+    device_refund = _refund(app, w, sale, "50.00")
+    assert _stops(app) == [(licence, None, 1, device_refund)]
     _refund(app, w, sale, "100.00")
-    assert _stops(app) == [(licence, None, 2, pair_refund)]
+    assert _stops(app) == [(licence, None, 1, device_refund)]
     assert [s["status"] for s in _ladder_sales(app, w["seller_profile"])] == ["COUNTED"]
 
 

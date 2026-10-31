@@ -56,9 +56,11 @@ def register_cli(app: Flask) -> None:
                   help="Retire every other sellable Aura Retail plan (a plan an open sale still needs is kept).")
     def seed_packages_cmd(retire_other_retail_plans: bool):
         """Put the owner's three Aura Retail packages (2026-10-24) and the
-        50 JOD extra device pair into the price list (idempotent). Creates
-        what is missing, never changes what exists: a package or price that
-        differs is REPORTED under "differs". See app/catalog/package_seed.py."""
+        50 JOD extra phone / extra desktop (2026-10-31) into the price list,
+        and take the old device-pair and extra-branch add-ons off sale
+        (idempotent). Creates what is missing, never changes a price that
+        exists: a package or price that differs is REPORTED under "differs".
+        See app/catalog/package_seed.py."""
         from app.catalog.package_seed import seed_packages
 
         try:
@@ -66,6 +68,8 @@ def register_cli(app: Flask) -> None:
         except ValueError as exc:
             raise click.ClickException(str(exc))
         click.echo(json.dumps(result, indent=2))
+        if result["retired_addons"]:
+            click.echo("NOTE: taken off sale (RETIRED): " + ", ".join(result["retired_addons"]) + ".")
         if result["differs"]:
             click.echo("WARNING: some packages or prices differ from the owner's list and were left as they are.")
         if result["other_sellable_retail_plans"]:

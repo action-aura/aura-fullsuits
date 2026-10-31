@@ -386,7 +386,7 @@ def test_posting_the_form_with_a_slip_records_it_and_without_one_is_refused(app,
     force_login(client, app, w["seller"])
     token = get_csrf(client.get(f"/licenses/issuance/new?convert={trial.subscription_id}").get_data(as_text=True))
     data = {"csrf_token": token, "idempotency_key": str(uuid.uuid4()), "converts_subscription_id": str(trial.subscription_id),
-            "customer_id": str(trial.customer_id), "plan_id": str(w["plan"]), "extra_device_pairs": "0", "amount": "100.00",
+            "customer_id": str(trial.customer_id), "plan_id": str(w["plan"]), "extra_phones": "0", "extra_desktops": "0", "amount": "100.00",
             "method": "BANK_TRANSFER", "reference": "CLIQ-FORM", "payment_date": jordan_today().isoformat()}
     refused = client.post("/licenses/issuance/sale", data=dict(data), content_type="multipart/form-data")
     assert refused.status_code == 400 and "bank slip" in refused.get_data(as_text=True)

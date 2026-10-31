@@ -8803,28 +8803,28 @@ msgid "Packages put in the price list"
 msgstr "وُضعت الباقات في قائمة الأسعار"
 
 #: app/i18n_labels.py
-msgid "Extra device pairs must be a whole number."
-msgstr "يجب أن يكون عدد أزواج الأجهزة الإضافية عددًا صحيحًا."
+msgid "Extra phones and extra desktops must each be a whole number."
+msgstr "يجب أن يكون عدد الهواتف الإضافية وعدد الأجهزة المكتبية الإضافية عددًا صحيحًا."
 
 #: app/i18n_labels.py
-msgid "Extra device pairs must not be negative."
-msgstr "لا يمكن أن يكون عدد أزواج الأجهزة الإضافية سالبًا."
+msgid "Extra phones and extra desktops must not be negative."
+msgstr "لا يمكن أن يكون عدد الهواتف الإضافية أو الأجهزة المكتبية الإضافية سالبًا."
 
 #: app/i18n_labels.py
-msgid "One sale can add at most %(max)s extra device pairs. Check the number you typed."
-msgstr "يمكن لعملية بيع واحدة أن تضيف %(max)s زوج أجهزة إضافيًا على الأكثر. تحقق من الرقم الذي كتبته."
+msgid "One sale can add at most %(max)s extra phones and at most %(max)s extra desktops. Check the number you typed."
+msgstr "يمكن لعملية بيع واحدة أن تضيف %(max)s هاتفًا إضافيًا و%(max)s جهازًا مكتبيًا إضافيًا على الأكثر. تحقق من الرقم الذي كتبته."
 
 #: app/i18n_labels.py
-msgid "Extra device pairs are not on sale for this package yet: the Extra Device Pair add-on needs a price and must be Available in the catalog."
-msgstr "أزواج الأجهزة الإضافية غير معروضة للبيع لهذه الباقة بعد: إضافة زوج الأجهزة الإضافي تحتاج إلى سعر ويجب أن تكون متاحة في الكتالوج."
+msgid "Extra phones are not on sale for this package yet: the Extra Phone add-on needs a price and must be Available in the catalog."
+msgstr "الهواتف الإضافية غير معروضة للبيع لهذه الباقة بعد: إضافة الهاتف الإضافي تحتاج إلى سعر ويجب أن تكون متاحة في الكتالوج."
 
 #: app/i18n_labels.py
-msgid "The Extra Device Pair add-on is priced in a different currency than this package."
-msgstr "إضافة زوج الأجهزة الإضافي مسعّرة بعملة مختلفة عن عملة هذه الباقة."
+msgid "The Extra Phone or Extra Desktop add-on is priced in a different currency than this package."
+msgstr "إضافة الهاتف الإضافي أو إضافة الجهاز المكتبي الإضافي مسعّرة بعملة مختلفة عن عملة هذه الباقة."
 
 #: app/i18n_labels.py
-msgid "This sale's total is too large to record (at most %(max)s). Check the number of extra device pairs."
-msgstr "مجموع عملية البيع هذه أكبر من أن يُسجَّل (الحد الأقصى %(max)s). تحقق من عدد أزواج الأجهزة الإضافية."
+msgid "This sale's total is too large to record (at most %(max)s). Check the number of extra phones and desktops."
+msgstr "مجموع عملية البيع هذه أكبر من أن يُسجَّل (الحد الأقصى %(max)s). تحقق من عدد الهواتف والأجهزة المكتبية الإضافية."
 
 #: app/templates/catalog/plan_detail.html
 msgid "Contract"
@@ -8863,16 +8863,16 @@ msgid "%(months)s-month contract"
 msgstr "عقد لمدة %(months)s شهرًا"
 
 #: app/templates/licensing/sale.html
-msgid "extra pair (1 desktop + 1 phone)"
-msgstr "زوج إضافي (جهاز مكتبي + هاتف)"
+msgid "extra phone"
+msgstr "هاتف إضافي"
 
 #: app/templates/licensing/sale.html
-msgid "Extra device pairs (each pair is 1 desktop + 1 phone, paid once, not on the renewal)"
-msgstr "أزواج الأجهزة الإضافية (كل زوج جهاز مكتبي + هاتف، يُدفع مرة واحدة، ولا يدخل في التجديد)"
+msgid "Extra phones (Android only; each paid once, not on the renewal)"
+msgstr "هواتف إضافية (أندرويد فقط؛ تُدفع مرة واحدة ولا تدخل في التجديد)"
 
 #: app/templates/licensing/sale.html
-msgid "Amount paid (the full first payment, extra pairs included)"
-msgstr "المبلغ المدفوع (الدفعة الأولى كاملة، شاملة الأزواج الإضافية)"
+msgid "Amount paid (the full first payment, extra phones and desktops included)"
+msgstr "المبلغ المدفوع (الدفعة الأولى كاملة، شاملة الهواتف والأجهزة المكتبية الإضافية)"
 
 #: app/templates/licensing/sales_pending.html
 msgid "+ 1 extra pair"
@@ -10769,3 +10769,71 @@ msgstr "هذه هي المرة الوحيدة التي تظهر فيها. عند
 #: app/templates/customer_onboarding/result.html
 msgid "Copy password"
 msgstr "نسخ كلمة المرور"
+
+#: app/i18n_labels.py
+msgid "Extra desktops are not on sale for this package yet: the Extra Desktop add-on needs a price and must be Available in the catalog."
+msgstr "الأجهزة المكتبية الإضافية غير معروضة للبيع لهذه الباقة بعد: إضافة الجهاز المكتبي الإضافي تحتاج إلى سعر ويجب أن تكون متاحة في الكتالوج."
+
+#: app/i18n_labels.py
+msgid "This sale form is out of date (it still sells device pairs). Reload the page and type extra phones and extra desktops instead."
+msgstr "نموذج البيع هذا قديم (ما زال يبيع أزواج أجهزة). أعد تحميل الصفحة واكتب عدد الهواتف والأجهزة المكتبية الإضافية."
+
+#: app/templates/licensing/sale.html
+msgid "extra desktop"
+msgstr "جهاز مكتبي إضافي"
+
+#: app/templates/licensing/sale.html
+msgid "Extra desktops (Windows only; each paid once, not on the renewal)"
+msgstr "أجهزة مكتبية إضافية (ويندوز فقط؛ تُدفع مرة واحدة ولا تدخل في التجديد)"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ 1 extra phone"
+msgstr "+ هاتف إضافي واحد"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ %(count)d extra phones"
+msgstr "+ %(count)d هواتف إضافية"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ 1 extra desktop"
+msgstr "+ جهاز مكتبي إضافي واحد"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ %(count)d extra desktops"
+msgstr "+ %(count)d أجهزة مكتبية إضافية"
+
+#: app/catalog/package_seed.py
+msgid "Extra desktop (Windows)"
+msgstr "جهاز مكتبي إضافي (ويندوز)"
+
+#: app/catalog/package_seed.py
+msgid "Extra phone (Android)"
+msgstr "هاتف إضافي (أندرويد)"
+
+#: app/i18n_labels.py
+msgid "This licence has no free slot for this kind of device (desktop or phone)."
+msgstr "لا يوجد في هذا الترخيص مكان شاغر لهذا النوع من الأجهزة (مكتبي أو هاتف)."
+
+#: app/i18n_labels.py
+msgid "slot_kind must be DESKTOP or PHONE."
+msgstr "يجب أن يكون نوع الجهاز مكتبيًا أو هاتفًا."
+
+#: app/templates/licensing/detail.html
+msgid "Device type"
+msgstr "نوع الجهاز"
+
+#: app/templates/licensing/detail.html
+msgid "Desktop (Windows)"
+msgstr "جهاز مكتبي (ويندوز)"
+
+#: app/templates/licensing/detail.html
+msgid "Phone (Android)"
+msgstr "هاتف (أندرويد)"
+
+#: app/templates/licensing/detail.html
+msgid "Extra devices bought"
+msgstr "الأجهزة الإضافية المشتراة"
+
+#: app/templates/licensing/detail.html
+msgid "Extra desktops bought: %(n)s · Extra phones bought: %(m)s"
+msgstr "أجهزة مكتبية إضافية مشتراة: %(n)s · هواتف إضافية مشتراة: %(m)s"

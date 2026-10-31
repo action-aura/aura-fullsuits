@@ -8844,28 +8844,28 @@ msgid "Packages put in the price list"
 msgstr "Packages put in the price list"
 
 #: app/i18n_labels.py
-msgid "Extra device pairs must be a whole number."
-msgstr "Extra device pairs must be a whole number."
+msgid "Extra phones and extra desktops must each be a whole number."
+msgstr "Extra phones and extra desktops must each be a whole number."
 
 #: app/i18n_labels.py
-msgid "Extra device pairs must not be negative."
-msgstr "Extra device pairs must not be negative."
+msgid "Extra phones and extra desktops must not be negative."
+msgstr "Extra phones and extra desktops must not be negative."
 
 #: app/i18n_labels.py
-msgid "One sale can add at most %(max)s extra device pairs. Check the number you typed."
-msgstr "One sale can add at most %(max)s extra device pairs. Check the number you typed."
+msgid "One sale can add at most %(max)s extra phones and at most %(max)s extra desktops. Check the number you typed."
+msgstr "One sale can add at most %(max)s extra phones and at most %(max)s extra desktops. Check the number you typed."
 
 #: app/i18n_labels.py
-msgid "Extra device pairs are not on sale for this package yet: the Extra Device Pair add-on needs a price and must be Available in the catalog."
-msgstr "Extra device pairs are not on sale for this package yet: the Extra Device Pair add-on needs a price and must be Available in the catalog."
+msgid "Extra phones are not on sale for this package yet: the Extra Phone add-on needs a price and must be Available in the catalog."
+msgstr "Extra phones are not on sale for this package yet: the Extra Phone add-on needs a price and must be Available in the catalog."
 
 #: app/i18n_labels.py
-msgid "The Extra Device Pair add-on is priced in a different currency than this package."
-msgstr "The Extra Device Pair add-on is priced in a different currency than this package."
+msgid "The Extra Phone or Extra Desktop add-on is priced in a different currency than this package."
+msgstr "The Extra Phone or Extra Desktop add-on is priced in a different currency than this package."
 
 #: app/i18n_labels.py
-msgid "This sale's total is too large to record (at most %(max)s). Check the number of extra device pairs."
-msgstr "This sale's total is too large to record (at most %(max)s). Check the number of extra device pairs."
+msgid "This sale's total is too large to record (at most %(max)s). Check the number of extra phones and desktops."
+msgstr "This sale's total is too large to record (at most %(max)s). Check the number of extra phones and desktops."
 
 #: app/templates/catalog/plan_detail.html
 msgid "Contract"
@@ -8904,16 +8904,16 @@ msgid "%(months)s-month contract"
 msgstr "%(months)s-month contract"
 
 #: app/templates/licensing/sale.html
-msgid "extra pair (1 desktop + 1 phone)"
-msgstr "extra pair (1 desktop + 1 phone)"
+msgid "extra phone"
+msgstr "extra phone"
 
 #: app/templates/licensing/sale.html
-msgid "Extra device pairs (each pair is 1 desktop + 1 phone, paid once, not on the renewal)"
-msgstr "Extra device pairs (each pair is 1 desktop + 1 phone, paid once, not on the renewal)"
+msgid "Extra phones (Android only; each paid once, not on the renewal)"
+msgstr "Extra phones (Android only; each paid once, not on the renewal)"
 
 #: app/templates/licensing/sale.html
-msgid "Amount paid (the full first payment, extra pairs included)"
-msgstr "Amount paid (the full first payment, extra pairs included)"
+msgid "Amount paid (the full first payment, extra phones and desktops included)"
+msgstr "Amount paid (the full first payment, extra phones and desktops included)"
 
 #: app/templates/licensing/sales_pending.html
 msgid "+ 1 extra pair"
@@ -10810,3 +10810,71 @@ msgstr "This is the only time it is shown. When you leave this page, nobody can 
 #: app/templates/customer_onboarding/result.html
 msgid "Copy password"
 msgstr "Copy password"
+
+#: app/i18n_labels.py
+msgid "Extra desktops are not on sale for this package yet: the Extra Desktop add-on needs a price and must be Available in the catalog."
+msgstr "Extra desktops are not on sale for this package yet: the Extra Desktop add-on needs a price and must be Available in the catalog."
+
+#: app/i18n_labels.py
+msgid "This sale form is out of date (it still sells device pairs). Reload the page and type extra phones and extra desktops instead."
+msgstr "This sale form is out of date (it still sells device pairs). Reload the page and type extra phones and extra desktops instead."
+
+#: app/templates/licensing/sale.html
+msgid "extra desktop"
+msgstr "extra desktop"
+
+#: app/templates/licensing/sale.html
+msgid "Extra desktops (Windows only; each paid once, not on the renewal)"
+msgstr "Extra desktops (Windows only; each paid once, not on the renewal)"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ 1 extra phone"
+msgstr "+ 1 extra phone"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ %(count)d extra phones"
+msgstr "+ %(count)d extra phones"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ 1 extra desktop"
+msgstr "+ 1 extra desktop"
+
+#: app/templates/licensing/sales_pending.html
+msgid "+ %(count)d extra desktops"
+msgstr "+ %(count)d extra desktops"
+
+#: app/catalog/package_seed.py
+msgid "Extra desktop (Windows)"
+msgstr "Extra desktop (Windows)"
+
+#: app/catalog/package_seed.py
+msgid "Extra phone (Android)"
+msgstr "Extra phone (Android)"
+
+#: app/i18n_labels.py
+msgid "This licence has no free slot for this kind of device (desktop or phone)."
+msgstr "This licence has no free slot for this kind of device (desktop or phone)."
+
+#: app/i18n_labels.py
+msgid "slot_kind must be DESKTOP or PHONE."
+msgstr "slot_kind must be DESKTOP or PHONE."
+
+#: app/templates/licensing/detail.html
+msgid "Device type"
+msgstr "Device type"
+
+#: app/templates/licensing/detail.html
+msgid "Desktop (Windows)"
+msgstr "Desktop (Windows)"
+
+#: app/templates/licensing/detail.html
+msgid "Phone (Android)"
+msgstr "Phone (Android)"
+
+#: app/templates/licensing/detail.html
+msgid "Extra devices bought"
+msgstr "Extra devices bought"
+
+#: app/templates/licensing/detail.html
+msgid "Extra desktops bought: %(n)s · Extra phones bought: %(m)s"
+msgstr "Extra desktops bought: %(n)s · Extra phones bought: %(m)s"

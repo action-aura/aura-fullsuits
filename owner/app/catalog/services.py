@@ -45,8 +45,9 @@ _CANONICAL_ENTITLEMENTS = [
     ("sms_notifications_enabled", "boolean", "SMS notifications (not yet built)"),
     ("digital_receipts_enabled", "boolean", "Digital receipts (not yet built)"),
     ("owner_dashboard_enabled", "boolean", "Customer-facing Owner dashboard (not yet built)"),
-    # 2026-09-05 price list: a new branch is a paid add-on (EXTRA_BRANCH,
-    # 250 JOD). Enforced entirely by the retail till's create_branch, which
+    # Branch cap: the 2026-09-05 price list sold a new branch as a paid add-on
+    # (EXTRA_BRANCH, 250 JOD); since 2026-10-31 a branch is a separate licence
+    # sold as its own package, never an add-on. Enforced entirely by the retail till's create_branch, which
     # reads this off the stored assertion (0/absent = no limit -- see
     # retail_api.py's _branch_limit()).
     ("max_branches", "integer", "Maximum branches the licence may run (0 = no limit; the till treats absent/0 as unlimited)"),
@@ -62,18 +63,23 @@ _CANONICAL_ADDONS = [
     ("RETAIL_OWNER_DASHBOARD", "AURA_RETAIL", "Customer Owner Dashboard", "DRAFT"),
     ("CLOUD_BACKUP", "AURA_RETAIL", "Cloud Backup", "DRAFT"),
     ("EXTRA_DEVICE", "AURA_RETAIL", "Extra Device", "PLANNED"),
-    # The owner's rule (2026-10-24): extra devices are sold only as a pair,
-    # 1 desktop + 1 phone, 50 JOD once. One unit = one pair = 2 devices on
-    # the licence (commercial_sales/catalog_for_sales.py). PLANNED here like
-    # every other add-on; `flask seed-packages` prices it and puts it on sale.
+    # The owner's final rule (2026-10-31): extra devices are sold TYPED, one
+    # kind at a time, 50 JOD once each -- an extra desktop admits one more
+    # Windows device, an extra phone one more Android device
+    # (commercial_sales/catalog_for_sales.py::DEVICE_SLOTS_BY_ADDON_CODE).
+    # PLANNED here like every other add-on; `flask seed-packages` prices them
+    # and puts them on sale.
+    ("EXTRA_DESKTOP", "AURA_RETAIL", "Extra desktop (Windows)", "PLANNED"),
+    ("EXTRA_PHONE", "AURA_RETAIL", "Extra phone (Android)", "PLANNED"),
+    # RETIRED for sale by `flask seed-packages` (kept for orders and refunds that
+    # already carry it): the 2026-10-24 "pair" offer, 1 desktop + 1 phone for one price.
     ("EXTRA_DEVICE_PAIR", "AURA_RETAIL", "Extra device pair (1 desktop + 1 phone)", "PLANNED"),
     ("PRIORITY_SUPPORT", "AURA_RETAIL", "Priority Support", "PLANNED"),
-    # The business owner's price list, 2026-09-05: a new branch is a paid
-    # add-on (250 JOD). Seeded PLANNED like everything else here -- nothing
-    # in either product enforces a branch limit yet (no `max_branches`
-    # entitlement, no gate on branch creation), so it must not read as
-    # sellable until that is built. Price and availability are data, set
-    # from the Owner UI, never here.
+    # The business owner's 2026-09-05 price list made a new branch a paid
+    # add-on (250 JOD). Owner decision 2026-10-31: a branch is a SEPARATE
+    # LICENCE sold as its own package, never an add-on -- so this row is
+    # RETIRED for sale by `flask seed-packages` and nothing sells it. The row
+    # itself stays (history, and an Owner-UI edit of it must not recreate it).
     ("EXTRA_BRANCH", "AURA_RETAIL", "Extra Branch", "PLANNED"),
 ]
 

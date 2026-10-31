@@ -8,7 +8,11 @@ desktop + 1 phone:
   Package 3  25 JOD a month + 100 activation every year, 24-month contract -> MONTHLY, contract 24
   (2026-10-26: Package 3 went 20 -> 25 and both monthly packages gained the
   100 JOD activation, held as the plan price's setup fee.)
-  extra devices only as a pair (1 desktop + 1 phone), 50 JOD once -> EXTRA_DEVICE_PAIR
+  every package includes 2 devices of ANY kind (2026-10-31; before, "1 desktop + 1 phone")
+  extra devices TYPED, 50 JOD once each, tax-inclusive: EXTRA_PHONE (Android only)
+  and EXTRA_DESKTOP (Windows only). The 2026-10-24 EXTRA_DEVICE_PAIR and the
+  2026-09-05 EXTRA_BRANCH add-ons are RETIRED for sale (a branch is a separate
+  licence sold as its own package).
 
 Prices are data in this product (catalog/services.py), so this is an
 explicit, idempotent release step like `seed-plans` -- never folded into
@@ -43,8 +47,10 @@ from sqlalchemy import select
 from app.audit.services import record as audit_record
 from app.catalog.services import seed_canonical_catalog
 from app.commercial_sales.catalog_for_sales import (
+    EXTRA_DESKTOP_ADDON_CODE,
     EXTRA_DEVICE_ADDON_CODE,
     EXTRA_DEVICE_PAIR_ADDON_CODE,
+    EXTRA_PHONE_ADDON_CODE,
     describe_plan_for_sale,
 )
 from flask_babel import lazy_gettext as _l
@@ -56,8 +62,9 @@ from app.models.commercial_sales import SalesOrder, SalesOrderLine
 
 PRODUCT_CODE = "AURA_RETAIL"
 CURRENCY = "JOD"
-INCLUDED_DEVICES = 2  # 1 desktop + 1 phone
-PAIR_PRICE = Decimal("50.00")
+INCLUDED_DEVICES = 2  # of ANY kind (owner, 2026-10-31)
+EXTRA_DEVICE_PRICE = Decimal("50.00")  # one extra phone or one extra desktop, once, tax-inclusive
+EXTRA_BRANCH_ADDON_CODE = "EXTRA_BRANCH"
 
 # (plan_code, name, billing_model, billing_interval_months, contract_term_months, base_price, setup_fee)
 PACKAGES = (
@@ -76,6 +83,8 @@ _PACKAGE_DISPLAY_MSGIDS = (
     _l("Aura Retail - Package 2 (monthly, 12-month contract)"),
     _l("Aura Retail - Package 3 (monthly, 24-month contract)"),
     _l("Extra device pair (1 desktop + 1 phone)"),
+    _l("Extra desktop (Windows)"),
+    _l("Extra phone (Android)"),
 )
 PACKAGE_CODES = tuple(p[0] for p in PACKAGES)
 # The owner's 2026-10-24 monthly prices (base, setup fee): the only values the
@@ -144,18 +153,33 @@ def _seed_package(product: Product, spec: tuple, today: date, report: dict) -> N
         })
 
 
-def _seed_pair(report: dict) -> None:
-    pair = db_session.execute(select(Addon).where(Addon.addon_code == EXTRA_DEVICE_PAIR_ADDON_CODE)).scalars().first()
-    if pair.price is None:
-        pair.price = PAIR_PRICE
-        pair.currency = CURRENCY
-        report["pair"] = "priced"
-    if (Decimal(pair.price), pair.currency) != (PAIR_PRICE, CURRENCY):
-        report["differs"].append({"addon_code": pair.addon_code, "price": str(pair.price), "currency": pair.currency})
+def _seed_typed_extra(addon_code: str, report: dict) -> None:
+    """Price (if it has no price yet) and put on sale one typed extra-device
+    add-on. A price someone set to anything else is REPORTED under "differs"
+    and left alone, never overwritten, and the add-on is then not put on sale."""
+    addon = db_session.execute(select(Addon).where(Addon.addon_code == addon_code)).scalars().first()
+    if addon.price is None:
+        addon.price = EXTRA_DEVICE_PRICE
+        addon.currency = CURRENCY
+        report["extras"][addon_code] = "priced"
+    if (Decimal(addon.price), addon.currency) != (EXTRA_DEVICE_PRICE, CURRENCY):
+        report["differs"].append({"addon_code": addon.addon_code, "price": str(addon.price), "currency": addon.currency})
         return
-    if pair.availability_status != "AVAILABLE":
-        pair.availability_status = "AVAILABLE"
-        report["pair"] = "put on sale"
+    if addon.availability_status != "AVAILABLE":
+        addon.availability_status = "AVAILABLE"
+        report["extras"][addon_code] = "put on sale"
+
+
+def _retire_addon(addon_code: str, report: dict) -> None:
+    """Take an add-on off sale (RETIRED). Safe for a sale already waiting on a
+    manager: confirming and fulfilling a one-screen sale never look at the
+    add-on's availability again (direct_sale.confirm_direct_sale checks only
+    the package; fulfillment reads the order lines), so a waiting pair sale
+    still becomes a licence with its pair."""
+    addon = db_session.execute(select(Addon).where(Addon.addon_code == addon_code)).scalars().first()
+    if addon is not None and addon.availability_status != "RETIRED":
+        addon.availability_status = "RETIRED"
+        report["retired_addons"].append(addon_code)
 
 
 def _has_open_sale(plan_id) -> bool:
@@ -183,17 +207,20 @@ def _other_retail_plans(product: Product, today: date, retire: bool, report: dic
 
 
 def seed_packages(*, retire_other_retail_plans: bool = False, actor_staff_user_id=None) -> dict:
-    seed_canonical_catalog()  # idempotent; makes sure EXTRA_DEVICE_PAIR exists on an older catalog
+    seed_canonical_catalog()  # idempotent; makes sure EXTRA_PHONE / EXTRA_DESKTOP exist on an older catalog
     product = db_session.execute(select(Product).where(Product.product_code == PRODUCT_CODE)).scalars().first()
     if product is None:
         raise ValueError("Aura Retail is not in the catalog -- run 'flask seed-catalog' first.")
     today = utcnow().date()
-    report = {"created": [], "prices_added": [], "prices_updated": [], "differs": [], "pair": "unchanged",
-              "other_sellable_retail_plans": [], "retired": [], "kept_for_open_sales": [],
+    report = {"created": [], "prices_added": [], "prices_updated": [], "differs": [], "extras": {},
+              "retired_addons": [], "other_sellable_retail_plans": [], "retired": [], "kept_for_open_sales": [],
               "single_extra_device_on_sale": False}
     for spec in PACKAGES:
         _seed_package(product, spec, today, report)
-    _seed_pair(report)
+    _seed_typed_extra(EXTRA_DESKTOP_ADDON_CODE, report)
+    _seed_typed_extra(EXTRA_PHONE_ADDON_CODE, report)
+    _retire_addon(EXTRA_DEVICE_PAIR_ADDON_CODE, report)
+    _retire_addon(EXTRA_BRANCH_ADDON_CODE, report)
     _other_retail_plans(product, today, retire_other_retail_plans, report)
     single = db_session.execute(select(Addon).where(Addon.addon_code == EXTRA_DEVICE_ADDON_CODE)).scalars().first()
     report["single_extra_device_on_sale"] = bool(single is not None and single.availability_status == "AVAILABLE")

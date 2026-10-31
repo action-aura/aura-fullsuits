@@ -46,22 +46,42 @@ DEFAULT_MAX_DISCOUNT_PERCENTAGE_WITHOUT_APPROVAL = Decimal("10")
 # one-screen sale (its price). Matched by code, not by a new column.
 EXTRA_DEVICE_ADDON_CODE = "EXTRA_DEVICE"
 
-# The owner's rule (Aura Growth Plan, 2026-10-24): extra devices are sold
-# ONLY as a pair -- 1 desktop + 1 phone, 50 JOD once, the same on every
-# package, never on the renewal. One unit of this add-on is one PAIR, so an
-# order line's quantity is the number of pairs. Seeded PLANNED by
+# The owner's FINAL rule (2026-10-31, replacing the 2026-10-24 "pairs only"
+# rule): extra devices are sold ONE KIND AT A TIME and are strictly typed --
+# an extra phone (Android only) and an extra desktop (Windows only), 50 JOD
+# each, once, tax-inclusive, the same on every package, never on the renewal.
+# One unit of either add-on is ONE device of that kind, so an order line's
+# quantity is the number of phones / desktops. Seeded PLANNED by
 # seed_canonical_catalog (inert), priced and put on sale by `flask
-# seed-packages`. The one-screen sale sells only this; the single
-# EXTRA_DEVICE above stays for orders made before (and for the quote
-# screen), never as a stand-in for a pair.
+# seed-packages`. The one-screen sale sells only these two.
+EXTRA_PHONE_ADDON_CODE = "EXTRA_PHONE"
+EXTRA_DESKTOP_ADDON_CODE = "EXTRA_DESKTOP"
+
+# RETIRED for sale (seed-packages marks the add-on RETIRED) but kept for
+# history: orders made while "1 desktop + 1 phone for one price" was the offer
+# still carry this line, and fulfilment / refunds / the ledger must keep
+# reading them. A unit is one desktop AND one phone.
 EXTRA_DEVICE_PAIR_ADDON_CODE = "EXTRA_DEVICE_PAIR"
 
-# Devices one unit of each device add-on adds to a licence. A licence
-# counts devices as ONE total (License.device_limit; licensing_service/
-# activation.py refuses a new device once the active count reaches it) --
-# desktop vs phone is not enforced separately, so a pair is simply +2.
-# Matched by code, like EXTRA_DEVICE_ADDON_CODE, not by a new column.
-DEVICES_PER_UNIT_BY_ADDON_CODE = {EXTRA_DEVICE_ADDON_CODE: 1, EXTRA_DEVICE_PAIR_ADDON_CODE: 2}
+# What one unit of each device add-on gives a licence, as
+# (extra desktops, extra phones, untyped any-kind devices). License.device_limit
+# stays the TOTAL every existing reader uses; the first two numbers also go to
+# License.extra_desktop_slots / extra_phone_slots so activation can admit only
+# the bought KIND (commercial_ops/device_slot_ops.py::fits_typed_slots). The
+# single EXTRA_DEVICE (quote screen / old orders) is untyped, any kind, as it
+# always was. Matched by code, like EXTRA_DEVICE_ADDON_CODE, not by a new column.
+DEVICE_SLOTS_BY_ADDON_CODE = {
+    EXTRA_DEVICE_ADDON_CODE: (0, 0, 1),
+    EXTRA_DEVICE_PAIR_ADDON_CODE: (1, 1, 0),
+    EXTRA_DESKTOP_ADDON_CODE: (1, 0, 0),
+    EXTRA_PHONE_ADDON_CODE: (0, 1, 0),
+}
+
+# Devices one unit of each device add-on adds in TOTAL (the sum of the three
+# numbers above). The commission ledger and refunds key on this dict, so every
+# device add-on -- including the typed ones -- is excluded from the commission
+# base exactly like extra devices always were.
+DEVICES_PER_UNIT_BY_ADDON_CODE = {code: sum(slots) for code, slots in DEVICE_SLOTS_BY_ADDON_CODE.items()}
 
 
 def _entitlement_summary(rows: list[tuple[EntitlementDefinition, dict]]) -> dict:

@@ -2,7 +2,7 @@
  *
  * Owner ships script-src 'self' (no inline script), so this is a file.
  *  - Trial-payment page (form[data-prefill]): the amount box is pre-filled with what the
- *    customer pays first for the chosen package (+ any extra pairs) and the line under it
+ *    customer pays first for the chosen package (+ any extra phones and desktops) and the line under it
  *    says what that is made of. The seller can still type another amount; once they have,
  *    changing the package no longer overwrites it.
  *  - Choosing Cash shows the cash rule (hand over ALL of it within 24 hours, no deduction).
@@ -14,7 +14,8 @@
   if (!form) { return; }
   var plan = document.getElementById('sale-plan-id');
   var amount = document.getElementById('sale-amount');
-  var pairs = document.getElementById('sale-extra-device-pairs');
+  var phones = document.getElementById('sale-extra-phones');
+  var desktops = document.getElementById('sale-extra-desktops');
   var method = document.getElementById('sale-method');
   var note = document.getElementById('sale-amount-breakdown');
   var cashRule = document.getElementById('sale-cash-rule');
@@ -33,9 +34,11 @@
     if (note) { note.textContent = option.getAttribute('data-breakdown') || ''; }
     if (!prefill || typedByHand || !amount) { return; }
     var first = parseFloat(option.getAttribute('data-first-payment'));
-    var pairPrice = parseFloat(option.getAttribute('data-pair-price')) || 0;
-    var count = parseInt(pairs ? pairs.value : '0', 10) || 0;
-    if (!isNaN(first)) { amount.value = (first + count * pairPrice).toFixed(2); }
+    var phonePrice = parseFloat(option.getAttribute('data-phone-price')) || 0;
+    var desktopPrice = parseFloat(option.getAttribute('data-desktop-price')) || 0;
+    var phoneCount = parseInt(phones ? phones.value : '0', 10) || 0;
+    var desktopCount = parseInt(desktops ? desktops.value : '0', 10) || 0;
+    if (!isNaN(first)) { amount.value = (first + phoneCount * phonePrice + desktopCount * desktopPrice).toFixed(2); }
   }
 
   function syncCashRule() {
@@ -43,7 +46,8 @@
   }
 
   if (plan) { plan.addEventListener('change', syncAmount); }
-  if (pairs) { pairs.addEventListener('input', syncAmount); }
+  if (phones) { phones.addEventListener('input', syncAmount); }
+  if (desktops) { desktops.addEventListener('input', syncAmount); }
   if (method) { method.addEventListener('change', syncCashRule); }
   syncCashRule();
 }());
