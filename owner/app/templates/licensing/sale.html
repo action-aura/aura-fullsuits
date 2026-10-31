@@ -20,6 +20,9 @@
   <p>{{ _("Record the sale and the customer's payment. A manager confirms the payment; the licence key is made then, and the seller's commission counts from that day. Cash is allowed: either the shop pays the company directly (CliQ, transfer or deposit) and you attach the slip photo, or you collect the cash and hand ALL of it to the company within 24 hours (bank transfer or at the office), with no deduction, and record it at once.") }}</p>
 
   {% set fv = form_values or {} %}
+  {% if sent_from_sale %}
+  <p class="notice" role="status" data-sent-from-sale="1">{{ _("This customer is in a free trial, so the payment is recorded here. When a manager confirms it, their shop is unlocked with the same licence. No second licence is made.") }}</p>
+  {% endif %}
   {% if error %}
   <p class="error" role="alert">{{ error }}</p>
   {% endif %}
@@ -82,7 +85,7 @@
     <input id="sale-reference" name="reference" value="{{ fv.get("reference", "") }}" required maxlength="128" dir="ltr">
     <label for="sale-payment-date">{{ _("Date the money arrived") }}</label>
     <input id="sale-payment-date" name="payment_date" type="date" value="{{ fv.get("payment_date", today) }}" max="{{ today }}" required>
-    <label for="sale-slip">{{ _("Photo of the bank slip or CliQ confirmation") }}{% if convert %} ({{ _("required unless cash") }}){% endif %}</label>
+    <label for="sale-slip">{{ _("Photo of the bank slip or CliQ confirmation") }} ({{ _("required unless cash") }})</label>
     <input id="sale-slip" name="slip_photo" type="file" accept="image/*,application/pdf" capture="environment">
     <p class="hint">{{ _("CliQ, transfer or deposit: attach the slip photo. Cash you collected yourself has no slip yet: leave this empty. Up to 10 MB. It is stored encrypted and the manager who confirms the payment sees it.") }}</p>
 

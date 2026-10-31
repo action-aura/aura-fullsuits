@@ -1080,7 +1080,11 @@ def localize_direct_sale_error(code: str, **params) -> str:
             "An invoice was already made for this sale; it can no longer be rejected here. Void the invoice first."
         ),
         # New customer flow (S3): paying for a trial, and the payment slip photo.
-        "SLIP_REQUIRED": _("Add a photo of the bank slip or CliQ confirmation. A trial is only unlocked against a slip."),
+        "SLIP_REQUIRED": _("Add a photo of the bank slip or CliQ confirmation. Only a cash payment can be recorded without one."),
+        "CUSTOMER_HAS_LIVE_TRIAL": _(
+            "This customer is in a free trial. Record their payment on the trial's payment page, so the shop is "
+            "unlocked with the same licence. A second licence must not be made."
+        ),
         "SLIP_TYPE_NOT_ALLOWED": _("The slip must be a JPEG or PNG picture (or a PDF)."),
         "SLIP_TOO_LARGE": _("The slip photo is too large (at most 10 MB)."),
         "SLIP_INVALID": _("The slip photo is empty or damaged. Take it again."),

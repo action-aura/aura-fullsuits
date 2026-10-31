@@ -172,6 +172,7 @@ def _render_sale_form(*, error: str | None, idempotency_key: str, form_values=No
         can_issue_no_charge=bool(actor.is_super_admin),
         can_confirm="payments.confirm" in codes,
         convert=convert,
+        sent_from_sale=bool(convert) and request.args.get("from_sale") == "1",
     ), status
 
 
@@ -215,6 +216,7 @@ def record_sale():
         result = record_direct_sale(
             converts_subscription_id=form.get("converts_subscription_id") or None,
             slip_photo=slip_bytes or None,
+            require_slip_unless_cash=True,
             customer_id=form.get("customer_id") or None,
             new_customer_legal_name=form.get("new_customer_legal_name") or None,
             plan_id=form.get("plan_id") or None,
@@ -229,6 +231,9 @@ def record_sale():
             actor_permission_codes=get_staff_permission_codes(actor),
         )
     except DirectSaleError as exc:
+        if exc.code == "CUSTOMER_HAS_LIVE_TRIAL":
+            # Not an error screen: take the seller to the page that does this right.
+            return redirect(url_for("license_issuance.new_form", convert=exc.params["subscription_id"], from_sale="1"))
         return _sale_error(localize_direct_sale_error(exc.code, **exc.params), idempotency_key)
     except CommercialSalesError as exc:
         return _sale_error(localize_commercial_sales_error(exc.code, **exc.params), idempotency_key)

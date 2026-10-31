@@ -153,6 +153,16 @@ def _counts(app):
         }
 
 
+@pytest.fixture()
+def kyc(app, tmp_path):
+    """Slip storage for the sale form (the encryption key + folder customer_onboarding's own fixture
+    sets). Not imported from test_customer_onboarding: that module imports this one (circular)."""
+    from tests.test_customer_onboarding import KEY32
+
+    app.config.update(KYC_KEYS=f"k1:{KEY32}", KYC_DIRECTORY=str(tmp_path / "kyc"))
+    return tmp_path / "kyc"
+
+
 RECORDED = {"customers": 1, "orders": 1, "payments": 1, "invoices": 0, "allocations": 0,
             "commissions": 0, "subscriptions": 0, "licenses": 0}
 CONFIRMED = {"customers": 1, "orders": 1, "payments": 1, "invoices": 1, "allocations": 1,
@@ -172,12 +182,20 @@ def _sale_form_post(client, **overrides):
         "payment_date": date.today().isoformat(),
     }
     data.update(overrides)
-    return client.post("/licenses/issuance/sale", data=data)
+    # Since 2026-10-31 every sale typed into the form needs its slip photo unless it is CASH
+    # (rehearsal: the form took a transfer with no slip). This test is about the pending
+    # payment / seller / no-licence outcome, so it records a transfer WITH its slip.
+    import io
+
+    from tests.test_customer_onboarding import _jpeg
+
+    data.setdefault("slip_photo", (io.BytesIO(_jpeg(b"bank-slip")), "slip.jpg", "image/jpeg"))
+    return client.post("/licenses/issuance/sale", data=data, content_type="multipart/form-data")
 
 
 # ------------------------------------------- the gap, end to end over HTTP --
 
-def test_one_screen_sale_records_pending_payment_and_seller_and_no_licence(app, client, seeded):
+def test_one_screen_sale_records_pending_payment_and_seller_and_no_licence(app, client, seeded, kyc):
     """RED on 829c4cde (no sale form; the one screen issued a licence with no
     payment). A seller records the sale: one PENDING payment recorded by
     them, one DRAFT order credited to them, and NO licence yet."""

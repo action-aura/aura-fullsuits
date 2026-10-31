@@ -449,7 +449,7 @@ def get_static_commands(codes: set[str]) -> dict:
         quick_create("licensing.new_form", str(_("New License")), "new_license")
     if "installations.register" in codes:
         quick_create("installations.new_form", str(_("New Installation")), "new_installation")
-    if "payments.create" in codes:
+    if "payments.create" in codes and "payments.confirm" in codes:  # sellers pay through "Sell a licence"
         quick_create("commercial_sales_web.new_payment_form", str(_("New Payment")), "new_payment")
     if "expenses.create" in codes:
         quick_create("operations_ui.new_expense_form", str(_("New Expense")), "new_expense")

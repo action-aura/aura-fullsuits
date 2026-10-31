@@ -764,7 +764,9 @@ def test_sale_form_error_is_shown_in_arabic(app, client, seeded):
     resp = client.post("/licenses/issuance/sale", data={
         "csrf_token": get_csrf(page.get_data(as_text=True)), "idempotency_key": str(uuid.uuid4()),
         "new_customer_legal_name": "Corner Shop LLC", "plan_id": str(w["plan"]), "extra_device_pairs": "0",
-        "amount": "99.99", "method": "BANK_TRANSFER", "reference": "CLIQ-1", "payment_date": date.today().isoformat(),
+        # CASH: this test is about the Arabic AMOUNT message, and a transfer without a slip would be
+        # refused for the slip first (the slip rule has its own tests, test_rehearsal_owner_fixes.py).
+        "amount": "99.99", "method": "CASH", "reference": "CLIQ-1", "payment_date": date.today().isoformat(),
     })
     assert resp.status_code == 400
     body = resp.get_data(as_text=True)

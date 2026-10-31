@@ -228,7 +228,11 @@ DIRECT_SALE_MESSAGES = {
         "An invoice was already made for this sale; it can no longer be rejected here. Void the invoice first."
     ),
     # New customer flow (S3): paying for a trial, and the payment slip photo.
-    "SLIP_REQUIRED": "Add a photo of the bank slip or CliQ confirmation. A trial is only unlocked against a slip.",
+    "SLIP_REQUIRED": "Add a photo of the bank slip or CliQ confirmation. Only a cash payment can be recorded without one.",
+    "CUSTOMER_HAS_LIVE_TRIAL": (
+        "This customer is in a free trial. Record their payment on the trial's payment page, so the shop is "
+        "unlocked with the same licence. A second licence must not be made."
+    ),
     "SLIP_TYPE_NOT_ALLOWED": "The slip must be a JPEG or PNG picture (or a PDF).",
     "SLIP_TOO_LARGE": "The slip photo is too large (at most 10 MB).",
     "SLIP_INVALID": "The slip photo is empty or damaged. Take it again.",
@@ -529,6 +533,7 @@ def record_direct_sale(
     as_of: date | None = None,
     converts_subscription_id=None,
     slip_photo: bytes | None = None,
+    require_slip_unless_cash: bool = False,
 ) -> dict:
     """Records the sale and its PENDING payment. Never issues a licence --
     that waits for a manager (confirm_direct_sale). Returns {order_id,
@@ -541,7 +546,17 @@ def record_direct_sale(
     actor), the package may differ from the trial's, a payment-slip photo is
     REQUIRED, and when a manager confirms, fulfillment converts that very
     subscription (no new licence). slip_photo, when given, is stored encrypted as
-    the payment's PAYMENT_SLIP in the payment's own transaction."""
+    the payment's PAYMENT_SLIP in the payment's own transaction.
+
+    require_slip_unless_cash: the sale FORM (issuance_routes.record_sale) sets this, so
+    every payment typed in by a person needs its slip photo unless it is CASH (rehearsal
+    2026-10-31: the generic form took a BANK_TRANSFER with no slip). It is a parameter,
+    not always on, only because the many service-level callers in the test-suite record
+    bare sales; the one production caller is the form.
+
+    A sale for a customer who is in a running trial is refused (CUSTOMER_HAS_LIVE_TRIAL)
+    unless it names that trial: a generic sale there would confirm into a SECOND licence
+    beside the trial's own."""
     if not idempotency_key:
         raise DirectSaleError("KEY_REQUIRED")
     # Jordan's date (Step 0 fix round): at 00:30 in Amman, utcnow().date() is
@@ -565,7 +580,10 @@ def record_direct_sale(
             if new_customer_legal_name:
                 raise DirectSaleError("CONVERSION_CUSTOMER_MISMATCH")
             customer_id = trial_subscription.customer_id
-        slip_photo = _check_slip(slip_photo, required=trial_subscription is not None and method not in SLIP_EXEMPT_PAYMENT_METHODS)
+        slip_photo = _check_slip(
+            slip_photo,
+            required=(trial_subscription is not None or require_slip_unless_cash) and method not in SLIP_EXEMPT_PAYMENT_METHODS,
+        )
         seller = _resolve_seller(
             sales_owner_employee_profile_id,
             actor_staff_user_id=actor_staff_user_id, actor_permission_codes=actor_permission_codes,
@@ -599,6 +617,11 @@ def record_direct_sale(
                                  payment_date=payment_date, seller=seller, actor_staff_user_id=actor_staff_user_id,
                                  slip_photo=slip_photo)
             return _result(order, payment_id, replayed=False)
+
+        if trial_subscription is None and customer is not None:
+            live_trial_id = _live_trial_subscription_id(customer.id)
+            if live_trial_id is not None:
+                raise DirectSaleError("CUSTOMER_HAS_LIVE_TRIAL", subscription_id=str(live_trial_id))
 
         plan = None
         try:
@@ -742,6 +765,19 @@ def _resolve_conversion(raw_subscription_id, idempotency_key, actor_staff_user_i
     ):
         raise DirectSaleError("CONVERSION_NOT_A_TRIAL")
     return subscription
+
+
+def _live_trial_subscription_id(customer_id):
+    """The customer's running trial subscription (PILOT, trial record ACTIVE/EXTENDED), or
+    None. A converted, cancelled or finished trial does not count: that customer is
+    sold to the ordinary way."""
+    from app.customer_onboarding.trial import trial_pilot_for_customer
+
+    pilot = trial_pilot_for_customer(customer_id)
+    if pilot is None or pilot.status not in ("ACTIVE", "EXTENDED"):
+        return None
+    subscription = db_session.get(Subscription, pilot.subscription_id)
+    return subscription.id if subscription is not None and subscription.status == "PILOT" else None
 
 
 def _check_slip(slip_photo: bytes | None, *, required: bool) -> bytes | None:

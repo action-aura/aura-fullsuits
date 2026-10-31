@@ -10052,8 +10052,8 @@ msgid "Payment slip"
 msgstr "إيصال الدفع"
 
 #: app/commercial_sales
-msgid "Add a photo of the bank slip or CliQ confirmation. A trial is only unlocked against a slip."
-msgstr "أضف صورة إيصال البنك أو تأكيد كليك. لا تُفتح التجربة إلا مقابل إيصال."
+msgid "Add a photo of the bank slip or CliQ confirmation. Only a cash payment can be recorded without one."
+msgstr "أضف صورة إيصال البنك أو تأكيد كليك. لا يمكن تسجيل دفعة بلا إيصال إلا إذا كانت نقدًا."
 
 #: app/commercial_sales
 msgid "The slip must be a JPEG or PNG picture (or a PDF)."
@@ -10697,3 +10697,11 @@ msgstr "مطلوب إلا للنقد"
 #: app/templates/dashboard/index.html
 msgid "These numbers are for your own customers only."
 msgstr "هذه الأرقام تخص عملاءك أنت فقط."
+
+#: app/commercial_sales/direct_sale.py
+msgid "This customer is in a free trial. Record their payment on the trial's payment page, so the shop is unlocked with the same licence. A second licence must not be made."
+msgstr "هذا العميل في تجربة مجانية. سجّل دفعته في صفحة دفع التجربة ليُفتح محله بالترخيص نفسه، ولا يجوز إنشاء ترخيص ثانٍ."
+
+#: app/templates/licensing/sale.html
+msgid "This customer is in a free trial, so the payment is recorded here. When a manager confirms it, their shop is unlocked with the same licence. No second licence is made."
+msgstr "هذا العميل في تجربة مجانية، لذلك تُسجَّل الدفعة هنا. عندما يؤكدها المدير يُفتح محله بالترخيص نفسه. لا يُنشأ ترخيص ثانٍ."

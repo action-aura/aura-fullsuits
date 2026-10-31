@@ -10093,8 +10093,8 @@ msgid "Payment slip"
 msgstr "Payment slip"
 
 #: app/commercial_sales
-msgid "Add a photo of the bank slip or CliQ confirmation. A trial is only unlocked against a slip."
-msgstr "Add a photo of the bank slip or CliQ confirmation. A trial is only unlocked against a slip."
+msgid "Add a photo of the bank slip or CliQ confirmation. Only a cash payment can be recorded without one."
+msgstr "Add a photo of the bank slip or CliQ confirmation. Only a cash payment can be recorded without one."
 
 #: app/commercial_sales
 msgid "The slip must be a JPEG or PNG picture (or a PDF)."
@@ -10738,3 +10738,11 @@ msgstr "required unless cash"
 #: app/templates/dashboard/index.html
 msgid "These numbers are for your own customers only."
 msgstr "These numbers are for your own customers only."
+
+#: app/commercial_sales/direct_sale.py
+msgid "This customer is in a free trial. Record their payment on the trial's payment page, so the shop is unlocked with the same licence. A second licence must not be made."
+msgstr "This customer is in a free trial. Record their payment on the trial's payment page, so the shop is unlocked with the same licence. A second licence must not be made."
+
+#: app/templates/licensing/sale.html
+msgid "This customer is in a free trial, so the payment is recorded here. When a manager confirms it, their shop is unlocked with the same licence. No second licence is made."
+msgstr "This customer is in a free trial, so the payment is recorded here. When a manager confirms it, their shop is unlocked with the same licence. No second licence is made."

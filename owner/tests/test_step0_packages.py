@@ -126,7 +126,9 @@ def _post_sale(client, app, w, plan_key, *, amount, pairs=None, key=None, **extr
     data = {
         "csrf_token": get_csrf(page.get_data(as_text=True)), "idempotency_key": key or str(uuid.uuid4()),
         "customer_id": "", "new_customer_legal_name": f"Shop {uuid.uuid4().hex[:6]}", "plan_id": str(w[plan_key]),
-        "amount": str(amount), "method": "BANK_TRANSFER", "reference": f"CLIQ-{uuid.uuid4().hex[:6]}",
+        # CASH: these tests are about package prices and device pairs; a transfer would need a slip
+        # photo since 2026-10-31 (rule tested in test_rehearsal_owner_fixes.py), which none of them is about.
+        "amount": str(amount), "method": "CASH", "reference": f"CLIQ-{uuid.uuid4().hex[:6]}",
         "payment_date": date.today().isoformat(),
     }
     if pairs is not None:

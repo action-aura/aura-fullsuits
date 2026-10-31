@@ -605,6 +605,11 @@ def _payment_form(subscription, *, error=None):
 @bp.route("/payments/new", methods=["GET"])
 @require_permission("payments.create")
 def new_payment_form():
+    # The old form lists every customer and records a bare payment. A seller records money
+    # through "Sell a licence" (or the trial's payment page); this form is for the people
+    # who confirm and reconcile payments (rehearsal 2026-10-31).
+    if "payments.confirm" not in get_staff_permission_codes(load_current_staff()):
+        return redirect(url_for("license_issuance.new_form"))
     return _payment_form(_subscription_or_none(request.args.get("subscription_id")))
 
 

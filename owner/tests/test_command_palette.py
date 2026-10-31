@@ -251,14 +251,19 @@ def test_static_commands_gates_quick_create_lead_on_create_permission(app, seede
         assert any(item["label"] == "New Lead" for item in with_perm["create"])
 
 
-def test_static_commands_gates_quick_create_payment_on_create_permission(app, seeded):
+def test_static_commands_gates_quick_create_payment_on_create_and_confirm_permission(app, seeded):
+    """2026-10-31: the old bare record-payment form is for the people who also CONFIRM payments
+    (finance, managers). A seller holds payments.create but records money through "Sell a
+    licence", so the quick-create entry needs payments.confirm as well."""
     with app.test_request_context():
         from app.command_palette.service import get_static_commands
 
         without = get_static_commands(set())
-        with_perm = get_static_commands({"payments.create"})
+        seller = get_static_commands({"payments.create"})
+        finance = get_static_commands({"payments.create", "payments.confirm"})
         assert without["create"] == []
-        assert any(item["label"] == "New Payment" and item["key"] == "new_payment" for item in with_perm["create"])
+        assert not any(item["key"] == "new_payment" for item in seller["create"])  # deny: create alone is not enough
+        assert any(item["label"] == "New Payment" and item["key"] == "new_payment" for item in finance["create"])
 
 
 def test_static_commands_gates_quick_create_expense_on_create_permission(app, seeded):
@@ -286,7 +291,7 @@ def test_static_commands_quick_create_entries_all_carry_a_stable_key(app, seeded
         from app.command_palette.service import get_static_commands
 
         all_codes = {"leads.create", "customers.create", "quotes.create", "licenses.create",
-                     "installations.register", "payments.create", "expenses.create", "cash_closing.prepare"}
+                     "installations.register", "payments.create", "payments.confirm", "expenses.create", "cash_closing.prepare"}
         data = get_static_commands(all_codes)
         keys = [item["key"] for item in data["create"]]
         assert len(keys) == len(set(keys)), "quick-create keys must be unique"

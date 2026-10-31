@@ -83,7 +83,7 @@
     {% if has_permission("quotes.create") %}
     <a class="btn secondary" href="{{ url_for('commercial_sales_web.new_quote_form') }}">{{ _("New quote") }}</a>
     {% endif %}
-    {% if has_permission("payments.create") %}
+    {% if has_permission("payments.create") and has_permission("payments.confirm") %}
     <a class="btn secondary" href="{{ url_for('commercial_sales_web.new_payment_form') }}">{{ _("Record payment") }}</a>
     {% endif %}
     {% if has_permission("subscriptions.create") %}

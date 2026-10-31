@@ -3,7 +3,7 @@
 {% block title %}{{ _("Payments") }}{% endblock %}
 {% block content %}
 <div class="card">
-  {{ table.toolbar(_("Payments"), url_for('commercial_sales_web.new_payment_form'), _("Record payment"), new_permission="payments.create") }}
+  {{ table.toolbar(_("Payments"), url_for('commercial_sales_web.new_payment_form') if has_permission('payments.confirm') else none, _("Record payment"), new_permission="payments.create") }}
   {{ table.filter_bar(
       status_options=["PENDING","CONFIRMED","FAILED","REFUNDED","VOIDED"], status_value=status_filter, status_label_fn=payment_status_label,
       search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Reference")
