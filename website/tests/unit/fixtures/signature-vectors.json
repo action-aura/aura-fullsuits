@@ -1,0 +1,67 @@
+[
+  {
+    "name": "documented known-answer vector",
+    "secret": "aura-kat-secret-0123456789abcdefghijklmnopqrstuv",
+    "kid": "k1",
+    "method": "POST",
+    "path": "/api/website/v1/account/sign-in",
+    "ts": "1790000000",
+    "nonce": "kat-nonce-0123456789ab",
+    "body": "{\"email\":\"owner@haddad.example\",\"password\":\"Tr0ub4dor-and-3-horses\",\"client_ip\":\"203.0.113.5\",\"lang\":\"en\"}",
+    "body_sha256": "9c16876004ff573925af9b456c4f2c01da3eb1c3a9cc51bb0eb61109bba27448",
+    "sig": "729cdd1adc289d537d1bd21a5fd2844adcb1ab6e5fde59f8b669623a5e19bb0a",
+    "header": "v1,kid=k1,ts=1790000000,nonce=kat-nonce-0123456789ab,sig=729cdd1adc289d537d1bd21a5fd2844adcb1ab6e5fde59f8b669623a5e19bb0a"
+  },
+  {
+    "name": "arabic text and an IPv6 client address",
+    "secret": "aura-kat-secret-0123456789abcdefghijklmnopqrstuv",
+    "kid": "k1",
+    "method": "POST",
+    "path": "/api/website/v1/account/sign-in",
+    "ts": "1790000001",
+    "nonce": "kat-nonce-arabic-0001",
+    "body": "{\"email\":\"عميل@مثال.example\",\"password\":\"كلمة-سر-طويلة-123\",\"client_ip\":\"2001:db8::1\",\"lang\":\"ar\"}",
+    "body_sha256": "4478ef4f4b3bdd04f644db6f0420766a2b799b79acf9ceeca18b8ac6b30a9208",
+    "sig": "a9642f98f3c28e2094366b0d3545c1998e6d5cf3dcce0d5988c0a9730bd2b8b6",
+    "header": "v1,kid=k1,ts=1790000001,nonce=kat-nonce-arabic-0001,sig=a9642f98f3c28e2094366b0d3545c1998e6d5cf3dcce0d5988c0a9730bd2b8b6"
+  },
+  {
+    "name": "empty object on a different route",
+    "secret": "aura-kat-secret-0123456789abcdefghijklmnopqrstuv",
+    "kid": "k1",
+    "method": "POST",
+    "path": "/api/website/v1/account/sign-out",
+    "ts": "1790000002",
+    "nonce": "kat-nonce-empty-00001",
+    "body": "{}",
+    "body_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "sig": "72b39fdf367cb0f062061941388026ba8b8e0e6b3a62a14eb65f3473f67f26c9",
+    "header": "v1,kid=k1,ts=1790000002,nonce=kat-nonce-empty-00001,sig=72b39fdf367cb0f062061941388026ba8b8e0e6b3a62a14eb65f3473f67f26c9"
+  },
+  {
+    "name": "escapes, quotes and a newline inside the JSON text",
+    "secret": "aura-kat-secret-0123456789abcdefghijklmnopqrstuv",
+    "kid": "k1",
+    "method": "POST",
+    "path": "/api/website/v1/account/password/change",
+    "ts": "1790000003",
+    "nonce": "kat-nonce-escape-0001",
+    "body": "{\"current_password\":\"a\\\"b\\\\c\\nd\",\"new_password\":\"x y\\tz\",\"client_ip\":\"198.51.100.7\"}",
+    "body_sha256": "a05e06fb05f0cc3aac60c67702333b7b0e90b3c2c8f25a104a37b9f0af6487d3",
+    "sig": "c97ee5ffc00941889b5029a7feee5e7d406244905aeba40291219580e51a519f",
+    "header": "v1,kid=k1,ts=1790000003,nonce=kat-nonce-escape-0001,sig=c97ee5ffc00941889b5029a7feee5e7d406244905aeba40291219580e51a519f"
+  },
+  {
+    "name": "second key slot, non-ASCII secret, lower-case method input",
+    "secret": "سر-سري-طويل-جدا-0123456789abcdefghij",
+    "kid": "k2",
+    "method": "post",
+    "path": "/api/website/v1/account/summary",
+    "ts": "1790000099",
+    "nonce": "kat_nonce-second-slot-9",
+    "body": "{\"session_token\":\"abcdefghijklmnopqrstuvwxyz012345\",\"client_ip\":\"203.0.113.9\",\"lang\":\"en\"}",
+    "body_sha256": "c7ace26924477ccd6d1fb5776b5a18940ccc2634a30ef90ee382d738ed5fdfbf",
+    "sig": "6a391bb4130861ee6fb61d5c23ad32f712e5539cf24e1d6f8ff56b85d234238a",
+    "header": "v1,kid=k2,ts=1790000099,nonce=kat_nonce-second-slot-9,sig=6a391bb4130861ee6fb61d5c23ad32f712e5539cf24e1d6f8ff56b85d234238a"
+  }
+]

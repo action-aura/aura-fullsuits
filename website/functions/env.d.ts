@@ -20,4 +20,13 @@ export interface Env {
   SMTP_USER?: string;
   SMTP_PASS?: string;
   NOTIFY_TO?: string;
+  // Customer accounts (BFF to Owner). ACCOUNTS_ENABLED is "1" or "true" to switch the feature on;
+  // anything else (unset, "0", "") means every account page and API answers 404.
+  ACCOUNTS_ENABLED?: string;
+  OWNER_ACCOUNT_API_URL?: string;
+  OWNER_ACCOUNT_KEY_ID?: string;
+  // Pages secret (wrangler pages secret put). Never in wrangler.toml.
+  OWNER_ACCOUNT_SECRET?: string;
+  // Local dev only: wrangler pages dev sends no CF-Connecting-IP. "1" lets the BFF use 127.0.0.1 then.
+  ALLOW_NO_CLIENT_IP?: string;
 }
