@@ -98,6 +98,7 @@ NAMED_ROUTES = [
     "/commissions",                # commission pages beyond the agreement
     "/leaderboard",
     "/quotes",
+    "/commissions/statements",     # the monthly statement
     "/",                           # the dashboard: a seller lands on the agreement first
 ]
 

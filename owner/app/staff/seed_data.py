@@ -156,6 +156,7 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("commissions.approve", "COMMISSIONS", "Approve a commission ledger entry"),
     ("commissions.pay", "COMMISSIONS", "Approve a commission payout batch"),
     ("commissions.reverse", "COMMISSIONS", "Reverse a commission ledger entry"),
+    ("commission_objections.answer", "COMMISSIONS", "Answer a seller's objection to a monthly commission statement (accept or reject, with a written reply)"),
     ("expenses.create", "EXPENSES", "Create/submit an expense"),
     ("expenses.view_own", "EXPENSES", "View own submitted expenses"),
     ("expenses.view_all", "EXPENSES", "View all expenses"),
@@ -327,6 +328,9 @@ ROLES: dict[str, dict] = {
             "quotes.approve",
             # the team's commissions and the leaderboard (commissions.view_all)
             "commissions.view_own", "commissions.view_all", "commissions.approve",
+            # Clause 5 of the seller agreement: the Sales Manager answers the sellers' objections
+            # to their monthly statements within 2 working days (Super Admin via the wildcard).
+            "commission_objections.answer",
             "expenses.create", "expenses.view_own",
             "device_policy.view",
             "dashboard.view_own", "dashboard.view_all", "reports.view_own", "reports.view_all",

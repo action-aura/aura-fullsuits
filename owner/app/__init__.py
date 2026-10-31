@@ -232,6 +232,14 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.contracts import gate as seller_agreement_gate
 
     seller_agreement_gate.register(app)
+    # `flask contracts import-seller-draft --pdf <file>`: seeds the owner's agreement as a draft.
+    from app.contracts.cli import contracts_cli
+
+    app.cli.add_command(contracts_cli)
+    # Clause 5: the monthly commission statement, the Object button and the manager's reply queue.
+    from app.commissions.statement_routes import bp as commission_statements_bp
+
+    app.register_blueprint(commission_statements_bp)
     app.jinja_env.globals["customer_accounts_enabled"] = lambda: bool(app.config.get("CUSTOMER_ACCOUNTS_ENABLED"))
 
     if app.config.get("EXTERNAL_API_ENABLED"):

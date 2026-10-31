@@ -10470,3 +10470,260 @@ msgstr "Download (JSON)"
 msgid "Everything they accepted"
 msgstr "Everything they accepted"
 
+
+#: app/commissions
+msgid "A statement is issued on the first day after each month closes. You have 7 days from then to object to it, with a reason. The company replies within 2 working days (Friday and Saturday are not working days)."
+msgstr "A statement is issued on the first day after each month closes. You have 7 days from then to object to it, with a reason. The company replies within 2 working days (Friday and Saturday are not working days)."
+
+#: app/commissions
+msgid "Accept the objection"
+msgstr "Accept the objection"
+
+#: app/commissions
+msgid "Already deducted from your pay-outs this month for earlier take-backs"
+msgstr "Already deducted from your pay-outs this month for earlier take-backs"
+
+#: app/commissions
+msgid "Choose accepted or rejected."
+msgstr "Choose accepted or rejected."
+
+#: app/commissions
+msgid "Commission statement"
+msgstr "Commission statement"
+
+#: app/commissions
+msgid "Confirmed on"
+msgstr "Confirmed on"
+
+#: app/commissions
+msgid "Download the PDF"
+msgstr "Download the PDF"
+
+#: app/commissions
+msgid "Download the full agreement (PDF)"
+msgstr "Download the full agreement (PDF)"
+
+#: app/commissions
+msgid "Download the text"
+msgstr "Download the text"
+
+#: app/commissions
+msgid "Held means still inside the 30-day hold. Payable means the hold is over or the amount was approved. Figures are read from the commission ledger when you open this page."
+msgstr "Held means still inside the 30-day hold. Payable means the hold is over or the amount was approved. Figures are read from the commission ledger when you open this page."
+
+#: app/commissions
+msgid "Monthly commission statements"
+msgstr "Monthly commission statements"
+
+#: app/commissions
+msgid "Net"
+msgstr "Net"
+
+#: app/commissions
+msgid "No longer counted"
+msgstr "No longer counted"
+
+#: app/commissions
+msgid "No month has closed with commission activity yet."
+msgstr "No month has closed with commission activity yet."
+
+#: app/commissions
+msgid "No objections yet."
+msgstr "No objections yet."
+
+#: app/commissions
+msgid "No subscriptions were confirmed in this month."
+msgstr "No subscriptions were confirmed in this month."
+
+#: app/commissions
+msgid "OVERDUE"
+msgstr "OVERDUE"
+
+#: app/commissions
+msgid "Object"
+msgstr "Object"
+
+#: app/commissions
+msgid "Object to this statement"
+msgstr "Object to this statement"
+
+#: app/commissions
+msgid "Objected"
+msgstr "Objected"
+
+#: app/commissions
+msgid "Objection"
+msgstr "Objection"
+
+#: app/commissions
+msgid "Open objections"
+msgstr "Open objections"
+
+#: app/commissions
+msgid "Open the statement"
+msgstr "Open the statement"
+
+#: app/commissions
+msgid "Overdue objections"
+msgstr "Overdue objections"
+
+#: app/commissions
+msgid "Place on the ladder"
+msgstr "Place on the ladder"
+
+#: app/commissions
+msgid "Reject the objection"
+msgstr "Reject the objection"
+
+#: app/commissions
+msgid "Reply (the seller will read this)"
+msgstr "Reply (the seller will read this)"
+
+#: app/commissions
+msgid "Reply due"
+msgstr "Reply due"
+
+#: app/commissions
+msgid "Seller statement objections"
+msgstr "Seller statement objections"
+
+#: app/commissions
+msgid "Sellers' objections to their monthly commission statements. Each must be answered within 2 working days; the oldest deadline is first."
+msgstr "Sellers' objections to their monthly commission statements. Each must be answered within 2 working days; the oldest deadline is first."
+
+#: app/commissions
+msgid "Send the answer"
+msgstr "Send the answer"
+
+#: app/commissions
+msgid "Statement objection"
+msgstr "Statement objection"
+
+#: app/commissions
+msgid "Statement objections"
+msgstr "Statement objections"
+
+#: app/commissions
+msgid "Subscriptions confirmed"
+msgstr "Subscriptions confirmed"
+
+#: app/commissions
+msgid "Subscriptions confirmed in this month, their place on the ladder, and what is held, payable, paid and taken back."
+msgstr "Subscriptions confirmed in this month, their place on the ladder, and what is held, payable, paid and taken back."
+
+#: app/commissions
+msgid "That objection does not exist."
+msgstr "That objection does not exist."
+
+#: app/commissions
+msgid "The 7 days to object are over"
+msgstr "The 7 days to object are over"
+
+#: app/commissions
+msgid "The 7 days to object to this statement are over."
+msgstr "The 7 days to object to this statement are over."
+
+#: app/commissions
+msgid "The answer"
+msgstr "The answer"
+
+#: app/commissions
+msgid "The company's reply"
+msgstr "The company's reply"
+
+#: app/commissions
+msgid "The seller's reason"
+msgstr "The seller's reason"
+
+#: app/commissions
+msgid "The statement as the seller saw it"
+msgstr "The statement as the seller saw it"
+
+#: app/commissions
+msgid "The text is too long."
+msgstr "The text is too long."
+
+#: app/commissions
+msgid "This is not a valid statement month."
+msgstr "This is not a valid statement month."
+
+#: app/commissions
+msgid "This is your own objection. Another manager must answer it."
+msgstr "This is your own objection. Another manager must answer it."
+
+#: app/commissions
+msgid "This month has not closed yet, so there is no statement to object to."
+msgstr "This month has not closed yet, so there is no statement to object to."
+
+#: app/commissions
+msgid "This objection has already been answered."
+msgstr "This objection has already been answered."
+
+#: app/commissions
+msgid "To keep working in Aura Owner you must read and accept the seller agreement below."
+msgstr "To keep working in Aura Owner you must read and accept the seller agreement below."
+
+#: app/commissions
+msgid "Waiting for the company's reply"
+msgstr "Waiting for the company's reply"
+
+#: app/commissions
+msgid "Waiting for the company's reply. Due by %(when)s"
+msgstr "Waiting for the company's reply. Due by %(when)s"
+
+#: app/commissions
+msgid "What is wrong? Write the reason."
+msgstr "What is wrong? Write the reason."
+
+#: app/commissions
+msgid "Write the reason for your objection."
+msgstr "Write the reason for your objection."
+
+#: app/commissions
+msgid "Write the reply the seller will read."
+msgstr "Write the reply the seller will read."
+
+#: app/commissions
+msgid "You can download a copy of every version you accepted, with the date, time and address it was accepted from."
+msgstr "You can download a copy of every version you accepted, with the date, time and address it was accepted from."
+
+#: app/commissions
+msgid "You can object until %(when)s"
+msgstr "You can object until %(when)s"
+
+#: app/commissions
+msgid "You can object until %(when)s."
+msgstr "You can object until %(when)s."
+
+#: app/commissions
+msgid "You cannot answer your own objection; another manager must."
+msgstr "You cannot answer your own objection; another manager must."
+
+#: app/commissions
+msgid "You have already objected to this statement."
+msgstr "You have already objected to this statement."
+
+#: app/commissions
+msgid "Your account has no employee profile, so there are no statements for it."
+msgstr "Your account has no employee profile, so there are no statements for it."
+
+#: app/commissions
+msgid "Your answer"
+msgstr "Your answer"
+
+#: app/commissions
+msgid "Your copies"
+msgstr "Your copies"
+
+#: app/commissions
+msgid "Your objection"
+msgstr "Your objection"
+
+#: app/commissions
+msgid "Your objection is recorded. The company will reply within 2 working days."
+msgstr "Your objection is recorded. The company will reply within 2 working days."
+
+#: app/commissions
+msgid "Your reply is recorded. The seller can read it on their statement."
+msgstr "Your reply is recorded. The seller can read it on their statement."
+

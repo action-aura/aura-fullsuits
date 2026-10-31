@@ -46,6 +46,11 @@ GATED_DIRS = (
     # so it is scanned like every other template (and so the all-directories
     # guard below stays green).
     "customer_accounts",
+    # New customer flow: the seller's onboarding form (S2), the e-contract pages (S5) and the
+    # monthly commission statement / objection screens (seller agreement clause 5). Each was
+    # added without registering its directory here, so the all-directories guard was red;
+    # registering them also brings their templates under the hardcoded-string scan below.
+    "customer_onboarding", "contracts", "commissions",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form

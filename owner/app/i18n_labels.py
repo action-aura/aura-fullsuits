@@ -1192,6 +1192,17 @@ def localize_commission_error(code: str, **params) -> str:
         "COMMISSION_CLAWBACK_NOTHING_REMAINING": _("Nothing remains of this take-back; it is already settled."),
         "COMMISSION_CLAWBACK_AMOUNT_INVALID": _("The amount to settle must be greater than 0."),
         "COMMISSION_CLAWBACK_AMOUNT_TOO_LARGE": _("The amount is more than what remains of this take-back."),
+        "STATEMENT_MONTH_INVALID": _("This is not a valid statement month."),
+        "STATEMENT_NOT_ISSUED": _("This month has not closed yet, so there is no statement to object to."),
+        "STATEMENT_OBJECTION_WINDOW_CLOSED": _("The 7 days to object to this statement are over."),
+        "STATEMENT_OBJECTION_REASON_REQUIRED": _("Write the reason for your objection."),
+        "STATEMENT_OBJECTION_REASON_TOO_LONG": _("The text is too long."),
+        "STATEMENT_ALREADY_OBJECTED": _("You have already objected to this statement."),
+        "STATEMENT_OBJECTION_OUTCOME_INVALID": _("Choose accepted or rejected."),
+        "STATEMENT_OBJECTION_REPLY_REQUIRED": _("Write the reply the seller will read."),
+        "STATEMENT_OBJECTION_NOT_FOUND": _("That objection does not exist."),
+        "STATEMENT_OBJECTION_SELF_ANSWER_FORBIDDEN": _("You cannot answer your own objection; another manager must."),
+        "STATEMENT_OBJECTION_ALREADY_ANSWERED": _("This objection has already been answered."),
     }
     template = messages.get(code)
     if template is None:

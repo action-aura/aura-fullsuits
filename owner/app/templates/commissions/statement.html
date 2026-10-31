@@ -1,0 +1,69 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Commission statement") }} {{ month.strftime("%Y-%m") }}{% endblock %}
+{% block content %}
+{% set t = statement.totals %}
+<section class="card" aria-labelledby="st-heading" data-statement-month="{{ statement.month }}">
+  <h2 id="st-heading">{{ _("Commission statement") }} {{ month.strftime("%Y-%m") }}</h2>
+  <p class="muted">{{ _("Subscriptions confirmed in this month, their place on the ladder, and what is held, payable, paid and taken back.") }}</p>
+  <table class="responsive-table">
+    <thead><tr>
+      <th>{{ _("Customer") }}</th><th>{{ _("Package") }}</th><th>{{ _("Confirmed on") }}</th><th class="num">{{ _("Place on the ladder") }}</th>
+      <th class="num">{{ _("Held") }}</th><th class="num">{{ _("Payable") }}</th><th class="num">{{ _("Paid") }}</th>
+      <th class="num">{{ _("Taken back") }}</th><th class="num">{{ _("Net") }}</th>
+    </tr></thead>
+    <tbody>
+    {% for l in statement.lines %}
+    <tr data-statement-line="{{ l.kind }}" data-line-net="{{ l.net }}">
+      <td>{{ l.customer or "-" }}{% if l.kind == "RENEWAL" %} <span class="badge pending">{{ _("Renewal") }}</span>{% endif %}
+        {% if not l.counted %} <span class="badge danger">{{ _("No longer counted") }}</span>{% endif %}</td>
+      <td>{{ l.plan or "-" }}</td>
+      <td>{{ l.confirmed_on }}</td>
+      <td class="num">{{ l.position if l.position else "-" }}</td>
+      <td class="num">{{ l.held }}</td><td class="num">{{ l.payable }}</td><td class="num">{{ l.paid }}</td>
+      <td class="num">{{ l.clawed_back }}</td><td class="num">{{ l.net }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="9" class="empty">{{ _("No subscriptions were confirmed in this month.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+    <tfoot><tr data-statement-totals="1">
+      <th colspan="4">{{ _("Total") }} ({{ statement.currency }}) -- {{ _("Subscriptions confirmed") }}: {{ statement.sales_confirmed }}</th>
+      <th class="num" data-total-held="{{ t.held }}">{{ t.held }}</th><th class="num" data-total-payable="{{ t.payable }}">{{ t.payable }}</th>
+      <th class="num" data-total-paid="{{ t.paid }}">{{ t.paid }}</th><th class="num" data-total-clawed-back="{{ t.clawed_back }}">{{ t.clawed_back }}</th>
+      <th class="num" data-total-net="{{ t.net }}">{{ t.net }}</th>
+    </tr></tfoot>
+  </table>
+  {% if statement.deducted_from_payouts != "0.00" %}
+  <p class="muted">{{ _("Already deducted from your pay-outs this month for earlier take-backs") }}: {{ statement.deducted_from_payouts }} {{ statement.currency }}</p>
+  {% endif %}
+  <p class="muted">{{ _("Held means still inside the 30-day hold. Payable means the hold is over or the amount was approved. Figures are read from the commission ledger when you open this page.") }}</p>
+</section>
+
+<section class="card" aria-labelledby="obj-heading">
+  <h3 id="obj-heading">{{ _("Object to this statement") }}</h3>
+  {% if objection %}
+  <div data-objection-status="{{ objection.status }}">
+    <p><strong>{{ _("Your objection") }}</strong> ({{ format_owner_datetime(objection.objected_at) }}):</p>
+    <blockquote dir="auto" style="white-space:pre-wrap;">{{ objection.reason }}</blockquote>
+    {% if objection.status == "OPEN" %}
+    <p class="badge pending">{{ _("Waiting for the company's reply. Due by %(when)s", when=format_owner_datetime(objection.due_at)) }}</p>
+    {% else %}
+    <p><span class="badge {{ 'success' if objection.status == 'ACCEPTED' else 'danger' }}">{{ _("Accepted") if objection.status == "ACCEPTED" else _("Rejected") }}</span>
+       {{ format_owner_datetime(objection.answered_at) }}</p>
+    <p><strong>{{ _("The company's reply") }}</strong></p>
+    <blockquote dir="auto" style="white-space:pre-wrap;" data-objection-reply="1">{{ objection.reply_text }}</blockquote>
+    {% endif %}
+  </div>
+  {% elif window_open %}
+  <p>{{ _("You can object until %(when)s.", when=format_owner_datetime(window_closes_at)) }}</p>
+  <form method="post" action="{{ url_for('commission_statements.statement_object', month_text=month.strftime('%Y-%m')) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <p><label for="reason">{{ _("What is wrong? Write the reason.") }}</label><br>
+      <textarea id="reason" name="reason" rows="5" maxlength="4000" required dir="auto" style="width:100%;"></textarea></p>
+    <button type="submit" class="btn--primary-action" data-object-button="1">{{ _("Object") }}</button>
+  </form>
+  {% else %}
+  <p class="muted" data-objection-closed="1">{{ _("The 7 days to object to this statement are over.") }}</p>
+  {% endif %}
+</section>
+{% endblock %}

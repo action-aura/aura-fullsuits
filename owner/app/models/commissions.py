@@ -14,7 +14,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPKMixin
@@ -402,3 +402,63 @@ class CommissionClawbackDeduction(Base, UUIDPKMixin, TimestampMixin):
     created_by_staff_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False
     )
+
+OBJECTION_STATUSES = ("OPEN", "ACCEPTED", "REJECTED")
+
+
+class CommissionStatementObjection(Base, UUIDPKMixin, TimestampMixin):
+    """Seller agreement clause 5 (Alembic SO1 d7e3a1b94c52) -- a seller's objection to
+    ONE monthly commission statement, and the company's written answer.
+
+    The statement itself is not stored: it is derived from the ledger (commissions/
+    statements.py). What IS stored is the statement AS THE SELLER SAW IT when they
+    objected (statement_snapshot + its hash), because the ledger moves on (a take-back
+    posted next week) and the answer must be about what was disputed.
+
+    The two deadlines are decided in code and also GUARDED BY THE DATABASE:
+      * objected_at < window_closes_at  -- the 7-day window (the month closes, the
+        statement is issued on the 1st; the button is there for 7 days). A row outside
+        the window cannot exist, whatever code tries to write it.
+      * due_at > objected_at           -- the 2-working-day reply deadline.
+    One objection per seller per statement (unique): a rejected one is final in the
+    system; anything further is the dispute route of clause 19.
+    """
+
+    __tablename__ = "owner_commission_statement_objections"
+    __table_args__ = (
+        UniqueConstraint("staff_user_id", "statement_month", name="uq_owner_commission_statement_objections_one_per_month"),
+        CheckConstraint("status IN ('OPEN', 'ACCEPTED', 'REJECTED')", name="ck_owner_commission_statement_objections_status"),
+        CheckConstraint("length(btrim(reason)) > 0", name="ck_owner_commission_statement_objections_reason"),
+        CheckConstraint("extract(day FROM statement_month) = 1", name="ck_owner_commission_statement_objections_month_first"),
+        CheckConstraint("objected_at < window_closes_at", name="ck_owner_commission_statement_objections_in_window"),
+        CheckConstraint("due_at > objected_at", name="ck_owner_commission_statement_objections_due_after"),
+        # Open <=> no answer; answered <=> a non-blank reply, a named answerer, a time.
+        CheckConstraint(
+            "(status = 'OPEN' AND answered_at IS NULL AND answered_by_staff_user_id IS NULL AND reply_text IS NULL) OR "
+            "(status IN ('ACCEPTED', 'REJECTED') AND answered_at IS NOT NULL AND answered_by_staff_user_id IS NOT NULL "
+            "AND reply_text IS NOT NULL AND length(btrim(reply_text)) > 0)",
+            name="ck_owner_commission_statement_objections_answer_shape",
+        ),
+        # Nobody answers their own objection (a manager who also sells).
+        CheckConstraint(
+            "answered_by_staff_user_id IS NULL OR answered_by_staff_user_id <> staff_user_id",
+            name="ck_owner_commission_statement_objections_not_self_answered",
+        ),
+        Index("ix_owner_commission_statement_objections_status_due", "status", "due_at"),
+    )
+
+    staff_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False, index=True)
+    employee_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
+    )
+    statement_month: Mapped[date] = mapped_column(Date, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    statement_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    statement_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    objected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_closes_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(12), default="OPEN", server_default="OPEN", nullable=False)
+    reply_text: Mapped[str | None] = mapped_column(Text)
+    answered_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_staff_users.id"))
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -1,0 +1,33 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Monthly commission statements") }}{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="statements-heading">
+  <h2 id="statements-heading">{{ _("Monthly commission statements") }}</h2>
+  <p class="muted">{{ _("A statement is issued on the first day after each month closes. You have 7 days from then to object to it, with a reason. The company replies within 2 working days (Friday and Saturday are not working days).") }}</p>
+  {% if not has_profile %}
+  <p class="empty">{{ _("Your account has no employee profile, so there are no statements for it.") }}</p>
+  {% elif not rows %}
+  <p class="empty">{{ _("No month has closed with commission activity yet.") }}</p>
+  {% else %}
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Month") }}</th><th>{{ _("Objection") }}</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr data-statement-month="{{ r.month.strftime('%Y-%m') }}">
+      <td>{{ r.month.strftime("%Y-%m") }}</td>
+      <td>
+        {% if r.objection %}
+          {% if r.objection.status == "OPEN" %}<span class="badge pending">{{ _("Waiting for the company's reply") }}</span>
+          {% elif r.objection.status == "ACCEPTED" %}<span class="badge success">{{ _("Accepted") }}</span>
+          {% else %}<span class="badge danger">{{ _("Rejected") }}</span>{% endif %}
+        {% elif r.window_open %}<span class="badge pending">{{ _("You can object until %(when)s", when=format_owner_datetime(r.window_closes_at)) }}</span>
+        {% else %}<span class="muted">{{ _("The 7 days to object are over") }}</span>{% endif %}
+      </td>
+      <td><a href="{{ url_for('commission_statements.statement_detail', month_text=r.month.strftime('%Y-%m')) }}">{{ _("Open the statement") }}</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endblock %}

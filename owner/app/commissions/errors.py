@@ -49,4 +49,16 @@ class CommissionError(StableCodeError):
         "COMMISSION_CLAWBACK_NOTHING_REMAINING": "Nothing remains of this take-back; it is already settled.",
         "COMMISSION_CLAWBACK_AMOUNT_INVALID": "The amount to settle must be greater than 0.",
         "COMMISSION_CLAWBACK_AMOUNT_TOO_LARGE": "The amount is more than what remains of this take-back.",
+        # Seller agreement clause 5 (2026-10-31): objections to a monthly statement.
+        "STATEMENT_MONTH_INVALID": "This is not a valid statement month.",
+        "STATEMENT_NOT_ISSUED": "This month has not closed yet, so there is no statement to object to.",
+        "STATEMENT_OBJECTION_WINDOW_CLOSED": "The 7 days to object to this statement are over.",
+        "STATEMENT_OBJECTION_REASON_REQUIRED": "Write the reason for your objection.",
+        "STATEMENT_OBJECTION_REASON_TOO_LONG": "The text is too long.",
+        "STATEMENT_ALREADY_OBJECTED": "You have already objected to this statement.",
+        "STATEMENT_OBJECTION_OUTCOME_INVALID": "Choose accepted or rejected.",
+        "STATEMENT_OBJECTION_REPLY_REQUIRED": "Write the reply the seller will read.",
+        "STATEMENT_OBJECTION_NOT_FOUND": "That objection does not exist.",
+        "STATEMENT_OBJECTION_SELF_ANSWER_FORBIDDEN": "You cannot answer your own objection; another manager must.",
+        "STATEMENT_OBJECTION_ALREADY_ANSWERED": "This objection has already been answered.",
     }

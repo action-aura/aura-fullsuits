@@ -10429,3 +10429,260 @@ msgstr "تنزيل (JSON)"
 msgid "Everything they accepted"
 msgstr "كل ما وافق عليه"
 
+
+#: app/commissions
+msgid "A statement is issued on the first day after each month closes. You have 7 days from then to object to it, with a reason. The company replies within 2 working days (Friday and Saturday are not working days)."
+msgstr "يصدر الكشف في اليوم الأول بعد انتهاء كل شهر. لديك 7 أيام من ذلك التاريخ للاعتراض عليه مع بيان السبب. وترد الشركة خلال يومي عمل (الجمعة والسبت ليسا يومي عمل)."
+
+#: app/commissions
+msgid "Accept the objection"
+msgstr "قبول الاعتراض"
+
+#: app/commissions
+msgid "Already deducted from your pay-outs this month for earlier take-backs"
+msgstr "خُصم بالفعل من دفعاتك هذا الشهر مقابل استردادات سابقة"
+
+#: app/commissions
+msgid "Choose accepted or rejected."
+msgstr "اختر القبول أو الرفض."
+
+#: app/commissions
+msgid "Commission statement"
+msgstr "كشف العمولة"
+
+#: app/commissions
+msgid "Confirmed on"
+msgstr "تاريخ التأكيد"
+
+#: app/commissions
+msgid "Download the PDF"
+msgstr "تنزيل ملف PDF"
+
+#: app/commissions
+msgid "Download the full agreement (PDF)"
+msgstr "تنزيل الاتفاقية كاملة (PDF)"
+
+#: app/commissions
+msgid "Download the text"
+msgstr "تنزيل النص"
+
+#: app/commissions
+msgid "Held means still inside the 30-day hold. Payable means the hold is over or the amount was approved. Figures are read from the commission ledger when you open this page."
+msgstr "المحجوز يعني أنه ما زال ضمن مدة الحجز البالغة 30 يومًا. المستحق يعني انتهاء مدة الحجز أو اعتماد المبلغ. تُقرأ الأرقام من سجل العمولات عند فتح هذه الصفحة."
+
+#: app/commissions
+msgid "Monthly commission statements"
+msgstr "كشوف العمولة الشهرية"
+
+#: app/commissions
+msgid "Net"
+msgstr "الصافي"
+
+#: app/commissions
+msgid "No longer counted"
+msgstr "لم يعد محتسبًا"
+
+#: app/commissions
+msgid "No month has closed with commission activity yet."
+msgstr "لم ينتهِ بعدُ أي شهر فيه نشاط عمولات."
+
+#: app/commissions
+msgid "No objections yet."
+msgstr "لا توجد اعتراضات بعد."
+
+#: app/commissions
+msgid "No subscriptions were confirmed in this month."
+msgstr "لم يتم تأكيد أي اشتراك في هذا الشهر."
+
+#: app/commissions
+msgid "OVERDUE"
+msgstr "متأخر"
+
+#: app/commissions
+msgid "Object"
+msgstr "اعتراض"
+
+#: app/commissions
+msgid "Object to this statement"
+msgstr "الاعتراض على هذا الكشف"
+
+#: app/commissions
+msgid "Objected"
+msgstr "تاريخ الاعتراض"
+
+#: app/commissions
+msgid "Objection"
+msgstr "الاعتراض"
+
+#: app/commissions
+msgid "Open objections"
+msgstr "اعتراضات مفتوحة"
+
+#: app/commissions
+msgid "Open the statement"
+msgstr "فتح الكشف"
+
+#: app/commissions
+msgid "Overdue objections"
+msgstr "اعتراضات متأخرة"
+
+#: app/commissions
+msgid "Place on the ladder"
+msgstr "الترتيب على السلّم"
+
+#: app/commissions
+msgid "Reject the objection"
+msgstr "رفض الاعتراض"
+
+#: app/commissions
+msgid "Reply (the seller will read this)"
+msgstr "الرد (سيقرؤه البائع)"
+
+#: app/commissions
+msgid "Reply due"
+msgstr "موعد الرد"
+
+#: app/commissions
+msgid "Seller statement objections"
+msgstr "اعتراضات البائعين على الكشوف"
+
+#: app/commissions
+msgid "Sellers' objections to their monthly commission statements. Each must be answered within 2 working days; the oldest deadline is first."
+msgstr "اعتراضات البائعين على كشوف عمولاتهم الشهرية. يجب الرد على كل اعتراض خلال يومي عمل، وأقدم موعد في الأعلى."
+
+#: app/commissions
+msgid "Send the answer"
+msgstr "إرسال الرد"
+
+#: app/commissions
+msgid "Statement objection"
+msgstr "اعتراض على كشف"
+
+#: app/commissions
+msgid "Statement objections"
+msgstr "اعتراضات الكشوف"
+
+#: app/commissions
+msgid "Subscriptions confirmed"
+msgstr "الاشتراكات المؤكدة"
+
+#: app/commissions
+msgid "Subscriptions confirmed in this month, their place on the ladder, and what is held, payable, paid and taken back."
+msgstr "الاشتراكات المؤكدة في هذا الشهر وترتيبها على السلّم، وما هو محجوز ومستحق ومدفوع ومسترد."
+
+#: app/commissions
+msgid "That objection does not exist."
+msgstr "هذا الاعتراض غير موجود."
+
+#: app/commissions
+msgid "The 7 days to object are over"
+msgstr "انتهت الأيام السبعة المتاحة للاعتراض"
+
+#: app/commissions
+msgid "The 7 days to object to this statement are over."
+msgstr "انتهت الأيام السبعة المتاحة للاعتراض على هذا الكشف."
+
+#: app/commissions
+msgid "The answer"
+msgstr "الرد"
+
+#: app/commissions
+msgid "The company's reply"
+msgstr "رد الشركة"
+
+#: app/commissions
+msgid "The seller's reason"
+msgstr "سبب البائع"
+
+#: app/commissions
+msgid "The statement as the seller saw it"
+msgstr "الكشف كما رآه البائع"
+
+#: app/commissions
+msgid "The text is too long."
+msgstr "النص أطول من المسموح."
+
+#: app/commissions
+msgid "This is not a valid statement month."
+msgstr "هذا ليس شهر كشف صالحًا."
+
+#: app/commissions
+msgid "This is your own objection. Another manager must answer it."
+msgstr "هذا اعتراضك أنت. يجب أن يرد عليه مدير آخر."
+
+#: app/commissions
+msgid "This month has not closed yet, so there is no statement to object to."
+msgstr "لم ينتهِ هذا الشهر بعد، فلا يوجد كشف للاعتراض عليه."
+
+#: app/commissions
+msgid "This objection has already been answered."
+msgstr "تم الرد على هذا الاعتراض مسبقًا."
+
+#: app/commissions
+msgid "To keep working in Aura Owner you must read and accept the seller agreement below."
+msgstr "لمتابعة العمل في Aura Owner يجب أن تقرأ اتفاقية البائع أدناه وتوافق عليها."
+
+#: app/commissions
+msgid "Waiting for the company's reply"
+msgstr "بانتظار رد الشركة"
+
+#: app/commissions
+msgid "Waiting for the company's reply. Due by %(when)s"
+msgstr "بانتظار رد الشركة. الموعد النهائي: %(when)s"
+
+#: app/commissions
+msgid "What is wrong? Write the reason."
+msgstr "ما الخطأ؟ اكتب السبب."
+
+#: app/commissions
+msgid "Write the reason for your objection."
+msgstr "اكتب سبب اعتراضك."
+
+#: app/commissions
+msgid "Write the reply the seller will read."
+msgstr "اكتب الرد الذي سيقرؤه البائع."
+
+#: app/commissions
+msgid "You can download a copy of every version you accepted, with the date, time and address it was accepted from."
+msgstr "يمكنك تنزيل نسخة من كل إصدار وافقت عليه، مع التاريخ والوقت والعنوان الذي تمت منه الموافقة."
+
+#: app/commissions
+msgid "You can object until %(when)s"
+msgstr "يمكنك الاعتراض حتى %(when)s"
+
+#: app/commissions
+msgid "You can object until %(when)s."
+msgstr "يمكنك الاعتراض حتى %(when)s."
+
+#: app/commissions
+msgid "You cannot answer your own objection; another manager must."
+msgstr "لا يمكنك الرد على اعتراضك أنت؛ يجب أن يرد مدير آخر."
+
+#: app/commissions
+msgid "You have already objected to this statement."
+msgstr "لقد اعترضت على هذا الكشف مسبقًا."
+
+#: app/commissions
+msgid "Your account has no employee profile, so there are no statements for it."
+msgstr "ليس لحسابك ملف موظف، لذلك لا توجد كشوف له."
+
+#: app/commissions
+msgid "Your answer"
+msgstr "ردك"
+
+#: app/commissions
+msgid "Your copies"
+msgstr "نسخك"
+
+#: app/commissions
+msgid "Your objection"
+msgstr "اعتراضك"
+
+#: app/commissions
+msgid "Your objection is recorded. The company will reply within 2 working days."
+msgstr "تم تسجيل اعتراضك. سترد الشركة خلال يومي عمل."
+
+#: app/commissions
+msgid "Your reply is recorded. The seller can read it on their statement."
+msgstr "تم تسجيل ردك. يستطيع البائع قراءته في كشفه."
+

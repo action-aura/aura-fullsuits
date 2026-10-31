@@ -4,6 +4,10 @@
 {% block content %}
 {# Step 0 ladder (2026-10-24): the owner's monthly ladder, per month. The
    data-ladder-* attributes carry the exact amounts for tests and tools. #}
+<p>
+  <a data-statements-link="1" href="{{ url_for('commission_statements.statements_index') }}">{{ _("Monthly commission statements") }}</a>
+  {% if has_permission('commission_objections.answer') %} &middot; <a data-objections-link="1" href="{{ url_for('commission_statements.objections_queue') }}">{{ _("Statement objections") }}</a>{% endif %}
+</p>
 <section class="card" aria-labelledby="ladder-heading">
   <h2 id="ladder-heading">{{ _("Monthly commission ladder") }}</h2>
   <p class="muted">{{ _("Package 1: 1 sale = 20, 2 = 50, 3 = 100, 4 = 200, 5 = 350 JOD in a month; each sale after the 5th adds 30.") }}</p>

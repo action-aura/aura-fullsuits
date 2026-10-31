@@ -85,6 +85,11 @@ def get_dashboard_summary() -> dict:
     pending_activations = count(select(PendingActivation).where(PendingActivation.status == "PENDING_REVIEW"))
     active_emergency_extensions = count(select(EmergencyExtension).where(EmergencyExtension.status == "ACTIVE"))
     active_device_slot_exceptions = count(select(DeviceSlotException).where(DeviceSlotException.status == "ACTIVE"))
+    # Seller agreement clause 5: sellers' objections to their statements waiting for a reply,
+    # and the ones past their 2-working-day deadline (flagged in red on the manager dashboard).
+    from app.commissions.statements import open_and_overdue_counts
+
+    open_objections, overdue_objections = open_and_overdue_counts()
 
     return {
         "total_customers": total_customers,
@@ -105,4 +110,6 @@ def get_dashboard_summary() -> dict:
         "pending_activations": pending_activations,
         "active_emergency_extensions": active_emergency_extensions,
         "active_device_slot_exceptions": active_device_slot_exceptions,
+        "open_statement_objections": open_objections,
+        "overdue_statement_objections": overdue_objections,
     }

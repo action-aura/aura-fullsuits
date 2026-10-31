@@ -148,6 +148,18 @@
 </div>
 {% endif %}
 
+{# Seller agreement clause 5: the Sales Manager / Super Admin queue of statement objections.
+   The overdue count is the flag: a seller was promised a reply within 2 working days. #}
+{% if has_permission('commission_objections.answer') %}
+<div class="card" data-objections-card="1">
+  <h3>{{ _("Seller statement objections") }}</h3>
+  <div class="aura-stat-tile-row">
+    {{ charts.stat_tile(_("Open objections"), format_owner_number(summary.open_statement_objections), href=url_for('commission_statements.objections_queue')) }}
+    {{ charts.stat_tile(_("Overdue objections"), format_owner_number(summary.overdue_statement_objections), href=url_for('commission_statements.objections_queue'), tone='danger' if summary.overdue_statement_objections else 'default') }}
+  </div>
+</div>
+{% endif %}
+
 {% if can_view_customers or can_view_subscriptions %}
 <div class="card">
   <h2>{{ _("Overview") }}</h2>
