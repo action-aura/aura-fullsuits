@@ -68,7 +68,10 @@ def test_preflight_detects_role_missing_permission_assignment(app, seeded, signi
         from app.models.staff import Permission, Role, RolePermission
         from app.commercial_ops.preflight import run_preflight
 
-        role = db_session.execute(select(Role).where(Role.code == "SALES")).scalars().first()
+        # SALES_MANAGER, not SALES: pilots.manage moved to it on 2026-10-31 (the
+        # sellers' free buttons). Same check: a role missing a code it is
+        # supposed to hold is reported.
+        role = db_session.execute(select(Role).where(Role.code == "SALES_MANAGER")).scalars().first()
         perm = db_session.execute(select(Permission).where(Permission.code == "pilots.manage")).scalars().first()
         assert role is not None and perm is not None
         rp = db_session.execute(
@@ -81,7 +84,7 @@ def test_preflight_detects_role_missing_permission_assignment(app, seeded, signi
         result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
         assert result.ok is False
         fail_names = [c.name for c in result.checks if c.status == "FAIL"]
-        assert any(n.startswith("role_permissions_synced:SALES") for n in fail_names)
+        assert any(n.startswith("role_permissions_synced:SALES_MANAGER") for n in fail_names)
 
 
 def test_preflight_trust_anchor_missing_is_warning_not_failure(app, seeded, signing_key, plans_seeded, tmp_path):
