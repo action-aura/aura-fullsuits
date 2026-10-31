@@ -87,6 +87,21 @@ def app_version_can_run_trial(app_version: str | None) -> bool:
         return False  # cannot prove it is new enough -> not allowed (fail closed)
 
 
+def _set_purge_after(customer_id, end: date) -> None:
+    """An unconverted trial's ID / registration files go 90 days after it ends
+    (documents.py). Called whenever the end becomes known OR MOVES (an extension), so
+    the files are never kept shorter or longer than "90 days after the real end"."""
+    purge_after = datetime.combine(end, datetime.min.time(), tzinfo=timezone.utc) + timedelta(days=90)
+    for document in db_session.execute(
+        select(CustomerDocument).where(
+            CustomerDocument.customer_id == customer_id,
+            CustomerDocument.kind.in_(("NATIONAL_ID", "COMMERCIAL_REGISTRATION")),
+            CustomerDocument.purge_after.is_not(None), CustomerDocument.purged_at.is_(None),
+        )
+    ).scalars():
+        document.purge_after = purge_after
+
+
 def _apply_dates(pilot: PilotRecord, start: date, *, started_at: datetime) -> date:
     end = trial_end_for(start)
     subscription = db_session.get(Subscription, pilot.subscription_id)
@@ -99,17 +114,7 @@ def _apply_dates(pilot: PilotRecord, start: date, *, started_at: datetime) -> da
     pilot.pilot_end = end
     pilot.trial_started_at = started_at
     pilot.trial_length_days = TRIAL_LENGTH_DAYS
-    # An unconverted trial's ID / registration files go 90 days after it ends
-    # (documents.py); now that the end is known the provisional date is replaced.
-    purge_after = datetime.combine(end, datetime.min.time(), tzinfo=timezone.utc) + timedelta(days=90)
-    for document in db_session.execute(
-        select(CustomerDocument).where(
-            CustomerDocument.customer_id == pilot.customer_id,
-            CustomerDocument.kind.in_(("NATIONAL_ID", "COMMERCIAL_REGISTRATION")),
-            CustomerDocument.purge_after.is_not(None), CustomerDocument.purged_at.is_(None),
-        )
-    ).scalars():
-        document.purge_after = purge_after
+    _set_purge_after(pilot.customer_id, end)
     return end
 
 
@@ -240,6 +245,7 @@ def extend_trial(pilot: PilotRecord, *, days: int, reason: str, actor_staff_user
     subscription.end_date = new_end
     for license_row in db_session.execute(select(License).where(License.subscription_id == subscription.id)).scalars():
         license_row.valid_until = new_end
+    _set_purge_after(pilot.customer_id, new_end)
     db_session.commit()
     audit_record(
         actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="TRIAL_EXTENDED",

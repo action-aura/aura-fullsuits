@@ -286,6 +286,28 @@ def test_a_double_click_on_extend_extends_once(app, client, seeded, kyc, signing
         assert db_session_count(PilotExtension) == 1
 
 
+def test_an_extended_trial_keeps_the_id_files_ninety_days_after_the_new_end(app, client, seeded, kyc, signing_key):
+    """r32: _apply_dates set purge_after = end + 90d once; extend_trial moved the end but
+    not the files' date, so they were deleted up to 7 days before "90 days after the end"."""
+    from app.customer_onboarding.trial import extend_trial
+
+    w, result = _started(app, client)
+    end = jordan_today() + timedelta(days=7)
+
+    def purge_dates():
+        with app.app_context():
+            from app.extensions import db_session
+            from app.models.customer_onboarding import CustomerDocument
+
+            return {d.purge_after.date() for d in db_session.execute(
+                select(CustomerDocument).where(CustomerDocument.customer_id == result.customer_id)).scalars()}
+
+    assert purge_dates() == {end + timedelta(days=90)}  # before the extension (already true)
+    with app.app_context():
+        extend_trial(db_session_pilot(), days=5, reason="Customer's shop was closed for Eid", actor_staff_user_id=w["manager"])
+    assert purge_dates() == {end + timedelta(days=5 + 90)}
+
+
 def db_session_pilot():
     from app.extensions import db_session
     from app.models.commercial_ops import PilotRecord
