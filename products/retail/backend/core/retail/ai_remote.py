@@ -10,7 +10,7 @@ how the crash-report sender and the mail relay wire themselves
   * the installation id Owner issued, read from licensing.db;
   * the same device key (WindowsDpapiDeviceIdentityProvider over
     <app_data>/licensing) -- never a second key;
-  * `max_retries=1`, 60 s timeout (a report is a long generation).
+  * `max_retries=0`, 150 s timeout -- see AI_TIMEOUT_SECONDS for why both.
 
 ANDROID is excluded exactly as the mail relay and crash sender are: Python on
 Android has no signing key (Kotlin holds it, see android_bridge_identity), so
@@ -28,8 +28,16 @@ import config
 
 log = logging.getLogger(__name__)
 
-#: A report can take a while for the model to write.
-AI_TIMEOUT_SECONDS = 60.0
+#: Longer than Owner can take, and NEVER retried. Owner's worst case is two
+#: 40 s attempts at the AI provider (its own SDK retry) -- ~80 s. The first
+#: version used 60 s with max_retries=1: a slow report timed out here, the
+#: client re-sent the SAME signed body (same nonce), Owner refused it as
+#: NONCE_REUSED, the shop was told "licence problem", and the first request
+#: still finished on Owner and spent a cap slot and a paid call for nothing.
+#: Found by adversarial review 2026-10-31. A connection that fails outright is
+#: also not retried: the cashier pressing the button again sends a fresh nonce.
+AI_TIMEOUT_SECONDS = 150.0
+AI_MAX_RETRIES = 0
 
 #: Local error codes the routes translate into friendly messages.
 NOT_AVAILABLE = 'AI_NOT_AVAILABLE'          # no Owner URL / not activated / Android
@@ -51,6 +59,10 @@ _OWNER_CODE_MAP = {
     'AI_RATE_LIMITED': BUSY,
     'RATE_LIMITED': BUSY,
     'SERVICE_TEMPORARILY_UNAVAILABLE': BUSY,
+    # A replayed or stale request is a transport hiccup, not a licence fault;
+    # "try again" (fresh nonce, fresh timestamp) is the right advice.
+    'NONCE_REUSED': BUSY,
+    'TIMESTAMP_OUTSIDE_ALLOWED_WINDOW': BUSY,
     'AI_PRIVACY_REFUSED': PRIVACY,
 }
 
@@ -91,7 +103,7 @@ def _make_client():
     from commercial_runtime.licensing_contracts.client import LicensingClient, LicensingClientConfig
     return LicensingClient(LicensingClientConfig(
         base_url=config.OWNER_LICENSING_BASE_URL, timeout_seconds=AI_TIMEOUT_SECONDS,
-        verify_tls=config.OWNER_LICENSING_VERIFY_TLS, max_retries=1))
+        verify_tls=config.OWNER_LICENSING_VERIFY_TLS, max_retries=AI_MAX_RETRIES))
 
 
 def available():

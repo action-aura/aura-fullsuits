@@ -300,6 +300,51 @@ def test_long_arabic_chat_on_a_big_shop_stays_under_owners_60kb_body_limit(monke
     assert len(sent['history']) < 10
 
 
+def test_a_slow_owner_is_asked_exactly_once_never_replayed(monkeypatch):
+    # A retry re-sends the SAME signed body (same nonce): Owner refuses it as
+    # NONCE_REUSED while the first request still runs and still spends a cap
+    # slot and a paid AI call. Drive the REAL LicensingClient (not the fake)
+    # with a transport that always times out, and count the attempts.
+    monkeypatch.setattr(config, 'OWNER_LICENSING_BASE_URL', OWNER_URL)
+    monkeypatch.setattr(config, 'LICENSING_PLATFORM', 'WINDOWS')
+    monkeypatch.setattr(ai_remote, '_installation_id', lambda: 'inst-test')
+
+    class Signer:
+        def sign(self, data):
+            return 'sig'
+
+    monkeypatch.setattr(ai_remote, '_make_signer', lambda: Signer())
+    attempts = []
+    real_make_client = ai_remote._make_client
+
+    def make_client():
+        client = real_make_client()
+
+        class TimesOut:
+            def request(self, *a, **k):
+                attempts.append(k.get('timeout'))
+                raise requests.exceptions.Timeout('slow report')
+
+        client._session = TimesOut()
+        client._sleep = lambda s: None
+        return client
+
+    monkeypatch.setattr(ai_remote, '_make_client', make_client)
+    with pytest.raises(ai_remote.AiRemoteError) as err:
+        ai_remote.request('report', 'ar', {'currency': 'JOD'})
+    assert err.value.code == ai_remote.BUSY
+    assert len(attempts) == 1, f'the signed AI request was sent {len(attempts)} times'
+    # Owner's worst case is two 40 s provider attempts; the till must outwait it.
+    assert attempts[0] >= 120, attempts
+
+
+def test_a_replayed_nonce_reads_as_busy_not_as_a_licence_problem(monkeypatch):
+    fake = _owner(monkeypatch, {'result': 'FAILURE', 'reason_code': 'NONCE_REUSED'})
+    with pytest.raises(ai_remote.AiRemoteError) as err:
+        ai_remote.request('report', 'en', {'currency': 'JOD'})
+    assert err.value.code == ai_remote.BUSY and len(fake.calls) == 1
+
+
 def test_chat_question_is_cut_to_owners_1000_char_limit(monkeypatch):
     admin, _ = _shop()
     _enable(admin)
