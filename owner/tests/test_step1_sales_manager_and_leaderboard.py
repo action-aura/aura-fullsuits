@@ -164,13 +164,17 @@ MANAGER_MUST_HOLD = (
     "customers.view", "customers.view_all", "customers.update_all", "customers.assign",
     "commissions.view_all", "commissions.approve",
     "employees.view_all",
+    # Owner decision 2026-10-25: a Sales Manager may approve a seller's discount.
+    # Moved here from MANAGER_MUST_NOT_HOLD: the RULE changed, the guard was not
+    # weakened -- it now asserts the opposite, and quotes.create stays in MUST_NOT.
+    "quotes.approve",
 )
 
 # The owner's "can NOT" list, and everything only a Super Admin may do.
 MANAGER_MUST_NOT_HOLD = (
     # catalog prices and price exceptions
     "catalog.manage_products", "catalog.manage_versions", "catalog.manage_plans", "catalog.manage_addons",
-    "catalog.manage_prices", "catalog.manage_entitlements", "pricing.override", "quotes.approve",
+    "catalog.manage_prices", "catalog.manage_entitlements", "pricing.override",
     # no-charge licences / licence secrets / licence stops
     "licenses.issue", "licenses.revoke", "licenses.suspend", "licenses.replace", "licenses.reactivate",
     # staff and roles

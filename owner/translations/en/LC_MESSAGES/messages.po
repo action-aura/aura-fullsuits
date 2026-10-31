@@ -9371,3 +9371,255 @@ msgstr "That subscription was not found."
 
 msgid "That subscription belongs to a different customer than this payment."
 msgstr "That subscription belongs to a different customer than this payment."
+
+#: app/templates/customer_accounts
+msgid "That email address does not look right."
+msgstr "That email address does not look right."
+
+#: app/templates/customer_accounts
+msgid "This customer already has a website account."
+msgstr "This customer already has a website account."
+
+#: app/templates/customer_accounts
+msgid "That email address is already used by another customer's account."
+msgstr "That email address is already used by another customer's account."
+
+#: app/templates/customer_accounts
+msgid "Write the reason first."
+msgstr "Write the reason first."
+
+#: app/templates/customer_accounts
+msgid "This account has already been set up."
+msgstr "This account has already been set up."
+
+#: app/templates/customer_accounts
+msgid "Only an account that has been set up can be reset."
+msgstr "Only an account that has been set up can be reset."
+
+#: app/templates/customer_accounts
+msgid "That is already the account's email address."
+msgstr "That is already the account's email address."
+
+#: app/templates/customer_accounts
+msgid "This account is disabled."
+msgstr "This account is disabled."
+
+#: app/templates/customer_accounts
+msgid "Something went wrong. Nothing was changed."
+msgstr "Something went wrong. Nothing was changed."
+
+#: app/templates/customer_accounts
+msgid "The website address for account links is not set up yet (OWNER_CUSTOMER_PORTAL_BASE_URL)."
+msgstr "The website address for account links is not set up yet (OWNER_CUSTOMER_PORTAL_BASE_URL)."
+
+#: app/templates/customer_accounts
+msgid "Signed out everywhere. Licences and devices are not affected."
+msgstr "Signed out everywhere. Licences and devices are not affected."
+
+#: app/templates/customer_accounts
+msgid "Account disabled. The customer cannot sign in to the website. Licences and devices are not affected."
+msgstr "Account disabled. The customer cannot sign in to the website. Licences and devices are not affected."
+
+#: app/templates/customer_accounts
+msgid "Account enabled."
+msgstr "Account enabled."
+
+#: app/templates/customer_accounts
+#, python-format
+msgid "The branch name can be at most %(max)s characters."
+msgstr "The branch name can be at most %(max)s characters."
+
+#: app/templates/customer_accounts
+msgid "Branch name saved."
+msgstr "Branch name saved."
+
+#: app/templates/customer_accounts
+msgid "Website account"
+msgstr "Website account"
+
+#: app/templates/customer_accounts
+#, python-format
+msgid "Password reset link for %(email)s"
+msgstr "Password reset link for %(email)s"
+
+#: app/templates/customer_accounts
+msgid "Email change link"
+msgstr "Email change link"
+
+#: app/templates/customer_accounts
+#, python-format
+msgid "Website account invitation for %(email)s"
+msgstr "Website account invitation for %(email)s"
+
+#: app/templates/customer_accounts
+msgid "We emailed the link. For safety it is not shown here."
+msgstr "We emailed the link. For safety it is not shown here."
+
+#: app/templates/customer_accounts
+msgid "Email is not set up on this server, so nothing was sent. Copy this one-time link and send it to the customer yourself (for example on WhatsApp). It is shown only now and cannot be shown again:"
+msgstr "Email is not set up on this server, so nothing was sent. Copy this one-time link and send it to the customer yourself (for example on WhatsApp). It is shown only now and cannot be shown again:"
+
+#: app/templates/customer_accounts
+msgid "Copy link"
+msgstr "Copy link"
+
+#: app/templates/customer_accounts
+msgid "Back to the customer"
+msgstr "Back to the customer"
+
+#: app/templates/customer_accounts
+msgid "This customer has no website account."
+msgstr "This customer has no website account."
+
+#: app/templates/customer_accounts
+msgid "Email address of the person who will sign in"
+msgstr "Email address of the person who will sign in"
+
+#: app/templates/customer_accounts
+msgid "Language of the emails"
+msgstr "Language of the emails"
+
+#: app/templates/customer_accounts
+msgid "English"
+msgstr "English"
+
+#: app/templates/customer_accounts
+msgid "Arabic"
+msgstr "Arabic"
+
+#: app/templates/customer_accounts
+msgid "Create website account and send the invitation"
+msgstr "Create website account and send the invitation"
+
+#: app/templates/customer_accounts
+msgid "The customer gets a link to choose a password. An account is about signing in to the website only; it does not change any licence or device."
+msgstr "The customer gets a link to choose a password. An account is about signing in to the website only; it does not change any licence or device."
+
+#: app/templates/customer_accounts
+msgid "Invited -- password not set yet"
+msgstr "Invited -- password not set yet"
+
+#: app/templates/customer_accounts
+msgid "Last sign-in"
+msgstr "Last sign-in"
+
+#: app/templates/customer_accounts
+msgid "Reason it was disabled"
+msgstr "Reason it was disabled"
+
+#: app/templates/customer_accounts
+msgid "Send the invitation again"
+msgstr "Send the invitation again"
+
+#: app/templates/customer_accounts
+msgid "Send a password reset link"
+msgstr "Send a password reset link"
+
+#: app/templates/customer_accounts
+msgid "Sign out everywhere"
+msgstr "Sign out everywhere"
+
+#: app/templates/customer_accounts
+msgid "Confirm it is you to disable, enable or change the email"
+msgstr "Confirm it is you to disable, enable or change the email"
+
+#: app/templates/customer_accounts
+msgid "Enable this account"
+msgstr "Enable this account"
+
+#: app/templates/customer_accounts
+msgid "Reason for disabling (kept in the audit log)"
+msgstr "Reason for disabling (kept in the audit log)"
+
+#: app/templates/customer_accounts
+msgid "Disable this account"
+msgstr "Disable this account"
+
+#: app/templates/customer_accounts
+msgid "Disabling stops the customer signing in to the website. Their licences and devices keep working."
+msgstr "Disabling stops the customer signing in to the website. Their licences and devices keep working."
+
+#: app/templates/customer_accounts
+msgid "New sign-in email address"
+msgstr "New sign-in email address"
+
+#: app/templates/customer_accounts
+msgid "Reason for the change (kept in the audit log)"
+msgstr "Reason for the change (kept in the audit log)"
+
+#: app/templates/customer_accounts
+msgid "Change the sign-in email"
+msgstr "Change the sign-in email"
+
+#: app/templates/customer_accounts
+msgid "The new address gets a confirmation link and the old address gets a notice. The email only changes when the link is used."
+msgstr "The new address gets a confirmation link and the old address gets a notice. The email only changes when the link is used."
+
+#: app/templates/customer_accounts
+msgid "Branch name"
+msgstr "Branch name"
+
+#: app/templates/customer_accounts
+msgid "Shown to the customer when they pick which shop to sign in to. Leave empty to show just the branch number."
+msgstr "Shown to the customer when they pick which shop to sign in to. Leave empty to show just the branch number."
+
+#: app/templates/customer_accounts
+msgid "This customer has no website account"
+msgstr "This customer has no website account"
+
+#: app/templates/customer_accounts
+#, python-format
+msgid "%(name)s cannot sign in to the Action Aura website yet. Create the account now so they get their invitation."
+msgstr "%(name)s cannot sign in to the Action Aura website yet. Create the account now so they get their invitation."
+
+#: app/templates/customer_accounts
+msgid "Create the website account"
+msgstr "Create the website account"
+
+#: app/templates/customer_accounts
+msgid "Website account created"
+msgstr "Website account created"
+
+#: app/templates/customer_accounts
+msgid "Website account invitation sent again"
+msgstr "Website account invitation sent again"
+
+#: app/templates/customer_accounts
+msgid "Website account reset link issued"
+msgstr "Website account reset link issued"
+
+#: app/templates/customer_accounts
+msgid "Website account password reset requested"
+msgstr "Website account password reset requested"
+
+#: app/templates/customer_accounts
+msgid "Website account signed out everywhere"
+msgstr "Website account signed out everywhere"
+
+#: app/templates/customer_accounts
+msgid "Website account disabled"
+msgstr "Website account disabled"
+
+#: app/templates/customer_accounts
+msgid "Website account enabled"
+msgstr "Website account enabled"
+
+#: app/templates/customer_accounts
+msgid "Website account email change requested"
+msgstr "Website account email change requested"
+
+#: app/templates/customer_accounts
+msgid "Website account email changed"
+msgstr "Website account email changed"
+
+#: app/templates/customer_accounts
+msgid "Website account password set"
+msgstr "Website account password set"
+
+#: app/templates/customer_accounts
+msgid "Website account password changed"
+msgstr "Website account password changed"
+
+#: app/templates/customer_accounts
+msgid "Branch name changed"
+msgstr "Branch name changed"

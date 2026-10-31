@@ -45,6 +45,19 @@
 
   <p><a href="{{ url_for('commercial_ops_ui.license_slot_exceptions', license_id=license.id) }}">{{ _("Device-slot exceptions") }}</a></p>
 
+  {% if customer_accounts_enabled() and has_permission("subscriptions.update") %}
+  <div class="card--action" id="branch-label">
+    <h3>{{ _("Branch name") }}</h3>
+    <p>{{ _("Shown to the customer when they pick which shop to sign in to. Leave empty to show just the branch number.") }}</p>
+    <form method="post" action="{{ url_for('licensing.set_branch_label', license_id=license.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label for="licence-branch-label">{{ _("Branch name") }}</label>
+      <input id="licence-branch-label" type="text" name="branch_label" maxlength="120" value="{{ license.subscription.branch_label or '' }}">
+      <button type="submit">{{ _("Save") }}</button>
+    </form>
+  </div>
+  {% endif %}
+
   <div class="card--action">
     <h3>{{ _("Add devices") }}</h3>
     <p>{{ _("Permanently raises this license's device limit and mirrors the new allowance onto its subscription. Requires a fresh MFA confirmation. Never lowers the limit below devices already active.") }}</p>

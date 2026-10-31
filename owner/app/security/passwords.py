@@ -44,6 +44,13 @@ def hash_password(password: str) -> str:
     return _hasher.hash(password)
 
 
+def hash_secret_unchecked(password: str) -> str:
+    """Argon2id hash with NO staff policy check. For callers that apply their own
+    policy first (customer website accounts: app/customer_accounts/policy.py) and
+    for the dummy hash that keeps unknown-email sign-ins as slow as real ones."""
+    return _hasher.hash(password)
+
+
 def verify_password(password: str, stored_hash: str) -> bool:
     if not password or not stored_hash:
         return False

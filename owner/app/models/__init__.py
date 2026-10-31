@@ -30,6 +30,7 @@ from app.models import release_distribution  # noqa: F401
 from app.models import crash_reports  # noqa: F401
 from app.models import email_outbox  # noqa: F401
 from app.models import push  # noqa: F401
+from app.models import customer_accounts  # noqa: F401
 
 from app.models.staff import (  # noqa: F401
     Role,

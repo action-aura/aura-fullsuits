@@ -62,6 +62,11 @@ class Subscription(Base, UUIDPKMixin, TimestampMixin):
     # commission ladder read these. NULL = no contract.
     contract_term_months: Mapped[int | None] = mapped_column()
     contract_ends_on: Mapped[date | None] = mapped_column(Date)
+    # Step 2 CA1 (revision a6e81bf3d32c): a customer with several shops has
+    # several subscriptions; this is the name the customer's own sign-in picker
+    # shows ("Branch 2 - Dabouq"). Free text, staff-edited on the licence page;
+    # NULL = unnamed (the picker falls back to "Branch n").
+    branch_label: Mapped[str | None] = mapped_column(String(120))
 
     customer: Mapped["Customer"] = relationship()  # noqa: F821
     product: Mapped["Product"] = relationship()  # noqa: F821

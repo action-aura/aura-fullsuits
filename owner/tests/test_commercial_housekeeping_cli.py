@@ -50,6 +50,9 @@ def test_apply_calls_each_function_exactly_once(app, calls):
         "idempotency_records_purged": 3, "rate_limit_counters_purged": 4,
         # SEC-09: real (unstubbed) privacy rules over an empty database.
         "email_bodies_cleared": 0, "login_attempts_purged": 0,
+        # Step 2 CA1: customer website accounts (empty database, so all zero).
+        "customer_login_attempts_purged": 0, "customer_sessions_and_tokens_purged": 0,
+        "customer_link_mail_bodies_cleared": 0,
         "sync_bootstrap": {"expired": 0, "leases_reset": 0, "blobs_removed": 0},
     }
 
@@ -61,7 +64,9 @@ def test_dry_run_calls_no_deleting_path_and_reports_counts(app, calls):
     report = json.loads(result.output)
     assert report["dry_run"] is True
     assert set(report) == {"dry_run", "quotes_expired", "nonces_purged", "idempotency_records_purged", "rate_limit_counters_purged",
-                         "email_bodies_cleared", "login_attempts_purged", "sync_bootstrap"}
+                         "email_bodies_cleared", "login_attempts_purged", "sync_bootstrap",
+                         "customer_login_attempts_purged", "customer_sessions_and_tokens_purged",
+                         "customer_link_mail_bodies_cleared"}
 
 
 def test_dry_run_counts_are_real_and_nothing_is_deleted(app):

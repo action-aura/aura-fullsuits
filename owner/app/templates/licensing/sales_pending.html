@@ -21,6 +21,13 @@
 </div>
 {% endif %}
 {% endif %}
+{% if confirmed and account_prompt %}
+<div class="card" role="status" data-account-prompt="1">
+  <h2>{{ _("This customer has no website account") }}</h2>
+  <p>{{ _("%(name)s cannot sign in to the Action Aura website yet. Create the account now so they get their invitation.", name=account_prompt.customer_name) }}</p>
+  <p><a class="btn" href="{{ url_for('customers.detail', customer_id=account_prompt.customer_id) }}#website-account">{{ _("Create the website account") }}</a></p>
+</div>
+{% endif %}
 {% if confirmed %}
 <div class="card card--critical">
   {% if confirmed.full_key %}

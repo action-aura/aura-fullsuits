@@ -60,6 +60,23 @@ POLICIES: dict[str, RateLimitPolicy] = {
     # not a per-visitor limit -- the website already limits each visitor to 5
     # requests per 10 minutes before forwarding anything.
     "website_intake": RateLimitPolicy("website_intake", max_requests=30, window_seconds=60),
+    # Step 2 CA1: customer website sign-in. Each attempt takes a slot from all
+    # three BEFORE the password is checked (so parallel guesses cannot all slip
+    # through -- the take is one atomic statement). The keys are hashes (see
+    # safe_bucket_component): (email, IP) 5 per 15 min, email alone 50 per hour
+    # (a botnet spread over many IPs), IP alone 30 per 15 min (one source
+    # walking a list of emails). These are CUSTOMER buckets: they share nothing
+    # with the staff login lockout, so a flood on the website cannot lock staff.
+    "customer_signin_pair": RateLimitPolicy("customer_signin_pair", max_requests=5, window_seconds=900),
+    "customer_signin_email": RateLimitPolicy("customer_signin_email", max_requests=50, window_seconds=3600),
+    "customer_signin_ip": RateLimitPolicy("customer_signin_ip", max_requests=30, window_seconds=900),
+    # Forgot-password: 3 per address per hour (the website always answers the
+    # same, so this is silent), plus a per-IP flood guard.
+    "customer_forgot_address": RateLimitPolicy("customer_forgot_address", max_requests=3, window_seconds=3600),
+    "customer_forgot_ip": RateLimitPolicy("customer_forgot_ip", max_requests=20, window_seconds=3600),
+    # Set-password / email-confirm links: tokens are 256-bit so guessing is not
+    # the worry; this bounds work and noise per source.
+    "customer_token_ip": RateLimitPolicy("customer_token_ip", max_requests=20, window_seconds=900),
 }
 
 

@@ -565,6 +565,10 @@ def register_cli(app: Flask) -> None:
                 # SEC-09 (privacy): see app/privacy_retention.py.
                 "email_bodies_cleared": privacy_retention.clear_old_email_bodies(),
                 "login_attempts_purged": privacy_retention.purge_old_login_attempts(),
+                # Step 2 CA1: customer website accounts (see privacy_retention.py).
+                "customer_login_attempts_purged": privacy_retention.purge_customer_login_attempts(),
+                "customer_sessions_and_tokens_purged": privacy_retention.purge_expired_customer_sessions_and_tokens(),
+                "customer_link_mail_bodies_cleared": privacy_retention.clear_customer_link_mail_bodies(),
                 # SYNC-BOOT Phase 3: expire unfinished bootstrap requests and delete
                 # every encrypted blob nobody may read again.
                 "sync_bootstrap": bootstrap_routes.sweep(apply=True),
@@ -583,6 +587,9 @@ def register_cli(app: Flask) -> None:
                 "rate_limit_counters_purged": _count(RateLimitCounter, RateLimitCounter.window_start < counter_cutoff),
                 "email_bodies_cleared": privacy_retention.count_email_bodies_to_clear(),
                 "login_attempts_purged": privacy_retention.count_login_attempts_to_purge(),
+                "customer_login_attempts_purged": privacy_retention.count_customer_login_attempts_to_purge(),
+                "customer_sessions_and_tokens_purged": privacy_retention.count_expired_customer_sessions_and_tokens(),
+                "customer_link_mail_bodies_cleared": privacy_retention.count_customer_link_mail_bodies_to_clear(),
                 "sync_bootstrap": bootstrap_routes.sweep(apply=False),
             }
         click.echo(json.dumps(result, indent=2))

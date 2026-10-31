@@ -12,6 +12,7 @@ operator who unsets the host stops sends on the next tick).
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import random
 import ssl
@@ -23,7 +24,7 @@ from typing import Optional
 from flask import Flask
 
 from app.extensions import db_session
-from app.mail import outbox, smtp
+from app.mail import outbox, smtp, templates
 from app.models.email_outbox import EmailOutbox
 
 log = logging.getLogger("aura.owner.mail")
@@ -36,6 +37,20 @@ PACING_SECONDS = 0.5
 # Sent on every message: the footer says "do not reply", so a reply that does
 # arrive goes to a mailbox a person reads.
 REPLY_TO = "support@actionaura.me"
+
+
+def _sender_for(config, settings: smtp.SmtpSettings, kind: str) -> tuple:
+    """(settings, reply_to) for one message. Everything but customer mail goes out
+    as before. Customer website-account mail (kinds `customer_*`) may use its own
+    sender (OWNER_CUSTOMER_MAIL_FROM, e.g. noreply@actionaura.me) and its Reply-To
+    comes from OWNER_CUSTOMER_MAIL_REPLY_TO -- empty means NO Reply-To header,
+    never the support@ default, because that mailbox may not exist."""
+    if not kind.startswith(templates.CUSTOMER_KIND_PREFIX):
+        return settings, REPLY_TO
+    sender = (config.get("CUSTOMER_MAIL_FROM") or "").strip()
+    if sender:
+        settings = dataclasses.replace(settings, from_address=sender)
+    return settings, ((config.get("CUSTOMER_MAIL_REPLY_TO") or "").strip() or None)
 
 
 def compute_backoff_delay(attempt_count: int) -> float:
@@ -110,8 +125,9 @@ class EmailWorker:
         row = db_session.get(EmailOutbox, row_id)
         to, subject, text, html, attempts = row.to_address, row.subject, row.body_text, row.body_html, row.attempt_count
         try:
-            smtp.send_message(settings, to=to, subject=subject, body_text=text, body_html=html,
-                              reply_to=REPLY_TO, ssl_context=self._ssl_context)
+            send_settings, reply_to = _sender_for(self._app.config, settings, row.kind)
+            smtp.send_message(send_settings, to=to, subject=subject, body_text=text, body_html=html,
+                              reply_to=reply_to, ssl_context=self._ssl_context)
         except Exception as exc:  # noqa: BLE001 -- any transport failure is a retry decision
             # Class name only: an SMTP error text can echo the recipient or the login.
             error = type(exc).__name__

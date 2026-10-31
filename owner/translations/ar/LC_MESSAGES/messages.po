@@ -9330,3 +9330,255 @@ msgstr "لم يتم العثور على هذا الاشتراك."
 
 msgid "That subscription belongs to a different customer than this payment."
 msgstr "هذا الاشتراك يخص عميلاً آخر غير صاحب هذه الدفعة."
+
+#: app/templates/customer_accounts
+msgid "That email address does not look right."
+msgstr "عنوان البريد الإلكتروني هذا غير صحيح."
+
+#: app/templates/customer_accounts
+msgid "This customer already has a website account."
+msgstr "لهذا العميل حساب على الموقع بالفعل."
+
+#: app/templates/customer_accounts
+msgid "That email address is already used by another customer's account."
+msgstr "عنوان البريد الإلكتروني هذا مستخدم في حساب عميل آخر."
+
+#: app/templates/customer_accounts
+msgid "Write the reason first."
+msgstr "اكتب السبب أولاً."
+
+#: app/templates/customer_accounts
+msgid "This account has already been set up."
+msgstr "تم إعداد هذا الحساب بالفعل."
+
+#: app/templates/customer_accounts
+msgid "Only an account that has been set up can be reset."
+msgstr "يمكن إعادة تعيين الحساب الذي تم إعداده فقط."
+
+#: app/templates/customer_accounts
+msgid "That is already the account's email address."
+msgstr "هذا هو عنوان البريد الإلكتروني الحالي للحساب."
+
+#: app/templates/customer_accounts
+msgid "This account is disabled."
+msgstr "هذا الحساب معطّل."
+
+#: app/templates/customer_accounts
+msgid "Something went wrong. Nothing was changed."
+msgstr "حدث خطأ ما. لم يتم تغيير أي شيء."
+
+#: app/templates/customer_accounts
+msgid "The website address for account links is not set up yet (OWNER_CUSTOMER_PORTAL_BASE_URL)."
+msgstr "عنوان الموقع الخاص بروابط الحسابات غير مضبوط بعد (OWNER_CUSTOMER_PORTAL_BASE_URL)."
+
+#: app/templates/customer_accounts
+msgid "Signed out everywhere. Licences and devices are not affected."
+msgstr "تم تسجيل الخروج من كل الأجهزة. لا تتأثر التراخيص ولا الأجهزة."
+
+#: app/templates/customer_accounts
+msgid "Account disabled. The customer cannot sign in to the website. Licences and devices are not affected."
+msgstr "تم تعطيل الحساب. لا يستطيع العميل تسجيل الدخول إلى الموقع. لا تتأثر التراخيص ولا الأجهزة."
+
+#: app/templates/customer_accounts
+msgid "Account enabled."
+msgstr "تم تفعيل الحساب."
+
+#: app/templates/customer_accounts
+#, python-format
+msgid "The branch name can be at most %(max)s characters."
+msgstr "يجب ألا يتجاوز اسم الفرع %(max)s حرفاً."
+
+#: app/templates/customer_accounts
+msgid "Branch name saved."
+msgstr "تم حفظ اسم الفرع."
+
+#: app/templates/customer_accounts
+msgid "Website account"
+msgstr "حساب الموقع"
+
+#: app/templates/customer_accounts
+#, python-format
+msgid "Password reset link for %(email)s"
+msgstr "رابط إعادة تعيين كلمة المرور لـ %(email)s"
+
+#: app/templates/customer_accounts
+msgid "Email change link"
+msgstr "رابط تغيير البريد الإلكتروني"
+
+#: app/templates/customer_accounts
+#, python-format
+msgid "Website account invitation for %(email)s"
+msgstr "دعوة حساب الموقع لـ %(email)s"
+
+#: app/templates/customer_accounts
+msgid "We emailed the link. For safety it is not shown here."
+msgstr "أرسلنا الرابط بالبريد الإلكتروني. لا يُعرض هنا حفاظاً على الأمان."
+
+#: app/templates/customer_accounts
+msgid "Email is not set up on this server, so nothing was sent. Copy this one-time link and send it to the customer yourself (for example on WhatsApp). It is shown only now and cannot be shown again:"
+msgstr "البريد الإلكتروني غير مُعدّ على هذا الخادم، لذا لم يُرسل شيء. انسخ هذا الرابط لمرة واحدة وأرسله إلى العميل بنفسك (مثلاً عبر واتساب). يُعرض الآن فقط ولا يمكن عرضه مرة أخرى:"
+
+#: app/templates/customer_accounts
+msgid "Copy link"
+msgstr "نسخ الرابط"
+
+#: app/templates/customer_accounts
+msgid "Back to the customer"
+msgstr "العودة إلى العميل"
+
+#: app/templates/customer_accounts
+msgid "This customer has no website account."
+msgstr "ليس لهذا العميل حساب على الموقع."
+
+#: app/templates/customer_accounts
+msgid "Email address of the person who will sign in"
+msgstr "البريد الإلكتروني للشخص الذي سيسجّل الدخول"
+
+#: app/templates/customer_accounts
+msgid "Language of the emails"
+msgstr "لغة الرسائل"
+
+#: app/templates/customer_accounts
+msgid "English"
+msgstr "الإنجليزية"
+
+#: app/templates/customer_accounts
+msgid "Arabic"
+msgstr "العربية"
+
+#: app/templates/customer_accounts
+msgid "Create website account and send the invitation"
+msgstr "إنشاء حساب الموقع وإرسال الدعوة"
+
+#: app/templates/customer_accounts
+msgid "The customer gets a link to choose a password. An account is about signing in to the website only; it does not change any licence or device."
+msgstr "يصل العميل رابط لاختيار كلمة المرور. الحساب خاص بتسجيل الدخول إلى الموقع فقط ولا يغيّر أي ترخيص أو جهاز."
+
+#: app/templates/customer_accounts
+msgid "Invited -- password not set yet"
+msgstr "مدعو -- لم تُحدَّد كلمة المرور بعد"
+
+#: app/templates/customer_accounts
+msgid "Last sign-in"
+msgstr "آخر تسجيل دخول"
+
+#: app/templates/customer_accounts
+msgid "Reason it was disabled"
+msgstr "سبب التعطيل"
+
+#: app/templates/customer_accounts
+msgid "Send the invitation again"
+msgstr "إرسال الدعوة مرة أخرى"
+
+#: app/templates/customer_accounts
+msgid "Send a password reset link"
+msgstr "إرسال رابط إعادة تعيين كلمة المرور"
+
+#: app/templates/customer_accounts
+msgid "Sign out everywhere"
+msgstr "تسجيل الخروج من كل الأجهزة"
+
+#: app/templates/customer_accounts
+msgid "Confirm it is you to disable, enable or change the email"
+msgstr "أكّد هويتك لتعطيل الحساب أو تفعيله أو تغيير البريد الإلكتروني"
+
+#: app/templates/customer_accounts
+msgid "Enable this account"
+msgstr "تفعيل هذا الحساب"
+
+#: app/templates/customer_accounts
+msgid "Reason for disabling (kept in the audit log)"
+msgstr "سبب التعطيل (يُحفظ في سجل التدقيق)"
+
+#: app/templates/customer_accounts
+msgid "Disable this account"
+msgstr "تعطيل هذا الحساب"
+
+#: app/templates/customer_accounts
+msgid "Disabling stops the customer signing in to the website. Their licences and devices keep working."
+msgstr "التعطيل يمنع العميل من تسجيل الدخول إلى الموقع. تبقى تراخيصه وأجهزته تعمل."
+
+#: app/templates/customer_accounts
+msgid "New sign-in email address"
+msgstr "عنوان البريد الإلكتروني الجديد لتسجيل الدخول"
+
+#: app/templates/customer_accounts
+msgid "Reason for the change (kept in the audit log)"
+msgstr "سبب التغيير (يُحفظ في سجل التدقيق)"
+
+#: app/templates/customer_accounts
+msgid "Change the sign-in email"
+msgstr "تغيير بريد تسجيل الدخول"
+
+#: app/templates/customer_accounts
+msgid "The new address gets a confirmation link and the old address gets a notice. The email only changes when the link is used."
+msgstr "يصل العنوان الجديد رابط تأكيد ويصل العنوان القديم إشعار. لا يتغير البريد إلا عند استخدام الرابط."
+
+#: app/templates/customer_accounts
+msgid "Branch name"
+msgstr "اسم الفرع"
+
+#: app/templates/customer_accounts
+msgid "Shown to the customer when they pick which shop to sign in to. Leave empty to show just the branch number."
+msgstr "يظهر للعميل عند اختيار المتجر الذي سيسجّل الدخول إليه. اتركه فارغاً لإظهار رقم الفرع فقط."
+
+#: app/templates/customer_accounts
+msgid "This customer has no website account"
+msgstr "ليس لهذا العميل حساب على الموقع"
+
+#: app/templates/customer_accounts
+#, python-format
+msgid "%(name)s cannot sign in to the Action Aura website yet. Create the account now so they get their invitation."
+msgstr "لا يستطيع %(name)s تسجيل الدخول إلى موقع Action Aura بعد. أنشئ الحساب الآن ليصله الدعوة."
+
+#: app/templates/customer_accounts
+msgid "Create the website account"
+msgstr "إنشاء حساب الموقع"
+
+#: app/templates/customer_accounts
+msgid "Website account created"
+msgstr "تم إنشاء حساب الموقع"
+
+#: app/templates/customer_accounts
+msgid "Website account invitation sent again"
+msgstr "أُعيد إرسال دعوة حساب الموقع"
+
+#: app/templates/customer_accounts
+msgid "Website account reset link issued"
+msgstr "تم إصدار رابط إعادة تعيين حساب الموقع"
+
+#: app/templates/customer_accounts
+msgid "Website account password reset requested"
+msgstr "طُلبت إعادة تعيين كلمة مرور حساب الموقع"
+
+#: app/templates/customer_accounts
+msgid "Website account signed out everywhere"
+msgstr "تم تسجيل الخروج من حساب الموقع في كل الأجهزة"
+
+#: app/templates/customer_accounts
+msgid "Website account disabled"
+msgstr "تم تعطيل حساب الموقع"
+
+#: app/templates/customer_accounts
+msgid "Website account enabled"
+msgstr "تم تفعيل حساب الموقع"
+
+#: app/templates/customer_accounts
+msgid "Website account email change requested"
+msgstr "طُلب تغيير بريد حساب الموقع"
+
+#: app/templates/customer_accounts
+msgid "Website account email changed"
+msgstr "تم تغيير بريد حساب الموقع"
+
+#: app/templates/customer_accounts
+msgid "Website account password set"
+msgstr "تم تحديد كلمة مرور حساب الموقع"
+
+#: app/templates/customer_accounts
+msgid "Website account password changed"
+msgstr "تم تغيير كلمة مرور حساب الموقع"
+
+#: app/templates/customer_accounts
+msgid "Branch name changed"
+msgstr "تم تغيير اسم الفرع"

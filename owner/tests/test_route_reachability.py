@@ -544,6 +544,24 @@ _WEBSITE_INTAKE_ENDPOINTS = (
     'website_intake.website_lead',
 )
 
+_WEBSITE_ACCOUNT_API_REASON = (
+    "Step 2 CA1 customer website account API (/api/website/v1/account/*): called "
+    "server-to-server by the actionaura.me Pages Function, authenticated by an HMAC "
+    "signature (app/customer_accounts/signature.py). No browser and no Owner template "
+    "ever calls it, so no url_for() can reach it; it answers 404 unless a real "
+    "OWNER_WEBSITE_ACCOUNT_SECRET is configured."
+)
+
+_WEBSITE_ACCOUNT_API_ENDPOINTS = (
+    'website_account_api.sign_in',
+    'website_account_api.sign_out',
+    'website_account_api.me',
+    'website_account_api.password_forgot',
+    'website_account_api.password_set',
+    'website_account_api.password_change',
+    'website_account_api.email_confirm',
+)
+
 _IMPLICIT_FORM_SIBLING_REASON = (
     "POST sibling of a GET form-page route, reached by `<form "
     "method=\"post\">` with NO `action` attribute in the corresponding "
@@ -580,12 +598,13 @@ INTENTIONALLY_UNREACHABLE.update({e: _EXTERNAL_SYNC_API_REASON for e in _EXTERNA
 INTENTIONALLY_UNREACHABLE.update({e: _HEALTH_CHECK_REASON for e in _HEALTH_CHECK_ENDPOINTS})
 INTENTIONALLY_UNREACHABLE.update({e: _IMPLICIT_FORM_SIBLING_REASON for e in _IMPLICIT_FORM_SIBLING_ENDPOINTS})
 INTENTIONALLY_UNREACHABLE.update({e: _WEBSITE_INTAKE_REASON for e in _WEBSITE_INTAKE_ENDPOINTS})
+INTENTIONALLY_UNREACHABLE.update({e: _WEBSITE_ACCOUNT_API_REASON for e in _WEBSITE_ACCOUNT_API_ENDPOINTS})
 
 assert len(INTENTIONALLY_UNREACHABLE) == (
     len(_MOBILE_API_ENDPOINTS) + len(_COMMERCIAL_OPS_MACHINE_ENDPOINTS)
     + len(_EXTERNAL_PRODUCT_API_ENDPOINTS) + len(_EXTERNAL_LICENSING_API_ENDPOINTS)
     + len(_EXTERNAL_SYNC_API_ENDPOINTS) + len(_HEALTH_CHECK_ENDPOINTS)
-    + len(_IMPLICIT_FORM_SIBLING_ENDPOINTS) + len(_WEBSITE_INTAKE_ENDPOINTS)
+    + len(_IMPLICIT_FORM_SIBLING_ENDPOINTS) + len(_WEBSITE_INTAKE_ENDPOINTS) + len(_WEBSITE_ACCOUNT_API_ENDPOINTS)
 ), "duplicate endpoint name across the INTENTIONALLY_UNREACHABLE source tuples -- fix the typo, don't just let one silently overwrite another"
 
 

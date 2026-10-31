@@ -177,8 +177,13 @@ def detail(customer_id):
             "min": refund_policy.MIN_THRESHOLD_PERCENT, "max": refund_policy.MAX_THRESHOLD_PERCENT,
         }
 
+    # Step 2 CA1: the "Website account" panel (None = feature off / not theirs).
+    from app.customer_accounts.staff_routes import panel_context
+
+    website_account_panel = panel_context(customer, actor, codes)
+
     return render_template(
-        "customers/detail.html", customer=customer, notes=notes, interactions=interactions, followups=followups,
+        "customers/detail.html", customer=customer, website_account_panel=website_account_panel, notes=notes, interactions=interactions, followups=followups,
         locations=locations, assignment_history=assignment_history, followup_status=followup_status,
         is_overdue=is_overdue, error=error_text,
         quotes=quotes, orders=orders, invoices=invoices, payments=payments, subscriptions=subscriptions,

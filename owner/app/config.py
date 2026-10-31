@@ -111,6 +111,16 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         # and the contact the push services see. Key unset == push off.
         "OWNER_PUSH_VAPID_PRIVATE_KEY",
         "OWNER_PUSH_VAPID_SUBJECT",
+        # Step 2 CA1: customer website accounts (app/customer_accounts/).
+        # Everything is off unless these are set; see the BaseConfig block.
+        "OWNER_CUSTOMER_ACCOUNTS_ENABLED",
+        "OWNER_CUSTOMER_PORTAL_BASE_URL",
+        "OWNER_WEBSITE_ACCOUNT_KEY_ID",
+        "OWNER_WEBSITE_ACCOUNT_SECRET",
+        "OWNER_WEBSITE_ACCOUNT_KEY_ID_2",
+        "OWNER_WEBSITE_ACCOUNT_SECRET_2",
+        "OWNER_CUSTOMER_MAIL_FROM",
+        "OWNER_CUSTOMER_MAIL_REPLY_TO",
         # Read directly by other modules (not by this Config class), but
         # still legitimate OWNER_* variables -- must not trip the unknown-key
         # check in strict mode.
@@ -332,6 +342,27 @@ class BaseConfig:
     # The contact a push service may use to reach the sender (RFC 8292 "sub");
     # Apple refuses a message without a mailto: or https: subject.
     PUSH_VAPID_SUBJECT = os.environ.get("OWNER_PUSH_VAPID_SUBJECT", "mailto:info@actionaura.me").strip()
+    # -- Step 2 CA1 (2026-10-25): customer website accounts (app/customer_accounts/).
+    # OFF unless OWNER_CUSTOMER_ACCOUNTS_ENABLED=true: the staff "Website account"
+    # panel and routes do not exist (404) and nothing is mailed. The website-facing
+    # API (/api/website/v1/account/*) has its OWN gate: it answers 404 unless a real
+    # shared secret is set below. The portal base URL is the ONLY place a link in a
+    # customer mail is built from (never the request Host: a forged Host would put
+    # an attacker's address in OUR mail, see ALLOWED_HOSTS above).
+    CUSTOMER_ACCOUNTS_ENABLED = os.environ.get("OWNER_CUSTOMER_ACCOUNTS_ENABLED", "false").strip().lower() == "true"
+    CUSTOMER_PORTAL_BASE_URL = os.environ.get("OWNER_CUSTOMER_PORTAL_BASE_URL", "").strip().rstrip("/")
+    # Two key slots so the shared secret can be rotated without a second of
+    # downtime: add the new one in slot 2, move the website to it, then retire
+    # slot 1. A slot with a placeholder/short secret is simply not active.
+    WEBSITE_ACCOUNT_KEY_ID = os.environ.get("OWNER_WEBSITE_ACCOUNT_KEY_ID", "k1").strip() or "k1"
+    WEBSITE_ACCOUNT_SECRET = os.environ.get("OWNER_WEBSITE_ACCOUNT_SECRET", "").strip()
+    WEBSITE_ACCOUNT_KEY_ID_2 = os.environ.get("OWNER_WEBSITE_ACCOUNT_KEY_ID_2", "k2").strip() or "k2"
+    WEBSITE_ACCOUNT_SECRET_2 = os.environ.get("OWNER_WEBSITE_ACCOUNT_SECRET_2", "").strip()
+    # Customer mail: sender address (owner wants noreply@actionaura.me; unset =
+    # the normal OWNER_SMTP_FROM) and Reply-To (unset = NO Reply-To header at
+    # all; whether support@ is a real mailbox is not known yet).
+    CUSTOMER_MAIL_FROM = os.environ.get("OWNER_CUSTOMER_MAIL_FROM", "").strip()
+    CUSTOMER_MAIL_REPLY_TO = os.environ.get("OWNER_CUSTOMER_MAIL_REPLY_TO", "").strip()
     # M2: when true, validate() also rejects any OWNER_* environment variable
     # that isn't in KNOWN_CONFIG_ENV_VARS (catches typos like a misspelled
     # override that would otherwise silently fall back to a default). Off by
@@ -547,6 +578,14 @@ class TestingConfig(BaseConfig):
     # Push is off unless a test turns it on via app.config (never inherited
     # from the shell env), like the intake secret above.
     PUSH_VAPID_PRIVATE_KEY = ""
+    # Customer accounts are off unless a test turns them on via app.config
+    # (never inherited from the shell env), like the two above.
+    CUSTOMER_ACCOUNTS_ENABLED = False
+    CUSTOMER_PORTAL_BASE_URL = ""
+    WEBSITE_ACCOUNT_SECRET = ""
+    WEBSITE_ACCOUNT_SECRET_2 = ""
+    CUSTOMER_MAIL_FROM = ""
+    CUSTOMER_MAIL_REPLY_TO = ""
 
 
 class ProductionConfig(BaseConfig):

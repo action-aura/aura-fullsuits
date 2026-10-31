@@ -178,6 +178,7 @@
       <p style="color:#6b7785;font-size:0.85rem;">{{ _("A refund stops this customer's licence (2 days later) only when the package money given back is above this percentage of the package money paid.") }}</p>
     </div>
     {% endif %}
+    {% if website_account_panel %}{% include "customers/_website_account.html" %}{% endif %}
     {% if next_followup or open_quote %}
     <div class="card">
       <h3>{{ _("Open items") }}</h3>

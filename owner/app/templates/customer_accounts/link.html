@@ -1,0 +1,25 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Website account") }}{% endblock %}
+{% block content %}
+<div class="card">
+  {% if what == "RESET" %}
+  <h2>{{ _("Password reset link for %(email)s", email=issued.account.email) }}</h2>
+  {% elif what == "EMAIL_CHANGE" %}
+  <h2>{{ _("Email change link") }}</h2>
+  {% else %}
+  <h2>{{ _("Website account invitation for %(email)s", email=issued.account.email) }}</h2>
+  {% endif %}
+  {% if issued.emailed %}
+  <p data-link-emailed="1">{{ _("We emailed the link. For safety it is not shown here.") }}</p>
+  {% else %}
+  <p data-link-shown-once="1">{{ _("Email is not set up on this server, so nothing was sent. Copy this one-time link and send it to the customer yourself (for example on WhatsApp). It is shown only now and cannot be shown again:") }}</p>
+  <p><code style="word-break:break-all;" dir="ltr" id="customer-account-link">{{ issued.link }}</code></p>
+  <p>
+    <button type="button" class="secondary" data-copy-target="customer-account-link"
+            data-copy-label="{{ _('Copy link') }}" data-copy-success-label="{{ _('Copied') }}"
+            data-copy-fallback-label="{{ _('Selected -- press Ctrl+C') }}">{{ _("Copy link") }}</button>
+  </p>
+  {% endif %}
+  <a class="btn" href="{{ url_for('customers.detail', customer_id=customer_id) }}#website-account">{{ _("Back to the customer") }}</a>
+</div>
+{% endblock %}
