@@ -2683,7 +2683,7 @@ const SubsystemApp = {
       // that page, folded under the sign-in. After activation the page sends
       // the person back here and the role step above asks which computer it is.
       // A key already submitted and waiting for approval keeps its own screens.
-      if (this._needsActivation(lic) && !this._isActivationPending()) {
+      if (this._needsActivation(lic) && lic.current_state !== 'ACTIVATING' && !this._isActivationPending()) {
         location.href = '/static/licensing.html?gate=1';
         return;
       }

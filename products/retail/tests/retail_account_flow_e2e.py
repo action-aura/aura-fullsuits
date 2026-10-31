@@ -73,7 +73,7 @@ MUTANTS = {
     "cashier_gets_setup": ("**/app-shell.js", "    return this._waitForShopAccount();\n  },\n\n  // ── First-run brand intro",
                            "    return this.showSetupModal();\n  },\n\n  // ── First-run brand intro"),
     "no_gate_redirect": ("**/app-shell.js",
-                         "if (this._needsActivation(lic) && !this._isActivationPending()) {\n        location.href = '/static/licensing.html?gate=1';",
+                         "if (this._needsActivation(lic) && lic.current_state !== 'ACTIVATING' && !this._isActivationPending()) {\n        location.href = '/static/licensing.html?gate=1';",
                          "if (false) {\n        location.href = '/static/licensing.html?gate=1';"),
 }
 MUTATE = os.environ.get("ACCT_MUTATE")

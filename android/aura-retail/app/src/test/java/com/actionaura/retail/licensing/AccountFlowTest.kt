@@ -309,8 +309,10 @@ class AccountFlowTest {
 
     // ── wiring that only exists in Compose / AppRoot (source guards, like LicensingWiringContractTest) ──
 
+    private val moduleRoot = File(".")
+
     private fun source(relative: String): String {
-        val file = File(File("."), relative)
+        val file = File(moduleRoot, relative)
         assumeTrue("$relative not reachable from this run context", file.exists())
         return file.readText()
     }

@@ -62,6 +62,10 @@
     PLATFORM_NOT_ALLOWED: 'This license key is not valid for a Windows installation.',
     DEVICE_LIMIT_REACHED: 'This license has reached its computer limit. Deactivate another computer or contact support to add capacity.',
     RATE_LIMITED: 'Too many attempts. Please wait a moment and try again.',
+    // New customer flow: the activation-code path answers with these on /activate.
+    ACTIVATION_GRANT_INVALID: 'This computer could not be activated with that account. Sign in again, or contact your seller.',
+    TRIAL_REQUIRES_UPDATE: 'This version of Aura Retail is too old to start a trial. Please download the newest version from actionaura.me and install it.',
+    CONTRACT_ACCEPTANCE_REQUIRED: 'The agreement must be accepted before this computer can be activated.',
     NETWORK_UNAVAILABLE: 'Could not reach the licensing service. Check your internet connection and try again.',
     REQUEST_TIMED_OUT: 'The request timed out. Please try again.',
     TLS_VERIFICATION_FAILED: 'A secure connection to the licensing service could not be established.',
