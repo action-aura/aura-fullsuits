@@ -29,7 +29,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin, UUIDPKMixin
 
 ACCOUNT_STATUSES = ("INVITED", "ACTIVE", "DISABLED")
-TOKEN_KINDS = ("INVITE", "RESET", "EMAIL_CHANGE")
+TOKEN_KINDS = ("INVITE", "RESET", "EMAIL_CHANGE", "VERIFY_EMAIL")
 
 
 class CustomerAccount(Base, UUIDPKMixin, TimestampMixin):
@@ -69,12 +69,28 @@ class CustomerAccount(Base, UUIDPKMixin, TimestampMixin):
     created_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
     )
+    # New customer flow (NC1, e2c4a8b1f730). A seller can create an account that is
+    # ACTIVE from birth with a temporary password they typed (the customer is
+    # standing next to them). True means "the customer must choose their own
+    # password before anything else": the website and the apps send them to the
+    # change-password step at the first sign-in, and the flag is cleared only by
+    # the customer's own password change.
+    password_must_change: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    # Set when the customer proves the mailbox is theirs (VERIFY_EMAIL link). A
+    # seller-typed address is NOT verified at creation; ACTIVE here no longer
+    # implies "verified" for these accounts, this column says so.
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    password_set_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
 
 
 class CustomerAccountToken(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_customer_account_tokens"
     __table_args__ = (
-        CheckConstraint("kind IN ('INVITE', 'RESET', 'EMAIL_CHANGE')", name="ck_owner_customer_account_tokens_kind"),
+        CheckConstraint(
+            "kind IN ('INVITE', 'RESET', 'EMAIL_CHANGE', 'VERIFY_EMAIL')", name="ck_owner_customer_account_tokens_kind"
+        ),
         CheckConstraint(
             "(kind = 'EMAIL_CHANGE' AND new_email IS NOT NULL) OR (kind <> 'EMAIL_CHANGE' AND new_email IS NULL)",
             name="ck_owner_customer_account_tokens_new_email",

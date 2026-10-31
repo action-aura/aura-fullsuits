@@ -1,0 +1,151 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Create a new customer") }}{% endblock %}
+{% block content %}
+{# New customer flow, slice S2. MOBILE FIRST: sellers fill this on the phone, standing
+   next to the customer -- one column, 16px+ text (a smaller font makes iOS zoom the page
+   on focus), 48px tap targets, the two photos open the camera directly, and the submit
+   button stays at the bottom of the screen. #}
+<style>
+  .nc-form { max-width: 560px; margin: 0 auto; padding-bottom: 5.5rem; }
+  .nc-form fieldset { border: 0; padding: 0; margin: 0 0 1.25rem; }
+  .nc-form legend { font-weight: 600; font-size: 1.05rem; margin-bottom: 0.5rem; padding: 0; }
+  .nc-form label { display: block; margin: 0.75rem 0 0.25rem; font-size: 0.95rem; }
+  .nc-form input[type=text], .nc-form input[type=email], .nc-form input[type=tel],
+  .nc-form input[type=file], .nc-form select, .nc-form textarea {
+    width: 100%; min-height: 48px; font-size: 16px; box-sizing: border-box; padding: 0.6rem 0.75rem;
+  }
+  .nc-hint { color: #6b7785; font-size: 0.85rem; margin: 0.25rem 0 0; }
+  .nc-pkg { display: flex; gap: 0.75rem; align-items: flex-start; border: 1px solid #c8d0d8; border-radius: 10px;
+    padding: 0.75rem; margin: 0.5rem 0; min-height: 48px; cursor: pointer; }
+  .nc-pkg input { margin-top: 0.25rem; width: 22px; height: 22px; flex: none; }
+  .nc-pkg strong { display: block; }
+  .nc-row { display: flex; gap: 0.5rem; }
+  .nc-row > * { flex: 1; }
+  .nc-btn { min-height: 48px; font-size: 16px; padding: 0.6rem 1rem; }
+  .nc-check { display: flex; gap: 0.75rem; align-items: flex-start; }
+  .nc-check input { width: 22px; height: 22px; flex: none; margin-top: 0.15rem; }
+  .nc-submit { position: fixed; inset-inline: 0; bottom: 0; background: var(--aura-color-surface, #fff);
+    border-top: 1px solid #c8d0d8; padding: 0.75rem 1rem; z-index: 5; }
+  .nc-submit button { width: 100%; min-height: 52px; font-size: 1.05rem; }
+  #nc-pw { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.04em; }
+</style>
+
+<div class="nc-form">
+  <h2>{{ _("Create a new customer") }}</h2>
+  <p>{{ _("Fill this in with the customer next to you. It makes their account, starts their free 7-day trial and gives you the licence key to keep as a backup. The trial clock starts when they first open the app, not now.") }}</p>
+
+  {% if not kyc_ready %}
+  <p class="error" role="alert">{{ _("Customer documents cannot be stored on this server yet (no encryption key is set). Nothing was created. Ask the administrator.") }}</p>
+  {% endif %}
+  {% if error %}<p class="error" role="alert" data-onboarding-error="1">{{ error }}</p>{% endif %}
+
+  <form method="post" action="{{ url_for('customer_onboarding.create') }}" enctype="multipart/form-data" autocomplete="off"
+        id="nc-form" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="idempotency_key" value="{{ form_key }}">
+    <input type="hidden" name="product_code" value="AURA_RETAIL">
+    <input type="hidden" name="latitude" id="nc-lat" value="{{ values.get('latitude', '') }}">
+    <input type="hidden" name="longitude" id="nc-lng" value="{{ values.get('longitude', '') }}">
+    <input type="hidden" name="accuracy_meters" id="nc-acc" value="{{ values.get('accuracy_meters', '') }}">
+
+    <fieldset>
+      <legend>{{ _("1. The shop") }}</legend>
+      <label for="nc-business">{{ _("Shop (business) name") }}</label>
+      <input id="nc-business" type="text" name="business_name" required maxlength="255" autocomplete="organization"
+             value="{{ values.get('business_name', '') }}">
+      <label for="nc-contact">{{ _("Owner's name (optional)") }}</label>
+      <input id="nc-contact" type="text" name="contact_name" maxlength="255" autocomplete="name" value="{{ values.get('contact_name', '') }}">
+      <label for="nc-phone">{{ _("Phone (WhatsApp)") }}</label>
+      <input id="nc-phone" type="tel" name="phone" inputmode="tel" required dir="ltr" autocomplete="tel"
+             placeholder="079 123 4567" value="{{ values.get('phone', '') }}">
+      <label for="nc-cr">{{ _("Commercial registration number") }}</label>
+      <input id="nc-cr" type="text" name="cr_number" required maxlength="128" dir="ltr" value="{{ values.get('cr_number', '') }}">
+    </fieldset>
+
+    <fieldset>
+      <legend>{{ _("2. Where is the shop?") }}</legend>
+      <label for="nc-address">{{ _("Address or area") }}</label>
+      <input id="nc-address" type="text" name="address" required maxlength="500" autocomplete="street-address" value="{{ values.get('address', '') }}">
+      <label for="nc-city">{{ _("City") }}</label>
+      <input id="nc-city" type="text" name="city" maxlength="128" autocomplete="address-level2" value="{{ values.get('city', '') }}">
+      <p style="margin-top:0.75rem;">
+        <button type="button" class="secondary nc-btn" id="nc-locate"
+                data-ok="{{ _('Location captured.') }}" data-denied="{{ _('Location permission was denied or unavailable.') }}"
+                data-unsupported="{{ _('Location is not supported by this browser.') }}"
+                data-busy="{{ _('Getting your location...') }}">{{ _("Use my current location") }}</button>
+        <span id="nc-locate-status" role="status" class="nc-hint"></span>
+      </p>
+      <p class="nc-hint">{{ _("Optional. Asked once, only when you press the button; the app never tracks you.") }}</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>{{ _("3. Photos") }}</legend>
+      <label for="nc-id">{{ _("Photo of the owner's ID") }}</label>
+      <input id="nc-id" type="file" name="id_photo" accept="image/*,application/pdf" capture="environment" required>
+      <label for="nc-crphoto">{{ _("Photo of the commercial registration") }}</label>
+      <input id="nc-crphoto" type="file" name="cr_photo" accept="image/*,application/pdf" capture="environment" required>
+      <p class="nc-hint">{{ _("Up to 10 MB each. They are stored encrypted and only a Sales Manager can open them.") }}</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>{{ _("4. Package") }}</legend>
+      <p class="nc-hint">{{ _("Aura Retail") }}</p>
+      {% for pkg in packages %}
+      <label class="nc-pkg">
+        <input type="radio" name="plan_id" value="{{ pkg.plan_id }}" required
+               {% if values.get('plan_id') == pkg.plan_id|string or (not values.get('plan_id') and loop.first) %}checked{% endif %}>
+        <span>
+          <strong>{{ catalog_label(pkg.name) }}</strong>
+          {{ _("first payment") }} {{ pkg.first_sale_unit_price }} {{ pkg.currency }},
+          {{ _("then") }} {{ pkg.renewal_unit_price }} {{ pkg.currency }}
+          {% if pkg.billing_model == "MONTHLY" %}{{ _("a month") }}{% elif pkg.billing_model == "ANNUAL" %}{{ _("a year") }}{% endif %}
+          &middot; {{ pkg.included_device_count }} {{ _("devices included") }}
+        </span>
+      </label>
+      {% else %}
+      <p class="error">{{ _("No sellable packages yet -- set an effective date and current price on a plan first.") }}</p>
+      {% endfor %}
+      <p class="nc-hint">{{ _("The customer pays after the trial. Nothing is charged now.") }}</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>{{ _("5. Sign-in") }}</legend>
+      <label for="nc-email">{{ _("Email address (the customer signs in with it)") }}</label>
+      <input id="nc-email" type="email" name="email" required dir="ltr" inputmode="email" autocomplete="off"
+             autocapitalize="none" spellcheck="false" value="{{ values.get('email', '') }}">
+      <label for="nc-pw">{{ _("Temporary password") }}</label>
+      <div class="nc-row">
+        <input id="nc-pw" type="text" name="temp_password" required minlength="10" maxlength="128" dir="ltr"
+               autocomplete="off" autocapitalize="none" spellcheck="false">
+        <button type="button" class="secondary nc-btn" id="nc-genpw" style="flex:none;">{{ _("Make one") }}</button>
+      </div>
+      <p class="nc-hint">{{ _("Tell it to the customer now. They must choose their own at the first sign-in. It is never shown again.") }}</p>
+      <label for="nc-lang">{{ _("Language") }}</label>
+      <select id="nc-lang" name="language">
+        <option value="ar" {% if values.get('language', 'ar') == 'ar' %}selected{% endif %}>{{ _("Arabic") }}</option>
+        <option value="en" {% if values.get('language') == 'en' %}selected{% endif %}>{{ _("English") }}</option>
+      </select>
+    </fieldset>
+
+    {% if may_override %}
+    <fieldset>
+      <legend>{{ _("Manager only") }}</legend>
+      <label class="nc-check"><input type="checkbox" name="override_duplicate" value="1" {% if values.get('override_duplicate') == '1' %}checked{% endif %}>
+        <span>{{ _("This shop already exists, but it should get another trial") }}</span></label>
+      <label for="nc-override-reason">{{ _("Why? (at least 10 characters)") }}</label>
+      <textarea id="nc-override-reason" name="override_reason" rows="2" maxlength="500">{{ values.get('override_reason', '') }}</textarea>
+    </fieldset>
+    {% endif %}
+
+    <label class="nc-check">
+      <input type="checkbox" name="consent" value="1" required {% if values.get('consent') == '1' %}checked{% endif %}>
+      <span>{{ _("The customer agrees that we store a copy of their ID and commercial registration (kept in the EU, encrypted) to open their account.") }}</span>
+    </label>
+
+    <div class="nc-submit">
+      <button type="submit" class="btn--primary-action" {% if not kyc_ready or not packages %}disabled{% endif %}>{{ _("Create the customer and start the trial") }}</button>
+    </div>
+  </form>
+</div>
+<script src="{{ url_for('static', filename='js/onboarding-form.js') }}"></script>
+{% endblock %}

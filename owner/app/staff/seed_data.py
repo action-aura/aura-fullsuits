@@ -129,6 +129,13 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("customer_accounts.manage", "CUSTOMERS", "Create a website account, send/resend its invitation or reset link, sign it out everywhere"),
     ("customer_accounts.disable", "CUSTOMERS", "Disable or enable a customer's website account (blocks sign-in only, never a licence)"),
     ("customer_accounts.change_email", "CUSTOMERS", "Change the sign-in email of a customer's website account"),
+    # New customer flow (2026-10-31). onboard = the seller's "Create a new customer" form;
+    # the other three are manager powers: press through a duplicate shop, give a trial
+    # 1-7 more days once, and open a customer's ID / registration photo (never the seller).
+    ("customers.onboard", "CUSTOMERS", "Create a new customer with a website account and a 7-day trial in one form"),
+    ("trials.override_duplicate", "CUSTOMERS", "Create a second trial for a shop that already exists (with a written reason)"),
+    ("trials.extend", "CUSTOMERS", "Extend a started trial once, by up to 7 days (with a written reason)"),
+    ("customer_documents.view", "CUSTOMERS", "Open a customer's ID, commercial registration and payment-slip photos"),
     ("quotes.create", "COMMERCIAL_SALES", "Create a quote"),
     ("quotes.approve", "COMMERCIAL_SALES", "Approve/send a quote"),
     ("orders.create", "COMMERCIAL_SALES", "Create a sales order"),
@@ -229,6 +236,8 @@ ROLES: dict[str, dict] = {
             "customers.view_own", "customers.update_own", "customers.capture_location",
             # Step 2 CA1: a seller creates the website account for THEIR OWN customer.
             "customer_accounts.view", "customer_accounts.manage",
+            # New customer flow: the seller's one form (customer + account + trial).
+            "customers.onboard",
             "quotes.create", "orders.create", "invoices.create",
             # Phase 9.5D Milestone 18 -- real gap found and closed:
             # payments.create was FINANCE-only, but submit_payment()'s own
@@ -294,6 +303,7 @@ ROLES: dict[str, dict] = {
             "customers.manage_notes", "customers.view_own", "customers.view_all", "customers.update_own",
             "customers.update_all", "customers.assign", "customers.capture_location", "customers.verify_location",
             "customer_accounts.view", "customer_accounts.manage",
+            "customers.onboard", "trials.override_duplicate", "trials.extend", "customer_documents.view",
             "leads.create", "leads.discover", "leads.view_own", "leads.view_all", "leads.update_own",
             "leads.update_all", "leads.assign", "leads.convert", "leads.archive",
             "subscriptions.view", "licenses.view", "installations.view", "pilots.view",

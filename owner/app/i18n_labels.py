@@ -1079,6 +1079,88 @@ def localize_direct_sale_error(code: str, **params) -> str:
         "REJECT_INVOICE_EXISTS": _(
             "An invoice was already made for this sale; it can no longer be rejected here. Void the invoice first."
         ),
+        # New customer flow (S3): paying for a trial, and the payment slip photo.
+        "SLIP_REQUIRED": _("Add a photo of the bank slip or CliQ confirmation. A trial is only unlocked against a slip."),
+        "SLIP_TYPE_NOT_ALLOWED": _("The slip must be a JPEG or PNG picture (or a PDF)."),
+        "SLIP_TOO_LARGE": _("The slip photo is too large (at most 10 MB)."),
+        "SLIP_INVALID": _("The slip photo is empty or damaged. Take it again."),
+        "SLIP_STORAGE_NOT_READY": _(
+            "Slip photos cannot be stored on this server yet (no encryption key is set). Nothing was recorded. Ask the administrator."
+        ),
+        "CONVERSION_TRIAL_NOT_FOUND": _("The trial to pay for was not found."),
+        "CONVERSION_CUSTOMER_MISMATCH": _("That trial belongs to a different customer."),
+        "CONVERSION_NOT_A_TRIAL": _("That subscription is not a running trial, so there is nothing to convert."),
+        "CONVERSION_WRONG_PRODUCT": _("A trial can only be paid with a package of its own product."),
+        "CONVERSION_ALREADY_PENDING": _(
+            "A payment for this trial is already waiting for a manager. Wait for it, or ask a manager to reject it first."
+        ),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
+def localize_onboarding_error(code: str, **params) -> str:
+    """New customer flow (S2): customer_onboarding.service.OnboardingError and
+    trial.TrialError by code -- the presentation-boundary pattern of
+    localize_direct_sale_error. The service's own str(exc) stays English and
+    request-free (service.ONBOARDING_MESSAGES holds the same sentences)."""
+    params = dict(params)
+    fields = params.pop("fields", None)
+    if code == "TRIAL_ALREADY_USED":
+        labels = {"cr": _("registration number"), "phone": _("phone number"), "email": _("email address")}
+        params["what"] = _(" and ").join(str(labels.get(f, f)) for f in (fields or ()))
+    messages = {
+        "FEATURE_OFF": _("Creating a new customer is not switched on here."),
+        "KEY_REQUIRED": _("An idempotency key is required to create a customer."),
+        "OWN_PROFILE_REQUIRED": _("Creating a customer needs your own employee profile. Ask a manager to add one."),
+        "SELLER_NOT_ACTIVE": _("Only an active employee can create a customer."),
+        "KYC_NOT_READY": _(
+            "Customer documents cannot be stored on this server yet (no encryption key is set). Nothing was created. Ask the administrator."
+        ),
+        "CONSENT_REQUIRED": _("Tick the box to confirm the customer agreed to the storing of their ID and registration documents."),
+        "BUSINESS_NAME_REQUIRED": _("Type the shop's (business) name."),
+        "NAME_TOO_LONG": _("A name is too long (at most %(max)s characters)."),
+        "EMAIL_INVALID": _("Type a valid email address for the customer."),
+        "EMAIL_IN_USE": _("This email address is already used by another customer's account."),
+        "PASSWORD_REQUIRED": _("Type a temporary password for the customer."),
+        "PASSWORD_TOO_SHORT": _("The temporary password must be at least 10 characters."),
+        "PASSWORD_TOO_LONG": _("The temporary password is too long."),
+        "PASSWORD_TOO_COMMON": _("That password is too common. Pick another temporary password."),
+        "PASSWORD_CONTAINS_PERSONAL": _("The password must not contain the customer's email or shop name."),
+        "PHONE_INVALID": _("Type a valid phone number, like 079 123 4567."),
+        "CR_NUMBER_REQUIRED": _("Type the commercial registration number."),
+        "CR_NUMBER_TOO_LONG": _("The registration number is too long (at most %(max)s characters)."),
+        "ADDRESS_REQUIRED": _("Type where the shop is (address or area)."),
+        "LOCATION_INVALID": _("The captured location is not valid. Capture it again or leave it empty."),
+        "ID_PHOTO_REQUIRED": _("Add a photo of the owner's ID."),
+        "CR_PHOTO_REQUIRED": _("Add a photo of the commercial registration."),
+        "DOCUMENT_TYPE_NOT_ALLOWED": _("Photos must be JPEG or PNG pictures (or a PDF)."),
+        "DOCUMENT_TOO_LARGE": _("A photo is too large (at most %(max_mb)s MB)."),
+        "DOCUMENT_EMPTY": _("A photo file is empty."),
+        "DOCUMENT_CORRUPT": _("A photo file is damaged. Take it again."),
+        "PRODUCT_NOT_AVAILABLE": _("This product is not available for new customers yet."),
+        "PACKAGE_NOT_FOUND": _("Selected package was not found."),
+        "PACKAGE_WRONG_PRODUCT": _("That package belongs to a different product."),
+        "PACKAGE_NOT_SELLABLE": _("Selected package is not currently sellable (check its effective date and price)."),
+        "PACKAGE_NO_PLATFORMS": _("Selected package has no supported platforms configured."),
+        "TRIAL_ALREADY_USED": _("A shop with this %(what)s already exists, and a shop gets only one trial. Ask a Sales Manager."),
+        "OVERRIDE_NOT_ALLOWED": _("Only a Sales Manager or Super Admin may create a second trial for the same shop."),
+        "OVERRIDE_REASON_REQUIRED": _("Write why this shop should get another trial (at least %(min)s characters)."),
+        "KEY_USED_FOR_DIFFERENT_FORM": _(
+            "This form was already used to create a different customer. Open a fresh form to create another one."
+        ),
+        "ONBOARDING_IN_PROGRESS": _(
+            "This customer is still being created from an earlier click. Wait a moment, then check the customer list."
+        ),
+        # trial.TrialError (extend / activation)
+        "TRIAL_EXTEND_REASON_REQUIRED": _("Write why the trial is extended (at least 10 characters)."),
+        "TRIAL_EXTEND_DAYS_INVALID": _("A trial can be extended by 1 to 7 days."),
+        "NOT_A_TRIAL": _("This is not a trial."),
+        "TRIAL_NOT_STARTED": _("The trial has not started yet: no device has signed in. There is nothing to extend."),
+        "TRIAL_NOT_ACTIVE": _("This trial is over (paid, cancelled or closed)."),
+        "TRIAL_ALREADY_EXTENDED": _("This trial was already extended once."),
     }
     template = messages.get(code)
     if template is None:

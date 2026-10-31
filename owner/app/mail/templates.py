@@ -32,6 +32,7 @@ _SUBJECTS = {
     # Step 2 CA1: customer website account mail. NOT in the product relay's KINDS
     # (app/mail/relay.py): only Owner's own code can queue these.
     "customer_invitation": ("Set up your Action Aura account", "إعداد حسابك في Action Aura"),
+    "customer_welcome": ("Welcome to Action Aura - confirm your email", "مرحباً بك في Action Aura - أكّد بريدك الإلكتروني"),
     "customer_password_reset": ("Reset your Action Aura password", "إعادة تعيين كلمة مرور Action Aura"),
     "customer_password_changed": ("Your Action Aura password was changed", "تم تغيير كلمة مرور Action Aura"),
     "customer_email_change": ("Confirm your new Action Aura email address", "تأكيد بريدك الإلكتروني الجديد في Action Aura"),
@@ -42,7 +43,7 @@ _SUBJECTS = {
 # Kinds whose body carries a live one-time link. The sender clears the body the
 # moment such a message is SENT (app/mail/outbox.py::mark_sent), so a finished
 # mail row never keeps a usable token.
-LINK_BEARING_KINDS = frozenset({"customer_invitation", "customer_password_reset", "customer_email_change"})
+LINK_BEARING_KINDS = frozenset({"customer_invitation", "customer_welcome", "customer_password_reset", "customer_email_change"})
 CUSTOMER_KIND_PREFIX = "customer_"
 
 # (english intro, arabic intro) per kind -- the link / list is added below.
@@ -62,6 +63,8 @@ _INTROS = {
              "هذه رسالة اختبار من Aura Owner. إذا استطعت قراءتها فإرسال البريد يعمل."),
     "customer_invitation": ("Action Aura has set up an account for you. Open this one-time link to choose your password:",
                             "أنشأت Action Aura حساباً لك. افتح هذا الرابط لمرة واحدة لاختيار كلمة المرور:"),
+    "customer_welcome": ("Your seller has set up your Action Aura account. Sign in on our website with this email address and the temporary password your seller gave you (we never send passwords by email); you will be asked to choose your own. Please also confirm this address with the link below:",
+                         "قام البائع بإعداد حسابك في Action Aura. سجّل الدخول على موقعنا بهذا البريد وكلمة المرور المؤقتة التي أعطاك إياها البائع (لا نرسل كلمات المرور بالبريد)، وسيُطلب منك اختيار كلمة مرور خاصة بك. يرجى أيضاً تأكيد هذا البريد عبر الرابط التالي:"),
     "customer_password_reset": ("Someone asked to reset the password of your Action Aura account. Open this link to choose a new one:",
                                 "طُلب إعادة تعيين كلمة مرور حسابك في Action Aura. افتح هذا الرابط لاختيار كلمة مرور جديدة:"),
     "customer_password_changed": ("The password of your Action Aura account was just changed. Your licences and devices are not affected.",
@@ -85,6 +88,8 @@ _LINK_NOTES = {
                              "يعمل الرابط لمدة 30 دقيقة ويتوقف عن العمل بعد تغيير كلمة المرور. إذا لم تطلب ذلك فتجاهل هذه الرسالة - لن تتغير كلمة مرورك."),
     "customer_invitation": ("The link works once and expires in 3 days. If you were not expecting this, ignore this email.",
                             "يعمل الرابط مرة واحدة وتنتهي صلاحيته خلال 3 أيام. إذا لم تكن تتوقع هذه الرسالة فتجاهلها."),
+    "customer_welcome": ("The link works once and expires in 14 days. If you were not expecting this, ignore this email.",
+                         "يعمل الرابط مرة واحدة وتنتهي صلاحيته خلال 14 يوماً. إذا لم تكن تتوقع هذه الرسالة فتجاهلها."),
     "customer_password_reset": ("The link works for 30 minutes and only once. If you did not ask for this, ignore this email - your password will not change.",
                                 "يعمل الرابط لمدة 30 دقيقة ولمرة واحدة. إذا لم تطلب ذلك فتجاهل هذه الرسالة - لن تتغير كلمة مرورك."),
     "customer_password_changed": ("If this was not you, reset your password now from the sign-in page and contact Action Aura.",

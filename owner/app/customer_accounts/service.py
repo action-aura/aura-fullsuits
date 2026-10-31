@@ -40,6 +40,10 @@ TOKEN_TTL = {
     "INVITE": timedelta(hours=72),
     "RESET": timedelta(minutes=30),
     "EMAIL_CHANGE": timedelta(hours=24),
+    # New customer flow: proves the mailbox a SELLER typed is the customer's. Long
+    # (14 days) because the customer may not open the mail until they have got
+    # home; it grants nothing but the verified flag, so a longer life is harmless.
+    "VERIFY_EMAIL": timedelta(days=14),
 }
 SESSION_IDLE = timedelta(minutes=60)
 SESSION_ABSOLUTE = timedelta(hours=12)
@@ -166,7 +170,8 @@ def _revoke_unused_links(account: CustomerAccount) -> None:
     The caller commits."""
     db_session.execute(
         update(CustomerAccountToken)
-        .where(CustomerAccountToken.account_id == account.id, CustomerAccountToken.kind.in_(("INVITE", "RESET")),
+        .where(CustomerAccountToken.account_id == account.id,
+               CustomerAccountToken.kind.in_(("INVITE", "RESET", "VERIFY_EMAIL")),
                CustomerAccountToken.consumed_at.is_(None), CustomerAccountToken.revoked_at.is_(None))
         .values(revoked_at=_now())
     )
@@ -253,6 +258,71 @@ def create_account(customer: Customer, email: str, language: str, actor_staff_us
         raise AccountError("email_in_use")
     _audit("CUSTOMER_ACCOUNT_CREATED", account, actor_staff_user_id=actor_staff_user_id, after={"language": language})
     return _send_link(account, "INVITE", raw, "customer_invitation")
+
+
+def create_account_with_temp_password(
+    customer: Customer, email: str, language: str, password: str, actor_staff_user_id
+) -> tuple[CustomerAccount, "IssuedLink | None"]:
+    """New customer flow: the seller is standing next to the customer, types their
+    email and a TEMPORARY password, and the account is ACTIVE at once -- the
+    customer signs in on the website with those two things and is made to choose
+    their own password first (password_must_change). Differences from
+    create_account (the staff 'send an invitation' path), each deliberate:
+      - ACTIVE immediately: the customer has no mailbox round-trip before the
+        trial can start, but email_verified_at stays NULL until they use the
+        VERIFY_EMAIL link (the old rule 'ACTIVE implies verified' does not hold
+        for these accounts; the column says so);
+      - the password is checked against the customer-password policy (a seller
+        must not be able to set 'password123' or the shop's own name);
+      - the password is NEVER mailed and never audited; the mail carries only the
+        verify link (or, with email off, the link is returned to be shown once).
+    The caller (the onboarding action) holds the per-form lock; this commits its
+    own rows. Returns (account, verify link or None when the portal URL is unset)."""
+    email = normalize_email(email)
+    language = language if language in LANGUAGES else "en"
+    if get_account_for_customer(customer.id) is not None:
+        raise AccountError("account_exists")
+    if get_account_by_email(email) is not None:
+        raise AccountError("email_in_use")
+    policy.validate(password, email=email, legal_name=customer.legal_name or "", trade_name=customer.trade_name or "")
+    now = _now()
+    account = CustomerAccount(
+        customer_id=customer.id, email=email, language=language, status="ACTIVE",
+        password_hash=passwords.hash_secret_unchecked(password), session_version=1,
+        password_changed_at=now, activated_at=now, password_must_change=True,
+        password_set_by_staff_user_id=actor_staff_user_id, created_by_staff_user_id=actor_staff_user_id,
+    )
+    try:
+        db_session.add(account)
+        db_session.flush()
+        raw = _issue_token(account, "VERIFY_EMAIL", actor_staff_user_id=actor_staff_user_id)
+        db_session.commit()
+    except IntegrityError:
+        db_session.rollback()
+        if get_account_for_customer(customer.id) is not None:
+            raise AccountError("account_exists")
+        raise AccountError("email_in_use")
+    _audit("CUSTOMER_ACCOUNT_CREATED_WITH_TEMP_PASSWORD", account, actor_staff_user_id=actor_staff_user_id,
+           after={"language": language, "password_must_change": True})
+    try:
+        return account, _send_link(account, "VERIFY_EMAIL", raw, "customer_welcome")
+    except mail.PortalUrlNotSet:
+        return account, None
+
+
+def verify_email_with_token(raw_token: str, ip: str) -> CustomerAccount:
+    """The customer opened the VERIFY_EMAIL link: the mailbox is theirs."""
+    _take_token_slot(ip)
+    token = _consume_token(raw_token, ("VERIFY_EMAIL",))
+    account = db_session.get(CustomerAccount, token.account_id)
+    if account is None or account.status == "DISABLED":
+        db_session.rollback()
+        raise AccountError("token_invalid")
+    if account.email_verified_at is None:
+        account.email_verified_at = _now()
+    db_session.commit()
+    _audit("CUSTOMER_ACCOUNT_EMAIL_VERIFIED", account)
+    return account
 
 
 def resend_invitation(account: CustomerAccount, actor_staff_user_id) -> IssuedLink:
@@ -360,6 +430,8 @@ def confirm_email_change(raw_token: str, ip: str) -> CustomerAccount:
         raise AccountError("email_in_use")
     old = account.email
     account.email = token.new_email
+    # The link was sent to the NEW address and used, so that mailbox is proven.
+    account.email_verified_at = _now()
     _revoke_all_sessions(account, "EMAIL_CHANGED", bump_version=True)
     # Any invite/reset link was mailed to the address that is going away.
     _revoke_unused_links(account)
@@ -410,6 +482,10 @@ def _apply_new_password(account: CustomerAccount, password: str) -> None:
     now = _now()
     account.password_hash = passwords.hash_secret_unchecked(password)
     account.password_changed_at = now
+    # The customer choosing their own password is what ends "temporary password"
+    # (new customer flow): a seller-typed one is cleared by every path that sets
+    # a password the customer picked -- link, reset or signed-in change.
+    account.password_must_change = False
     if account.status == "INVITED":
         account.status = "ACTIVE"
     if account.activated_at is None:

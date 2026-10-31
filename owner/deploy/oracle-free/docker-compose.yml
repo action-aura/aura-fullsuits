@@ -67,6 +67,9 @@ services:
       OWNER_EXPENSE_ATTACHMENT_DIR: /app/owner/var/expense-attachments
       OWNER_RELEASE_ARTIFACT_DIR: /app/owner/var/release-artifacts
       OWNER_SYNC_BOOTSTRAP_DIR: /app/owner/var/sync-bootstrap
+      # Customer ID / registration / payment-slip files (new customer flow).
+      # Encrypted blobs; OWNER_KYC_KEYS (the key) comes from .env.oracle.
+      OWNER_KYC_DIR: /app/owner/var/kyc-documents
     volumes:
       # Named volume backed by the VM's own real disk -- this is the ENTIRE
       # point of this host choice. It survives container restarts, image
@@ -79,6 +82,7 @@ services:
       # every `up -d --build` redeploy (found 2026-10-10).
       - owner_expense_attachments:/app/owner/var/expense-attachments
       - owner_release_artifacts:/app/owner/var/release-artifacts
+      - owner_kyc_documents:/app/owner/var/kyc-documents
       # SYNC-BOOT Phase 3: encrypted shop copies in transit between two devices.
       # Transient (deleted on ack / after 72 h) and deliberately NOT in
       # run_backup.sh: a backup of it would be a second, longer-lived copy of a
@@ -143,6 +147,7 @@ volumes:
   owner_backups:
   owner_expense_attachments:
   owner_release_artifacts:
+  owner_kyc_documents:
   owner_sync_bootstrap:
   caddy_data:
   caddy_config:

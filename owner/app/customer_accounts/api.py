@@ -55,6 +55,10 @@ def _account_view(account) -> dict:
     customer = db_session.get(Customer, account.customer_id)
     return {
         "email": account.email, "language": account.language, "status": account.status,
+        # New customer flow: the website/app send the person to "choose your own
+        # password" while this is true; email_verified says the mailbox was proven.
+        "password_must_change": bool(account.password_must_change),
+        "email_verified": account.email_verified_at is not None,
         "customer_name": (customer.trade_name or customer.legal_name) if customer else None,
     }
 
@@ -197,6 +201,18 @@ def password_change(body):
     except policy.PasswordPolicyError as exc:
         return _json({"ok": False, "error": "password_policy", "reason": exc.code}, 422)
     return _json({"ok": True, "session_token": token, "account": _account_view(account)})
+
+
+@bp.route("/email/verify", methods=["GET", "POST"])
+@_gated
+def email_verify(body):
+    try:
+        account = service.verify_email_with_token(_text(body, "token", 256), _ip(body))
+    except service.SignInLocked as exc:
+        return _locked(exc)
+    except service.AccountError:
+        return _json({"ok": False, "error": "token_invalid"}, 400)
+    return _json({"ok": True, "account": _account_view(account)})
 
 
 @bp.route("/email/confirm", methods=["GET", "POST"])

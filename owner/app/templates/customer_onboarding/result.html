@@ -1,0 +1,46 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Customer created") }}{% endblock %}
+{% block content %}
+<div class="card card--critical" style="max-width:640px;margin:0 auto;" data-onboarding-result="1">
+  {% if result.replayed %}
+  <h2>{{ _("Already created") }}</h2>
+  <p>{{ _("This form was already submitted -- nothing new was created. The licence key was shown once, then, and cannot be shown again.") }}</p>
+  {% else %}
+  <h2>{{ _("Customer created -- the 7-day trial is ready") }}</h2>
+  <p><strong>{{ customer.legal_name }}</strong></p>
+  <ol>
+    <li>{{ _("Tell the customer to sign in at actionaura.me with their email and the temporary password you typed. They will choose their own password first.") }}</li>
+    <li>{{ _("Then they open Downloads, install the app, and sign in there with the same email and password.") }}</li>
+    <li>{{ _("Their 7 days start when the app is first opened -- not before.") }}</li>
+  </ol>
+  {% if result.emailed %}
+  <p data-link-emailed="1">{{ _("We emailed them a welcome message with a link to confirm their email address.") }}</p>
+  {% elif result.verify_link %}
+  <p data-link-shown-once="1">{{ _("Email is not set up on this server, so nothing was sent. This one-time link confirms the customer's email address. Send it to them yourself if you want. It is shown only now:") }}</p>
+  <p><code style="word-break:break-all;" dir="ltr" id="onboarding-verify-link">{{ result.verify_link }}</code></p>
+  <p><button type="button" class="secondary" data-copy-target="onboarding-verify-link"
+             data-copy-label="{{ _('Copy link') }}" data-copy-success-label="{{ _('Copied') }}"
+             data-copy-fallback-label="{{ _('Selected -- press Ctrl+C') }}">{{ _("Copy link") }}</button></p>
+  {% endif %}
+  {% if result.license_key %}
+  <h3>{{ _("Licence key -- a backup, shown once") }}</h3>
+  <p>{{ _("The customer does not need this key if they sign in with their account. Keep it only in case the sign-in cannot be used. It will never be displayed again.") }}</p>
+  <p>
+    <code class="masked" dir="ltr" id="onboarding-key">{{ result.license_key }}</code>
+    <button type="button" class="secondary" data-copy-target="onboarding-key"
+            data-copy-label="{{ _('Copy key') }}" data-copy-success-label="{{ _('Copied') }}"
+            data-copy-fallback-label="{{ _('Selected -- press Ctrl+C') }}">{{ _("Copy key") }}</button>
+  </p>
+  <label for="onboarding-whatsapp">{{ _("Pre-composed WhatsApp message (English + Arabic)") }}</label>
+  <textarea id="onboarding-whatsapp" rows="8" readonly style="width:100%;">{{ result.whatsapp_message }}</textarea>
+  <p><button type="button" class="secondary" data-copy-target="onboarding-whatsapp"
+             data-copy-label="{{ _('Copy message') }}" data-copy-success-label="{{ _('Copied') }}"
+             data-copy-fallback-label="{{ _('Selected -- press Ctrl+C') }}">{{ _("Copy message") }}</button></p>
+  {% endif %}
+  {% endif %}
+  <p>
+    <a class="btn" href="{{ url_for('customers.detail', customer_id=result.customer_id) }}">{{ _("Open the customer") }}</a>
+    <a href="{{ url_for('customer_onboarding.new_form') }}">{{ _("Create another customer") }}</a>
+  </p>
+</div>
+{% endblock %}

@@ -17,7 +17,10 @@ _CSP = (
 def register_security_headers(app: Flask) -> None:
     @app.after_request
     def _set_headers(response: Response) -> Response:
-        response.headers["Content-Security-Policy"] = _CSP
+        # setdefault, not assignment: a view that serves untrusted bytes (the customer ID /
+        # slip photos in customer_onboarding/routes.py::view_document) sets a stricter
+        # policy of its own (`default-src 'none'; sandbox`) and must keep it.
+        response.headers.setdefault("Content-Security-Policy", _CSP)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         # AUDIT-fix: 'no-referrer' meant the browser never sent a Referer

@@ -92,6 +92,8 @@ owner/var/signing-keys-test/
 # committed, matches signing-keys' private-storage treatment above.
 owner/var/expense-attachments/
 owner/var/expense-attachments-test/
+owner/var/kyc-documents/
+owner/var/kyc-documents-test/
 
 # Aura Owner -- private release-artifact storage, local/test adapter
 # (Phase 9R M11) -- never committed, same treatment as the two above. A

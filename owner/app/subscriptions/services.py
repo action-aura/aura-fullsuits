@@ -107,6 +107,17 @@ def transition_subscription(subscription: Subscription, to_status: str, actor_st
     allowed = VALID_TRANSITIONS.get(subscription.status, set())
     if to_status not in allowed:
         raise InvalidTransitionError(f"Cannot transition subscription from {subscription.status} to {to_status}.")
+    if to_status == "EXPIRED":
+        # New customer flow: a 7-day trial ends by LOCKING the till (the product
+        # reads the signed term_end), never by Owner expiring the subscription --
+        # EXPIRED is terminal here, and the shop's trial-to-paid conversion needs
+        # the subscription alive. The table above already forbids PILOT->EXPIRED;
+        # this is the explicit second wall for a trial, so a future edit of that
+        # table cannot silently open it.
+        from app.customer_onboarding.trial import is_unconverted_trial
+
+        if is_unconverted_trial(subscription.id):
+            raise InvalidTransitionError("A trial can never be moved to EXPIRED; it ends by locking.")
     from_status = subscription.status
     subscription.status = to_status
     if to_status == "CANCELLED":

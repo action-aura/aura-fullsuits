@@ -548,7 +548,9 @@ def register_cli(app: Flask) -> None:
         from app import privacy_retention
         from app.commercial_sales import quotes
         from app.licensing_service import idempotency, ratelimit, replay
+        from app.customer_onboarding import documents as customer_documents
         from app.models.commercial_sales import Quote
+        from app.models.customer_onboarding import CustomerDocument
         from app.models.licensing_service import ExternalIdempotencyRecord, RateLimitCounter, SecurityNonceRecord
         from app.sync import bootstrap_routes
 
@@ -572,6 +574,9 @@ def register_cli(app: Flask) -> None:
                 # SYNC-BOOT Phase 3: expire unfinished bootstrap requests and delete
                 # every encrypted blob nobody may read again.
                 "sync_bootstrap": bootstrap_routes.sweep(apply=True),
+                # New customer flow (S2): ID / registration photos whose retention is
+                # over (trial never paid + 90 days; payment slips 7 years).
+                "customer_documents_purged": customer_documents.purge_expired_documents(),
             }
         else:
             def _count(model, *conditions) -> int:
@@ -591,8 +596,21 @@ def register_cli(app: Flask) -> None:
                 "customer_sessions_and_tokens_purged": privacy_retention.count_expired_customer_sessions_and_tokens(),
                 "customer_link_mail_bodies_cleared": privacy_retention.count_customer_link_mail_bodies_to_clear(),
                 "sync_bootstrap": bootstrap_routes.sweep(apply=False),
+                "customer_documents_purged": _count(
+                    CustomerDocument, CustomerDocument.purge_after.is_not(None), CustomerDocument.purge_after <= now,
+                    CustomerDocument.purged_at.is_(None),
+                ),
             }
         click.echo(json.dumps(result, indent=2))
+
+    @commercial_group.command("start-overdue-trials")
+    def start_overdue_trials_cmd():
+        """New customer flow: a trial nobody ever signed in to starts by itself 14
+        days after the customer was created (so it also ends). Idempotent; safe to
+        run every night with the other `commercial` jobs."""
+        from app.customer_onboarding.trial import start_overdue_trials
+
+        click.echo(json.dumps({"trials_started": start_overdue_trials()}, indent=2))
 
     @app.cli.group("leads")
     def leads_group():

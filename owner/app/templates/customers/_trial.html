@@ -1,0 +1,43 @@
+{# New customer flow (S2): the 'Trial' card. Rendered only when the feature is on and the
+   customer has a trial (customer_onboarding/panel.py::panel_context). #}
+{% set tp = trial_panel %}
+<div class="card" id="trial-card" data-trial-state="{{ 'CONVERTED' if tp.converted else ('RUNNING' if tp.started else 'NOT_STARTED') }}">
+  <h3>{{ _("Trial") }}</h3>
+  <dl class="kv">
+    <dt>{{ _("Status") }}</dt>
+    <dd>
+      {% if tp.converted %}<span class="badge active">{{ _("Paid -- the trial became a subscription") }}</span>
+      {% elif not tp.started %}<span class="badge draft">{{ _("Waiting for the first app sign-in") }}</span>
+      {% elif tp.days_left == 0 %}<span class="badge danger">{{ _("Trial over -- the till is locked until the package is paid") }}</span>
+      {% else %}<span class="badge active">{{ _("%(n)s day(s) left", n=tp.days_left) }}</span>{% endif %}
+    </dd>
+    {% if tp.started %}
+    <dt>{{ _("Ends") }}</dt><dd>{{ tp.pilot.pilot_end.isoformat() }}</dd>
+    {% else %}
+    <dt>{{ _("Starts by itself on") }}</dt><dd>{{ tp.fallback_start.isoformat() }}</dd>
+    {% endif %}
+    <dt>{{ _("Extensions used") }}</dt><dd>{{ tp.pilot.extension_count }} / {{ tp.pilot.max_extensions_allowed }}</dd>
+  </dl>
+  {% if not tp.converted and tp.can_convert %}
+  <p><a class="btn" data-convert-link="1" href="{{ url_for('license_issuance.new_form', convert=tp.pilot.subscription_id) }}">{{ _("The customer is paying -- record the payment") }}</a></p>
+  {% endif %}
+  {% if tp.can_extend %}
+  <form method="post" action="{{ url_for('customer_onboarding.extend', customer_id=customer.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="trial-days">{{ _("Give the trial more days (1 to 7, once)") }}</label>
+    <input id="trial-days" type="number" name="days" min="1" max="7" value="7" required>
+    <label for="trial-reason">{{ _("Why? (at least 10 characters)") }}</label>
+    <input id="trial-reason" type="text" name="reason" required minlength="10" maxlength="500">
+    <button type="submit">{{ _("Extend the trial") }}</button>
+  </form>
+  {% endif %}
+  {% if tp.documents %}
+  <h4>{{ _("Documents") }}</h4>
+  <ul>
+    {% for d in tp.documents %}
+    <li><a href="{{ url_for('customer_onboarding.view_document', customer_id=customer.id, document_id=d.id) }}" target="_blank" rel="noopener">
+      {% if d.kind == 'NATIONAL_ID' %}{{ _("Owner's ID") }}{% elif d.kind == 'COMMERCIAL_REGISTRATION' %}{{ _("Commercial registration") }}{% else %}{{ _("Payment slip") }}{% endif %}</a></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>

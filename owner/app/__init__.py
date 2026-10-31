@@ -215,6 +215,12 @@ def create_app(config_name: str | None = None) -> Flask:
     app.register_blueprint(website_account_api_bp)
     csrf.exempt(website_account_api_bp)
     app.register_blueprint(customer_accounts_bp)
+    # New customer flow (S2): the seller's "Create a new customer" form, the
+    # manager-only ID photos and the trial extension. 404 unless
+    # OWNER_CUSTOMER_ONBOARDING_ENABLED=true (customer_onboarding/routes.py).
+    from app.customer_onboarding.routes import bp as customer_onboarding_bp
+
+    app.register_blueprint(customer_onboarding_bp)
     app.jinja_env.globals["customer_accounts_enabled"] = lambda: bool(app.config.get("CUSTOMER_ACCOUNTS_ENABLED"))
 
     if app.config.get("EXTERNAL_API_ENABLED"):

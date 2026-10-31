@@ -39,6 +39,7 @@ COPY owner/ /app/owner/
 # the directory exists in the image with that owner, hence created here too.
 RUN mkdir -p /app/owner/var/signing-keys /app/owner/var/backups \
     /app/owner/var/expense-attachments /app/owner/var/release-artifacts \
+    /app/owner/var/kyc-documents \
     && chown -R aura:aura /app
 
 WORKDIR /app/owner

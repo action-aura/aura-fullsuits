@@ -22,6 +22,7 @@ _PATH_FOR_KIND = {
     "INVITE": "account/set-password/",
     "RESET": "account/set-password/",
     "EMAIL_CHANGE": "account/confirm-email/",
+    "VERIFY_EMAIL": "account/verify-email/",
 }
 
 

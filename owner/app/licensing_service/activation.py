@@ -373,6 +373,27 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         pin_outcome, installation=installation, license_id=locked_license.id, correlation_id=body.get("correlation_id")
     )
 
+    # New customer flow (S2): a licence that belongs to a 7-day trial starts the
+    # trial's clock at the FIRST device that gets this far, under the licence row
+    # lock taken above, inside this same transaction -- so a refusal here (or any
+    # error before the commit below) leaves the trial un-started and the
+    # installation unregistered. Not a trial -> no-op. An old build (cannot lock a
+    # trial) or hardware that already started another customer's trial is refused
+    # HERE, before an assertion is signed.
+    from app.customer_onboarding.trial import TrialError, start_trial_on_activation
+
+    try:
+        start_trial_on_activation(
+            locked_license,
+            device_fingerprint=device_identity.fingerprint_of(body["device_public_key"]),
+            registry_device_id=body.get("registry_device_id"),
+            installation_id=installation.id,
+            app_version=body.get("app_version"),
+            today=today,
+        )
+    except TrialError as exc:
+        raise ActivationRejected(exc.code)
+
     # Step 20: entitlements
     entitlements = resolve_entitlements(locked_license, datetime.now(timezone.utc))
 

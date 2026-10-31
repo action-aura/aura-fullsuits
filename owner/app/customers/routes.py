@@ -182,8 +182,13 @@ def detail(customer_id):
 
     website_account_panel = panel_context(customer, actor, codes)
 
+    # New customer flow (S2): the "Trial" card (None = feature off / no trial).
+    from app.customer_onboarding.panel import panel_context as trial_panel_context
+
+    trial_panel = trial_panel_context(customer, codes)
+
     return render_template(
-        "customers/detail.html", customer=customer, website_account_panel=website_account_panel, notes=notes, interactions=interactions, followups=followups,
+        "customers/detail.html", customer=customer, website_account_panel=website_account_panel, trial_panel=trial_panel, notes=notes, interactions=interactions, followups=followups,
         locations=locations, assignment_history=assignment_history, followup_status=followup_status,
         is_overdue=is_overdue, error=error_text,
         quotes=quotes, orders=orders, invoices=invoices, payments=payments, subscriptions=subscriptions,

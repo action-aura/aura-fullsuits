@@ -9646,3 +9646,488 @@ msgstr "تسوية يدوية"
 #: app/commissions/clawback.py
 msgid "No take-backs are waiting to be deducted."
 msgstr "لا توجد استرجاعات بانتظار الخصم."
+
+#: app/customer_onboarding
+msgid "registration number"
+msgstr "رقم السجل التجاري"
+
+#: app/customer_onboarding
+msgid "phone number"
+msgstr "رقم الهاتف"
+
+#: app/customer_onboarding
+msgid "email address"
+msgstr "البريد الإلكتروني"
+
+#: app/customer_onboarding
+msgid " and "
+msgstr " و"
+
+#: app/customer_onboarding
+msgid "Creating a new customer is not switched on here."
+msgstr "إنشاء عميل جديد غير مُفعّل هنا."
+
+#: app/customer_onboarding
+msgid "An idempotency key is required to create a customer."
+msgstr "مطلوب مفتاح منع التكرار لإنشاء عميل."
+
+#: app/customer_onboarding
+msgid "Creating a customer needs your own employee profile. Ask a manager to add one."
+msgstr "إنشاء عميل يتطلب ملف موظف خاصاً بك. اطلب من المدير إضافته."
+
+#: app/customer_onboarding
+msgid "Only an active employee can create a customer."
+msgstr "يمكن للموظف النشط فقط إنشاء عميل."
+
+#: app/customer_onboarding
+msgid "Customer documents cannot be stored on this server yet (no encryption key is set). Nothing was created. Ask the administrator."
+msgstr "لا يمكن حفظ مستندات العملاء على هذا الخادم بعد (لم يُضبط مفتاح التشفير). لم يُنشأ شيء. اطلب من المسؤول."
+
+#: app/customer_onboarding
+msgid "Tick the box to confirm the customer agreed to the storing of their ID and registration documents."
+msgstr "ضع علامة للتأكيد أن العميل وافق على حفظ هويته وسجله التجاري."
+
+#: app/customer_onboarding
+msgid "Type the shop's (business) name."
+msgstr "اكتب اسم المحل (النشاط التجاري)."
+
+#: app/customer_onboarding
+msgid "A name is too long (at most %(max)s characters)."
+msgstr "الاسم طويل جداً (الحد الأقصى %(max)s حرفاً)."
+
+#: app/customer_onboarding
+msgid "Type a valid email address for the customer."
+msgstr "اكتب بريداً إلكترونياً صحيحاً للعميل."
+
+#: app/customer_onboarding
+msgid "This email address is already used by another customer's account."
+msgstr "هذا البريد الإلكتروني مستخدم في حساب عميل آخر."
+
+#: app/customer_onboarding
+msgid "Type a temporary password for the customer."
+msgstr "اكتب كلمة مرور مؤقتة للعميل."
+
+#: app/customer_onboarding
+msgid "The temporary password must be at least 10 characters."
+msgstr "يجب ألا تقل كلمة المرور المؤقتة عن 10 أحرف."
+
+#: app/customer_onboarding
+msgid "The temporary password is too long."
+msgstr "كلمة المرور المؤقتة طويلة جداً."
+
+#: app/customer_onboarding
+msgid "That password is too common. Pick another temporary password."
+msgstr "كلمة المرور هذه شائعة جداً. اختر كلمة مرور مؤقتة أخرى."
+
+#: app/customer_onboarding
+msgid "The password must not contain the customer's email or shop name."
+msgstr "يجب ألا تحتوي كلمة المرور على بريد العميل أو اسم المحل."
+
+#: app/customer_onboarding
+msgid "Type a valid phone number, like 079 123 4567."
+msgstr "اكتب رقم هاتف صحيحاً، مثل 079 123 4567."
+
+#: app/customer_onboarding
+msgid "Type the commercial registration number."
+msgstr "اكتب رقم السجل التجاري."
+
+#: app/customer_onboarding
+msgid "The registration number is too long (at most %(max)s characters)."
+msgstr "رقم السجل طويل جداً (الحد الأقصى %(max)s حرفاً)."
+
+#: app/customer_onboarding
+msgid "Type where the shop is (address or area)."
+msgstr "اكتب مكان المحل (العنوان أو المنطقة)."
+
+#: app/customer_onboarding
+msgid "The captured location is not valid. Capture it again or leave it empty."
+msgstr "الموقع الملتقط غير صالح. التقطه من جديد أو اتركه فارغاً."
+
+#: app/customer_onboarding
+msgid "Add a photo of the owner's ID."
+msgstr "أضف صورة هوية المالك."
+
+#: app/customer_onboarding
+msgid "Add a photo of the commercial registration."
+msgstr "أضف صورة السجل التجاري."
+
+#: app/customer_onboarding
+msgid "Photos must be JPEG or PNG pictures (or a PDF)."
+msgstr "يجب أن تكون الصور بصيغة JPEG أو PNG (أو ملف PDF)."
+
+#: app/customer_onboarding
+msgid "A photo is too large (at most %(max_mb)s MB)."
+msgstr "الصورة كبيرة جداً (الحد الأقصى %(max_mb)s ميغابايت)."
+
+#: app/customer_onboarding
+msgid "A photo file is empty."
+msgstr "ملف الصورة فارغ."
+
+#: app/customer_onboarding
+msgid "A photo file is damaged. Take it again."
+msgstr "ملف الصورة تالف. صوّره من جديد."
+
+#: app/customer_onboarding
+msgid "This product is not available for new customers yet."
+msgstr "هذا المنتج غير متاح للعملاء الجدد بعد."
+
+#: app/customer_onboarding
+msgid "That package belongs to a different product."
+msgstr "هذه الباقة تخص منتجاً آخر."
+
+#: app/customer_onboarding
+msgid "A shop with this %(what)s already exists, and a shop gets only one trial. Ask a Sales Manager."
+msgstr "يوجد محل بنفس %(what)s، والمحل يحصل على تجربة واحدة فقط. اسأل مدير المبيعات."
+
+#: app/customer_onboarding
+msgid "Only a Sales Manager or Super Admin may create a second trial for the same shop."
+msgstr "مدير المبيعات أو المسؤول الأعلى فقط يستطيع إنشاء تجربة ثانية للمحل نفسه."
+
+#: app/customer_onboarding
+msgid "Write why this shop should get another trial (at least %(min)s characters)."
+msgstr "اكتب سبب منح هذا المحل تجربة أخرى (%(min)s أحرف على الأقل)."
+
+#: app/customer_onboarding
+msgid "This form was already used to create a different customer. Open a fresh form to create another one."
+msgstr "استُخدم هذا النموذج لإنشاء عميل مختلف. افتح نموذجاً جديداً لإنشاء عميل آخر."
+
+#: app/customer_onboarding
+msgid "This customer is still being created from an earlier click. Wait a moment, then check the customer list."
+msgstr "ما زال هذا العميل قيد الإنشاء من ضغطة سابقة. انتظر لحظة ثم راجع قائمة العملاء."
+
+#: app/customer_onboarding
+msgid "Write why the trial is extended (at least 10 characters)."
+msgstr "اكتب سبب تمديد التجربة (10 أحرف على الأقل)."
+
+#: app/customer_onboarding
+msgid "A trial can be extended by 1 to 7 days."
+msgstr "يمكن تمديد التجربة من يوم إلى 7 أيام."
+
+#: app/customer_onboarding
+msgid "This is not a trial."
+msgstr "هذه ليست تجربة."
+
+#: app/customer_onboarding
+msgid "The trial has not started yet: no device has signed in. There is nothing to extend."
+msgstr "لم تبدأ التجربة بعد: لم يسجّل أي جهاز الدخول. لا يوجد ما يُمدَّد."
+
+#: app/customer_onboarding
+msgid "This trial is over (paid, cancelled or closed)."
+msgstr "انتهت هذه التجربة (دُفعت أو أُلغيت أو أُغلقت)."
+
+#: app/customer_onboarding
+msgid "This trial was already extended once."
+msgstr "سبق تمديد هذه التجربة مرة واحدة."
+
+#: app/customer_onboarding
+msgid "The trial was extended."
+msgstr "تم تمديد التجربة."
+
+#: app/customer_onboarding
+msgid "Create a new customer"
+msgstr "إنشاء عميل جديد"
+
+#: app/customer_onboarding
+msgid "Fill this in with the customer next to you. It makes their account, starts their free 7-day trial and gives you the licence key to keep as a backup. The trial clock starts when they first open the app, not now."
+msgstr "املأ هذا النموذج والعميل بجانبك. ينشئ حسابه، ويجهّز تجربته المجانية لمدة 7 أيام، ويعطيك مفتاح الترخيص لتحتفظ به كنسخة احتياطية. تبدأ مدة التجربة عند أول فتح للتطبيق وليس الآن."
+
+#: app/customer_onboarding
+msgid "1. The shop"
+msgstr "1. المحل"
+
+#: app/customer_onboarding
+msgid "Shop (business) name"
+msgstr "اسم المحل (النشاط التجاري)"
+
+#: app/customer_onboarding
+msgid "Owner's name (optional)"
+msgstr "اسم المالك (اختياري)"
+
+#: app/customer_onboarding
+msgid "Phone (WhatsApp)"
+msgstr "الهاتف (واتساب)"
+
+#: app/customer_onboarding
+msgid "Commercial registration number"
+msgstr "رقم السجل التجاري"
+
+#: app/customer_onboarding
+msgid "2. Where is the shop?"
+msgstr "2. أين المحل؟"
+
+#: app/customer_onboarding
+msgid "Address or area"
+msgstr "العنوان أو المنطقة"
+
+#: app/customer_onboarding
+msgid "Location captured."
+msgstr "تم التقاط الموقع."
+
+#: app/customer_onboarding
+msgid "Location is not supported by this browser."
+msgstr "المتصفح لا يدعم تحديد الموقع."
+
+#: app/customer_onboarding
+msgid "Getting your location..."
+msgstr "جارٍ تحديد موقعك..."
+
+#: app/customer_onboarding
+msgid "Use my current location"
+msgstr "استخدم موقعي الحالي"
+
+#: app/customer_onboarding
+msgid "Optional. Asked once, only when you press the button; the app never tracks you."
+msgstr "اختياري. يُطلب مرة واحدة فقط عند الضغط على الزر؛ التطبيق لا يتتبعك أبداً."
+
+#: app/customer_onboarding
+msgid "3. Photos"
+msgstr "3. الصور"
+
+#: app/customer_onboarding
+msgid "Photo of the owner's ID"
+msgstr "صورة هوية المالك"
+
+#: app/customer_onboarding
+msgid "Photo of the commercial registration"
+msgstr "صورة السجل التجاري"
+
+#: app/customer_onboarding
+msgid "Up to 10 MB each. They are stored encrypted and only a Sales Manager can open them."
+msgstr "حتى 10 ميغابايت لكل صورة. تُحفظ مشفّرة ولا يفتحها إلا مدير المبيعات."
+
+#: app/customer_onboarding
+msgid "4. Package"
+msgstr "4. الباقة"
+
+#: app/customer_onboarding
+msgid "Aura Retail"
+msgstr "Aura Retail"
+
+#: app/customer_onboarding
+msgid "The customer pays after the trial. Nothing is charged now."
+msgstr "يدفع العميل بعد التجربة. لا يُحصَّل أي مبلغ الآن."
+
+#: app/customer_onboarding
+msgid "5. Sign-in"
+msgstr "5. تسجيل الدخول"
+
+#: app/customer_onboarding
+msgid "Email address (the customer signs in with it)"
+msgstr "البريد الإلكتروني (يسجّل العميل الدخول به)"
+
+#: app/customer_onboarding
+msgid "Temporary password"
+msgstr "كلمة المرور المؤقتة"
+
+#: app/customer_onboarding
+msgid "Make one"
+msgstr "أنشئ واحدة"
+
+#: app/customer_onboarding
+msgid "Tell it to the customer now. They must choose their own at the first sign-in. It is never shown again."
+msgstr "أخبر العميل بها الآن. سيختار كلمة مرور خاصة به عند أول تسجيل دخول. لن تظهر مرة أخرى."
+
+#: app/customer_onboarding
+msgid "Manager only"
+msgstr "للمدير فقط"
+
+#: app/customer_onboarding
+msgid "This shop already exists, but it should get another trial"
+msgstr "هذا المحل موجود، لكن يجب أن يحصل على تجربة أخرى"
+
+#: app/customer_onboarding
+msgid "Why? (at least 10 characters)"
+msgstr "لماذا؟ (10 أحرف على الأقل)"
+
+#: app/customer_onboarding
+msgid "The customer agrees that we store a copy of their ID and commercial registration (kept in the EU, encrypted) to open their account."
+msgstr "يوافق العميل على أن نحتفظ بنسخة من هويته وسجله التجاري (محفوظة في الاتحاد الأوروبي ومشفّرة) لفتح حسابه."
+
+#: app/customer_onboarding
+msgid "Create the customer and start the trial"
+msgstr "أنشئ العميل وابدأ التجربة"
+
+#: app/customer_onboarding
+msgid "Already created"
+msgstr "تم الإنشاء سابقاً"
+
+#: app/customer_onboarding
+msgid "This form was already submitted -- nothing new was created. The licence key was shown once, then, and cannot be shown again."
+msgstr "سبق إرسال هذا النموذج -- لم يُنشأ شيء جديد. عُرض مفتاح الترخيص مرة واحدة حينها ولا يمكن عرضه مرة أخرى."
+
+#: app/customer_onboarding
+msgid "Customer created -- the 7-day trial is ready"
+msgstr "تم إنشاء العميل -- التجربة لمدة 7 أيام جاهزة"
+
+#: app/customer_onboarding
+msgid "Tell the customer to sign in at actionaura.me with their email and the temporary password you typed. They will choose their own password first."
+msgstr "اطلب من العميل تسجيل الدخول في actionaura.me ببريده وكلمة المرور المؤقتة التي كتبتها. سيختار كلمة مرور خاصة به أولاً."
+
+#: app/customer_onboarding
+msgid "Then they open Downloads, install the app, and sign in there with the same email and password."
+msgstr "ثم يفتح صفحة التنزيلات ويثبّت التطبيق ويسجّل الدخول فيه بالبريد وكلمة المرور نفسيهما."
+
+#: app/customer_onboarding
+msgid "Their 7 days start when the app is first opened -- not before."
+msgstr "تبدأ الأيام السبعة عند أول فتح للتطبيق -- وليس قبل ذلك."
+
+#: app/customer_onboarding
+msgid "We emailed them a welcome message with a link to confirm their email address."
+msgstr "أرسلنا إليهم رسالة ترحيب برابط لتأكيد البريد الإلكتروني."
+
+#: app/customer_onboarding
+msgid "Email is not set up on this server, so nothing was sent. This one-time link confirms the customer's email address. Send it to them yourself if you want. It is shown only now:"
+msgstr "البريد الإلكتروني غير مُعدّ على هذا الخادم فلم يُرسل شيء. هذا الرابط لمرة واحدة يؤكد بريد العميل. أرسله إليه بنفسك إن أردت. يظهر الآن فقط:"
+
+#: app/customer_onboarding
+msgid "Licence key -- a backup, shown once"
+msgstr "مفتاح الترخيص -- نسخة احتياطية، يظهر مرة واحدة"
+
+#: app/customer_onboarding
+msgid "The customer does not need this key if they sign in with their account. Keep it only in case the sign-in cannot be used. It will never be displayed again."
+msgstr "لا يحتاج العميل هذا المفتاح إذا سجّل الدخول بحسابه. احتفظ به فقط إن تعذّر تسجيل الدخول. لن يُعرض مرة أخرى."
+
+#: app/customer_onboarding
+msgid "Open the customer"
+msgstr "افتح العميل"
+
+#: app/customer_onboarding
+msgid "Create another customer"
+msgstr "أنشئ عميلاً آخر"
+
+#: app/customer_onboarding
+msgid "Trial"
+msgstr "التجربة"
+
+#: app/customer_onboarding
+msgid "Paid -- the trial became a subscription"
+msgstr "تم الدفع -- أصبحت التجربة اشتراكاً"
+
+#: app/customer_onboarding
+msgid "Waiting for the first app sign-in"
+msgstr "بانتظار أول تسجيل دخول في التطبيق"
+
+#: app/customer_onboarding
+msgid "Trial over -- the till is locked until the package is paid"
+msgstr "انتهت التجربة -- الصندوق مقفل حتى تُدفع الباقة"
+
+#: app/customer_onboarding
+msgid "%(n)s day(s) left"
+msgstr "تبقّى %(n)s يوم"
+
+#: app/customer_onboarding
+msgid "Ends"
+msgstr "تنتهي في"
+
+#: app/customer_onboarding
+msgid "Starts by itself on"
+msgstr "تبدأ تلقائياً في"
+
+#: app/customer_onboarding
+msgid "Give the trial more days (1 to 7, once)"
+msgstr "امنح التجربة أياماً إضافية (من 1 إلى 7، مرة واحدة)"
+
+#: app/customer_onboarding
+msgid "Extend the trial"
+msgstr "مدّد التجربة"
+
+#: app/customer_onboarding
+msgid "Documents"
+msgstr "المستندات"
+
+#: app/customer_onboarding
+msgid "Owner's ID"
+msgstr "هوية المالك"
+
+#: app/customer_onboarding
+msgid "Commercial registration"
+msgstr "السجل التجاري"
+
+#: app/customer_onboarding
+msgid "Payment slip"
+msgstr "إيصال الدفع"
+
+#: app/commercial_sales
+msgid "Add a photo of the bank slip or CliQ confirmation. A trial is only unlocked against a slip."
+msgstr "أضف صورة إيصال البنك أو تأكيد كليك. لا تُفتح التجربة إلا مقابل إيصال."
+
+#: app/commercial_sales
+msgid "The slip must be a JPEG or PNG picture (or a PDF)."
+msgstr "يجب أن يكون الإيصال صورة JPEG أو PNG (أو ملف PDF)."
+
+#: app/commercial_sales
+msgid "The slip photo is too large (at most 10 MB)."
+msgstr "صورة الإيصال كبيرة جداً (الحد الأقصى 10 ميغابايت)."
+
+#: app/commercial_sales
+msgid "The slip photo is empty or damaged. Take it again."
+msgstr "صورة الإيصال فارغة أو تالفة. صوّرها من جديد."
+
+#: app/commercial_sales
+msgid "Slip photos cannot be stored on this server yet (no encryption key is set). Nothing was recorded. Ask the administrator."
+msgstr "لا يمكن حفظ صور الإيصالات على هذا الخادم بعد (لم يُضبط مفتاح التشفير). لم يُسجَّل شيء. اطلب من المسؤول."
+
+#: app/commercial_sales
+msgid "The trial to pay for was not found."
+msgstr "لم يُعثر على التجربة المراد دفعها."
+
+#: app/commercial_sales
+msgid "That trial belongs to a different customer."
+msgstr "هذه التجربة تخص عميلاً آخر."
+
+#: app/commercial_sales
+msgid "That subscription is not a running trial, so there is nothing to convert."
+msgstr "هذا الاشتراك ليس تجربة جارية، فلا يوجد ما يُحوَّل."
+
+#: app/commercial_sales
+msgid "A trial can only be paid with a package of its own product."
+msgstr "لا تُدفع التجربة إلا بباقة من المنتج نفسه."
+
+#: app/commercial_sales
+msgid "A payment for this trial is already waiting for a manager. Wait for it, or ask a manager to reject it first."
+msgstr "توجد دفعة لهذه التجربة بانتظار المدير. انتظرها أو اطلب من المدير رفضها أولاً."
+
+#: app/commercial_sales
+msgid "The customer is paying -- record the payment"
+msgstr "العميل يدفع -- سجّل الدفعة"
+
+#: app/commercial_sales
+msgid "this payment is for their trial. When a manager confirms it, their shop is unlocked with the same licence; no new key is made."
+msgstr "هذه الدفعة لتجربته. عندما يؤكدها المدير يُفتح محله بالترخيص نفسه ولا يُنشأ مفتاح جديد."
+
+#: app/commercial_sales
+msgid "Photo of the bank slip or CliQ confirmation"
+msgstr "صورة إيصال البنك أو تأكيد كليك"
+
+#: app/commercial_sales
+msgid "required"
+msgstr "مطلوب"
+
+#: app/commercial_sales
+msgid "For cash, photograph the bank deposit slip. Up to 10 MB. It is stored encrypted and the manager who confirms the payment sees it."
+msgstr "للدفع النقدي صوّر إيصال الإيداع في البنك. حتى 10 ميغابايت. يُحفظ مشفّراً ويراه المدير الذي يؤكد الدفعة."
+
+#: app/commercial_sales
+msgid "Trial paid -- the shop is unlocked"
+msgstr "تم دفع التجربة -- فُتح المحل"
+
+#: app/commercial_sales
+msgid "The shop keeps the same licence and key. Its tills unlock at their next check-in with Owner. No new key was made."
+msgstr "يحتفظ المحل بالترخيص والمفتاح نفسيهما. تُفتح صناديقه عند أقرب اتصال بالنظام. لم يُنشأ مفتاح جديد."
+
+#: app/commercial_sales
+msgid "Trial payment"
+msgstr "دفعة تجربة"
+
+#: app/commercial_sales
+msgid "View the slip"
+msgstr "عرض الإيصال"
+
+#: app/commercial_sales
+msgid "No slip photo"
+msgstr "لا توجد صورة إيصال"
+
+#: app/commercial_sales
+msgid "Money received -- confirm and unlock the shop"
+msgstr "وصل المال -- أكّد وافتح المحل"
+

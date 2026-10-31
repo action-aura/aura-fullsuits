@@ -121,6 +121,12 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_WEBSITE_ACCOUNT_SECRET_2",
         "OWNER_CUSTOMER_MAIL_FROM",
         "OWNER_CUSTOMER_MAIL_REPLY_TO",
+        # New customer flow (S2): the seller's "Create a new customer" form and
+        # the encrypted ID / registration photos it stores. See BaseConfig.
+        "OWNER_CUSTOMER_ONBOARDING_ENABLED",
+        "OWNER_CLINIC_ACCOUNTS_ENABLED",
+        "OWNER_KYC_KEYS",
+        "OWNER_KYC_DIR",
         # Read directly by other modules (not by this Config class), but
         # still legitimate OWNER_* variables -- must not trip the unknown-key
         # check in strict mode.
@@ -358,6 +364,26 @@ class BaseConfig:
     WEBSITE_ACCOUNT_SECRET = os.environ.get("OWNER_WEBSITE_ACCOUNT_SECRET", "").strip()
     WEBSITE_ACCOUNT_KEY_ID_2 = os.environ.get("OWNER_WEBSITE_ACCOUNT_KEY_ID_2", "k2").strip() or "k2"
     WEBSITE_ACCOUNT_SECRET_2 = os.environ.get("OWNER_WEBSITE_ACCOUNT_SECRET_2", "").strip()
+    # -- New customer flow (S2, 2026-10-31): the seller's "Create a new customer"
+    # form (customer + website account + ID photos + 7-day trial in one action).
+    # OFF unless OWNER_CUSTOMER_ONBOARDING_ENABLED=true: the screen and its routes
+    # answer 404 and nothing else in Owner changes. It also needs the website
+    # accounts switched on (it creates one) and a KYC key (below); with either
+    # missing the form refuses before it writes anything.
+    CUSTOMER_ONBOARDING_ENABLED = os.environ.get("OWNER_CUSTOMER_ONBOARDING_ENABLED", "false").strip().lower() == "true"
+    # Key-encryption keys for the customer ID / registration / payment-slip files:
+    # "kid:base64(32 bytes)[,kid2:base64(32 bytes)]". The FIRST key encrypts new
+    # files; every listed key can still read old ones (rotation). Unset == no
+    # document can be stored, so the onboarding form is refused up front. Never
+    # logged, never in the database, never in an image.
+    KYC_KEYS = os.environ.get("OWNER_KYC_KEYS", "").strip()
+    # Retail first (owner, 2026-10-31): the seller's form offers Aura Clinic only
+    # when this is true. Default false -- nothing about Clinic changes until the
+    # owner raises it.
+    CLINIC_ACCOUNTS_ENABLED = os.environ.get("OWNER_CLINIC_ACCOUNTS_ENABLED", "false").strip().lower() == "true"
+    # Where the encrypted blobs live (a docker named volume in production, so a
+    # redeploy or a container swap keeps them).
+    KYC_DIRECTORY = os.environ.get("OWNER_KYC_DIR", os.path.join(_OWNER_ROOT, "var", "kyc-documents"))
     # Customer mail: sender address (owner wants noreply@actionaura.me; unset =
     # the normal OWNER_SMTP_FROM) and Reply-To (unset = NO Reply-To header at
     # all; whether support@ is a real mailbox is not known yet).
@@ -586,6 +612,12 @@ class TestingConfig(BaseConfig):
     WEBSITE_ACCOUNT_SECRET_2 = ""
     CUSTOMER_MAIL_FROM = ""
     CUSTOMER_MAIL_REPLY_TO = ""
+    # Onboarding is off and has no key unless a test sets them (never inherited
+    # from the shell env); documents go to a test-only directory.
+    CUSTOMER_ONBOARDING_ENABLED = False
+    CLINIC_ACCOUNTS_ENABLED = False
+    KYC_KEYS = ""
+    KYC_DIRECTORY = os.environ.get("OWNER_TEST_KYC_DIR", os.path.join(_OWNER_ROOT, "var", "kyc-documents-test"))
 
 
 class ProductionConfig(BaseConfig):

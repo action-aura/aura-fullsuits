@@ -23,7 +23,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -351,6 +351,14 @@ class PilotRecord(Base, UUIDPKMixin, TimestampMixin):
     """
 
     __tablename__ = "owner_pilot_records"
+    __table_args__ = (
+        CheckConstraint("pilot_kind IN ('PILOT', 'TRIAL')", name="ck_owner_pilot_records_pilot_kind"),
+        # One trial per customer, ever (the owner's rule; also what makes a
+        # second "Create a new customer" for the same shop impossible even if
+        # every application-level duplicate check were bypassed).
+        Index("uq_owner_pilot_records_one_trial_per_customer", "customer_id", unique=True,
+              postgresql_where=text("pilot_kind = 'TRIAL'")),
+    )
 
     subscription_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_subscriptions.id"), unique=True, nullable=False
@@ -390,6 +398,15 @@ class PilotRecord(Base, UUIDPKMixin, TimestampMixin):
     max_extensions_allowed: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
 
     status: Mapped[str] = mapped_column(String(16), default="DRAFT", nullable=False)
+
+    # New customer flow (NC1, e2c4a8b1f730). PILOT is the long-standing,
+    # staff-run pilot; TRIAL is the 7-day trial every new customer gets. A TRIAL
+    # has no dates when created -- its clock starts at the first device
+    # activation (trial_started_at, set under the licence row lock) -- and a
+    # customer can have only one (partial unique index in the migration).
+    pilot_kind: Mapped[str] = mapped_column(String(8), default="PILOT", server_default="PILOT", nullable=False)
+    trial_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trial_length_days: Mapped[int | None] = mapped_column(Integer)
 
     created_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id")

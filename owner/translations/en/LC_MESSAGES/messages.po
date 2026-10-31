@@ -9687,3 +9687,488 @@ msgstr "Settle by hand"
 #: app/commissions/clawback.py
 msgid "No take-backs are waiting to be deducted."
 msgstr "No take-backs are waiting to be deducted."
+
+#: app/customer_onboarding
+msgid "registration number"
+msgstr "registration number"
+
+#: app/customer_onboarding
+msgid "phone number"
+msgstr "phone number"
+
+#: app/customer_onboarding
+msgid "email address"
+msgstr "email address"
+
+#: app/customer_onboarding
+msgid " and "
+msgstr " and "
+
+#: app/customer_onboarding
+msgid "Creating a new customer is not switched on here."
+msgstr "Creating a new customer is not switched on here."
+
+#: app/customer_onboarding
+msgid "An idempotency key is required to create a customer."
+msgstr "An idempotency key is required to create a customer."
+
+#: app/customer_onboarding
+msgid "Creating a customer needs your own employee profile. Ask a manager to add one."
+msgstr "Creating a customer needs your own employee profile. Ask a manager to add one."
+
+#: app/customer_onboarding
+msgid "Only an active employee can create a customer."
+msgstr "Only an active employee can create a customer."
+
+#: app/customer_onboarding
+msgid "Customer documents cannot be stored on this server yet (no encryption key is set). Nothing was created. Ask the administrator."
+msgstr "Customer documents cannot be stored on this server yet (no encryption key is set). Nothing was created. Ask the administrator."
+
+#: app/customer_onboarding
+msgid "Tick the box to confirm the customer agreed to the storing of their ID and registration documents."
+msgstr "Tick the box to confirm the customer agreed to the storing of their ID and registration documents."
+
+#: app/customer_onboarding
+msgid "Type the shop's (business) name."
+msgstr "Type the shop's (business) name."
+
+#: app/customer_onboarding
+msgid "A name is too long (at most %(max)s characters)."
+msgstr "A name is too long (at most %(max)s characters)."
+
+#: app/customer_onboarding
+msgid "Type a valid email address for the customer."
+msgstr "Type a valid email address for the customer."
+
+#: app/customer_onboarding
+msgid "This email address is already used by another customer's account."
+msgstr "This email address is already used by another customer's account."
+
+#: app/customer_onboarding
+msgid "Type a temporary password for the customer."
+msgstr "Type a temporary password for the customer."
+
+#: app/customer_onboarding
+msgid "The temporary password must be at least 10 characters."
+msgstr "The temporary password must be at least 10 characters."
+
+#: app/customer_onboarding
+msgid "The temporary password is too long."
+msgstr "The temporary password is too long."
+
+#: app/customer_onboarding
+msgid "That password is too common. Pick another temporary password."
+msgstr "That password is too common. Pick another temporary password."
+
+#: app/customer_onboarding
+msgid "The password must not contain the customer's email or shop name."
+msgstr "The password must not contain the customer's email or shop name."
+
+#: app/customer_onboarding
+msgid "Type a valid phone number, like 079 123 4567."
+msgstr "Type a valid phone number, like 079 123 4567."
+
+#: app/customer_onboarding
+msgid "Type the commercial registration number."
+msgstr "Type the commercial registration number."
+
+#: app/customer_onboarding
+msgid "The registration number is too long (at most %(max)s characters)."
+msgstr "The registration number is too long (at most %(max)s characters)."
+
+#: app/customer_onboarding
+msgid "Type where the shop is (address or area)."
+msgstr "Type where the shop is (address or area)."
+
+#: app/customer_onboarding
+msgid "The captured location is not valid. Capture it again or leave it empty."
+msgstr "The captured location is not valid. Capture it again or leave it empty."
+
+#: app/customer_onboarding
+msgid "Add a photo of the owner's ID."
+msgstr "Add a photo of the owner's ID."
+
+#: app/customer_onboarding
+msgid "Add a photo of the commercial registration."
+msgstr "Add a photo of the commercial registration."
+
+#: app/customer_onboarding
+msgid "Photos must be JPEG or PNG pictures (or a PDF)."
+msgstr "Photos must be JPEG or PNG pictures (or a PDF)."
+
+#: app/customer_onboarding
+msgid "A photo is too large (at most %(max_mb)s MB)."
+msgstr "A photo is too large (at most %(max_mb)s MB)."
+
+#: app/customer_onboarding
+msgid "A photo file is empty."
+msgstr "A photo file is empty."
+
+#: app/customer_onboarding
+msgid "A photo file is damaged. Take it again."
+msgstr "A photo file is damaged. Take it again."
+
+#: app/customer_onboarding
+msgid "This product is not available for new customers yet."
+msgstr "This product is not available for new customers yet."
+
+#: app/customer_onboarding
+msgid "That package belongs to a different product."
+msgstr "That package belongs to a different product."
+
+#: app/customer_onboarding
+msgid "A shop with this %(what)s already exists, and a shop gets only one trial. Ask a Sales Manager."
+msgstr "A shop with this %(what)s already exists, and a shop gets only one trial. Ask a Sales Manager."
+
+#: app/customer_onboarding
+msgid "Only a Sales Manager or Super Admin may create a second trial for the same shop."
+msgstr "Only a Sales Manager or Super Admin may create a second trial for the same shop."
+
+#: app/customer_onboarding
+msgid "Write why this shop should get another trial (at least %(min)s characters)."
+msgstr "Write why this shop should get another trial (at least %(min)s characters)."
+
+#: app/customer_onboarding
+msgid "This form was already used to create a different customer. Open a fresh form to create another one."
+msgstr "This form was already used to create a different customer. Open a fresh form to create another one."
+
+#: app/customer_onboarding
+msgid "This customer is still being created from an earlier click. Wait a moment, then check the customer list."
+msgstr "This customer is still being created from an earlier click. Wait a moment, then check the customer list."
+
+#: app/customer_onboarding
+msgid "Write why the trial is extended (at least 10 characters)."
+msgstr "Write why the trial is extended (at least 10 characters)."
+
+#: app/customer_onboarding
+msgid "A trial can be extended by 1 to 7 days."
+msgstr "A trial can be extended by 1 to 7 days."
+
+#: app/customer_onboarding
+msgid "This is not a trial."
+msgstr "This is not a trial."
+
+#: app/customer_onboarding
+msgid "The trial has not started yet: no device has signed in. There is nothing to extend."
+msgstr "The trial has not started yet: no device has signed in. There is nothing to extend."
+
+#: app/customer_onboarding
+msgid "This trial is over (paid, cancelled or closed)."
+msgstr "This trial is over (paid, cancelled or closed)."
+
+#: app/customer_onboarding
+msgid "This trial was already extended once."
+msgstr "This trial was already extended once."
+
+#: app/customer_onboarding
+msgid "The trial was extended."
+msgstr "The trial was extended."
+
+#: app/customer_onboarding
+msgid "Create a new customer"
+msgstr "Create a new customer"
+
+#: app/customer_onboarding
+msgid "Fill this in with the customer next to you. It makes their account, starts their free 7-day trial and gives you the licence key to keep as a backup. The trial clock starts when they first open the app, not now."
+msgstr "Fill this in with the customer next to you. It makes their account, starts their free 7-day trial and gives you the licence key to keep as a backup. The trial clock starts when they first open the app, not now."
+
+#: app/customer_onboarding
+msgid "1. The shop"
+msgstr "1. The shop"
+
+#: app/customer_onboarding
+msgid "Shop (business) name"
+msgstr "Shop (business) name"
+
+#: app/customer_onboarding
+msgid "Owner's name (optional)"
+msgstr "Owner's name (optional)"
+
+#: app/customer_onboarding
+msgid "Phone (WhatsApp)"
+msgstr "Phone (WhatsApp)"
+
+#: app/customer_onboarding
+msgid "Commercial registration number"
+msgstr "Commercial registration number"
+
+#: app/customer_onboarding
+msgid "2. Where is the shop?"
+msgstr "2. Where is the shop?"
+
+#: app/customer_onboarding
+msgid "Address or area"
+msgstr "Address or area"
+
+#: app/customer_onboarding
+msgid "Location captured."
+msgstr "Location captured."
+
+#: app/customer_onboarding
+msgid "Location is not supported by this browser."
+msgstr "Location is not supported by this browser."
+
+#: app/customer_onboarding
+msgid "Getting your location..."
+msgstr "Getting your location..."
+
+#: app/customer_onboarding
+msgid "Use my current location"
+msgstr "Use my current location"
+
+#: app/customer_onboarding
+msgid "Optional. Asked once, only when you press the button; the app never tracks you."
+msgstr "Optional. Asked once, only when you press the button; the app never tracks you."
+
+#: app/customer_onboarding
+msgid "3. Photos"
+msgstr "3. Photos"
+
+#: app/customer_onboarding
+msgid "Photo of the owner's ID"
+msgstr "Photo of the owner's ID"
+
+#: app/customer_onboarding
+msgid "Photo of the commercial registration"
+msgstr "Photo of the commercial registration"
+
+#: app/customer_onboarding
+msgid "Up to 10 MB each. They are stored encrypted and only a Sales Manager can open them."
+msgstr "Up to 10 MB each. They are stored encrypted and only a Sales Manager can open them."
+
+#: app/customer_onboarding
+msgid "4. Package"
+msgstr "4. Package"
+
+#: app/customer_onboarding
+msgid "Aura Retail"
+msgstr "Aura Retail"
+
+#: app/customer_onboarding
+msgid "The customer pays after the trial. Nothing is charged now."
+msgstr "The customer pays after the trial. Nothing is charged now."
+
+#: app/customer_onboarding
+msgid "5. Sign-in"
+msgstr "5. Sign-in"
+
+#: app/customer_onboarding
+msgid "Email address (the customer signs in with it)"
+msgstr "Email address (the customer signs in with it)"
+
+#: app/customer_onboarding
+msgid "Temporary password"
+msgstr "Temporary password"
+
+#: app/customer_onboarding
+msgid "Make one"
+msgstr "Make one"
+
+#: app/customer_onboarding
+msgid "Tell it to the customer now. They must choose their own at the first sign-in. It is never shown again."
+msgstr "Tell it to the customer now. They must choose their own at the first sign-in. It is never shown again."
+
+#: app/customer_onboarding
+msgid "Manager only"
+msgstr "Manager only"
+
+#: app/customer_onboarding
+msgid "This shop already exists, but it should get another trial"
+msgstr "This shop already exists, but it should get another trial"
+
+#: app/customer_onboarding
+msgid "Why? (at least 10 characters)"
+msgstr "Why? (at least 10 characters)"
+
+#: app/customer_onboarding
+msgid "The customer agrees that we store a copy of their ID and commercial registration (kept in the EU, encrypted) to open their account."
+msgstr "The customer agrees that we store a copy of their ID and commercial registration (kept in the EU, encrypted) to open their account."
+
+#: app/customer_onboarding
+msgid "Create the customer and start the trial"
+msgstr "Create the customer and start the trial"
+
+#: app/customer_onboarding
+msgid "Already created"
+msgstr "Already created"
+
+#: app/customer_onboarding
+msgid "This form was already submitted -- nothing new was created. The licence key was shown once, then, and cannot be shown again."
+msgstr "This form was already submitted -- nothing new was created. The licence key was shown once, then, and cannot be shown again."
+
+#: app/customer_onboarding
+msgid "Customer created -- the 7-day trial is ready"
+msgstr "Customer created -- the 7-day trial is ready"
+
+#: app/customer_onboarding
+msgid "Tell the customer to sign in at actionaura.me with their email and the temporary password you typed. They will choose their own password first."
+msgstr "Tell the customer to sign in at actionaura.me with their email and the temporary password you typed. They will choose their own password first."
+
+#: app/customer_onboarding
+msgid "Then they open Downloads, install the app, and sign in there with the same email and password."
+msgstr "Then they open Downloads, install the app, and sign in there with the same email and password."
+
+#: app/customer_onboarding
+msgid "Their 7 days start when the app is first opened -- not before."
+msgstr "Their 7 days start when the app is first opened -- not before."
+
+#: app/customer_onboarding
+msgid "We emailed them a welcome message with a link to confirm their email address."
+msgstr "We emailed them a welcome message with a link to confirm their email address."
+
+#: app/customer_onboarding
+msgid "Email is not set up on this server, so nothing was sent. This one-time link confirms the customer's email address. Send it to them yourself if you want. It is shown only now:"
+msgstr "Email is not set up on this server, so nothing was sent. This one-time link confirms the customer's email address. Send it to them yourself if you want. It is shown only now:"
+
+#: app/customer_onboarding
+msgid "Licence key -- a backup, shown once"
+msgstr "Licence key -- a backup, shown once"
+
+#: app/customer_onboarding
+msgid "The customer does not need this key if they sign in with their account. Keep it only in case the sign-in cannot be used. It will never be displayed again."
+msgstr "The customer does not need this key if they sign in with their account. Keep it only in case the sign-in cannot be used. It will never be displayed again."
+
+#: app/customer_onboarding
+msgid "Open the customer"
+msgstr "Open the customer"
+
+#: app/customer_onboarding
+msgid "Create another customer"
+msgstr "Create another customer"
+
+#: app/customer_onboarding
+msgid "Trial"
+msgstr "Trial"
+
+#: app/customer_onboarding
+msgid "Paid -- the trial became a subscription"
+msgstr "Paid -- the trial became a subscription"
+
+#: app/customer_onboarding
+msgid "Waiting for the first app sign-in"
+msgstr "Waiting for the first app sign-in"
+
+#: app/customer_onboarding
+msgid "Trial over -- the till is locked until the package is paid"
+msgstr "Trial over -- the till is locked until the package is paid"
+
+#: app/customer_onboarding
+msgid "%(n)s day(s) left"
+msgstr "%(n)s day(s) left"
+
+#: app/customer_onboarding
+msgid "Ends"
+msgstr "Ends"
+
+#: app/customer_onboarding
+msgid "Starts by itself on"
+msgstr "Starts by itself on"
+
+#: app/customer_onboarding
+msgid "Give the trial more days (1 to 7, once)"
+msgstr "Give the trial more days (1 to 7, once)"
+
+#: app/customer_onboarding
+msgid "Extend the trial"
+msgstr "Extend the trial"
+
+#: app/customer_onboarding
+msgid "Documents"
+msgstr "Documents"
+
+#: app/customer_onboarding
+msgid "Owner's ID"
+msgstr "Owner's ID"
+
+#: app/customer_onboarding
+msgid "Commercial registration"
+msgstr "Commercial registration"
+
+#: app/customer_onboarding
+msgid "Payment slip"
+msgstr "Payment slip"
+
+#: app/commercial_sales
+msgid "Add a photo of the bank slip or CliQ confirmation. A trial is only unlocked against a slip."
+msgstr "Add a photo of the bank slip or CliQ confirmation. A trial is only unlocked against a slip."
+
+#: app/commercial_sales
+msgid "The slip must be a JPEG or PNG picture (or a PDF)."
+msgstr "The slip must be a JPEG or PNG picture (or a PDF)."
+
+#: app/commercial_sales
+msgid "The slip photo is too large (at most 10 MB)."
+msgstr "The slip photo is too large (at most 10 MB)."
+
+#: app/commercial_sales
+msgid "The slip photo is empty or damaged. Take it again."
+msgstr "The slip photo is empty or damaged. Take it again."
+
+#: app/commercial_sales
+msgid "Slip photos cannot be stored on this server yet (no encryption key is set). Nothing was recorded. Ask the administrator."
+msgstr "Slip photos cannot be stored on this server yet (no encryption key is set). Nothing was recorded. Ask the administrator."
+
+#: app/commercial_sales
+msgid "The trial to pay for was not found."
+msgstr "The trial to pay for was not found."
+
+#: app/commercial_sales
+msgid "That trial belongs to a different customer."
+msgstr "That trial belongs to a different customer."
+
+#: app/commercial_sales
+msgid "That subscription is not a running trial, so there is nothing to convert."
+msgstr "That subscription is not a running trial, so there is nothing to convert."
+
+#: app/commercial_sales
+msgid "A trial can only be paid with a package of its own product."
+msgstr "A trial can only be paid with a package of its own product."
+
+#: app/commercial_sales
+msgid "A payment for this trial is already waiting for a manager. Wait for it, or ask a manager to reject it first."
+msgstr "A payment for this trial is already waiting for a manager. Wait for it, or ask a manager to reject it first."
+
+#: app/commercial_sales
+msgid "The customer is paying -- record the payment"
+msgstr "The customer is paying -- record the payment"
+
+#: app/commercial_sales
+msgid "this payment is for their trial. When a manager confirms it, their shop is unlocked with the same licence; no new key is made."
+msgstr "this payment is for their trial. When a manager confirms it, their shop is unlocked with the same licence; no new key is made."
+
+#: app/commercial_sales
+msgid "Photo of the bank slip or CliQ confirmation"
+msgstr "Photo of the bank slip or CliQ confirmation"
+
+#: app/commercial_sales
+msgid "required"
+msgstr "required"
+
+#: app/commercial_sales
+msgid "For cash, photograph the bank deposit slip. Up to 10 MB. It is stored encrypted and the manager who confirms the payment sees it."
+msgstr "For cash, photograph the bank deposit slip. Up to 10 MB. It is stored encrypted and the manager who confirms the payment sees it."
+
+#: app/commercial_sales
+msgid "Trial paid -- the shop is unlocked"
+msgstr "Trial paid -- the shop is unlocked"
+
+#: app/commercial_sales
+msgid "The shop keeps the same licence and key. Its tills unlock at their next check-in with Owner. No new key was made."
+msgstr "The shop keeps the same licence and key. Its tills unlock at their next check-in with Owner. No new key was made."
+
+#: app/commercial_sales
+msgid "Trial payment"
+msgstr "Trial payment"
+
+#: app/commercial_sales
+msgid "View the slip"
+msgstr "View the slip"
+
+#: app/commercial_sales
+msgid "No slip photo"
+msgstr "No slip photo"
+
+#: app/commercial_sales
+msgid "Money received -- confirm and unlock the shop"
+msgstr "Money received -- confirm and unlock the shop"
+

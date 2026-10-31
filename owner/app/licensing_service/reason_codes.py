@@ -39,6 +39,11 @@ PUBLIC_REASON_CODES = frozenset(
         "DEVICE_KEY_MISMATCH",
         "DEVICE_KEY_REVOKED",
         "DEVICE_ALREADY_REGISTERED",
+        # New customer flow: a valid trial key on a build too old to lock the
+        # trial, or on hardware that already started another customer's trial.
+        # Public on purpose: the caller already proved the key and the device.
+        "TRIAL_REQUIRES_UPDATE",
+        "TRIAL_DEVICE_ALREADY_USED",
         "SERVICE_TEMPORARILY_UNAVAILABLE",
         "RATE_LIMITED",
         # Real-email wave: an installation is over one of its mail-relay caps.

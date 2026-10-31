@@ -45,7 +45,7 @@ UPLOADS_PARENT=/app/owner/var
 # sync-bootstrap is DELIBERATELY absent (SYNC-BOOT Phase 3): it holds transient,
 # encrypted shop copies in transit between devices (deleted on ack / after 72 h).
 # Backing it up would keep a shop's data longer than its owner expects.
-UPLOAD_DIRS=(expense-attachments release-artifacts)
+UPLOAD_DIRS=(expense-attachments release-artifacts kyc-documents)
 
 log() { printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1"; }
 fail() { log "FAILED: $1"; exit 1; }
