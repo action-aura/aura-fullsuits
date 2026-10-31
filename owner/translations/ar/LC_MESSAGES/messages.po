@@ -8507,8 +8507,8 @@ msgid "Record another sale"
 msgstr "تسجيل عملية بيع أخرى"
 
 #: app/templates/licensing/sale.html
-msgid "Record the sale and the customer's payment. A manager confirms the payment; the licence key is made then, and the seller's commission counts from that day. Sellers never take cash: the customer pays the company by CliQ or bank transfer."
-msgstr "سجّل عملية البيع ودفعة العميل. يؤكد المدير الدفعة؛ عندها يُنشأ مفتاح الترخيص وتُحتسب عمولة البائع من ذلك اليوم. البائعون لا يستلمون نقدًا أبدًا: يدفع العميل للشركة عبر CliQ أو حوالة بنكية."
+msgid "Record the sale and the customer's payment. A manager confirms the payment; the licence key is made then, and the seller's commission counts from that day. Cash is allowed: either the shop pays the company directly (CliQ, transfer or deposit) and you attach the slip photo, or you collect the cash and hand ALL of it to the company within 24 hours (bank transfer or at the office), with no deduction, and record it at once."
+msgstr "سجّل عملية البيع ودفعة العميل. يؤكد المدير الدفعة؛ عندها يُنشأ مفتاح الترخيص وتُحتسب عمولة البائع من ذلك اليوم. النقد مسموح: إما أن يدفع المحل للشركة مباشرة (CliQ أو حوالة أو إيداع) وترفق صورة الإيصال، أو تستلم النقد بنفسك وتسلّم كامله للشركة خلال 24 ساعة (حوالة بنكية أو في المكتب) دون أي خصم، وتسجّله فورًا."
 
 #: app/templates/licensing/sale.html
 msgid "extra device"
@@ -8551,8 +8551,8 @@ msgid "CliQ / bank transfer"
 msgstr "CliQ / حوالة بنكية"
 
 #: app/templates/licensing/sale.html
-msgid "CliQ or transfer reference number"
-msgstr "الرقم المرجعي لـ CliQ أو الحوالة"
+msgid "CliQ or transfer reference number (for cash, your receipt number)"
+msgstr "الرقم المرجعي لـ CliQ أو الحوالة (للنقد: رقم إيصالك)"
 
 #: app/templates/licensing/sale.html
 msgid "Date the money arrived"
@@ -8699,8 +8699,8 @@ msgid "This package costs nothing, so there is no payment to record. Use a no-ch
 msgstr "هذه الباقة بلا تكلفة، فلا توجد دفعة لتسجيلها. استخدم ترخيصًا بدون مقابل بدلًا من ذلك."
 
 #: app/i18n_labels.py
-msgid "The customer pays the company by CliQ or bank transfer; sellers never take cash."
-msgstr "يدفع العميل للشركة عبر CliQ أو حوالة بنكية؛ البائعون لا يستلمون نقدًا أبدًا."
+msgid "Choose how the customer paid: CliQ / bank transfer, or cash."
+msgstr "اختر طريقة دفع العميل: CliQ / حوالة بنكية، أو نقدًا."
 
 #: app/i18n_labels.py
 msgid "Type the CliQ or transfer reference number."
@@ -10104,8 +10104,8 @@ msgid "required"
 msgstr "مطلوب"
 
 #: app/commercial_sales
-msgid "For cash, photograph the bank deposit slip. Up to 10 MB. It is stored encrypted and the manager who confirms the payment sees it."
-msgstr "للدفع النقدي صوّر إيصال الإيداع في البنك. حتى 10 ميغابايت. يُحفظ مشفّراً ويراه المدير الذي يؤكد الدفعة."
+msgid "CliQ, transfer or deposit: attach the slip photo. Cash you collected yourself has no slip yet: leave this empty. Up to 10 MB. It is stored encrypted and the manager who confirms the payment sees it."
+msgstr "CliQ أو حوالة أو إيداع: أرفق صورة الإيصال. النقد الذي استلمته بنفسك لا إيصال له بعد: اترك الحقل فارغًا. حتى 10 ميغابايت. يُحفظ مشفّراً ويراه المدير الذي يؤكد الدفعة."
 
 #: app/commercial_sales
 msgid "Trial paid -- the shop is unlocked"
@@ -10686,3 +10686,6 @@ msgstr "تم تسجيل اعتراضك. سترد الشركة خلال يومي 
 msgid "Your reply is recorded. The seller can read it on their statement."
 msgstr "تم تسجيل ردك. يستطيع البائع قراءته في كشفه."
 
+#: app/templates/licensing/sale.html
+msgid "required unless cash"
+msgstr "مطلوب إلا للنقد"

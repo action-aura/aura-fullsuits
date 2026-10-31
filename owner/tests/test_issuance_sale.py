@@ -625,13 +625,13 @@ def test_manager_recording_must_name_an_active_seller(app, seeded):
 @pytest.mark.parametrize("overrides", [
     {"amount": Decimal("99.99")},                       # not the full price
     {"amount": Decimal("100.01")},
-    {"method": "CASH"},                                 # sellers never take cash
+    {"method": "CARD_OFFLINE"},                         # only CliQ/transfer and (2026-10-31) CASH are accepted
     {"method": "CHEQUE"},
     {"reference": "   "},                               # proof required
     {"payment_date": jordan_today() + timedelta(days=1)},  # money from the future (Jordan's tomorrow)
     {"payment_date": None},
     {"extra_device_pairs": -1},
-], ids=["short", "over", "cash", "cheque", "no-reference", "future-date", "no-date", "negative-pairs"])
+], ids=["short", "over", "card", "cheque", "no-reference", "future-date", "no-date", "negative-pairs"])
 def test_money_rules_refuse_before_any_write(app, seeded, overrides):
     w = _world(app)
     from app.commercial_sales.direct_sale import DirectSaleError
@@ -927,7 +927,11 @@ def test_sale_form_renders_seller_and_payment_fields(app, client, seeded):
     for field in ('name="amount"', 'name="reference"', 'name="payment_date"', 'name="method"',
                   'name="sales_owner_employee_profile_id"', 'action="/licenses/issuance/sale"'):
         assert field in body, field
-    assert 'value="CASH"' not in body
+    # 2026-10-31 (owner): cash is allowed both ways, so CASH is now offered. This
+    # line used to assert it was ABSENT ("sellers never take cash"); it now asserts
+    # the opposite and can no longer catch CASH being re-hidden by accident --
+    # test_seller_demo_fixes.py covers the refusal of every other method instead.
+    assert '<option value="CASH"' in body
 
 
 # ---------- the reused pipeline itself (quote path, no direct_sale code) --

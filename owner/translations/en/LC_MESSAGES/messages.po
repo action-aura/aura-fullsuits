@@ -8548,8 +8548,8 @@ msgid "Record another sale"
 msgstr "Record another sale"
 
 #: app/templates/licensing/sale.html
-msgid "Record the sale and the customer's payment. A manager confirms the payment; the licence key is made then, and the seller's commission counts from that day. Sellers never take cash: the customer pays the company by CliQ or bank transfer."
-msgstr "Record the sale and the customer's payment. A manager confirms the payment; the licence key is made then, and the seller's commission counts from that day. Sellers never take cash: the customer pays the company by CliQ or bank transfer."
+msgid "Record the sale and the customer's payment. A manager confirms the payment; the licence key is made then, and the seller's commission counts from that day. Cash is allowed: either the shop pays the company directly (CliQ, transfer or deposit) and you attach the slip photo, or you collect the cash and hand ALL of it to the company within 24 hours (bank transfer or at the office), with no deduction, and record it at once."
+msgstr "Record the sale and the customer's payment. A manager confirms the payment; the licence key is made then, and the seller's commission counts from that day. Cash is allowed: either the shop pays the company directly (CliQ, transfer or deposit) and you attach the slip photo, or you collect the cash and hand ALL of it to the company within 24 hours (bank transfer or at the office), with no deduction, and record it at once."
 
 #: app/templates/licensing/sale.html
 msgid "extra device"
@@ -8592,8 +8592,8 @@ msgid "CliQ / bank transfer"
 msgstr "CliQ / bank transfer"
 
 #: app/templates/licensing/sale.html
-msgid "CliQ or transfer reference number"
-msgstr "CliQ or transfer reference number"
+msgid "CliQ or transfer reference number (for cash, your receipt number)"
+msgstr "CliQ or transfer reference number (for cash, your receipt number)"
 
 #: app/templates/licensing/sale.html
 msgid "Date the money arrived"
@@ -8740,8 +8740,8 @@ msgid "This package costs nothing, so there is no payment to record. Use a no-ch
 msgstr "This package costs nothing, so there is no payment to record. Use a no-charge licence instead."
 
 #: app/i18n_labels.py
-msgid "The customer pays the company by CliQ or bank transfer; sellers never take cash."
-msgstr "The customer pays the company by CliQ or bank transfer; sellers never take cash."
+msgid "Choose how the customer paid: CliQ / bank transfer, or cash."
+msgstr "Choose how the customer paid: CliQ / bank transfer, or cash."
 
 #: app/i18n_labels.py
 msgid "Type the CliQ or transfer reference number."
@@ -10145,8 +10145,8 @@ msgid "required"
 msgstr "required"
 
 #: app/commercial_sales
-msgid "For cash, photograph the bank deposit slip. Up to 10 MB. It is stored encrypted and the manager who confirms the payment sees it."
-msgstr "For cash, photograph the bank deposit slip. Up to 10 MB. It is stored encrypted and the manager who confirms the payment sees it."
+msgid "CliQ, transfer or deposit: attach the slip photo. Cash you collected yourself has no slip yet: leave this empty. Up to 10 MB. It is stored encrypted and the manager who confirms the payment sees it."
+msgstr "CliQ, transfer or deposit: attach the slip photo. Cash you collected yourself has no slip yet: leave this empty. Up to 10 MB. It is stored encrypted and the manager who confirms the payment sees it."
 
 #: app/commercial_sales
 msgid "Trial paid -- the shop is unlocked"
@@ -10727,3 +10727,6 @@ msgstr "Your objection is recorded. The company will reply within 2 working days
 msgid "Your reply is recorded. The seller can read it on their statement."
 msgstr "Your reply is recorded. The seller can read it on their statement."
 
+#: app/templates/licensing/sale.html
+msgid "required unless cash"
+msgstr "required unless cash"

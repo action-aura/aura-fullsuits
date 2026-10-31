@@ -6,8 +6,9 @@ payment and NO sales owner -- measured on 829c4cde: a licence and its key
 out, zero PaymentRecord rows, zero SalesOrder rows, so the seller's
 commission could never be counted and nothing tied the licence to money.
 The owner's rules (Aura Growth Plan, "Your answers", 2026-10-24):
-  - sellers are employees registered in Owner and never take cash; the
-    customer pays the company (CliQ or bank transfer);
+  - sellers are employees registered in Owner; the customer pays the company
+    (CliQ or bank transfer) -- or, since 2026-10-31, the seller collects cash
+    and hands all of it over within 24 hours (see DIRECT_SALE_PAYMENT_METHODS);
   - a manager -- not the seller, not whoever recorded it -- confirms each
     payment, and the licence key is issued only after that;
   - commission goes to the sale's seller, counted by the payment-confirmed
@@ -107,12 +108,19 @@ from app.models.subscriptions import PaymentRecord, Subscription
 from app.push.outbox import enqueue_sale_waiting
 from app.subscriptions.services import lock_payment_for_update, record_payment
 
-# Sellers never take cash: the customer pays the company by CliQ or bank
-# transfer (owner, 2026-10-24). CliQ is a bank transfer in Jordan and the
-# shared PAYMENT_METHODS list has no separate value for it, so the form
-# shows BANK_TRANSFER as "CliQ / bank transfer". Widen this tuple -- not the
-# check -- if the owner ever accepts another channel.
-DIRECT_SALE_PAYMENT_METHODS = ("BANK_TRANSFER",)
+# Cash is allowed BOTH ways (owner, 2026-10-31, reversing 2026-10-24's "sellers
+# never take cash"): the shop pays the company directly (CliQ / transfer /
+# deposit -- all BANK_TRANSFER: CliQ is a bank transfer in Jordan and the shared
+# PAYMENT_METHODS list has no separate value for it or for a deposit) and the
+# seller attaches the slip; or the seller collects CASH and hands ALL of it to
+# the company within 24 hours, with no deduction, recording it at once (a rule
+# the form states; nothing here can enforce the hand-over). Widen this tuple --
+# not the check -- if the owner ever accepts another channel.
+DIRECT_SALE_PAYMENT_METHODS = ("BANK_TRANSFER", "CASH")
+
+# A cash payment collected by the seller has no bank slip yet, so paying for a
+# trial must NOT demand one for it. Every other method proves itself with a slip.
+SLIP_EXEMPT_PAYMENT_METHODS = ("CASH",)
 
 # Seller-picking: a caller holding this may record a sale for any active
 # employee (a manager entering a seller's sale). Anyone else -- SALES --
@@ -188,7 +196,7 @@ DIRECT_SALE_MESSAGES = {
     "EXTRA_PAIR_CURRENCY_MISMATCH": "The Extra Device Pair add-on is priced in a different currency than this package.",
     "TOTAL_TOO_LARGE": "This sale's total is too large to record (at most %(max)s). Check the number of extra device pairs.",
     "ZERO_PRICE": "This package costs nothing, so there is no payment to record. Use a no-charge licence instead.",
-    "METHOD_NOT_ALLOWED": "The customer pays the company by CliQ or bank transfer; sellers never take cash.",
+    "METHOD_NOT_ALLOWED": "Choose how the customer paid: CliQ / bank transfer, or cash.",
     "REFERENCE_REQUIRED": "Type the CliQ or transfer reference number.",
     "REFERENCE_TOO_LONG": "The reference is too long (at most %(max)s characters).",
     "PAYMENT_DATE_REQUIRED": "Type the date the money arrived.",
@@ -555,7 +563,7 @@ def record_direct_sale(
             if new_customer_legal_name:
                 raise DirectSaleError("CONVERSION_CUSTOMER_MISMATCH")
             customer_id = trial_subscription.customer_id
-        slip_photo = _check_slip(slip_photo, required=trial_subscription is not None)
+        slip_photo = _check_slip(slip_photo, required=trial_subscription is not None and method not in SLIP_EXEMPT_PAYMENT_METHODS)
         seller = _resolve_seller(
             sales_owner_employee_profile_id,
             actor_staff_user_id=actor_staff_user_id, actor_permission_codes=actor_permission_codes,

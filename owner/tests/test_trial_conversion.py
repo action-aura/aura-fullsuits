@@ -365,7 +365,12 @@ def test_the_sale_form_opened_for_a_trial_fixes_the_customer_and_asks_for_the_sl
     force_login(client, app, w["seller"])
     html = client.get(f"/licenses/issuance/new?convert={trial.subscription_id}").get_data(as_text=True)
     assert 'data-converting-trial="1"' in html and f'value="{trial.subscription_id}"' in html
-    assert 'name="slip_photo"' in html and "required" in html.split('name="slip_photo"')[1].split(">")[0]
+    # The slip is asked for (label says "required unless cash") but the input itself is no longer
+    # browser-`required` (2026-10-31: a cash payment has no slip yet). The refusal of a transfer
+    # with no slip is the SERVER's, proven by the next test (400 "bank slip") and by
+    # test_a_conversion_sale_without_a_valid_slip_writes_nothing; this line can no longer
+    # catch the browser-side attribute disappearing.
+    assert 'name="slip_photo"' in html and "required unless cash" in html
     assert 'enctype="multipart/form-data"' in html and 'name="new_customer_legal_name"' not in html
     # another seller does not even see that this trial exists
     other = app.test_client()

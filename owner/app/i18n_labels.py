@@ -1049,7 +1049,7 @@ def localize_direct_sale_error(code: str, **params) -> str:
         "EXTRA_PAIR_CURRENCY_MISMATCH": _("The Extra Device Pair add-on is priced in a different currency than this package."),
         "TOTAL_TOO_LARGE": _("This sale's total is too large to record (at most %(max)s). Check the number of extra device pairs."),
         "ZERO_PRICE": _("This package costs nothing, so there is no payment to record. Use a no-charge licence instead."),
-        "METHOD_NOT_ALLOWED": _("The customer pays the company by CliQ or bank transfer; sellers never take cash."),
+        "METHOD_NOT_ALLOWED": _("Choose how the customer paid: CliQ / bank transfer, or cash."),
         "REFERENCE_REQUIRED": _("Type the CliQ or transfer reference number."),
         "REFERENCE_TOO_LONG": _("The reference is too long (at most %(max)s characters)."),
         "PAYMENT_DATE_REQUIRED": _("Type the date the money arrived."),
