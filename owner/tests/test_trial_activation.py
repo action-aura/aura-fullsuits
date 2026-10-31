@@ -196,7 +196,7 @@ def test_a_trial_nobody_opened_starts_by_itself_after_fourteen_days(app, seeded,
 
     w = _world(app)
     result = onboard(app, w)
-    created = datetime.now(timezone.utc).date()
+    created = jordan_today()  # the Amman day the shop was made (r32: was the UTC day)
     with app.app_context():
         assert start_overdue_trials(today=created + timedelta(days=13)) == 0  # deny: day 13
     assert _trial(app, result.customer_id)[1]["started"] is None
@@ -206,6 +206,28 @@ def test_a_trial_nobody_opened_starts_by_itself_after_fourteen_days(app, seeded,
     sub, pilot, lic = _trial(app, result.customer_id)
     assert sub["start"] == created + timedelta(days=14) and sub["end"] == created + timedelta(days=21)
     assert pilot["started"] is not None and lic["until"] == created + timedelta(days=21)
+
+
+def test_the_fallback_clock_counts_from_the_amman_day_the_shop_was_made(app, seeded, kyc):
+    """r32: created 22:30 UTC on day D is already day D+1 in Amman (UTC+3). The fallback
+    used the UTC day, so a shop made after 21:00 UTC started its 14 days a day early."""
+    from app.customer_onboarding.trial import start_overdue_trials
+
+    w = _world(app)
+    result = onboard(app, w)
+    day = date(2026, 3, 10)
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.commercial_ops import PilotRecord
+
+        db_session.execute(PilotRecord.__table__.update().values(created_at=datetime(2026, 3, 10, 22, 30, tzinfo=timezone.utc)))
+        db_session.commit()
+    amman_day = day + timedelta(days=1)
+    with app.app_context():
+        assert start_overdue_trials(today=amman_day + timedelta(days=13)) == 0  # deny: a day short of 14 Amman days
+        assert start_overdue_trials(today=amman_day + timedelta(days=14)) == 1  # allow: the 14th
+    sub, _pilot, _lic = _trial(app, result.customer_id)
+    assert sub["start"] == amman_day + timedelta(days=14), sub  # not day D + 14
 
 
 # ------------------------------------------------------------------- extension

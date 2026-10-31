@@ -40,7 +40,7 @@ from app.models.commercial_ops import PilotExtension, PilotRecord
 from app.models.customer_onboarding import CustomerDocument, TrialDeviceMark
 from app.models.licensing import License
 from app.models.subscriptions import Subscription
-from app.operational_reports.periods import jordan_today
+from app.operational_reports.periods import jordan_date, jordan_today
 from app.releases import versioning
 
 TRIAL_LENGTH_DAYS = 7
@@ -194,7 +194,10 @@ def start_overdue_trials(*, today: date | None = None) -> int:
         )
     ).scalars().all()
     for pilot in candidates:
-        created_day = pilot.created_at.astimezone(timezone.utc).date()
+        # The Amman calendar day (the product's business date), not the UTC one: a shop
+        # made 00:00-02:59 in Amman is still "yesterday" in UTC, which started its
+        # never-signed-in clock a day early.
+        created_day = jordan_date(pilot.created_at)
         start = created_day + timedelta(days=FALLBACK_START_AFTER_DAYS)
         if start > today:
             continue
