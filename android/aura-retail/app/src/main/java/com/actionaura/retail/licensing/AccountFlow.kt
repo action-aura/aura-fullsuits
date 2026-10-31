@@ -27,6 +27,9 @@ data class AccountLicence(
     val licensePublicId: String,
     val branchLabel: String?,
     val planCode: String?,
+    /** Friendly package name Owner sends next to [planCode] (rc.19); null from an older Owner. */
+    val planName: String? = null,
+    val planNameAr: String? = null,
     val trialState: String?,
     val trialEndsOn: String?,
 )
@@ -52,6 +55,40 @@ data class AccountView(
     val sellerPhone: String?,
 )
 
+/** `plan_name` as Owner may send it: one string (both languages) or {"en": .., "ar": ..}. */
+internal fun planNameOf(raw: Any?, lang: String): String? = when (raw) {
+    is String -> raw.takeIf { it.isNotBlank() }
+    is Map<*, *> -> (raw[lang] as? String)?.takeIf { it.isNotBlank() }
+    else -> null
+}
+
+/** Local fallback names for the three launch packages -- the same map as licensing-account.js PLAN_NAMES. */
+private val PLAN_NAMES: Map<String, Pair<String, String>> = mapOf(
+    "AURA_RETAIL_P1_YEARLY" to ("Package 1 (yearly)" to "الباقة 1 (سنوية)"),
+    "AURA_RETAIL_P2_MONTHLY_12" to ("Package 2 (monthly, 12-month contract)" to "الباقة 2 (شهرية، عقد 12 شهراً)"),
+    "AURA_RETAIL_P3_MONTHLY_24" to ("Package 3 (monthly, 24-month contract)" to "الباقة 3 (شهرية، عقد 24 شهراً)"),
+)
+
+/**
+ * The name to SHOW for a licence's package: what Owner sent, else the local map of the plan code,
+ * else null. A raw code like AURA_RETAIL_P1_YEARLY is never returned -- a code is not a name.
+ */
+fun planDisplayName(lic: AccountLicence, arabic: Boolean): String? {
+    val sent = if (arabic) lic.planNameAr ?: lic.planName else lic.planName ?: lic.planNameAr
+    if (sent != null) return sent
+    val local = PLAN_NAMES[lic.planCode] ?: return null
+    return if (arabic) local.second else local.first
+}
+
+/**
+ * "<shop or branch label> · <package name>"; the placeholder shows only when both are missing, or always in
+ * the branch picker (several licences of one package must stay tellable apart). Same rule as licensing-account.js.
+ */
+fun licenceDisplayLabel(lic: AccountLicence, fallbackLabel: String, arabic: Boolean, alwaysFallback: Boolean = false): String {
+    val parts = listOfNotNull(lic.branchLabel ?: fallbackLabel.takeIf { alwaysFallback }, planDisplayName(lic, arabic))
+    return if (parts.isEmpty()) fallbackLabel else parts.joinToString(" · ")
+}
+
 /** Steps of the wizard, in the only order they may happen. */
 enum class AccountStep { SIGN_IN, PASSWORD, CONTRACT, BRANCH, ACTIVATE }
 
@@ -70,6 +107,8 @@ internal fun parseAccountView(map: Map<String, Any?>): AccountView? {
             licensePublicId = id,
             branchLabel = m["branch_label"] as? String,
             planCode = m["plan_code"] as? String,
+            planName = planNameOf(m["plan_name"], "en") ?: (m["plan_name_en"] as? String)?.takeIf { it.isNotBlank() },
+            planNameAr = planNameOf(m["plan_name"], "ar") ?: (m["plan_name_ar"] as? String)?.takeIf { it.isNotBlank() },
             trialState = trial?.get("state") as? String,
             trialEndsOn = trial?.get("ends_on") as? String,
         )

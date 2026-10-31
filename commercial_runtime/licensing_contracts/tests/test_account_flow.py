@@ -478,3 +478,17 @@ def test_android_internal_route_validates_the_raw_answer_and_needs_the_secret(tm
     # Not registered at all on Windows (no shared secret configured).
     (tmp_path / "w").mkdir()
     assert _build(tmp_path / "w", fake).post(url, json=raw).status_code == 404
+
+
+def test_plan_name_from_owner_is_carried_and_older_owners_still_work():
+    """rc.19: Owner sends `plan_name` next to `plan_code` (string, or {en, ar}, or plan_name_ar);
+    an Owner that sends none yields None and the screens map plan_code locally."""
+    from commercial_runtime.licensing_contracts.account_flow import _plan_names, LicenceChoice
+
+    assert _plan_names({"plan_code": "X"}) == (None, None)
+    assert _plan_names({"plan_name": "Package 1"}) == ("Package 1", None)
+    assert _plan_names({"plan_name": {"en": "Package 1", "ar": "الباقة 1"}}) == ("Package 1", "الباقة 1")
+    assert _plan_names({"plan_name": "Package 1", "plan_name_ar": "الباقة 1"}) == ("Package 1", "الباقة 1")
+    assert _plan_names({"plan_name": 7, "plan_name_ar": ""}) == (None, None)
+    view = LicenceChoice("l", "AURA_RETAIL", "AURA_RETAIL_P1_YEARLY", None, None, None, "Package 1", "الباقة 1").public_view()
+    assert view["plan_name"] == "Package 1" and view["plan_name_ar"] == "الباقة 1" and view["plan_code"] == "AURA_RETAIL_P1_YEARLY"

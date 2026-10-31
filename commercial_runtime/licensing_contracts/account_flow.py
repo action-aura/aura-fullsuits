@@ -57,6 +57,20 @@ class AccountFlowError(Exception):
         self.policy_code = policy_code
 
 
+def _plan_names(raw: dict):
+    """`plan_name` as Owner may send it: one string (used for both languages), or
+    {"en": ..., "ar": ...}; `plan_name_ar` alone is also honoured. Anything else
+    is None -- the screens fall back to their local map of `plan_code`."""
+    name = raw.get("plan_name")
+    en = ar = None
+    if isinstance(name, dict):
+        en, ar = _text(name.get("en")), _text(name.get("ar"))
+    else:
+        en = _text(name)
+    ar = ar or _text(raw.get("plan_name_ar"))
+    return en, ar
+
+
 @dataclass(frozen=True)
 class LicenceChoice:
     license_public_id: str
@@ -65,12 +79,21 @@ class LicenceChoice:
     branch_label: Optional[str]
     trial_state: Optional[str]
     trial_ends_on: Optional[str]
+    #: rc.19: the friendly package name Owner sends next to `plan_code` (dress
+    #: rehearsal 2026-10-31: the activation screen showed the raw code
+    #: "AURA_RETAIL_P1_YEARLY"). Optional on purpose -- an older Owner sends
+    #: neither, and the screens then map `plan_code` locally (plan-names in
+    #: licensing-account.js / AccountFlow.kt). English + Arabic, either may be None.
+    plan_name: Optional[str] = None
+    plan_name_ar: Optional[str] = None
 
     def public_view(self) -> dict:
         return {
             "license_public_id": self.license_public_id,
             "product_code": self.product_code,
             "plan_code": self.plan_code,
+            "plan_name": self.plan_name,
+            "plan_name_ar": self.plan_name_ar,
             "branch_label": self.branch_label,
             "trial": {"state": self.trial_state, "ends_on": self.trial_ends_on},
         }
@@ -160,6 +183,7 @@ def normalise_sign_in_response(response: dict) -> SignInResult:
         if not public_id:
             continue
         trial = raw.get("trial") if isinstance(raw.get("trial"), dict) else {}
+        plan_name, plan_name_ar = _plan_names(raw)
         licences.append(LicenceChoice(
             license_public_id=public_id,
             product_code=_text(raw.get("product_code")) or "",
@@ -167,6 +191,8 @@ def normalise_sign_in_response(response: dict) -> SignInResult:
             branch_label=_text(raw.get("branch_label")),
             trial_state=_text(trial.get("state")),
             trial_ends_on=_text(trial.get("ends_on")),
+            plan_name=plan_name,
+            plan_name_ar=plan_name_ar,
         ))
     if not licences:
         # Signed in fine, but nothing to activate: the same single failure --

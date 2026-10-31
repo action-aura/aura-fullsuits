@@ -193,8 +193,8 @@ fun AccountSignInPanel(
                     if (licences.size > 1) {
                         Text(tr("Which branch is this computer for?"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         licences.forEachIndexed { i, lic ->
-                            val label = (lic.branchLabel ?: (tr("Branch") + " " + (i + 1))) +
-                                (lic.planCode?.let { " · $it" } ?: "") +
+                            val label = com.actionaura.retail.licensing.licenceDisplayLabel(
+                                lic, tr("Branch") + " " + (i + 1), com.actionaura.retail.ui.i18n.AppLocale.isRtl, alwaysFallback = true) +
                                 (lic.trialEndsOn?.let { " · " + tr("trial ends") + " " + it } ?: "")
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 RadioButton(selected = chosen == lic.licensePublicId, onClick = { chosen = lic.licensePublicId })
@@ -205,7 +205,8 @@ fun AccountSignInPanel(
                         val lic = licences.first()
                         chosen = lic.licensePublicId
                         Text(tr("Signed in. This computer is ready to be activated for:"), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text((lic.branchLabel ?: tr("your shop")) + (lic.planCode?.let { " · $it" } ?: ""),
+                        Text(com.actionaura.retail.licensing.licenceDisplayLabel(
+                                lic, tr("your shop"), com.actionaura.retail.ui.i18n.AppLocale.isRtl),
                             style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         lic.trialEndsOn?.let { Text(tr("Your free trial runs until") + " " + it + ".") }
                     }
