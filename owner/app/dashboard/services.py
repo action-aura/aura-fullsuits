@@ -18,49 +18,68 @@ from app.models.subscriptions import Subscription
 from app.operational_reports.periods import jordan_today
 
 
-def get_dashboard_summary() -> dict:
+def sees_own_customers_only(actor, codes) -> bool:
+    """A seller (customers.view_own without customers.view_all) sees the dashboard
+    for THEIR customers, not the company. The same ownership rule as the customer
+    list (customers.services.customer_visible_to_actor): the customer is assigned
+    to them. Rehearsal 2026-10-31: a seller's dashboard showed the whole company's
+    customer, subscription, licence and installation totals."""
+    return (
+        actor is not None and codes is not None
+        and "customers.view_own" in codes and "customers.view_all" not in codes
+    )
+
+
+def get_dashboard_summary(actor=None, codes=None) -> dict:
     today = jordan_today()  # Jordan's day (Step 0 fix round): was the server's calendar
+    scoped = sees_own_customers_only(actor, codes)
+    # The customers this viewer may count; None = the whole company (managers, finance, ...).
+    own_ids = (
+        select(Customer.id).where(Customer.assigned_sales_staff_id == actor.id, Customer.archived_at.is_(None))
+        if scoped else None
+    )
+
+    def own(stmt, customer_column):
+        return stmt if own_ids is None else stmt.where(customer_column.in_(own_ids))
 
     def count(stmt):
         return db_session.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
 
-    total_customers = count(select(Customer).where(Customer.archived_at.is_(None)))
-    pilot_customers = count(select(Customer).where(Customer.lifecycle_status == "PILOT"))
-    active_customers = count(select(Customer).where(Customer.lifecycle_status == "ACTIVE"))
-    active_subscriptions = count(select(Subscription).where(Subscription.status == "ACTIVE"))
+    total_customers = count(own(select(Customer).where(Customer.archived_at.is_(None)), Customer.id))
+    pilot_customers = count(own(select(Customer).where(Customer.lifecycle_status == "PILOT"), Customer.id))
+    active_customers = count(own(select(Customer).where(Customer.lifecycle_status == "ACTIVE"), Customer.id))
+    active_subscriptions = count(own(select(Subscription).where(Subscription.status == "ACTIVE"), Subscription.customer_id))
 
-    expiring_7 = count(
+    expiring_7 = count(own(
         select(Subscription).where(
             Subscription.status == "ACTIVE", Subscription.end_date.is_not(None),
             Subscription.end_date <= today + timedelta(days=7), Subscription.end_date >= today,
-        )
-    )
-    expiring_30 = count(
+        ), Subscription.customer_id,
+    ))
+    expiring_30 = count(own(
         select(Subscription).where(
             Subscription.status == "ACTIVE", Subscription.end_date.is_not(None),
             Subscription.end_date <= today + timedelta(days=30), Subscription.end_date >= today,
-        )
-    )
+        ), Subscription.customer_id,
+    ))
 
     subs_by_product = dict(
-        db_session.execute(
+        db_session.execute(own(
             select(Product.name, func.count(Subscription.id))
-            .join(Subscription, Subscription.product_id == Product.id)
-            .group_by(Product.name)
-        ).all()
+            .join(Subscription, Subscription.product_id == Product.id), Subscription.customer_id,
+        ).group_by(Product.name)).all()
     )
 
     licenses_by_status = dict(
-        db_session.execute(select(License.status, func.count(License.id)).group_by(License.status)).all()
+        db_session.execute(own(select(License.status, func.count(License.id)), License.customer_id).group_by(License.status)).all()
     )
 
     active_installations_by_product = dict(
-        db_session.execute(
+        db_session.execute(own(
             select(Product.name, func.count(Installation.id))
             .join(Installation, Installation.product_id == Product.id)
-            .where(Installation.status == "ACTIVE")
-            .group_by(Product.name)
-        ).all()
+            .where(Installation.status == "ACTIVE"), Installation.customer_id,
+        ).group_by(Product.name)).all()
     )
 
     recent_security_events = db_session.execute(
@@ -79,12 +98,20 @@ def get_dashboard_summary() -> dict:
     # per-customer financial detail or PII beyond what the rest of this
     # summary already surfaces): open notifications, workflow items
     # awaiting a human decision, and active exceptional-override counts.
-    open_notifications = count(select(InternalNotification).where(InternalNotification.status.in_(("OPEN", "IN_PROGRESS"))))
-    renewals_awaiting_approval = count(select(RenewalRequest).where(RenewalRequest.status == "PAYMENT_RECORDED"))
-    pilots_needing_action = count(select(PilotRecord).where(PilotRecord.status.in_(("DRAFT", "APPROVED"))))
-    pending_activations = count(select(PendingActivation).where(PendingActivation.status == "PENDING_REVIEW"))
-    active_emergency_extensions = count(select(EmergencyExtension).where(EmergencyExtension.status == "ACTIVE"))
-    active_device_slot_exceptions = count(select(DeviceSlotException).where(DeviceSlotException.status == "ACTIVE"))
+    #
+    # The counts that belong to a customer follow the same scope as above. The ones that
+    # do not (notifications, manual-review activations, emergency extensions, device-slot
+    # exceptions) are company-wide queues a seller has no share of: they are left at 0
+    # and `scoped` tells the template not to draw those tiles at all.
+    if scoped:
+        open_notifications = pending_activations = active_emergency_extensions = active_device_slot_exceptions = 0
+    else:
+        open_notifications = count(select(InternalNotification).where(InternalNotification.status.in_(("OPEN", "IN_PROGRESS"))))
+        pending_activations = count(select(PendingActivation).where(PendingActivation.status == "PENDING_REVIEW"))
+        active_emergency_extensions = count(select(EmergencyExtension).where(EmergencyExtension.status == "ACTIVE"))
+        active_device_slot_exceptions = count(select(DeviceSlotException).where(DeviceSlotException.status == "ACTIVE"))
+    renewals_awaiting_approval = count(own(select(RenewalRequest).where(RenewalRequest.status == "PAYMENT_RECORDED"), RenewalRequest.customer_id))
+    pilots_needing_action = count(own(select(PilotRecord).where(PilotRecord.status.in_(("DRAFT", "APPROVED"))), PilotRecord.customer_id))
     # Seller agreement clause 5: sellers' objections to their statements waiting for a reply,
     # and the ones past their 2-working-day deadline (flagged in red on the manager dashboard).
     from app.commissions.statements import open_and_overdue_counts
@@ -92,6 +119,7 @@ def get_dashboard_summary() -> dict:
     open_objections, overdue_objections = open_and_overdue_counts()
 
     return {
+        "scoped": scoped,
         "total_customers": total_customers,
         "pilot_customers": pilot_customers,
         "active_customers": active_customers,

@@ -10734,3 +10734,7 @@ msgstr "Your reply is recorded. The seller can read it on their statement."
 #: app/templates/licensing/sale.html
 msgid "required unless cash"
 msgstr "required unless cash"
+
+#: app/templates/dashboard/index.html
+msgid "These numbers are for your own customers only."
+msgstr "These numbers are for your own customers only."

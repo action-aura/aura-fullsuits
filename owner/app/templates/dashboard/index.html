@@ -17,11 +17,14 @@
 {% set can_view_installations = has_permission('installations.view') %}
 {% set can_view_backups = has_permission('system.view') %}
 {% set can_view_audit = has_permission('audit.view') %}
-{% set can_view_notifications = has_permission('subscriptions.view') %}
+{# A seller's dashboard is scoped to their own customers (dashboard/services.py); the company-wide
+   queues have no per-customer owner, so they are not drawn for them at all (not shown as a false 0). #}
+{% set company_wide = not summary.scoped %}
+{% set can_view_notifications = has_permission('subscriptions.view') and company_wide %}
 {% set can_view_pilots = has_permission('pilots.view') %}
-{% set can_view_activations = has_permission('pending_activations.view') %}
-{% set can_view_emergency_ext = has_permission('emergency_extensions.view') %}
-{% set can_view_device_slots = has_permission('device_slot_exceptions.view') %}
+{% set can_view_activations = has_permission('pending_activations.view') and company_wide %}
+{% set can_view_emergency_ext = has_permission('emergency_extensions.view') and company_wide %}
+{% set can_view_device_slots = has_permission('device_slot_exceptions.view') and company_wide %}
 {% set can_view_commercial_ops = can_view_notifications or can_view_pilots or can_view_activations or can_view_emergency_ext or can_view_device_slots %}
 
 {# ---------- Derived KPI values (stage 2) ----------
@@ -82,6 +85,9 @@
    never by translated label text (locale-safe). #}
 {% set quick_action_priority = ['new_quote', 'new_payment', 'new_lead', 'new_expense', 'new_cash_closing'] %}
 {% set quick_actions = command_palette_data.create | selectattr('key', 'in', quick_action_priority) | list %}
+{% if summary.scoped %}
+<p class="hint" data-dashboard-scoped="1">{{ _("These numbers are for your own customers only.") }}</p>
+{% endif %}
 {% if quick_actions or can_view_attention_center %}
 <div class="aura-quick-actions">
   {% for key in quick_action_priority %}

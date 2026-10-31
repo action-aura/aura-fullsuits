@@ -10693,3 +10693,7 @@ msgstr "تم تسجيل ردك. يستطيع البائع قراءته في كش
 #: app/templates/licensing/sale.html
 msgid "required unless cash"
 msgstr "مطلوب إلا للنقد"
+
+#: app/templates/dashboard/index.html
+msgid "These numbers are for your own customers only."
+msgstr "هذه الأرقام تخص عملاءك أنت فقط."
