@@ -10790,3 +10790,7 @@ msgstr "Sale %(order)s was rejected. No licence was made."
 #: app/templates/licensing/sales_pending.html
 msgid "No slip (cash the seller collected). Check that it was handed over."
 msgstr "No slip (cash the seller collected). Check that it was handed over."
+
+#: app/templates/customers/_trial.html
+msgid "Paid until"
+msgstr "Paid until"

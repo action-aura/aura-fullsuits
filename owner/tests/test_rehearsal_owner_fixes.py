@@ -232,3 +232,43 @@ def test_the_managers_list_names_the_payment_method_and_a_reject_says_so(app, cl
     after = resp.get_data(as_text=True)
     assert resp.status_code == 200 and "was rejected. No licence was made." in after  # deny: the click is acknowledged
     assert order_id not in after  # and the sale left the list
+
+
+# ------------------------------------------ 4. after payment: customer + paid until
+
+def _lifecycle(app, customer_id):
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.customers import Customer
+
+        db_session.expire_all()
+        return db_session.get(Customer, customer_id).lifecycle_status
+
+
+def test_a_paid_trial_makes_the_customer_active_and_the_page_shows_paid_until(app, client, seeded, kyc):
+    from tests.test_customer_onboarding import _world, onboard
+
+    w = _world(app)
+    trial = onboard(app, w)
+    before = _lifecycle(app, trial.customer_id)
+    assert before in ("LEAD", "PROSPECT", "PILOT")  # the starting point the rehearsal saw ("prospect")
+    sale = sell(app, w, trial, amount="100.00")
+    assert _lifecycle(app, trial.customer_id) == before  # nothing changes before the money is confirmed
+    confirm(app, w, sale)
+    assert _lifecycle(app, trial.customer_id) == "ACTIVE"
+    force_login(client, app, w["manager"])
+    page = client.get(f"/customers/{trial.customer_id}").get_data(as_text=True)
+    assert 'data-paid-until="1"' in page and "Paid until" in page
+    assert 'data-trial-state="CONVERTED"' in page
+
+    # deny twin: a payment never reopens a customer who was suspended in the meantime
+    other = onboard(app, w)
+    sale2 = sell(app, w, other, amount="100.00")
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.customers import Customer
+
+        db_session.get(Customer, other.customer_id).lifecycle_status = "SUSPENDED"
+        db_session.commit()
+    confirm(app, w, sale2)
+    assert _lifecycle(app, other.customer_id) == "SUSPENDED"

@@ -10749,3 +10749,7 @@ msgstr "تم رفض البيع %(order)s. لم يُنشأ أي ترخيص."
 #: app/templates/licensing/sales_pending.html
 msgid "No slip (cash the seller collected). Check that it was handed over."
 msgstr "لا يوجد إيصال (نقد حصّله البائع). تأكد من أنه سُلِّم للشركة."
+
+#: app/templates/customers/_trial.html
+msgid "Paid until"
+msgstr "مدفوع حتى"

@@ -8,6 +8,8 @@ from datetime import timedelta
 from flask import current_app
 
 from app.customer_onboarding import documents, trial
+from app.extensions import db_session
+from app.models.subscriptions import Subscription
 from app.operational_reports.periods import jordan_today
 
 
@@ -28,10 +30,16 @@ def panel_context(customer, codes: set) -> dict | None:
     if pilot is None:
         return None
     started = pilot.trial_started_at is not None
+    converted = pilot.status == "CONVERTED"
+    paid_until = None
+    if converted:
+        # The paid term, not the trial's end: after payment the subscription carries the real date.
+        paid_until = db_session.get(Subscription, pilot.subscription_id).end_date
     return {
+        "paid_until": paid_until,
         "pilot": pilot,
         "started": started,
-        "converted": pilot.status == "CONVERTED",
+        "converted": converted,
         "days_left": trial_days_left(pilot),
         "fallback_start": None if started else pilot.created_at.date() + timedelta(days=trial.FALLBACK_START_AFTER_DAYS),
         "can_convert": "orders.create" in codes and "payments.create" in codes and pilot.status in ("ACTIVE", "EXTENDED"),

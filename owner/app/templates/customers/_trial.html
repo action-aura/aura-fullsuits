@@ -11,7 +11,9 @@
       {% elif tp.days_left == 0 %}<span class="badge danger">{{ _("Trial over -- the till is locked until the package is paid") }}</span>
       {% else %}<span class="badge active">{{ _("%(n)s day(s) left", n=tp.days_left) }}</span>{% endif %}
     </dd>
-    {% if tp.started %}
+    {% if tp.converted %}
+    {% if tp.paid_until %}<dt>{{ _("Paid until") }}</dt><dd data-paid-until="1">{{ format_owner_date(tp.paid_until) }}</dd>{% endif %}
+    {% elif tp.started %}
     <dt>{{ _("Ends") }}</dt><dd>{{ tp.pilot.pilot_end.isoformat() }}</dd>
     {% else %}
     <dt>{{ _("Starts by itself on") }}</dt><dd>{{ tp.fallback_start.isoformat() }}</dd>

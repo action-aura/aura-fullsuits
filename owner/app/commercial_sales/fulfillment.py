@@ -42,6 +42,7 @@ from app.models.commercial_sales import (
     SalesOrder,
     SalesOrderLine,
 )
+from app.models.customers import Customer
 from app.models.licensing import License
 from app.models.subscriptions import Subscription
 from app.subscriptions.services import create_subscription, transition_subscription
@@ -289,6 +290,19 @@ def _create_subscription_and_license(
     return subscription, license_row, license_key
 
 
+_PRE_SALE_LIFECYCLE = ("LEAD", "PROSPECT", "PILOT")
+
+
+def _mark_customer_active(customer_id) -> None:
+    """The customer has paid: a lead / prospect / pilot customer becomes ACTIVE. Rehearsal
+    2026-10-31: after a trial was paid for and unlocked, the customer page still said
+    "prospect". Only the pre-sale stages move; a suspended, closed or archived customer is
+    never reopened by a payment. Committed by the caller's fulfillment commit."""
+    customer = db_session.get(Customer, customer_id)
+    if customer is not None and customer.lifecycle_status in _PRE_SALE_LIFECYCLE:
+        customer.lifecycle_status = "ACTIVE"
+
+
 def _convert_trial_in_place(order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id):
     """New customer flow (NC2): the money for a trial is confirmed. Under the
     order's fulfillment lock (held by the caller) the trial's OWN subscription
@@ -464,6 +478,7 @@ def fulfill_order(
                     order, plan, allowed_platforms, device_limit, start, end, actor_staff_user_id, license_pepper, idempotency_key
                 )
 
+            _mark_customer_active(order.customer_id)
             order.status = "FULFILLED"
             order.fulfilled_at = utcnow()
             order.version += 1
