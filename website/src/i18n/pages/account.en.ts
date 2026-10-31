@@ -68,6 +68,8 @@ export const accountEn = {
       too_long: 'The password is too long. Use 128 characters or fewer.',
       too_common: 'That password is too easy to guess. Try something longer and less usual.',
       contains_personal: 'The password must not contain your email or business name.',
+      same_as_old: 'The new password must be different from the temporary one.',
+      generic: 'That password cannot be used. Please choose a different one.',
     },
   },
   home: {
@@ -77,7 +79,7 @@ export const accountEn = {
       title: 'Your package',
       plan: 'Plan',
       product: 'Product',
-      productNames: { RETAIL: 'Aura Retail' },
+      productNames: { AURA_RETAIL: 'Aura Retail', RETAIL: 'Aura Retail' },
       devices: 'Devices included',
       branch: 'Branch',
       none: 'No package is linked to this account yet. Ask your seller or message us on WhatsApp.',

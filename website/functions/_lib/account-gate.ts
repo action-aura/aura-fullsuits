@@ -104,7 +104,7 @@ export function sessionGone(): Response {
 export const DOWNLOAD_TOKEN_RE = /^[A-Za-z0-9_-]{16,128}$/;
 
 export function policyReason(v: unknown): string {
-  return v === 'too_short' || v === 'too_long' || v === 'too_common' || v === 'contains_personal' ? v : 'too_common';
+  return v === 'too_short' || v === 'too_long' || v === 'too_common' || v === 'contains_personal' || v === 'same_as_old' ? v : 'generic';
 }
 
 /** Owner account view the browser may see. Whitelisted field by field: nothing unexpected is forwarded. */

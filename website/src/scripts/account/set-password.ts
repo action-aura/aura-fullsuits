@@ -46,7 +46,7 @@ form.addEventListener('submit', async (e) => {
   setBusy(submit, false, '');
   if (res.status === 401 && res.body.error === 'session_invalid') return void location.assign(accountUrl('sign-in') + '?n=session');
   if (res.status === 401) return showMessage(t.setPassword.invalidCurrent);
-  if (res.status === 422) return showMessage(t.setPassword.reasons[res.body.reason] ?? t.setPassword.reasons.too_common);
+  if (res.status === 422) return showMessage(t.setPassword.reasons[res.body.reason] ?? t.setPassword.reasons.generic);
   if (res.status === 400 && res.body.error === 'token_invalid') {
     $('acct-ask-new').hidden = false;
     return showMessage(t.setPassword.tokenInvalid);

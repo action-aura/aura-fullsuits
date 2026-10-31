@@ -70,6 +70,8 @@ export const accountAr: Dict['pages']['account'] = {
       too_long: 'كلمة المرور طويلة. استخدم 128 حرفًا أو أقل.',
       too_common: 'كلمة المرور هذه سهلة التخمين. جرّب كلمة أطول وأقل شيوعًا.',
       contains_personal: 'يجب ألا تحتوي كلمة المرور على بريدك الإلكتروني أو اسم نشاطك.',
+      same_as_old: 'يجب أن تختلف كلمة المرور الجديدة عن المؤقتة.',
+      generic: 'لا يمكن استخدام كلمة المرور هذه. اختر كلمة مرور أخرى.',
     },
   },
   home: {
@@ -79,7 +81,7 @@ export const accountAr: Dict['pages']['account'] = {
       title: 'باقتك',
       plan: 'الباقة',
       product: 'المنتج',
-      productNames: { RETAIL: 'أورا ريتيل' },
+      productNames: { AURA_RETAIL: 'أورا ريتيل', RETAIL: 'أورا ريتيل' },
       devices: 'الأجهزة المشمولة',
       branch: 'الفرع',
       none: 'لا توجد باقة مرتبطة بهذا الحساب بعد. اسأل البائع أو راسلنا على واتساب.',

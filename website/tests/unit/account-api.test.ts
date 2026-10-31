@@ -247,7 +247,9 @@ describe('forgot / set-password / change-password', () => {
     expect(weak.status).toBe(422);
     expect(await weak.json()).toEqual({ ok: false, error: 'password_policy', reason: 'too_common' });
     ownerReply = () => jsonRes(422, { ok: false, error: 'password_policy', reason: '<script>' });
-    expect((await (await call(setPassword, req('/api/account/set-password', { token: 't'.repeat(30), password: 'x' }))).json()).reason).toBe('too_common');
+    expect((await (await call(setPassword, req('/api/account/set-password', { token: 't'.repeat(30), password: 'x' }))).json()).reason).toBe('generic');
+    ownerReply = () => jsonRes(422, { ok: false, error: 'password_policy', reason: 'same_as_old' });
+    expect((await (await call(setPassword, req('/api/account/set-password', { token: 't'.repeat(30), password: 'x' }))).json()).reason).toBe('same_as_old');
   });
 
   it('change-password: rotates the cookie to the new session token', async () => {
