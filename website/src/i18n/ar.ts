@@ -5,6 +5,7 @@ import { aboutAr } from './pages/about.ar';
 import { faqAr } from './pages/faq.ar';
 import { contactAr } from './pages/contact.ar';
 import { legalAr } from './pages/legal.ar';
+import { accountAr } from './pages/account.ar';
 
 export const ar: Dict = {
   meta: {
@@ -59,6 +60,7 @@ export const ar: Dict = {
     switchTo: 'English',
     menu: 'القائمة', // AR: drafted, native check pending
     close: 'إغلاق', // AR: drafted, native check pending
+    signIn: 'تسجيل الدخول',
   },
   cta: {
     whatsapp: 'راسلنا على واتساب',
@@ -121,5 +123,5 @@ export const ar: Dict = {
     jewel: 'شعار أكشن أورا',
     nav: 'القائمة الرئيسية', // AR: drafted, native check pending
   },
-  pages: { retail: retailAr, clinic: clinicAr, about: aboutAr, faq: faqAr, contact: contactAr, legal: legalAr },
+  pages: { retail: retailAr, clinic: clinicAr, about: aboutAr, faq: faqAr, contact: contactAr, legal: legalAr, account: accountAr },
 };

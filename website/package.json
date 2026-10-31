@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:site": "playwright test",
     "pages:dev": "wrangler pages dev dist --port 8788",
-    "d1:local": "wrangler d1 migrations apply aura-leads --local"
+    "d1:local": "wrangler d1 migrations apply aura-leads --local",
+    "test:accounts": "node tests/accounts/run.mjs"
   },
   "dependencies": {
     "@astrojs/sitemap": "3.7.4",

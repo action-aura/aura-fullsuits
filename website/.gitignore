@@ -6,3 +6,4 @@ playwright-report/
 /shots/
 .dev.vars
 .wrangler/
+dist-*/

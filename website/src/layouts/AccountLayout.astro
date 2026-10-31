@@ -1,0 +1,39 @@
+---
+// Shell for the signed-in area. No 3D jewel: these are working pages (a form, a status, a download) and they
+// must be light and quick on a shop's phone. Same field, nav and footer as the rest of the site, never indexed.
+import Base from './Base.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/account.css';
+import { dict, type Lang } from '../i18n';
+import { accountPath } from '../lib/accounts';
+
+interface Props {
+  lang: Lang;
+  /** '' for the account home, else the sub-page folder ('downloads', 'forgot', ...). */
+  sub: string;
+  title: string;
+  description: string;
+  heading: string;
+  lead?: string;
+  /** The strings the page script needs, embedded as JSON (the script never fetches copy). */
+  strings: Record<string, unknown>;
+}
+const { lang, sub, title, description, heading, lead, strings } = Astro.props;
+const t = dict(lang);
+const other: Lang = lang === 'en' ? 'ar' : 'en';
+// `<` is escaped so no string can ever close the script element.
+const blob = JSON.stringify(strings).replace(/</g, '\\u003c');
+---
+<Base lang={lang} slug="" title={title} description={description} world="master" noindex>
+  <div class="world-bg bg-master" aria-hidden="true"></div>
+  <Nav lang={lang} slug="account" switchPath={accountPath(other, sub)} />
+  <main id="main" class="acct" data-w="master">
+    <h1 id="acct-heading">{heading}</h1>
+    {lead && <p class="lead" id="acct-lead">{lead}</p>}
+    <noscript><p class="acct-msg" data-kind="error">{t.pages.account.common.needJs}</p></noscript>
+    <slot />
+  </main>
+  <Footer lang={lang} slug="" />
+  <script type="application/json" id="acct-t" set:html={blob} />
+</Base>

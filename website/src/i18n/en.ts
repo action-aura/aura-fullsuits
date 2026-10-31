@@ -8,6 +8,7 @@ import { aboutEn } from './pages/about.en';
 import { faqEn } from './pages/faq.en';
 import { contactEn } from './pages/contact.en';
 import { legalEn } from './pages/legal.en';
+import { accountEn } from './pages/account.en';
 
 export const en = {
   meta: {
@@ -48,7 +49,7 @@ export const en = {
   },
   nav: {
     brand: 'Action Aura', retail: 'Aura Retail', clinic: 'Aura Clinic', gym: 'Aura Gym', about: 'About',
-    demo: 'Book a free demo', switchTo: 'العربية', menu: 'Menu', close: 'Close',
+    demo: 'Book a free demo', switchTo: 'العربية', menu: 'Menu', close: 'Close', signIn: 'Sign in',
   },
   cta: {
     whatsapp: 'Chat on WhatsApp', demo: 'Book a free demo', call: 'Call us',
@@ -94,7 +95,7 @@ export const en = {
     noscript: 'Choose a language above. Both links work without JavaScript.',
   },
   a11y: { skip: 'Skip to content', jewel: 'Action Aura mark', nav: 'Main' },
-  pages: { retail: retailEn, clinic: clinicEn, about: aboutEn, faq: faqEn, contact: contactEn, legal: legalEn },
+  pages: { retail: retailEn, clinic: clinicEn, about: aboutEn, faq: faqEn, contact: contactEn, legal: legalEn, account: accountEn },
 } as const;
 
 export type Dict = DeepStrings<typeof en>;

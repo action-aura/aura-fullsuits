@@ -1,0 +1,26 @@
+---
+import AccountLayout from '../../../../layouts/AccountLayout.astro';
+import { dict, type Lang } from '../../../../i18n';
+import { accountStaticPaths } from '../../../../lib/accounts';
+import Turnstile from '../../../../components/AccountTurnstile.astro';
+
+export function getStaticPaths() { return accountStaticPaths(); }
+const lang = Astro.params.lang as Lang;
+const a = dict(lang).pages.account;
+---
+<AccountLayout lang={lang} sub="forgot" title={a.meta.forgot.title} description={a.meta.forgot.description}
+  heading={a.forgot.title} lead={a.forgot.lead} strings={{ ...a, lang }}>
+  <p id="acct-msg" class="acct-msg" role="alert" hidden></p>
+  <form id="acct-form" class="acct-form" method="post" action="javascript:void(0)" novalidate>
+    <div class="field">
+      <label for="f-email">{a.forgot.email}</label>
+      <input id="f-email" name="email" type="email" inputmode="email" autocomplete="username" dir="ltr" autocapitalize="none" spellcheck="false" required />
+    </div>
+    <Turnstile />
+    <div class="form-actions">
+      <button type="submit" id="acct-submit" class="btn-send-wa" data-label={a.forgot.submit}>{a.forgot.submit}</button>
+      <a class="acct-link" href={`/${lang}/account/sign-in/`}>{a.common.backToSignIn}</a>
+    </div>
+  </form>
+</AccountLayout>
+<script>import '../../../../scripts/account/forgot';</script>

@@ -1,0 +1,30 @@
+---
+import AccountLayout from '../../../../layouts/AccountLayout.astro';
+import { dict, type Lang } from '../../../../i18n';
+import { accountStaticPaths } from '../../../../lib/accounts';
+
+
+export function getStaticPaths() { return accountStaticPaths(); }
+const lang = Astro.params.lang as Lang;
+const a = dict(lang).pages.account;
+---
+<AccountLayout lang={lang} sub="sign-in" title={a.meta.signIn.title} description={a.meta.signIn.description}
+  heading={a.signIn.title} lead={a.signIn.lead} strings={{ ...a, lang }}>
+  <p id="acct-msg" class="acct-msg" role="alert" hidden></p>
+  <form id="acct-form" class="acct-form" method="post" action="javascript:void(0)" novalidate>
+    <div class="field">
+      <label for="f-email">{a.signIn.email}</label>
+      <input id="f-email" name="email" type="email" inputmode="email" autocomplete="username" dir="ltr" autocapitalize="none" spellcheck="false" required />
+    </div>
+    <div class="field">
+      <label for="f-password">{a.signIn.password}</label>
+      <input id="f-password" name="password" type="password" autocomplete="current-password" dir="ltr" required />
+    </div>
+    <div class="form-actions">
+      <button type="submit" id="acct-submit" class="btn-send-wa" data-label={a.signIn.submit}>{a.signIn.submit}</button>
+      <a class="acct-link" href={`/${lang}/account/forgot/`}>{a.signIn.forgot}</a>
+    </div>
+  </form>
+  <p class="acct-help"><a class="acct-link" href="https://wa.me/962780069485">{a.common.help}</a></p>
+</AccountLayout>
+<script>import '../../../../scripts/account/sign-in';</script>

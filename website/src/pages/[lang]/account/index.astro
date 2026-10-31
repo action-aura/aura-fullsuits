@@ -1,0 +1,17 @@
+---
+import AccountLayout from '../../../layouts/AccountLayout.astro';
+import { dict, type Lang } from '../../../i18n';
+import { accountStaticPaths } from '../../../lib/accounts';
+
+
+export function getStaticPaths() { return accountStaticPaths(); }
+const lang = Astro.params.lang as Lang;
+const a = dict(lang).pages.account;
+---
+<AccountLayout lang={lang} sub="" title={a.meta.home.title} description={a.meta.home.description}
+  heading={a.home.title}  strings={{ ...a, lang }}>
+  <p id="acct-msg" class="acct-msg" role="alert" hidden></p>
+  <p id="acct-loading" class="acct-loading" role="status">{a.common.loading}</p>
+  <div id="acct-root" hidden></div>
+</AccountLayout>
+<script>import '../../../scripts/account/home';</script>

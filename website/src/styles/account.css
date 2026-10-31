@@ -1,0 +1,212 @@
+/* Signed-in area: sign in, account, downloads, password pages. Built on the site's existing tokens, form fields
+   (.field) and buttons (.btn-send / .btn-send-wa) so it reads as the same product. Logical properties only, so
+   the Arabic (RTL) pages mirror with no second stylesheet. */
+
+.acct {
+  padding-block: clamp(112px, 16vh, 168px) clamp(72px, 12vh, 128px);
+  padding-inline: var(--gutter);
+}
+
+.acct > * {
+  max-inline-size: 640px;
+}
+
+.acct h1 {
+  margin-block-end: 14px;
+}
+
+.acct .lead {
+  margin-block-end: 28px;
+}
+
+.acct-form {
+  display: grid;
+  gap: 20px;
+  margin-block-start: 8px;
+}
+
+.acct-loading,
+.acct-note,
+.acct-help {
+  color: var(--ink-muted);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.acct-help {
+  margin-block-start: 28px;
+}
+
+.acct-link {
+  color: var(--link);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  font-size: 15px;
+}
+
+.acct-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+/* Status line (error or confirmation). Colour is never the only signal: the text says what happened. */
+.acct-msg {
+  margin-block: 0 22px;
+  padding: 14px 18px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.acct-msg[data-kind="ok"] {
+  border-color: var(--hair);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.acct-msg[hidden],
+.acct [hidden] {
+  display: none;
+}
+
+/* Cards: a hairline, a soft fill, and a different rhythm for the title and the body. */
+.acct-card {
+  margin-block-end: 20px;
+  padding: clamp(20px, 3.4vw, 30px);
+  border: 1px solid var(--hair);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.acct-card h2 {
+  margin-block-end: 14px;
+  font-size: clamp(1.1rem, .95rem + .6vw, 1.35rem);
+  line-height: 1.2;
+}
+
+.acct-card-body > * + * {
+  margin-block-start: 12px;
+}
+
+.acct-licence + .acct-licence {
+  margin-block-start: 18px;
+  padding-block-start: 18px;
+  border-block-start: 1px solid var(--hair);
+}
+
+.acct-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  justify-content: space-between;
+  padding-block: 6px;
+}
+
+.acct-label {
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
+.acct-value {
+  font-weight: 500;
+}
+
+/* The trial sentence is the one thing a shop owner must not miss, so it is the loudest line in the card. */
+.acct-trial {
+  margin-block-start: 12px;
+  padding: 12px 16px;
+  border-inline-start: 3px solid var(--accent);
+  border-radius: 4px 12px 12px 4px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-weight: 500;
+  line-height: 1.55;
+}
+
+:lang(ar) .acct-trial {
+  border-radius: 12px 4px 4px 12px;
+}
+
+.acct-trial[data-state="ENDED"] {
+  border-inline-start-color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+}
+
+.acct-contact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+}
+
+.acct-downloads {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.acct-download {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border: 1px solid var(--hair);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+
+.acct-download-text {
+  display: grid;
+  gap: 2px;
+}
+
+.acct-meta {
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.acct-steps {
+  margin: 0;
+  padding-inline-start: 1.3em;
+  line-height: 1.7;
+}
+
+.acct-steps li + li {
+  margin-block-start: .4em;
+}
+
+.acct-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  align-items: center;
+  margin-block-start: 28px;
+}
+
+.acct-who {
+  flex: 1 1 100%;
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
+.acct .btn-send-wa,
+.acct .btn-send {
+  min-block-size: 44px;
+}
+
+@media (max-width: 899px) {
+  .acct-download .btn-send-wa {
+    inline-size: 100%;
+  }
+}
+
+/* The account area shows in the nav as a plain link; keep it quiet next to the "Book a demo" pill. */
+.nav-account[aria-current="page"] {
+  color: var(--ink);
+}
