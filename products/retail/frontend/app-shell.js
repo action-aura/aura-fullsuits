@@ -2670,9 +2670,20 @@ const SubsystemApp = {
       // an Aura account is first asked which computer it is (boss or cashier).
       // Only when the licence really is active -- a stale marker on a device
       // that is not activated must not hide the activation gate.
-      const rolePending = this._readRolePending();
-      if (rolePending && !this._needsActivation(lic)) {
-        return this._showRoleStep(rolePending);
+      // rc.19: the step is read from this device's own backend first (survives a
+      // reload, a wiped webview profile, another browser), localStorage second.
+      // It is a small state machine -- pending / ADMIN / CASHIER -- so a reload
+      // AFTER a choice resumes that choice instead of dropping on the join wait
+      // screen ("your account is on its way", which is false for a first device).
+      const roleStep = await this._loadRoleStep();
+      if (roleStep && !this._needsActivation(lic)) {
+        if (roleStep.state === 'ADMIN') {
+          this._setupPrefillEmail = roleStep.email || '';
+          this._landOnEmployeesOnce = true;
+          return this.showSetupModal();
+        }
+        if (roleStep.state === 'CASHIER') return this._waitForShopAccount(undefined, undefined, { otherDevice: true });
+        return this._showRoleStep(roleStep);
       }
       if (this._isJoinedDevice(lic)) {
         return this._waitForShopAccount();
@@ -2735,6 +2746,32 @@ const SubsystemApp = {
     try { localStorage.removeItem(this.ROLE_PENDING_KEY); } catch (e) { /* storage blocked */ }
   },
 
+  // Server copy of the step (config.json on this device; see onboarding_routes.py
+  // "Role step"). Returns {state, email} or null. A step found only in
+  // localStorage (older activation page) is copied to the server so it
+  // survives from here on.
+  async _loadRoleStep() {
+    try {
+      const body = await fetch('/api/onboarding/role-step', { cache: 'no-store' }).then(r => r.json());
+      if (body && body.role_step && body.role_step.state) return body.role_step;
+    } catch (e) { /* fall back to the local copy */ }
+    const local = this._readRolePending();
+    if (!local) return null;
+    this._postRoleStep('pending', local.email || '');
+    return { state: 'pending', email: local.email || '' };
+  },
+
+  async _postRoleStep(state, email) {
+    try {
+      const res = await fetch('/api/onboarding/role-step', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: state, email: email || '' }),
+      });
+      return res.ok;
+    } catch (e) { return false; }
+  },
+
   _showRoleStep(rec) {
     this._authModalOpen = true;
     this._applyAccent(this.systems.retail);
@@ -2770,9 +2807,11 @@ const SubsystemApp = {
   },
 
   async _chooseRole(role, rec) {
-    // Cleared the moment a choice is made: the step is asked once, and a later
-    // restart must not ask it again over a half-built shop.
-    this._clearRolePending();
+    // The choice is recorded on the device (so the step is asked once and a
+    // restart resumes THIS choice); the local pending marker is dropped only
+    // when that record landed -- if the backend could not be reached the marker
+    // stays and the step is simply asked again, never silently lost.
+    if (await this._postRoleStep(role, rec && rec.email)) this._clearRolePending();
     if (role === 'ADMIN') {
       this._setupPrefillEmail = (rec && rec.email) || '';
       this._landOnEmployeesOnce = true;
@@ -2782,7 +2821,7 @@ const SubsystemApp = {
     // CASHIER: the join wait screen. It polls for the shop's account, which the
     // boss computer sends by sync; with no boss computer yet it keeps waiting
     // and keeps the "first device" way out visible.
-    return this._waitForShopAccount();
+    return this._waitForShopAccount(undefined, undefined, { otherDevice: true });
   },
 
   // ── First-run brand intro (brand/intro.html) ────────────────────────────
@@ -2974,7 +3013,7 @@ const SubsystemApp = {
     // itself, and the owner's live first start sat on the wait for 120 s
     // because of the extra step), so go straight to the wait, which now
     // carries the "this is my first device" way out from the first second.
-    this._waitForShopAccount();
+    this._waitForShopAccount(undefined, undefined, { otherDevice: true });
   },
 
   // ── Waiting for the owner's account to arrive by sync ───────────────────────
@@ -2992,8 +3031,9 @@ const SubsystemApp = {
   // call sites never pass either argument.
   _waitApprovalTimer: null,
   _waitApprovalElapsedMs: 0,
+  _waitKnowsOtherDevice: false,
 
-  _waitForShopAccount(intervalMs, ceilingMs) {
+  _waitForShopAccount(intervalMs, ceilingMs, opts) {
     const interval = intervalMs || 3000;
     const ceiling  = ceilingMs  || 120000;
     // Two very different entry states share this function: _joinSubmit()
@@ -3013,11 +3053,20 @@ const SubsystemApp = {
     this._authModalOpen = true;
     this._applyAccent(this.systems.retail);
     this._waitApprovalElapsedMs = 0;
+    // rc.19: "your account is on its way from your other device" is only true
+    // when we KNOW another device exists (cashier chosen, or a key used to join
+    // an existing shop). A brand-new shop's first computer has none, and was
+    // told an account was coming. Anything else gets the neutral sentence.
+    const knowsOtherDevice = !!(opts && opts.otherDevice);
+    this._waitKnowsOtherDevice = knowsOtherDevice;   // the 'Keep waiting' retry re-enters with the same truth
+    const waitSentence = knowsOtherDevice
+      ? t("Your shop's account is on its way from your other device. This screen continues by itself once it arrives.")
+      : t("Looking for your shop's account. If this is the first computer in your shop, choose the button below to set the shop up here.");
     overlay.querySelector('.auth-card').innerHTML = `
       <div class="auth-head">
         <div class="auth-icon">${AuraIcons.render('key-round', 32)}</div>
         <h2 class="auth-title">${t('Connecting to your shop…')}</h2>
-        <p class="auth-sub">${t("Your shop's account is on its way from your other device. This screen continues by itself once it arrives.")}</p>
+        <p class="auth-sub">${waitSentence}</p>
       </div>
       <!-- REHEARSAL-1007 B10: the way out is offered from the FIRST second, not
            after the 120 s ceiling. The very first device of a shop has no other
@@ -3061,7 +3110,7 @@ const SubsystemApp = {
             <div class="auth-icon">${AuraIcons.render('key-round', 32)}</div>
             <h2 class="auth-title">${t('Still waiting for your account. Check the connection, or set up a new shop instead.')}</h2>
           </div>
-          <button id="su-wait-retry-btn" class="auth-submit" onclick="SubsystemApp._waitForShopAccount(${interval}, ${ceiling})">${t('Keep waiting')}</button>
+          <button id="su-wait-retry-btn" class="auth-submit" onclick="SubsystemApp._waitForShopAccount(${interval}, ${ceiling}, { otherDevice: ${!!this._waitKnowsOtherDevice} })">${t('Keep waiting')}</button>
           <button id="su-wait-setup-btn" class="auth-submit" style="margin-top:8px" onclick="SubsystemApp.showSetupModal()">${t('Set up a new shop instead')}</button>`;
       }
     }

@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import sqlite3
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -225,6 +226,92 @@ def set_device_branch_uid(uid):
     nothing about this function is special-cased beyond the one key name.
     """
     _write_config({'branch_uid': (uid or None)})
+
+
+# ── Role step ("which computer is this?") -- device-local, survives reloads ────
+#
+# rc.19 (dress rehearsal 2026-10-31): the marker that says "this computer was
+# just activated and has not been told whether it is the boss or a cashier
+# computer" lived ONLY in the webview's localStorage. A reload in another
+# browser profile, a wiped WebView profile or a storage-blocked launch lost it,
+# and the shop then landed on "Connecting to your shop... your account is on
+# its way from your other device" -- a sentence that is a lie for a brand-new
+# shop with no other device. The same screen also showed after the boss
+# choice itself, because the marker was cleared the moment a button was
+# pressed, BEFORE the create-admin form had a result.
+#
+# So the state now lives in config.json (device-local by construction, never
+# synced -- see get_device_branch_uid) and is a small state machine:
+#     pending  -> activated, nothing chosen yet  -> show the role step
+#     ADMIN    -> boss chosen, no admin exists yet -> show create-admin
+#     CASHIER  -> cashier chosen                  -> show the wait screen
+# It is dropped the moment an admin exists (first-run is over). Holds only an
+# e-mail address the person already typed into the activation form -- no secret.
+ROLE_STEP_KEY = 'role_step'
+ROLE_STEP_STATES = ('pending', 'ADMIN', 'CASHIER')
+ROLE_STEP_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+
+
+def _admin_exists() -> bool:
+    try:
+        conn = get_conn()
+        try:
+            row = conn.execute(
+                "SELECT password_hash FROM users WHERE role='admin' LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        return False
+    return bool(row and row['password_hash'] not in (None, '', 'PENDING', 'null', 'NULL'))
+
+
+def get_role_step():
+    """The stored role-step record, or None. Aged out after a week and dropped
+    once an admin exists (first-run is over, the step has nothing to ask)."""
+    rec = _read_config().get(ROLE_STEP_KEY)
+    if not isinstance(rec, dict) or rec.get('state') not in ROLE_STEP_STATES:
+        return None
+    at = rec.get('at')
+    if not isinstance(at, (int, float)) or time.time() - at > ROLE_STEP_MAX_AGE_SECONDS:
+        clear_role_step()
+        return None
+    if _admin_exists():
+        clear_role_step()
+        return None
+    return {'state': rec['state'], 'email': str(rec.get('email') or '')}
+
+
+def set_role_step(state, email=''):
+    _write_config({ROLE_STEP_KEY: {
+        'state': state, 'email': (email or '')[:254], 'at': time.time(),
+    }})
+
+
+def clear_role_step():
+    if ROLE_STEP_KEY in _read_config():
+        _write_config({ROLE_STEP_KEY: None})
+
+
+@onboarding_bp.route('/api/onboarding/role-step', methods=['GET'])
+def role_step_get():
+    return jsonify({'role_step': get_role_step()})
+
+
+@onboarding_bp.route('/api/onboarding/role-step', methods=['POST'])
+def role_step_set():
+    """Allowed only while first-run is still open (no admin yet) -- once a shop
+    has an admin this route can neither start nor change anything."""
+    if _admin_exists():
+        clear_role_step()
+        return jsonify({'error': 'First-run is already finished.'}), 409
+    data = request.get_json(silent=True) or {}
+    state = data.get('state')
+    if state not in ROLE_STEP_STATES:
+        return jsonify({'error': 'Unknown state.'}), 400
+    prev = get_role_step() or {}
+    set_role_step(state, str(data.get('email') or prev.get('email') or '').strip())
+    return jsonify({'role_step': get_role_step()})
 
 
 # ── Onboarding ─────────────────────────────────────────────────────────────────

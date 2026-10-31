@@ -68,9 +68,16 @@ MUTANTS = {
                              "const pending = api.post('/api/licensing/account/sign-in', { email: typedEmail, password: p.input.value });"),
     "password_in_storage": ("**/licensing-account.js", "const pending = api.post('/api/licensing/account/sign-in', { email: typedEmail, password: p.input.value });",
                             "try { sessionStorage.setItem('pw', p.input.value); } catch (e) {} const pending = api.post('/api/licensing/account/sign-in', { email: typedEmail, password: p.input.value });"),
-    "role_step_skipped": ("**/app-shell.js", "if (rolePending && !this._needsActivation(lic)) {", "if (false) {"),
+    "role_step_skipped": ("**/app-shell.js", "if (roleStep && !this._needsActivation(lic)) {", "if (false) {"),
+    # rc.19: the step lives on the device's backend, not only in localStorage. Blind the server read and a
+    # reload with a wiped localStorage must go RED (A6f).
+    "role_server_ignored": ("**/app-shell.js", "if (body && body.role_step && body.role_step.state) return body.role_step;", ""),
+    # rc.19: a reload AFTER choosing boss resumes the create-account form, not the join wait screen (A7e).
+    "admin_resume_lost": ("**/app-shell.js", "if (roleStep.state === 'ADMIN') {", "if (false) {"),
+    # rc.19: with no other device known the wait screen must not promise an account "on its way" (B5e).
+    "wait_always_on_its_way": ("**/app-shell.js", "const knowsOtherDevice = !!(opts && opts.otherDevice);", "const knowsOtherDevice = true;"),
     "no_email_prefill": ("**/app-shell.js", "if (emailEl && !emailEl.value) emailEl.value = this._setupPrefillEmail;", ""),
-    "cashier_gets_setup": ("**/app-shell.js", "    return this._waitForShopAccount();\n  },\n\n  // ── First-run brand intro",
+    "cashier_gets_setup": ("**/app-shell.js", "    return this._waitForShopAccount(undefined, undefined, { otherDevice: true });\n  },\n\n  // ── First-run brand intro",
                            "    return this.showSetupModal();\n  },\n\n  // ── First-run brand intro"),
     "no_gate_redirect": ("**/app-shell.js",
                          "if (this._needsActivation(lic) && lic.current_state !== 'ACTIVATING' && !this._isActivationPending()) {\n        location.href = '/static/licensing.html?gate=1';",
@@ -241,16 +248,34 @@ def scenario_admin(pw, fake, backend):
     check("A6d Owner activated by account ticket", [a["kind"] for a in st["activations"]] == ["account_ticket"], st["activations"])
     check("A6e every signed request verified (no bad signature)", st["bad_signatures"] == 0, st["bad_signatures"])
 
+    # A6f (rc.19): a reload / restart before choosing shows the role step AGAIN -- even with the webview's
+    # localStorage wiped, because the step is kept on the device's own backend.
+    page.evaluate("() => localStorage.clear()")
+    page.reload(wait_until="domcontentloaded")
+    check("A6f a reload (localStorage wiped) before choosing still shows the role step",
+          visible(page, "#role-admin-btn") and not page.locator("text=Connecting to your shop").is_visible())
+
     # A7: ADMIN
     page.click("#role-admin-btn")
     check("A7 ADMIN opens the create-account form", visible(page, "#su-name"))
     check("A7b the Aura e-mail is prefilled", page.input_value("#su-email") == EMAIL, page.input_value("#su-email"))
+    # A7e (rc.19): a reload AFTER choosing boss resumes the create-account form (it used to drop on
+    # "Connecting to your shop... your account is on its way", a lie for a first device), and the role
+    # step is not asked a second time.
+    page.reload(wait_until="domcontentloaded")
+    check("A7e reload after choosing boss resumes create-account, not the wait screen or the role step",
+          visible(page, "#su-name") and not page.locator("#role-admin-btn").is_visible()
+          and not page.locator("text=Connecting to your shop").is_visible())
+    check("A7f ... with the Aura e-mail still prefilled", page.input_value("#su-email") == EMAIL, page.input_value("#su-email"))
     page.fill("#su-name", "Boss Person")
     page.fill("#su-company", "Account Flow Co")
     page.fill("#su-pass", LOCAL_PW)
     page.fill("#su-pass2", LOCAL_PW)
     page.click("#su-btn")
-    page.locator(".sub-nav-item").first.wait_for(state="visible", timeout=WAIT_MS)
+    if not visible(page, ".sub-nav-item"):
+        page.screenshot(path=str(OUT / "A7_after_create_FAILED.png"))
+        check("A7g the boss account is created and the app opens", False, page.inner_text("body")[:300].replace(chr(10), " | "))
+        return
     page.wait_for_timeout(1500)
     active = page.evaluate("""() => { const a = document.getElementById('sub-header-section'); return a ? a.innerText : null; }""")
     check("A7c the new boss computer lands on Employees", active is not None and "Employees" in active, active)
@@ -322,6 +347,19 @@ def scenario_cashier(pw, fake, backend):
     check("B5 CASHIER waits for the shop's account", visible(page, "text=Connecting to your shop"))
     check("B5b ... and is NOT offered a create-account form", page.locator("#su-name").count() == 0)
     page.screenshot(path=str(OUT / "B5_cashier_wait.png"))
+    check("B5c a cashier computer is told its account is on its way from the other device",
+          "on its way" in page.locator("#aura-relogin-modal").inner_text())
+    # B5d (rc.19): a restart after choosing cashier keeps waiting -- the role step is not asked again.
+    page.reload(wait_until="domcontentloaded")
+    check("B5d reload after choosing cashier: still the wait screen, role step NOT asked again",
+          visible(page, "text=Connecting to your shop") and not page.locator("#role-cashier-btn").is_visible())
+    # B5e (rc.19): when nothing says another device exists, the wait screen must NOT say an account is
+    # "on its way" (that sentence is false for the first computer of a new shop).
+    page.evaluate("() => { SubsystemApp._stopWaitForShopAccountPoll(); SubsystemApp._waitForShopAccount(); }")
+    neutral = page.locator("#aura-relogin-modal").inner_text()
+    page.evaluate("() => SubsystemApp._stopWaitForShopAccountPoll()")
+    check("B5e no known other device: the wait screen does not claim an account is on its way",
+          "Connecting to your shop" in neutral and "on its way" not in neutral, neutral[:200])
     page.close()
 
 

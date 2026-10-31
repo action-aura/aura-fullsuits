@@ -856,7 +856,15 @@
   function markRolePending(email) {
     try {
       localStorage.setItem(ROLE_PENDING_KEY, JSON.stringify({ v: 1, at: Date.now(), email: email || '' }));
-    } catch (e) { /* storage blocked: the join wait screen is the fallback */ }
+    } catch (e) { /* storage blocked: the server copy below still holds the step */ }
+    // rc.19: also kept on the device's own backend so a reload / wiped webview
+    // profile still lands on the role step. Returns the promise so the bounce
+    // to '/' can wait for it.
+    return fetch('/api/onboarding/role-step', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state: 'pending', email: email || '' }),
+    }).catch(function () { /* the localStorage copy still stands */ });
   }
 
   function onAccountActivated(info) {
@@ -917,7 +925,7 @@
         // and this is what lets it explain why instead of it reading as an
         // error.
         markActivationHandoff(currentEmail);
-        markRolePending('');
+        const rolePost = markRolePending('');
         showMessage(t('Activation successful.'), 'info');
         // Reached via app-shell.js's pre-login activation gate (?gate=1) --
         // bounce back to '/' so init() re-runs and, now that this device is
@@ -926,7 +934,7 @@
         // deliberately stays here showing the now-active status card, same
         // as before this gate existed.
         if (new URLSearchParams(location.search).get('gate') === '1') {
-          setTimeout(() => { location.href = '/'; }, 900);
+          setTimeout(() => { Promise.resolve(rolePost).then(() => { location.href = '/'; }); }, 900);
         }
       } else if (status === 202 && body.result === 'PENDING') {
         // Phase 8 Part O: Owner is holding this activation for manual
