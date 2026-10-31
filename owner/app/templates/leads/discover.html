@@ -49,20 +49,45 @@
     <input type="hidden" name="count" value="{{ results|length }}">
     <input type="hidden" name="priority" value="{{ priority or 'MEDIUM' }}">
     <input type="hidden" name="assigned_employee_profile_id" value="{{ assigned_employee_profile_id or '' }}">
+    {% set rank_on = ai_available("leads") %}
+    {% if rank_on %}
+    {# "Rank with AI": static/js/leads-rank.js posts the rows' data-* values
+       (never the phone) to leads.discover_rank and fills the Score / Why /
+       Opener columns. Every word the script shows is here, translated; the
+       script adds none. The button exists only while a provider is configured
+       for this purpose (hard rule R5). #}
+    <div id="leads-rank" class="aura-rank"
+         data-rank-url="{{ url_for('leads.discover_rank') }}"
+         data-csrf="{{ csrf_token() }}"
+         data-segment="{{ segment or '' }}" data-area="{{ area or '' }}" data-lang="{{ current_locale }}"
+         data-msg-busy="{{ _('Ranking...') }}"
+         data-msg-error="{{ _('Ranking is not available right now. Try again in a minute.') }}"
+         data-msg-copied="{{ _('Copied') }}">
+      <button type="button" class="secondary" data-rank-action="rank">{{ _("Rank with AI") }}</button>
+      <span class="small" data-rank-status role="status"></span>
+      <p class="small">{{ _("The AI sees each business's name, address, categories, rating and review count -- never its phone number. Scores are advice; check a place before you call.") }}</p>
+    </div>
+    {% endif %}
     <table class="responsive-table">
       <thead>
         <tr>
           <th></th>
           <th>{{ _("Name") }}</th>
+          {% if rank_on %}<th>{{ _("Score") }}</th>{% endif %}
           <th>{{ _("Phone") }}</th>
           <th>{{ _("Address") }}</th>
           <th>{{ _("Website") }}</th>
+          {% if rank_on %}<th>{{ _("Why") }}</th><th>{{ _("Opener") }}</th>{% endif %}
         </tr>
       </thead>
       <tbody>
       {% for r in results %}
       {% set n = loop.index0 %}
-      <tr>
+      <tr data-rank-row data-idx="{{ n }}" data-name="{{ r.name }}" data-address="{{ r.address or '' }}"
+          data-types="{{ r.types|join('|') }}" data-rating="{{ '' if r.rating is none else r.rating }}"
+          data-reviews="{{ '' if r.user_rating_count is none else r.user_rating_count }}"
+          data-has-phone="{{ 1 if r.phone else 0 }}" data-has-website="{{ 1 if r.website else 0 }}"
+          data-status="{{ r.business_status or '' }}">
         <td>
           <input type="checkbox" name="select-{{ n }}" id="leads-discover-select-{{ n }}" {% if r.phone %}checked{% else %}disabled{% endif %}>
           <input type="hidden" name="place_id-{{ n }}" value="{{ r.place_id }}">
@@ -70,8 +95,13 @@
           <input type="hidden" name="phone-{{ n }}" value="{{ r.phone or '' }}">
           <input type="hidden" name="address-{{ n }}" value="{{ r.address or '' }}">
           <input type="hidden" name="website-{{ n }}" value="{{ r.website or '' }}">
+          {# Filled by leads-rank.js; saved on the imported lead as a note. #}
+          <input type="hidden" name="ai_score-{{ n }}" data-rank-field="score" value="">
+          <input type="hidden" name="ai_reason-{{ n }}" data-rank-field="reason" value="">
+          <input type="hidden" name="ai_opener-{{ n }}" data-rank-field="opener" value="">
         </td>
         <td><label for="leads-discover-select-{{ n }}">{{ r.name }}</label></td>
+        {% if rank_on %}<td data-rank-score></td>{% endif %}
         <td>
           {% if r.phone %}<bdi dir="ltr">{{ r.phone }}</bdi>
           {% else %}<span class="small">{{ _("No phone listed -- cannot be imported") }}</span>{% endif %}
@@ -82,6 +112,10 @@
            not stop a javascript: URL from becoming a clickable link. Anything
            else is shown as plain text. #}
         <td>{% if r.website and (r.website.startswith('https://') or r.website.startswith('http://')) %}<a href="{{ r.website }}" target="_blank" rel="noopener noreferrer">{{ r.website }}</a>{% elif r.website %}{{ r.website }}{% else %}-{% endif %}</td>
+        {% if rank_on %}
+        <td data-rank-reason></td>
+        <td><span data-rank-opener></span> <button type="button" class="secondary" data-rank-action="copy" hidden>{{ _("Copy") }}</button></td>
+        {% endif %}
       </tr>
       {% endfor %}
       </tbody>
@@ -92,5 +126,6 @@
   <p class="empty">{{ _("No places found for that search.") }}</p>
   {% endif %}
 </div>
+{% if ai_available("leads") %}<script src="{{ url_for('static', filename='js/leads-rank.js') }}"></script>{% endif %}
 {% endif %}
 {% endblock %}

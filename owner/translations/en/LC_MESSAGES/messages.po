@@ -9371,3 +9371,75 @@ msgstr "That subscription was not found."
 
 msgid "That subscription belongs to a different customer than this payment."
 msgstr "That subscription belongs to a different customer than this payment."
+
+msgid "The AI usage limit has been reached. It resets at midnight, Jordan time."
+msgstr "The AI usage limit has been reached. It resets at midnight, Jordan time."
+
+msgid "AI is not available on this server."
+msgstr "AI is not available on this server."
+
+msgid "The AI service is busy or unavailable. Try again in a minute."
+msgstr "The AI service is busy or unavailable. Try again in a minute."
+
+msgid "Check the question and try again."
+msgstr "Check the question and try again."
+
+msgid "Could not read the search results to rank."
+msgstr "Could not read the search results to rank."
+
+msgid "AI lead score"
+msgstr "AI lead score"
+
+msgid "AI lead suggestion"
+msgstr "AI lead suggestion"
+
+msgid "Why"
+msgstr "Why"
+
+msgid "WhatsApp opener"
+msgstr "WhatsApp opener"
+
+msgid "Ranking..."
+msgstr "Ranking..."
+
+msgid "Ranking is not available right now. Try again in a minute."
+msgstr "Ranking is not available right now. Try again in a minute."
+
+msgid "Rank with AI"
+msgstr "Rank with AI"
+
+msgid "The AI sees each business's name, address, categories, rating and review count -- never its phone number. Scores are advice; check a place before you call."
+msgstr "The AI sees each business's name, address, categories, rating and review count -- never its phone number. Scores are advice; check a place before you call."
+
+msgid "Score"
+msgstr "Score"
+
+msgid "Opener"
+msgstr "Opener"
+
+msgid "Copy"
+msgstr "Copy"
+
+msgid "Thinking..."
+msgstr "Thinking..."
+
+msgid "The assistant could not answer right now. Try again in a minute."
+msgstr "The assistant could not answer right now. Try again in a minute."
+
+msgid "Help assistant"
+msgstr "Help assistant"
+
+msgid "Don't paste customer phone numbers or personal data -- this helper uses a free service."
+msgstr "Don't paste customer phone numbers or personal data -- this helper uses a free service."
+
+msgid "Your question"
+msgstr "Your question"
+
+msgid "Ask how to do something in Aura Owner"
+msgstr "Ask how to do something in Aura Owner"
+
+msgid "Send"
+msgstr "Send"
+
+msgid "Help"
+msgstr "Help"

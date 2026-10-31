@@ -1,0 +1,46 @@
+/* Aura Owner -- the staff Help button + chat panel (layout/base.html,
+ * static/js/ai-help.js). Loaded only while a provider is configured for the
+ * staff-help purpose. Tokens only (css/tokens.css); logical properties so the
+ * button and panel sit at the inline-end corner in both LTR and RTL. */
+.aura-ai-help {
+  position: fixed;
+  inset-inline-end: var(--aura-space-4);
+  inset-block-end: calc(var(--aura-space-4) + env(safe-area-inset-bottom, 0px));
+  z-index: var(--aura-z-toast);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--aura-space-2);
+}
+.aura-ai-help__toggle {
+  padding: var(--aura-space-2) var(--aura-space-4);
+  background: var(--aura-color-brand-primary);
+  color: #fff;
+  border: 0;
+  border-radius: var(--aura-radius-lg);
+  font: inherit;
+  cursor: pointer;
+}
+.aura-ai-help__toggle:hover { background: var(--aura-color-brand-primary-hover); }
+.aura-ai-help__toggle:focus-visible { outline: 2px solid var(--aura-color-focus-ring); outline-offset: 2px; }
+.aura-ai-help__panel {
+  inline-size: min(24rem, calc(100vw - 2 * var(--aura-space-4)));
+  max-block-size: min(32rem, 70vh);
+  display: flex;
+  flex-direction: column;
+  gap: var(--aura-space-2);
+  padding: var(--aura-space-3);
+  background: var(--aura-color-surface-overlay);
+  color: var(--aura-color-text-primary);
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: var(--aura-radius-lg);
+}
+.aura-ai-help__panel[hidden] { display: none; }
+.aura-ai-help__note { margin: 0; color: var(--aura-color-text-muted); font-size: 0.85em; }
+.aura-ai-help__log { overflow-y: auto; display: flex; flex-direction: column; gap: var(--aura-space-2); min-block-size: 4rem; }
+.aura-ai-help__msg { margin: 0; padding: var(--aura-space-2) var(--aura-space-3); border-radius: var(--aura-radius-lg); white-space: pre-wrap; }
+.aura-ai-help__msg--user { align-self: flex-end; background: var(--aura-color-brand-primary-soft); }
+.aura-ai-help__msg--assistant { align-self: flex-start; background: var(--aura-color-surface-muted); }
+.aura-ai-help__msg--error { align-self: flex-start; background: var(--aura-color-danger-soft); color: var(--aura-color-danger); }
+.aura-ai-help__form { display: flex; gap: var(--aura-space-2); }
+.aura-ai-help__form textarea { flex: 1; resize: vertical; font: inherit; }

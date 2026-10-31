@@ -31,3 +31,9 @@ jsonschema==4.23.0
 # compile) with Jinja/Flask integration -- not an ad-hoc translation engine.
 flask-babel==4.0.0
 babel==2.18.0
+
+# AI brain (2026-10-31, owner/app/ai/): the official Anthropic SDK, used ONLY on
+# the Owner server -- tills never hold an AI key; they send a device-signed
+# request to Owner and Owner calls the model (docs/superpowers/specs/
+# 2026-10-31-ai-brain-design.md, hard rule R2).
+anthropic==2.3.0

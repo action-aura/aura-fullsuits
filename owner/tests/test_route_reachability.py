@@ -488,6 +488,11 @@ _EXTERNAL_LICENSING_API_ENDPOINTS = (
     # notifications worker) and the same device signature + nonce
     # authentication; Owner's own UI never calls it.
     'api_external_licensing.mail_relay',
+    # AI brain wave: a product install whose shop owner opted in sends a
+    # statistics snapshot (commercial_runtime's LicensingClient.ai_shop_analysis,
+    # driven by the till's Smart-analysis screen). Same device signature + nonce
+    # authentication as mail_relay; Owner's own UI never calls it.
+    'api_external_licensing.ai_shop_analysis',
     'api_external_licensing.service_info',
     'api_external_licensing.signing_keys',
 )

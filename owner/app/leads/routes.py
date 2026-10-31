@@ -15,6 +15,9 @@ from datetime import datetime
 from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for
 from flask_babel import gettext as _
 
+from app.ai import leads_rank
+from app.ai.providers import AIError
+from app.ai.routes import ai_error_response
 from app.auth.session import load_current_staff
 from app.customers.services import describe_duplicate_candidates_for_actor
 from app.employees.queries import find_own_profile
@@ -40,7 +43,7 @@ from app.leads.notes import list_lead_notes_visible_to
 from app.leads.website_intake import is_reserved_idempotency_key
 from app.leads.services import add_lead_note, assign_lead, capture_location, change_lead_status, create_lead, list_all_leads, list_own_leads, update_lead
 from app.models.base import utcnow
-from app.models.leads import Lead, LeadAssignment, LeadStatusHistory
+from app.models.leads import Lead, LeadAssignment, LeadNote, LeadStatusHistory
 from app.security.rbac import get_staff_permission_codes, require_any_permission, require_permission
 
 bp = Blueprint("leads", __name__, url_prefix="/leads")
@@ -289,6 +292,64 @@ def discover_search():
     )
 
 
+@bp.route("/discover/rank", methods=["POST"])
+@require_permission("leads.discover")
+def discover_rank():
+    """AI ranking of the results the rep is looking at (spec feature O1).
+    JSON in, JSON out; CSRF rides in the X-CSRFToken header (app-wide
+    Flask-WTF check, no exemption). Uses the existing `leads.discover`
+    permission: ranking is part of using the Leads Finder, not a new power.
+    Phone numbers are never part of what is sent to the AI -- see
+    app/ai/leads_rank.py."""
+    try:
+        rows = leads_rank.rank_places(request.get_json(silent=True), current_app.config)
+    except leads_rank.RankRequestError:
+        return jsonify({"error": "INVALID_REQUEST", "message": _("Could not read the search results to rank.")}), 400
+    except AIError as exc:
+        return ai_error_response(exc)
+    return jsonify({"results": rows})
+
+
+_AI_NOTE_MARKER = "[AI] "
+
+
+def _attach_ai_note(lead, n: int, profile, staff) -> None:
+    """Keep the AI's reason and WhatsApp opener on the imported lead as a note,
+    so the rep who opens the lead sees them (spec feature O1). The text comes
+    from hidden inputs the rank screen filled, i.e. from the browser -- so it is
+    bounded here and stored as PLAIN TEXT (templates escape it; it is never
+    rendered as markup) and is advice, never a contact detail: the lead's phone
+    was set above from Google Places alone.
+
+    A re-import of the same Google place returns the EXISTING lead
+    (create_lead's idempotency key), so this writes at most one AI note per
+    lead -- re-running a search must not stack duplicate notes."""
+    reason = (request.form.get(f"ai_reason-{n}") or "").strip()[:300]
+    opener = (request.form.get(f"ai_opener-{n}") or "").strip()[:400]
+    if not reason and not opener:
+        return
+    already = (
+        db_session.query(LeadNote.id)
+        .filter(LeadNote.lead_id == lead.id, LeadNote.body.startswith(_AI_NOTE_MARKER))
+        .first()
+    )
+    if already is not None:
+        return
+    score = request.form.get(f"ai_score-{n}", type=int)
+    if score is not None:
+        lines = [f"{_AI_NOTE_MARKER}{_('AI lead score')}: {max(0, min(100, score))}/100"]
+    else:
+        lines = [f"{_AI_NOTE_MARKER}{_('AI lead suggestion')}"]
+    if reason:
+        lines.append(f"{_('Why')}: {reason}")
+    if opener:
+        lines.append(f"{_('WhatsApp opener')}: {opener}")
+    try:
+        add_lead_note(lead, "\n".join(lines), profile.id, staff.id)
+    except LeadError:
+        pass  # the lead was imported; losing the advice note must not fail the row
+
+
 @bp.route("/discover/import", methods=["POST"])
 @require_permission("leads.discover")
 def discover_import():
@@ -360,7 +421,8 @@ def discover_import():
             # of inserting a new row, so re-importing the same Google Place
             # (same place_id) twice, whether by accident or by re-running a
             # search, never creates a second lead for it.
-            create_lead(fields, profile.id, staff.id, idempotency_key=f"maps-discovery:{place_id}")
+            lead = create_lead(fields, profile.id, staff.id, idempotency_key=f"maps-discovery:{place_id}")
+            _attach_ai_note(lead, n, profile, staff)
             imported += 1
         except LeadError as exc:
             row_errors.append(_localized_lead_error(exc))

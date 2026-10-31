@@ -66,7 +66,12 @@ from typing import Callable, Protocol
 _SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 _FIELD_MASK = (
     "places.id,places.displayName,places.formattedAddress,"
-    "places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri"
+    "places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,"
+    # AI Leads ranking (2026-10-31): rating, review count, categories, open/
+    # closed status and the Maps link feed the "Rank with AI" score. They are
+    # Enterprise-SKU fields, but the phone/website fields above already put
+    # every request in that SKU, so asking for them does not change the price.
+    "places.rating,places.userRatingCount,places.types,places.businessStatus,places.googleMapsUri"
 )
 _MAX_QUERY_LEN = 120
 # How much of a raw error/response body to surface in a LeadDiscoveryError's
@@ -89,6 +94,14 @@ class DiscoveredPlace:
     address: str | None
     phone: str | None  # internationalPhoneNumber if present, else nationalPhoneNumber, else None
     website: str | None
+    # Optional extras for AI ranking (all None/empty when Google omits them).
+    # None of these is ever a contact detail: the phone above stays the only
+    # one, and it comes from Google Places alone.
+    rating: float | None = None
+    user_rating_count: int | None = None
+    types: tuple[str, ...] = ()
+    business_status: str | None = None
+    maps_uri: str | None = None
 
 
 class LeadDiscoveryError(Exception):
@@ -229,9 +242,23 @@ class GooglePlacesTextSearchProvider:
                     address=place.get("formattedAddress"),
                     phone=place.get("internationalPhoneNumber") or place.get("nationalPhoneNumber") or None,
                     website=place.get("websiteUri"),
+                    rating=_number(place.get("rating"), float),
+                    user_rating_count=_number(place.get("userRatingCount"), int),
+                    types=tuple(t for t in (place.get("types") or []) if isinstance(t, str))[:12],
+                    business_status=place.get("businessStatus") if isinstance(place.get("businessStatus"), str) else None,
+                    maps_uri=place.get("googleMapsUri") if isinstance(place.get("googleMapsUri"), str) else None,
                 )
             )
         return results[:limit]
+
+
+def _number(value, kind):
+    """A Places number, or None. bool is an int subclass, so it is refused
+    explicitly; anything else that is not a plain number is dropped rather than
+    raising -- one odd field must not cost the rep the whole page."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return kind(value)
 
 
 def _decode(response_body: bytes) -> str:

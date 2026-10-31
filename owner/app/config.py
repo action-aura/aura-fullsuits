@@ -111,6 +111,19 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         # and the contact the push services see. Key unset == push off.
         "OWNER_PUSH_VAPID_PRIVATE_KEY",
         "OWNER_PUSH_VAPID_SUBJECT",
+        # AI brain (2026-10-31, app/ai/): provider keys, models, chains, caps.
+        "OWNER_ANTHROPIC_API_KEY",
+        "OWNER_GEMINI_API_KEY",
+        "OWNER_GEMINI_PAID_TIER",
+        "OWNER_AI_ANTHROPIC_MODEL",
+        "OWNER_AI_GEMINI_MODEL",
+        "OWNER_AI_TIMEOUT_SECONDS",
+        "OWNER_AI_SHOP_PROVIDERS",
+        "OWNER_AI_LEADS_PROVIDERS",
+        "OWNER_AI_HELP_PROVIDERS",
+        "OWNER_AI_SHOP_MONTHLY_CAP",
+        "OWNER_AI_DAILY_CAP",
+        "OWNER_AI_HELP_DAILY_CAP_PER_STAFF",
         # Read directly by other modules (not by this Config class), but
         # still legitimate OWNER_* variables -- must not trip the unknown-key
         # check in strict mode.
@@ -301,6 +314,28 @@ class BaseConfig:
     # monthly allowance for the Text Search Enterprise SKU this search uses.
     LEAD_DISCOVERY_DAILY_CAP = os.environ.get("OWNER_LEAD_DISCOVERY_DAILY_CAP", "100")
     LEAD_DISCOVERY_MONTHLY_CAP = os.environ.get("OWNER_LEAD_DISCOVERY_MONTHLY_CAP", "1000")
+
+    # -- AI brain (2026-10-31): see app/ai/brain.py and
+    # docs/superpowers/specs/2026-10-31-ai-brain-design.md. Keys live ONLY
+    # here (R2: tills never hold one); an empty key == that provider is not
+    # configured and every AI surface that needs it is absent (R5). Caps are
+    # kept as raw strings on purpose, like the discovery caps above: 0 or
+    # garbage switches the feature OFF instead of crashing boot or meaning
+    # "unlimited" (app/ai/budget.py::cap_value).
+    ANTHROPIC_API_KEY = os.environ.get("OWNER_ANTHROPIC_API_KEY", "").strip()
+    GEMINI_API_KEY = os.environ.get("OWNER_GEMINI_API_KEY", "").strip()
+    # Gemini's FREE tier may train on prompts (R1 hinges on this flag): only
+    # set true once the key is on a billing-enabled project.
+    GEMINI_PAID_TIER = os.environ.get("OWNER_GEMINI_PAID_TIER", "false").strip().lower() == "true"
+    AI_ANTHROPIC_MODEL = os.environ.get("OWNER_AI_ANTHROPIC_MODEL", "claude-haiku-5-5").strip() or "claude-haiku-5-5"
+    AI_GEMINI_MODEL = os.environ.get("OWNER_AI_GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
+    AI_TIMEOUT_SECONDS = float(os.environ.get("OWNER_AI_TIMEOUT_SECONDS", "40"))
+    AI_SHOP_PROVIDERS = os.environ.get("OWNER_AI_SHOP_PROVIDERS", "anthropic")
+    AI_LEADS_PROVIDERS = os.environ.get("OWNER_AI_LEADS_PROVIDERS", "gemini,anthropic")
+    AI_HELP_PROVIDERS = os.environ.get("OWNER_AI_HELP_PROVIDERS", "gemini,anthropic")
+    AI_SHOP_MONTHLY_CAP = os.environ.get("OWNER_AI_SHOP_MONTHLY_CAP", "120")
+    AI_DAILY_CAP = os.environ.get("OWNER_AI_DAILY_CAP", "2000")
+    AI_HELP_DAILY_CAP_PER_STAFF = os.environ.get("OWNER_AI_HELP_DAILY_CAP_PER_STAFF", "100")
 
     # -- Real-email wave: Owner sends email (staff invitations + the product
     # mail relay) through ITS OWN mailbox. OWNER_SMTP_HOST unset == email off:
@@ -547,6 +582,20 @@ class TestingConfig(BaseConfig):
     # Push is off unless a test turns it on via app.config (never inherited
     # from the shell env), like the intake secret above.
     PUSH_VAPID_PRIVATE_KEY = ""
+    # AI is off unless a test sets keys via app.config (never inherited from
+    # the shell env), so a developer's real key can never make a test call out.
+    ANTHROPIC_API_KEY = ""
+    GEMINI_API_KEY = ""
+    GEMINI_PAID_TIER = False
+    AI_ANTHROPIC_MODEL = "claude-haiku-5-5"
+    AI_GEMINI_MODEL = "gemini-3.8-flash"
+    AI_TIMEOUT_SECONDS = 40.0
+    AI_SHOP_PROVIDERS = "anthropic"
+    AI_LEADS_PROVIDERS = "gemini,anthropic"
+    AI_HELP_PROVIDERS = "gemini,anthropic"
+    AI_SHOP_MONTHLY_CAP = "120"
+    AI_DAILY_CAP = "2000"
+    AI_HELP_DAILY_CAP_PER_STAFF = "100"
 
 
 class ProductionConfig(BaseConfig):

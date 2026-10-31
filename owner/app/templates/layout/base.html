@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/shell.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/charts.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard-redesign.css') }}">
+  {% if staff and ai_available("staff_help") %}<link rel="stylesheet" href="{{ url_for('static', filename='css/ai-help.css') }}">{% endif %}
   {# See app/static/img/brand/action-aura-mark.svg's own header comment --
      the real Aura Owner product mark (flat construction; the surface
      renders it under the 3D construction's 64px minimum), per
@@ -200,6 +201,23 @@
   {% if staff %}
   {% include "layout/_command_palette.html" %}
   {% include "layout/_shortcuts_cheatsheet.html" %}
+  {# Staff Help (AI brain): present only for signed-in staff AND only while a
+     provider is configured for the staff-help purpose (hard rule R5). Every
+     sentence is here, translated; static/js/ai-help.js adds none. #}
+  {% if ai_available("staff_help") %}
+  <div class="aura-ai-help" id="aura-ai-help" data-ask-url="{{ url_for('assistant.ask') }}" data-csrf="{{ csrf_token() }}"
+       data-msg-busy="{{ _('Thinking...') }}" data-msg-error="{{ _('The assistant could not answer right now. Try again in a minute.') }}">
+    <section class="aura-ai-help__panel" id="aura-ai-help-panel" role="dialog" aria-label="{{ _('Help assistant') }}" hidden>
+      <p class="aura-ai-help__note">{{ _("Don't paste customer phone numbers or personal data -- this helper uses a free service.") }}</p>
+      <div class="aura-ai-help__log" aria-live="polite"></div>
+      <form class="aura-ai-help__form">
+        <textarea rows="2" maxlength="1000" aria-label="{{ _('Your question') }}" placeholder="{{ _('Ask how to do something in Aura Owner') }}" required></textarea>
+        <button type="submit" class="btn">{{ _("Send") }}</button>
+      </form>
+    </section>
+    <button type="button" class="aura-ai-help__toggle" aria-expanded="false" aria-controls="aura-ai-help-panel">{{ _("Help") }}</button>
+  </div>
+  {% endif %}
   {% endif %}
   {# "Add to home screen" hint -- static/js/pwa.js decides whether to show it
      (never inside the installed app; never again once dismissed on this
@@ -231,6 +249,7 @@
   <script src="{{ url_for('static', filename='js/chart-palette.js') }}"></script>
   <script src="{{ url_for('static', filename='js/dept-cards.js') }}"></script>
   <script src="{{ url_for('static', filename='js/count-badge.js') }}"></script>
+  {% if ai_available("staff_help") %}<script src="{{ url_for('static', filename='js/ai-help.js') }}"></script>{% endif %}
   {% endif %}
 </body>
 </html>

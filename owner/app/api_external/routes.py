@@ -18,6 +18,8 @@ from app.licensing_service.health import is_service_ready, public_service_info
 from app.licensing_service.reason_codes import to_public_reason_code
 from app.licensing_service.signing import SigningKeyError, export_signed_keyset_manifest
 from app.crash_reports.intake import accept_crash_reports
+from app.ai.providers import AIError
+from app.ai.shop_analysis import accept_shop_analysis
 from app.mail.relay import MailLimitExceeded, accept_mail
 from app.releases.discovery import find_latest_release
 from app.releases.distribution import DownloadAuthorizationRejected, authorize_download, fetch_download
@@ -383,6 +385,65 @@ def mail_relay():
         # The request body is deliberately NOT logged: it carries recipient
         # addresses and shop text from a customer's machine.
         current_app.logger.exception("Internal decision failure during mail relay (request body not logged).")
+        return _error_response("INTERNAL_DECISION_FAILURE", 500, correlation_id)
+
+
+# AI brain: what an AIError means to a till. AI_RATE_LIMITED (the provider said
+# slow down) and AI_BAD_OUTPUT (the model's reply was unusable) are both "try
+# again later" from the shop's point of view, so they share the one public code
+# AI_UPSTREAM_ERROR rather than teaching a till about provider internals.
+_AI_ERROR_RESPONSES = {
+    "AI_BUDGET_EXHAUSTED": (429, "AI_BUDGET_EXHAUSTED"),
+    "AI_NOT_CONFIGURED": (503, "AI_NOT_CONFIGURED"),
+    "AI_PRIVACY_REFUSED": (503, "AI_PRIVACY_REFUSED"),
+    "AI_UPSTREAM_ERROR": (503, "AI_UPSTREAM_ERROR"),
+    "AI_RATE_LIMITED": (503, "AI_UPSTREAM_ERROR"),
+    "AI_BAD_OUTPUT": (503, "AI_UPSTREAM_ERROR"),
+}
+
+
+@bp.route("/ai/shop-analysis", methods=["POST"])
+def ai_shop_analysis():
+    """AI brain wave. A product install whose shop owner opted in sends a
+    statistics snapshot and asks for a report or a chat answer. Owner holds the
+    only AI key (tills never do), meters the call per licence, and returns the
+    result. Device-signature-authenticated like the mail relay (own nonce scope);
+    the request is validated before it can burn a nonce, and the request body is
+    never logged (it is a shop's sales data)."""
+    ready, reason = is_service_ready(current_app.config["SIGNING_KEY_DIRECTORY"], replay_protection_required=current_app.config["REPLAY_PROTECTION_REQUIRED"])
+    if not ready:
+        return _error_response(reason, 503)
+
+    try:
+        ratelimit.check_and_increment("ai_shop_analysis", _client_bucket())
+    except ratelimit.RateLimitExceeded as exc:
+        resp, status = _error_response("RATE_LIMITED", 429)
+        resp.headers["Retry-After"] = str(exc.retry_after_seconds)
+        return resp, status
+
+    body = _get_json_body()
+    if body is None:
+        return _error_response("INVALID_REQUEST", 400)
+    correlation_id = body.get("correlation_id") if isinstance(body, dict) else None
+
+    try:
+        return jsonify(accept_shop_analysis(body, config=_service_config())), 200
+    except AIError as exc:
+        db_session.rollback()
+        status, public_code = _AI_ERROR_RESPONSES.get(exc.code, (503, "AI_UPSTREAM_ERROR"))
+        return _error_response(public_code, status, correlation_id)
+    except DownloadAuthorizationRejected as exc:
+        db_session.rollback()
+        if exc.internal_reason_code == "INVALID_SIGNATURE":
+            try:
+                ratelimit.check_and_increment("activation_invalid_signature", _client_bucket())
+            except ratelimit.RateLimitExceeded:
+                pass
+        return _error_response(exc.internal_reason_code, exc.http_status, correlation_id)
+    except Exception:
+        db_session.rollback()
+        # The request body is deliberately NOT logged: it is a shop's sales data.
+        current_app.logger.exception("Internal decision failure during AI shop analysis (request body not logged).")
         return _error_response("INTERNAL_DECISION_FAILURE", 500, correlation_id)
 
 

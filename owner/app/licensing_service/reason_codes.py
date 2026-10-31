@@ -43,6 +43,14 @@ PUBLIC_REASON_CODES = frozenset(
         "RATE_LIMITED",
         # Real-email wave: an installation is over one of its mail-relay caps.
         "MAIL_LIMIT",
+        # AI brain (2026-10-31): /ai/shop-analysis refusals. Public on purpose: the
+        # till must tell "ask again later" (budget / upstream) from "this Owner
+        # has no AI key" (not configured) and show the shop owner something
+        # honest; none of them reveals anything about licences or other shops.
+        "AI_BUDGET_EXHAUSTED",
+        "AI_NOT_CONFIGURED",
+        "AI_UPSTREAM_ERROR",
+        "AI_PRIVACY_REFUSED",
         "SIGNING_KEY_UNAVAILABLE",
         "INTERNAL_DECISION_FAILURE",
         # Deliberately normalized/generic public code for the whole license-

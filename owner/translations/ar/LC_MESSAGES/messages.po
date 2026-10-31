@@ -9330,3 +9330,75 @@ msgstr "لم يتم العثور على هذا الاشتراك."
 
 msgid "That subscription belongs to a different customer than this payment."
 msgstr "هذا الاشتراك يخص عميلاً آخر غير صاحب هذه الدفعة."
+
+msgid "The AI usage limit has been reached. It resets at midnight, Jordan time."
+msgstr "تم الوصول إلى حد استخدام الذكاء الاصطناعي. يُعاد ضبطه عند منتصف الليل بتوقيت الأردن."
+
+msgid "AI is not available on this server."
+msgstr "الذكاء الاصطناعي غير متاح على هذا الخادم."
+
+msgid "The AI service is busy or unavailable. Try again in a minute."
+msgstr "خدمة الذكاء الاصطناعي مشغولة أو غير متاحة. حاول مرة أخرى بعد دقيقة."
+
+msgid "Check the question and try again."
+msgstr "تحقق من السؤال وحاول مرة أخرى."
+
+msgid "Could not read the search results to rank."
+msgstr "تعذّرت قراءة نتائج البحث لترتيبها."
+
+msgid "AI lead score"
+msgstr "تقييم الذكاء الاصطناعي للعميل المحتمل"
+
+msgid "AI lead suggestion"
+msgstr "اقتراح الذكاء الاصطناعي للعميل المحتمل"
+
+msgid "Why"
+msgstr "السبب"
+
+msgid "WhatsApp opener"
+msgstr "رسالة افتتاح واتساب"
+
+msgid "Ranking..."
+msgstr "جارٍ الترتيب..."
+
+msgid "Ranking is not available right now. Try again in a minute."
+msgstr "الترتيب غير متاح الآن. حاول مرة أخرى بعد دقيقة."
+
+msgid "Rank with AI"
+msgstr "رتّب بالذكاء الاصطناعي"
+
+msgid "The AI sees each business's name, address, categories, rating and review count -- never its phone number. Scores are advice; check a place before you call."
+msgstr "يرى الذكاء الاصطناعي اسم كل نشاط وعنوانه وتصنيفاته وتقييمه وعدد المراجعات، ولا يرى رقم هاتفه أبداً. الدرجات مجرد نصيحة؛ تحقق من المكان قبل الاتصال."
+
+msgid "Score"
+msgstr "الدرجة"
+
+msgid "Opener"
+msgstr "الافتتاحية"
+
+msgid "Copy"
+msgstr "نسخ"
+
+msgid "Thinking..."
+msgstr "جارٍ التفكير..."
+
+msgid "The assistant could not answer right now. Try again in a minute."
+msgstr "تعذّر على المساعد الإجابة الآن. حاول مرة أخرى بعد دقيقة."
+
+msgid "Help assistant"
+msgstr "مساعد المساعدة"
+
+msgid "Don't paste customer phone numbers or personal data -- this helper uses a free service."
+msgstr "لا تلصق أرقام هواتف العملاء أو بياناتهم الشخصية، فهذا المساعد يستخدم خدمة مجانية."
+
+msgid "Your question"
+msgstr "سؤالك"
+
+msgid "Ask how to do something in Aura Owner"
+msgstr "اسأل كيف تنفّذ أمراً في Aura Owner"
+
+msgid "Send"
+msgstr "إرسال"
+
+msgid "Help"
+msgstr "مساعد"

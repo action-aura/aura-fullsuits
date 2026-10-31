@@ -268,7 +268,14 @@ def test_field_mask_is_exactly_the_fields_the_screen_uses():
     """Google bills Text Search by the most expensive field requested. Every
     field below is shown or imported (id = dedup key, name, address, phone x2
     as fallback, website shown in results). Adding one -- rating, opening
-    hours, photos -- must be a deliberate change to this list, not a drift."""
+    hours, photos -- must be a deliberate change to this list, not a drift.
+
+    2026-10-31 (AI Leads ranking, a DELIBERATE change): rating, review count,
+    categories, business status and the Maps link were added because the
+    "Rank with AI" score reads them. They sit in the same Enterprise SKU the
+    phone/website fields already put every request in, so the price is
+    unchanged. The assertion is still an EXACT list (not a subset), so the next
+    unplanned field still fails here."""
     captured: dict = {}
 
     def fake_post(url, headers, body, timeout):
@@ -280,6 +287,7 @@ def test_field_mask_is_exactly_the_fields_the_screen_uses():
     assert sorted(captured["mask"].split(",")) == sorted([
         "places.id", "places.displayName", "places.formattedAddress",
         "places.nationalPhoneNumber", "places.internationalPhoneNumber", "places.websiteUri",
+        "places.rating", "places.userRatingCount", "places.types", "places.businessStatus", "places.googleMapsUri",
     ])
 
 

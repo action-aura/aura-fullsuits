@@ -55,6 +55,11 @@ POLICIES: dict[str, RateLimitPolicy] = {
     # (50/day, 10 identity/day, same recipient 1 per 2 min) are enforced in
     # app/mail/relay.py after the device is authenticated.
     "mail_relay": RateLimitPolicy("mail_relay", max_requests=30, window_seconds=60),
+    # AI brain (2026-10-31): flood guard in front of authentication for
+    # POST /ai/shop-analysis. The real limits (per-licence monthly, server-wide
+    # daily) are in app/ai/budget.py after the device is authenticated. Small on
+    # purpose: a shop asks for a report or a question, never in a burst.
+    "ai_shop_analysis": RateLimitPolicy("ai_shop_analysis", max_requests=20, window_seconds=60),
     # Website-intake wave: the actionaura.me Pages Function forwards each demo
     # request once. Cloudflare egress IPs are shared, so this is a flood guard,
     # not a per-visitor limit -- the website already limits each visitor to 5

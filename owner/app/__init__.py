@@ -80,6 +80,7 @@ def create_app(config_name: str | None = None) -> Flask:
         from app.security.rbac import get_staff_permission_codes
         from app.attention.service import ATTENTION_CATEGORY_PERMISSIONS, count_attention_items
         from app.command_palette.service import get_static_commands
+        from app.ai.brain import is_available as ai_is_available
 
         staff = load_current_staff()
         permission_codes = get_staff_permission_codes(staff)
@@ -121,6 +122,10 @@ def create_app(config_name: str | None = None) -> Flask:
             "command_palette_data": command_palette_data,
             "can_confirm_sales": can_confirm_sales,
             "sales_waiting_count": sales_waiting_count,
+            # AI buttons render only when a provider could actually answer
+            # that purpose (hard rule R5: invisible unless configured).
+            # Presentation only -- each endpoint re-checks on its own.
+            "ai_available": lambda purpose: ai_is_available(purpose, app.config),
         }
 
     from app.auth import bp as auth_bp
@@ -158,6 +163,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.leads.intake_routes import warn_if_intake_secret_unusable
     from app.pwa import bp as pwa_bp
     from app.push.routes import bp as push_bp
+    from app.ai.routes import bp as assistant_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(staff_bp)
@@ -198,6 +204,8 @@ def create_app(config_name: str | None = None) -> Flask:
     # Manager push notifications: POST /push/subscribe|unsubscribe, 404 while
     # no VAPID key is configured (app/push/__init__.py).
     app.register_blueprint(push_bp)
+    # Staff Help button (AI brain): POST /assistant/ask, login + CSRF required.
+    app.register_blueprint(assistant_bp)
     # Website demo-request intake: server-to-server from the actionaura.me
     # Pages Function, authenticated by a bearer secret (no browser session, so
     # no CSRF token to carry; the bearer check is its CSRF-equivalent).
