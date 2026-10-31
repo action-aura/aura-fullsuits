@@ -34,7 +34,7 @@ from __future__ import annotations
 import uuid
 from datetime import date
 
-from flask import Blueprint, abort, current_app, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
 from flask_babel import gettext as _
 from sqlalchemy import select
 
@@ -368,11 +368,18 @@ def confirm_sale(order_id):
 def reject_sale(order_id):
     actor = load_current_staff()
     try:
-        reject_direct_sale(order_id, reason=request.form.get("reason", ""), actor_staff_user_id=actor.id)
+        order = reject_direct_sale(order_id, reason=request.form.get("reason", ""), actor_staff_user_id=actor.id)
     except DirectSaleError as exc:
         return _render_sales_list(error=localize_direct_sale_error(exc.code, **exc.params), status=400)
     except CommercialSalesError as exc:
         return _render_sales_list(error=localize_commercial_sales_error(exc.code, **exc.params), status=400)
+    # Say it happened: the row simply vanished from the list before (rehearsal 2026-10-31), which
+    # looked like nothing had been done.
+    if order.converts_subscription_id is not None:
+        flash(_("Sale %(order)s was rejected. The shop's trial stays as it was, and the seller can record the payment again.",
+                order=order.order_number), "success")
+    else:
+        flash(_("Sale %(order)s was rejected. No licence was made.", order=order.order_number), "success")
     return redirect(url_for("license_issuance.sales_awaiting_confirmation"))
 
 

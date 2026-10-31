@@ -10737,3 +10737,15 @@ msgstr "قاعدة النقد"
 #: app/templates/licensing/sale.html
 msgid "Hand over ALL of the cash to the company within 24 hours, by bank transfer or at the office, with no deduction. Record the sale now, before you hand it over."
 msgstr "سلّم النقد كله للشركة خلال 24 ساعة، بالتحويل البنكي أو في المكتب، دون أي خصم. سجّل عملية البيع الآن قبل التسليم."
+
+#: app/licensing/issuance_routes.py
+msgid "Sale %(order)s was rejected. The shop's trial stays as it was, and the seller can record the payment again."
+msgstr "تم رفض البيع %(order)s. تبقى تجربة المحل كما هي، ويستطيع البائع تسجيل الدفعة من جديد."
+
+#: app/licensing/issuance_routes.py
+msgid "Sale %(order)s was rejected. No licence was made."
+msgstr "تم رفض البيع %(order)s. لم يُنشأ أي ترخيص."
+
+#: app/templates/licensing/sales_pending.html
+msgid "No slip (cash the seller collected). Check that it was handed over."
+msgstr "لا يوجد إيصال (نقد حصّله البائع). تأكد من أنه سُلِّم للشركة."

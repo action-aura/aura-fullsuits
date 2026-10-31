@@ -205,3 +205,30 @@ def test_the_success_page_for_a_trial_payment_does_not_promise_a_new_key_and_rep
     # and an ordinary (non-trial) sale keeps its own wording
     plain = _sale_post(client, app, w["seller"], w, method="CASH", amount="250.00").get_data(as_text=True)
     assert "licence key is made when the payment is confirmed" in plain and 'data-recorded-trial' not in plain
+
+
+# -------------------------------- 3. the manager's list: method + reject message
+
+def test_the_managers_list_names_the_payment_method_and_a_reject_says_so(app, client, seeded, kyc):
+    from tests.test_customer_onboarding import _world, onboard
+
+    w = _world(app)
+    cash = _sale_post(client, app, w["seller"], w, method="CASH")
+    assert "Sale recorded" in cash.get_data(as_text=True)
+    bank = _sale_post(client, app, w["seller"], w, method="BANK_TRANSFER", slip=SLIP)
+    assert "Sale recorded" in bank.get_data(as_text=True)
+
+    force_login(client, app, w["manager"])
+    page = client.get("/licenses/issuance/sales").get_data(as_text=True)
+    assert 'data-payment-method="CASH"' in page and "Cash" in page
+    assert 'data-payment-method="BANK_TRANSFER"' in page and "CliQ / bank transfer" in page
+    # "No slip photo" is explained for cash, and kept for a transfer that somehow has none
+    assert "No slip (cash the seller collected)" in page
+    assert "data-slip-link" in page  # the transfer's slip is linked
+
+    order_id = re.search(r'action="/licenses/issuance/sales/([0-9a-f-]{36})/reject"', page).group(1)
+    resp = client.post(f"/licenses/issuance/sales/{order_id}/reject",
+                       data={"csrf_token": get_csrf(page), "reason": "The money never arrived"}, follow_redirects=True)
+    after = resp.get_data(as_text=True)
+    assert resp.status_code == 200 and "was rejected. No licence was made." in after  # deny: the click is acknowledged
+    assert order_id not in after  # and the sale left the list

@@ -82,9 +82,10 @@
         {% if sale.payment %}
         <span dir="ltr">{{ sale.payment.amount }} {{ sale.payment.currency }}</span> &middot; {{ _("ref.") }} <span dir="ltr">{{ sale.payment.reference }}</span>
         &middot; <span dir="ltr">{{ format_owner_date(sale.payment.payment_date) }}</span>
+        &middot; <span data-payment-method="{{ sale.payment.method }}">{{ payment_method_label(sale.payment.method) }}</span>
         &middot; {{ payment_status_label(sale.payment.status) }}
         {% if sale.slip %}&middot; <a href="{{ url_for('customer_onboarding.view_document', customer_id=sale.order.customer_id, document_id=sale.slip.id) }}" target="_blank" rel="noopener" data-slip-link="1">{{ _("View the slip") }}</a>
-        {% else %}&middot; <span data-no-slip="1">{{ _("No slip photo") }}</span>{% endif %}
+        {% else %}&middot; <span data-no-slip="1">{% if sale.payment.method == "CASH" %}{{ _("No slip (cash the seller collected). Check that it was handed over.") }}{% else %}{{ _("No slip photo") }}{% endif %}</span>{% endif %}
         {% else %}
         {{ _("Not recorded -- the seller must submit the same form again.") }}
         {% endif %}

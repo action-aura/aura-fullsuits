@@ -10778,3 +10778,15 @@ msgstr "Cash rule"
 #: app/templates/licensing/sale.html
 msgid "Hand over ALL of the cash to the company within 24 hours, by bank transfer or at the office, with no deduction. Record the sale now, before you hand it over."
 msgstr "Hand over ALL of the cash to the company within 24 hours, by bank transfer or at the office, with no deduction. Record the sale now, before you hand it over."
+
+#: app/licensing/issuance_routes.py
+msgid "Sale %(order)s was rejected. The shop's trial stays as it was, and the seller can record the payment again."
+msgstr "Sale %(order)s was rejected. The shop's trial stays as it was, and the seller can record the payment again."
+
+#: app/licensing/issuance_routes.py
+msgid "Sale %(order)s was rejected. No licence was made."
+msgstr "Sale %(order)s was rejected. No licence was made."
+
+#: app/templates/licensing/sales_pending.html
+msgid "No slip (cash the seller collected). Check that it was handed over."
+msgstr "No slip (cash the seller collected). Check that it was handed over."
