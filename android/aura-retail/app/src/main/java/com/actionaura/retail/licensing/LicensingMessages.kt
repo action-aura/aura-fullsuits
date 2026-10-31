@@ -138,6 +138,17 @@ object LicensingMessages {
         "DEVICE_LIMIT_REACHED" to
             "This license has reached its device limit. Deactivate another device or contact support to add capacity.",
         "RATE_LIMITED" to "Too many attempts. Please wait a moment and try again.",
+        // New customer flow (plan S6): sign in with an Aura account. Same sentences as
+        // AccountFlow.kt's accountReasonKey() and the desktop's licensing-account.js.
+        "ACCOUNT_SIGN_IN_FAILED" to "The email or password is not right. Check them and try again.",
+        "CONTRACT_ACCEPTANCE_REQUIRED" to "The agreement must be accepted before this computer can be activated.",
+        "TRIAL_REQUIRES_UPDATE" to
+            "This version of Aura Retail is too old to start a trial. Please download the newest version from actionaura.me and install it.",
+        "ACTIVATION_GRANT_INVALID" to
+            "This computer could not be activated with that account. Sign in again, or contact your seller.",
+        "PASSWORD_POLICY_FAILED" to "That password is not allowed. Choose a longer one you have not used before.",
+        "CONTRACT_HASH_MISMATCH" to
+            "The agreement text could not be checked, so it was not shown. Please try again, or contact support.",
         // Owner's mail relay (real-email wave, 2026-10-10) caps how many emails
         // one installation may send per day. The phone does not use the relay
         // yet, but the code is public, so it gets true copy instead of the

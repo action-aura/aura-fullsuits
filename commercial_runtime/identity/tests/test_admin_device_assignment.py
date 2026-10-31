@@ -481,11 +481,25 @@ def test_claim_route_arm_b_joined_refusal_and_founder_allowed(client, conn):
 
 
 def test_claim_route_refuses_a_non_windows_device(client, conn):
+    # 2026-10-31 (phone-only shops): a phone is refused ONLY while the shop has
+    # a Windows computer. What this test can no longer catch on its own: a phone
+    # refused in a shop with NO Windows computer -- that is now the allowed case
+    # and is pinned (both directions) in test_phone_only_main.py.
+    upsert_local_device(conn, "the-shop-pc", CO, platform="WINDOWS")
     _this_device(conn, platform="ANDROID")
     r = client.post("/api/devices/me/claim-admin")
     assert r.status_code == 409
     assert r.get_json()["code"] == "MAIN_MUST_BE_WINDOWS"
     assert get_assignment(conn, CO) is None
+
+
+def test_claim_route_allows_a_phone_in_a_phone_only_shop(client, conn):
+    """2026-10-31 owner decision: no Windows computer registered -> the phone
+    may be the boss device. The deny-half is test_claim_route_refuses_a_non_windows_device."""
+    did = _this_device(conn, platform="ANDROID")
+    r = client.post("/api/devices/me/claim-admin")
+    assert r.status_code == 200, r.get_json()
+    assert get_assignment(conn, CO)["device_id"] == did
 
 
 def test_claim_route_allows_windows_and_unknown_platform(client, conn):

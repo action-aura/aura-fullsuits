@@ -62,6 +62,8 @@ const AR = JSON.parse(fs.readFileSync(path.join(FRONTEND_DIR, 'locales', 'ar.jso
 const PAGES = [
   { js: 'einvoicing.js', html: 'einvoicing.html' },
   { js: 'licensing.js', html: 'licensing.html' },
+  // New customer flow (2026-10-31): the Aura-account sign-in wizard, loaded by licensing.html.
+  { js: 'licensing-account.js', html: 'licensing.html' },
   { js: 'whatsapp.js', html: 'whatsapp.html' },
 ];
 
@@ -382,6 +384,7 @@ function findHardcodedProseFieldLiterals(src, excludedSpans) {
 const TRANSLATION_SOURCE_CONSTS = {
   'einvoicing.js': ['OUTBOX_STATE_LABELS', 'PROVIDER_LABELS'],
   'licensing.js': ['STATE_LABELS', 'REASON_MESSAGES', 'LOCAL_VERIFICATION_MESSAGE', 'PRODUCT_NAMES'],
+  'licensing-account.js': ['MESSAGES', 'POLICY_MESSAGES'],
   'whatsapp.js': ['REPORT_TYPES', 'OUTBOX_STATE_LABELS'],
 };
 
@@ -399,6 +402,11 @@ const EXCLUDED_CONSTS = {
     PENDING_MAX_AGE_MS: 'a numeric constant.',
     AWAITING_POLL_MS: 'a numeric constant.',
     ACTIVATION_HANDOFF_KEY: 'an internal sessionStorage key, never rendered to a user.',
+    ROLE_PENDING_KEY: 'an internal localStorage key (the which-computer-is-this marker), never rendered to a user.',
+  },
+  'licensing-account.js': {
+    ROLE_PENDING_KEY: 'an internal localStorage key (the which-computer-is-this marker), never rendered to a user.',
+    MIN_PASSWORD_LENGTH: 'a numeric constant.',
   },
   'whatsapp.js': {},
 };
@@ -409,6 +417,14 @@ const EXCLUDED_CONSTS = {
 // "explicit exclusion with a written reason" requirement. A missing reason
 // fails testEveryExclusionHasAWrittenReason below.
 const HARDCODED_LITERAL_EXCLUSIONS = {
+  'licensing-account.js': [
+    { field: 'text', value: 'يرجى قراءة العقد حتى نهايته، ثم تأكيد الموافقة للمتابعة.', reason: "ARABIC-FIRST by the owner's decision (plan S6): the service-agreement frame is shown Arabic above English whatever language the screen is in, so this Arabic line is deliberately NOT routed through t() -- the English line beside it is, and is in both catalogs." },
+    { field: 'text', value: ' قرأت العقد وأوافق على جميع بنوده', reason: "ARABIC-FIRST by the owner's decision (plan S6): the service-agreement frame is shown Arabic above English whatever language the screen is in, so this Arabic line is deliberately NOT routed through t() -- the English line beside it is, and is in both catalogs." },
+    { field: 'text', value: 'DRAFT \u2014 مسودة', reason: 'the DRAFT watermark over a contract nobody has lawyer-approved: a fixed bilingual stamp, deliberately identical in every UI language so a screenshot can never pass for the final text.' },
+    { field: 'text', value: ' / ', reason: 'a bare separator between the Arabic and English halves of one label; it carries no words.' },
+    { field: 'text', value: 'أوافق / ', reason: "ARABIC-FIRST by the owner's decision (plan S6): the service-agreement frame is shown Arabic above English whatever language the screen is in, so this Arabic line is deliberately NOT routed through t() -- the English line beside it is, and is in both catalogs." },
+    { field: 'text', value: ' ', reason: 'a single space between two translated pieces of one label; it carries no words.' },
+  ],
   'licensing.js': [
     {
       field: 'placeholder', value: 'AURA-RETAIL-XXXX-YYYY-ZZZZ',

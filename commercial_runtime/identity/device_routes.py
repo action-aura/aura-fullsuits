@@ -99,7 +99,10 @@ JOINED_DEVICE_MESSAGE = (
     'This computer joined an existing shop, so it cannot become the main '
     'computer by itself. Ask the main computer to hand the role over.'
 )
-MAIN_MUST_BE_WINDOWS_MESSAGE = 'Only a Windows computer can be the main computer.'
+MAIN_MUST_BE_WINDOWS_MESSAGE = (
+    'Only a Windows computer can be the main computer, because this shop has one. '
+    'A phone can be the main computer only in a shop with no Windows computer.'
+)
 NOT_MAIN_FOR_DEVICES_MESSAGE = 'Only the main computer can rename or remove other computers.'
 CANNOT_REVOKE_MAIN_MESSAGE = (
     'The main computer cannot be removed. Move the main role to another computer first.'
@@ -127,6 +130,17 @@ def _platform_can_be_main(platform) -> bool:
     until the boot announcement runs, and an unknown platform here is a
     Windows desktop in practice (Android has always announced 'ANDROID')."""
     return not platform or str(platform).upper() == device_registry.WINDOWS_PLATFORM
+
+
+def _can_be_main(conn, company_id, platform) -> bool:
+    """`_platform_can_be_main` plus the phone-only allowance (owner decision
+    2026-10-31): a phone MAY be the main computer in a shop that has no
+    Windows computer registered. The registry helpers enforce the same rule
+    (device_registry._refuse_ineligible_main), so this is only the friendlier
+    first answer in front of them."""
+    if _platform_can_be_main(platform):
+        return True
+    return not device_registry.windows_device_registered(conn, company_id)
 
 
 def _session_user_uid(conn):
@@ -388,7 +402,7 @@ def claim_admin_device_route():
         if device_registry.is_joined_device(conn, company_id, device['id']):
             return jsonify({'error': JOINED_DEVICE_MESSAGE,
                             'code': 'JOINED_DEVICE_CANNOT_CLAIM'}), 409
-        if not _platform_can_be_main(device.get('platform')):
+        if not _can_be_main(conn, company_id, device.get('platform')):
             return jsonify({'error': MAIN_MUST_BE_WINDOWS_MESSAGE,
                             'code': 'MAIN_MUST_BE_WINDOWS'}), 409
         claimed = device_registry.claim_admin_device_with_assignment(
@@ -463,7 +477,7 @@ def transfer_admin_device_route(device_id):
                              'code': 'DEVICE_REVOKED'}), 409
         # v9: the new main computer must be a Windows computer and must not be
         # one the sync engine has flagged as sharing an identity with another.
-        if not _platform_can_be_main(target.get('platform')):
+        if not _can_be_main(conn, company_id, target.get('platform')):
             return jsonify({'error': MAIN_MUST_BE_WINDOWS_MESSAGE,
                             'code': 'MAIN_MUST_BE_WINDOWS'}), 409
         if device_registry.device_has_open_clash(conn, device_id):
@@ -689,7 +703,7 @@ def take_over_main_route():
                             'code': 'TAKEOVER_PASSWORD_INCORRECT'}), 403
         device_takeover.clear_takeover_failures(conn, user_id, device['id'])
 
-        if not _platform_can_be_main(device.get('platform')):
+        if not _can_be_main(conn, company_id, device.get('platform')):
             return jsonify({'error': MAIN_MUST_BE_WINDOWS_MESSAGE,
                             'code': 'MAIN_MUST_BE_WINDOWS'}), 409
         if device_registry.device_has_open_clash(conn, device['id']):

@@ -707,12 +707,17 @@ async function testCheckAuthAndSetupShowsSetupModalWhenUnactivated() {
   });
   await ctx.SubsystemApp.checkAuthAndSetup();
   await settle();
-  const title = ctx.doc.getElementById('su-title');
-  assert.ok(title && title.textContent === 'Welcome to Aura Retail',
-    `Expected the ordinary setup modal for an unactivated device, got: ${title && title.textContent}`);
-  assert.ok(ctx.doc.getElementById('su-join-link'), 'The join link is missing even though this device still needs a key.');
+  // New customer flow (2026-10-31, plan S6): a licensed build's first open is "Sign in with your Aura
+  // account" on the licensing page, NOT a registration form that asks for a key. This used to assert the
+  // setup modal with its key field + join link. What it can no longer catch: the key-in-registration form
+  // being offered to an unactivated device -- that is now deliberately unreachable from first run (the key
+  // lives under the sign-in on the licensing page). What it still catches: an unactivated device being
+  // dropped into account creation instead of activation.
+  assert.strictEqual(ctx.sandbox.location.href, '/static/licensing.html?gate=1',
+    'An unactivated device on a licensed build must be sent to the Aura-account sign-in.');
+  assert.ok(!ctx.doc.getElementById('su-title'), 'The create-account form must not open before the device is activated.');
   ctx.SubsystemApp._stopWaitForShopAccountPoll();
-  console.log('PASS: checkAuthAndSetup() still shows the ordinary setup modal for an unactivated device');
+  console.log('PASS: checkAuthAndSetup() sends an unactivated device to the Aura-account sign-in');
 }
 
 // (8b) A build with no Owner wired up -- /api/licensing/status answers
@@ -808,13 +813,38 @@ async function testInitShowsSetupModalWhenUnactivated() {
   try {
     await ctx.SubsystemApp.init();
     await settle();
-    const title = ctx.doc.getElementById('su-title');
-    assert.ok(title && title.textContent === 'Welcome to Aura Retail',
-      `Expected init() to open the ordinary setup modal on an unactivated device, got: ${title && title.textContent}`);
+    // See testCheckAuthAndSetupShowsSetupModalWhenUnactivated: the first open of a licensed, unactivated
+    // build is the Aura-account sign-in. This drives the REAL boot path (init() reads needs_setup first).
+    assert.strictEqual(ctx.sandbox.location.href, '/static/licensing.html?gate=1',
+      'init() must send an unactivated device on a licensed build to the Aura-account sign-in.');
+    assert.ok(!ctx.doc.getElementById('su-title'), 'init() must not open the create-account form before activation.');
   } finally {
     ctx.SubsystemApp._stopWaitForShopAccountPoll();
   }
-  console.log('PASS: init() still opens the ordinary setup modal on an unactivated device');
+  // Mutation proof: take the redirect away and this must go red (the form opens instead).
+  const mutated = mutate(SHELL_SRC, [[
+    "if (this._needsActivation(lic) && lic.current_state !== 'ACTIVATING' && !this._isActivationPending()) {",
+    'if (false) {',
+  ]]);
+  const ctx2 = loadApp({
+    routes: {
+      'GET /api/onboarding/status': () => ({ needs_setup: true }),
+      'GET /api/licensing/status': () => NEEDS_KEY_LIC,
+    },
+    shellSrc: mutated,
+  });
+  let caught = false;
+  try {
+    await ctx2.SubsystemApp.init();
+    await settle();
+    assert.strictEqual(ctx2.sandbox.location.href, '/static/licensing.html?gate=1', 'redirect missing');
+  } catch (e) {
+    caught = true;
+  } finally {
+    ctx2.SubsystemApp._stopWaitForShopAccountPoll();
+  }
+  assert.ok(caught, 'Mutation survived: removing the gate redirect did not break the assertion.');
+  console.log('PASS: init() sends an unactivated device to the Aura-account sign-in; the redirect is mutation-proved');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

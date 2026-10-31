@@ -43,6 +43,12 @@ PUBLIC_REASON_CODES = frozenset(
         "SIGNING_KEY_UNAVAILABLE",
         "INTERNAL_DECISION_FAILURE",
         "ACTIVATION_REJECTED",
+        # New customer flow (2026-10-31, plan S5): sign in with an Aura account.
+        "ACCOUNT_SIGN_IN_FAILED",
+        "CONTRACT_ACCEPTANCE_REQUIRED",
+        "TRIAL_REQUIRES_UPDATE",
+        "ACTIVATION_GRANT_INVALID",
+        "PASSWORD_POLICY_FAILED",
     }
 )
 
@@ -71,6 +77,8 @@ LOCAL_REASON_CODES = frozenset(
         "LOCAL_STATE_CORRUPT",
         "DEVICE_KEY_UNAVAILABLE",
         "CAPABILITY_DENIED",
+        # New customer flow: the contract body does not hash to what Owner said.
+        "CONTRACT_HASH_MISMATCH",
     }
 )
 

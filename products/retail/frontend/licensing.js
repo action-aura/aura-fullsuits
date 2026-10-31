@@ -62,6 +62,10 @@
     PLATFORM_NOT_ALLOWED: 'This license key is not valid for a Windows installation.',
     DEVICE_LIMIT_REACHED: 'This license has reached its computer limit. Deactivate another computer or contact support to add capacity.',
     RATE_LIMITED: 'Too many attempts. Please wait a moment and try again.',
+    // New customer flow: the activation-code path answers with these on /activate.
+    ACTIVATION_GRANT_INVALID: 'This computer could not be activated with that account. Sign in again, or contact your seller.',
+    TRIAL_REQUIRES_UPDATE: 'This version of Aura Retail is too old to start a trial. Please download the newest version from actionaura.me and install it.',
+    CONTRACT_ACCEPTANCE_REQUIRED: 'The agreement must be accepted before this computer can be activated.',
     NETWORK_UNAVAILABLE: 'Could not reach the licensing service. Check your internet connection and try again.',
     REQUEST_TIMED_OUT: 'The request timed out. Please try again.',
     TLS_VERIFICATION_FAILED: 'A secure connection to the licensing service could not be established.',
@@ -763,7 +767,8 @@
     const detailText = genuinelyUnconfigured
       ? t('This installation is not yet connected to a licensing server. Owner licensing is not configured for this build.')
       : t('Enter your Aura Retail license key to activate this installation.');
-    content.appendChild(el('p', { text: detailText }));
+    const detailEl = el('p', { text: detailText });
+    content.appendChild(detailEl);
 
     if (pendingWithoutKey && !genuinelyUnconfigured) {
       // Asked once more, but never blind: without this the user sees a bare
@@ -781,22 +786,95 @@
       }));
     }
 
-    content.appendChild(el('label', { htmlFor: 'license-key-input', text: t('License key') }));
+    // New customer flow (2026-10-31): signing in with the Aura account is the
+    // FIRST way in; an activation code and the typed licence key are still here,
+    // folded away below it. The module is absent in the node test sandbox and on
+    // a build that predates it -- then this is exactly the old key form.
+    const accountReady = !genuinelyUnconfigured && window.AuraAccountSignIn
+      && typeof window.AuraAccountSignIn.mount === 'function';
+    let keyHost = content;
+    let codeHost = null;
+    if (accountReady) {
+      // The sentence above told the person to enter a key; the account form is
+      // the first thing offered now, so that sentence would point the wrong way.
+      content.removeChild(detailEl);
+      const accountHost = el('div', { id: 'account-signin' });
+      content.appendChild(accountHost);
+      window.AuraAccountSignIn.mount(accountHost, {
+        post: apiPost,
+        say: showMessage,
+        clearSay: clearMessage,
+        onActivated: onAccountActivated,
+      });
+      codeHost = document.createElement('details');
+      codeHost.id = 'code-section';
+      const codeSummary = document.createElement('summary');
+      codeSummary.textContent = t('I have a code');
+      codeHost.appendChild(codeSummary);
+      content.appendChild(codeHost);
+      keyHost = document.createElement('details');
+      keyHost.id = 'key-section';
+      const keySummary = document.createElement('summary');
+      keySummary.textContent = t('Use a license key');
+      keyHost.appendChild(keySummary);
+      content.appendChild(keyHost);
+    }
+
+    if (codeHost) {
+      codeHost.appendChild(el('p', { text: t('Your seller can give you a one-time activation code.') }));
+      codeHost.appendChild(el('label', { htmlFor: 'activation-code-input', text: t('Activation code') }));
+      const codeInput = el('input', {
+        id: 'activation-code-input', type: 'text', autocomplete: 'off', spellcheck: false,
+      });
+      codeHost.appendChild(codeInput);
+      const codeBtn = el('button', { id: 'activate-code-btn', text: t('Activate') });
+      codeBtn.addEventListener('click', () => onActivateClicked(codeInput, codeBtn, 'activation_code'));
+      codeHost.appendChild(codeBtn);
+    }
+
+    keyHost.appendChild(el('label', { htmlFor: 'license-key-input', text: t('License key') }));
     const input = el('input', {
       id: 'license-key-input', type: 'text', autocomplete: 'off', spellcheck: false,
       placeholder: 'AURA-RETAIL-XXXX-YYYY-ZZZZ',
     });
-    content.appendChild(input);
+    keyHost.appendChild(input);
 
     const activateBtn = el('button', { id: 'activate-btn', text: t('Activate') });
     activateBtn.addEventListener('click', () => onActivateClicked(input, activateBtn));
-    content.appendChild(activateBtn);
+    keyHost.appendChild(activateBtn);
   }
 
-  async function onActivateClicked(input, btn) {
+  // The account sign-in finished and Owner activated this computer. Same
+  // aftermath as a successful key: hand-off marker (the activation rebinds the
+  // company and invalidates the session that submitted it), clear any held
+  // PENDING marker, and bounce back to the app from the activation gate.
+  // A computer activated here is asked "which computer is this?" on its next
+  // start-up (app-shell.js ROLE_PENDING_KEY -- same literal, separate document).
+  // Written for EVERY activation made at the gate -- sign-in, code or key -- so
+  // the three ways in all end at the same step.
+  const ROLE_PENDING_KEY = 'aura.firstrun.rolePending';
+  function markRolePending(email) {
+    try {
+      localStorage.setItem(ROLE_PENDING_KEY, JSON.stringify({ v: 1, at: Date.now(), email: email || '' }));
+    } catch (e) { /* storage blocked: the join wait screen is the fallback */ }
+  }
+
+  function onAccountActivated(info) {
+    clearActivationPending();
+    markActivationHandoff((info && info.email) || '');
+    showMessage(t('Activation successful.'), 'info');
+    if (new URLSearchParams(location.search).get('gate') === '1') {
+      setTimeout(() => { location.href = '/'; }, 900);
+    } else {
+      refresh();
+    }
+  }
+
+  async function onActivateClicked(input, btn, field) {
+    field = field || 'license_key';
     const key = input.value.trim();
     if (!key) {
-      showMessage(t('Please enter a license key.'), 'error');
+      showMessage(field === 'license_key' ? t('Please enter a license key.') : t('Please enter the activation code.'), 'error');
       return;
     }
 
@@ -824,7 +902,7 @@
     if (badge) badge.replaceWith(stateBadge('ACTIVATING'));
 
     try {
-      const { status, body } = await apiPost('/api/licensing/activate', { license_key: key });
+      const { status, body } = await apiPost('/api/licensing/activate', { [field]: key });
       // The key never lingers in this scope longer than needed to send it.
       input.value = '';
       if (status === 200 && body.result === 'SUCCESS') {
@@ -839,6 +917,7 @@
         // and this is what lets it explain why instead of it reading as an
         // error.
         markActivationHandoff(currentEmail);
+        markRolePending('');
         showMessage(t('Activation successful.'), 'info');
         // Reached via app-shell.js's pre-login activation gate (?gate=1) --
         // bounce back to '/' so init() re-runs and, now that this device is
@@ -869,6 +948,13 @@
         // full reasoning. It is dropped the moment Owner rules either way, and
         // it is never written anywhere that outlives this document; the marker
         // beside it deliberately carries no key material at all.
+        if (field !== 'license_key') {
+          // Only a typed key can be re-submitted to find out whether a held
+          // activation has been approved (renderAwaitingApproval explains why);
+          // a code is single-use and is not kept.
+          showMessage(t('Your request was received and is waiting for approval from Action Aura.'), 'info');
+          return;
+        }
         pendingKey = key;
         // Carried forward so a LATER approval (see pollActivationApproval's
         // own SUCCESS branch) can still mark the hand-off -- this is the only

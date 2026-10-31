@@ -171,6 +171,9 @@ fun LicensingScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var infoMessage by remember { mutableStateOf<String?>(null) }
     var confirmDeactivate by remember { mutableStateOf(false) }
+    // New customer flow: the Aura-account sign-in is the first way in; the code/key form is folded away
+    // under it until asked for (or until a held key makes it the right screen).
+    var showKeyForm by remember { mutableStateOf(false) }
 
     // The marker that says "a key from this installation is already awaiting
     // approval" -- persisted (PendingActivationStore), so it survives the
@@ -243,6 +246,9 @@ fun LicensingScreen(
                 // to advance to the login screen; the settings-accessed path
                 // (already logged in) passes null and just stays here showing
                 // the now-active status.
+                // At the first-run gate (onActivated set) a computer activated with a key is asked
+                // "which computer is this?" next, same as one activated by signing in.
+                if (onActivated != null) com.actionaura.retail.licensing.RolePendingStore(ctx).mark("")
                 onActivated?.invoke()
             }
 
@@ -476,12 +482,26 @@ fun LicensingScreen(
                 // message (caught via a real screenshot of the desktop gate
                 // this message shares the wording with).
                 val genuinelyUnconfigured = state == "NOT_CONFIGURED" && status["detail"] != null
-                Text(
+                // A key already held for approval keeps the key screens (they own that wait); otherwise the
+                // account sign-in leads.
+                val accountFirst = !genuinelyUnconfigured && pendingRecord == null
+                if (!accountFirst || genuinelyUnconfigured) Text(
                     if (genuinelyUnconfigured)
                         tr("This installation is not yet connected to a licensing server. Owner licensing is not configured for this build.")
                     else tr("Enter your Aura Retail license key to activate this installation."),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (accountFirst) {
+                    AccountSignInPanel(coordinator = coordinator, snackbar = snackbar, onActivated = {
+                        scope.launch {
+                            refresh()
+                            onActivated?.invoke()
+                        }
+                    })
+                    TextButton(onClick = { showKeyForm = !showKeyForm }) {
+                        Text(tr("Use a license key"))
+                    }
+                }
 
                 if (pendingRecord != null && !genuinelyUnconfigured) {
                     // Asked once more, but never blind: without this the user
@@ -500,14 +520,14 @@ fun LicensingScreen(
                     )
                 }
 
-                OutlinedTextField(
+                if (!accountFirst || showKeyForm) OutlinedTextField(
                     value = licenseKeyInput, onValueChange = { licenseKeyInput = it },
                     label = { Text(tr("License key")) },
                     placeholder = { Text("AURA-RETAIL-XXXX-YYYY-ZZZZ") },
                     singleLine = true, enabled = !busy,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Button(
+                if (!accountFirst || showKeyForm) Button(
                     enabled = !busy && licenseKeyInput.isNotBlank(),
                     onClick = {
                         scope.launch {

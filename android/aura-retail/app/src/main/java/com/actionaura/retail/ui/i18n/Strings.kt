@@ -1551,4 +1551,88 @@ private val AR_STRINGS: Map<String, String> = mapOf(
         "لا يمكن منح هذا الخصم بالضبط على هذه السلة. جرّب مبلغًا مختلفًا قليلًا.",
     "That discount does not fit this cart." to
         "هذا الخصم لا يناسب هذه السلة.",
+    // ── Sign in with your Aura account + "which computer is this?" (new customer flow, plan S6;
+    // ui/screens/AccountSignInScreen.kt, RoleStepScreen.kt). Same sentences as the desktop's
+    // products/retail/frontend/locales/ar.json. Arabic written by the assistant -- native speaker to confirm.
+    "Sign in with your Aura account to activate this computer. Use the email and password your seller gave you." to
+        "سجّل الدخول بحساب Aura لتفعيل هذا الجهاز. استخدم البريد الإلكتروني وكلمة المرور اللذين أعطاك إياهما البائع.",
+    "Sign in" to
+        "تسجيل الدخول",
+    "The email or password is not right. Check them and try again." to
+        "البريد الإلكتروني أو كلمة المرور غير صحيحة. تحقق منهما وحاول مرة أخرى.",
+    "Too many attempts. Please wait a few minutes and try again." to
+        "محاولات كثيرة جدًا. انتظر بضع دقائق ثم حاول مرة أخرى.",
+    "This version of Aura Retail is too old to start a trial. Please download the newest version from actionaura.me and install it." to
+        "هذا الإصدار من Aura Retail قديم جدًا لبدء التجربة. حمّل أحدث إصدار من actionaura.me وثبّته.",
+    "The agreement text could not be checked, so it was not shown. Please try again, or contact support." to
+        "تعذّر التحقق من نص العقد فلم يتم عرضه. حاول مرة أخرى أو تواصل مع الدعم.",
+    "Your sign-in timed out. Please sign in again." to
+        "انتهت مهلة تسجيل الدخول. سجّل الدخول مرة أخرى.",
+    "The agreement must be accepted before this computer can be activated." to
+        "يجب قبول العقد قبل تفعيل هذا الجهاز.",
+    "This computer could not be activated with that account. Sign in again, or contact your seller." to
+        "تعذّر تفعيل هذا الجهاز بهذا الحساب. سجّل الدخول مرة أخرى أو تواصل مع البائع.",
+    "This account has reached its computer limit. Contact your seller to add a device." to
+        "وصل هذا الحساب إلى الحد الأقصى للأجهزة. تواصل مع البائع لإضافة جهاز.",
+    "That password is not allowed. Choose a longer one you have not used before." to
+        "كلمة المرور هذه غير مسموحة. اختر كلمة أطول لم تستخدمها من قبل.",
+    "The new password must be at least 10 characters." to
+        "يجب أن تتكوّن كلمة المرور الجديدة من 10 أحرف على الأقل.",
+    "The new password must be different from your temporary password." to
+        "يجب أن تختلف كلمة المرور الجديدة عن كلمة المرور المؤقتة.",
+    "Choose your own password" to
+        "اختر كلمة مرورك الخاصة",
+    "The password your seller gave you was temporary. Choose a new one that only you know. At least 10 characters." to
+        "كلمة المرور التي أعطاك إياها البائع مؤقتة. اختر كلمة مرور جديدة لا يعرفها غيرك، 10 أحرف على الأقل.",
+    "New password" to
+        "كلمة المرور الجديدة",
+    "Repeat the new password" to
+        "أعد كتابة كلمة المرور الجديدة",
+    "Save password" to
+        "حفظ كلمة المرور",
+    "The two passwords are not the same." to
+        "كلمتا المرور غير متطابقتين.",
+    "One last step: please read and accept the service agreement." to
+        "خطوة أخيرة: يرجى قراءة عقد الخدمة والموافقة عليه.",
+    "Read the agreement to the end, then tick the box to continue." to
+        "اقرأ العقد حتى نهايته ثم ضع علامة في المربع للمتابعة.",
+    "I have read the agreement and I accept it" to
+        "قرأت العقد وأوافق عليه",
+    "Scroll to the end of the agreement to enable the box." to
+        "مرّر إلى نهاية العقد لتفعيل المربع.",
+    "Accept" to
+        "أوافق",
+    "Decline and go back" to
+        "رفض والعودة",
+    "Which branch is this computer for?" to
+        "لأي فرع هذا الجهاز؟",
+    "trial ends" to
+        "تنتهي التجربة في",
+    "Continue" to
+        "متابعة",
+    "Signed in. This computer is ready to be activated for:" to
+        "تم تسجيل الدخول. هذا الجهاز جاهز للتفعيل لـ:",
+    "your shop" to
+        "متجرك",
+    "Your free trial runs until" to
+        "تجربتك المجانية مستمرة حتى",
+    "Activate this computer" to
+        "تفعيل هذا الجهاز",
+    "Your request was received and is waiting for approval from Action Aura." to
+        "تم استلام طلبك وهو بانتظار موافقة Action Aura.",
+    "Use a license key" to
+        "استخدام مفتاح الترخيص",
+    "Which computer is this?" to
+        "أي جهاز هذا؟",
+    "Choose once. You can add more computers later." to
+        "اختر مرة واحدة. يمكنك إضافة أجهزة أخرى لاحقًا.",
+    "This is the boss computer (Admin)" to
+        "هذا جهاز المدير (الإدارة)",
+    "The boss computer sets up the shop, the staff and the settings. Every shop needs one." to
+        "جهاز المدير يُعدّ المتجر والموظفين والإعدادات. كل متجر يحتاج إلى جهاز واحد منه.",
+    "This is a cashier computer" to
+        "هذا جهاز كاشير",
+    "A cashier computer sells at the counter. It gets its staff from the boss computer." to
+        "جهاز الكاشير يبيع عند الصندوق. يحصل على الموظفين من جهاز المدير.",
+
 )
