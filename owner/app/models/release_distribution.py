@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,13 +21,27 @@ from app.models.base import Base, TimestampMixin, UUIDPKMixin
 
 class ReleaseDownloadAuthorization(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_release_download_authorizations"
+    __table_args__ = (
+        # Two kinds of link: a DEVICE's (installation_id + license_id, 1 use) and a
+        # signed-in CUSTOMER's from the website (customer_account_id, no device yet,
+        # 3 uses). Exactly one of installation_id / customer_account_id is set, so a
+        # website link can never be redeemed as a device link and the reverse.
+        CheckConstraint(
+            "num_nonnulls(installation_id, customer_account_id) = 1", name="ck_owner_release_download_authorizations_one_owner"
+        ),
+        CheckConstraint(
+            "installation_id IS NULL OR license_id IS NOT NULL", name="ck_owner_release_download_authorizations_device_has_license"
+        ),
+    )
 
     product_version_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_product_versions.id"), nullable=False
     )
-    license_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_licenses.id"), nullable=False)
-    installation_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_installations.id"), nullable=False
+    license_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_licenses.id"))
+    installation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_installations.id"))
+    # New customer flow (CA2, a3c7e9f15b28): the website account this link was made for.
+    customer_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_customer_accounts.id"), index=True
     )
     # SHA-256 of the raw token -- the raw value is returned to the caller
     # exactly once (the authorize-download response) and never stored.

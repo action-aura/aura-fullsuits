@@ -568,7 +568,12 @@ _WEBSITE_ACCOUNT_API_ENDPOINTS = (
     'website_account_api.password_set',
     'website_account_api.password_change',
     'website_account_api.email_confirm',
+    # CA1 follow-up (VERIFY_EMAIL link) and the New customer flow S4 endpoints: the
+    # account page's summary and the installer download, same caller and signature.
     'website_account_api.email_verify',
+    'website_account_api.summary',
+    'website_account_api.downloads_authorize',
+    'website_account_api.downloads_fetch',
 )
 
 _IMPLICIT_FORM_SIBLING_REASON = (

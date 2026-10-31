@@ -24,10 +24,12 @@ from __future__ import annotations
 import functools
 import logging
 
-from flask import Blueprint, abort, current_app, jsonify, request
+from flask import Blueprint, Response, abort, current_app, jsonify, request
 
-from app.customer_accounts import policy, service, signature
-from app.licensing_service import replay
+from app.customer_accounts import policy, service, signature, views
+from app.extensions import db_session
+from app.licensing_service import ratelimit, replay
+from app.releases import customer_offers, distribution
 
 logger = logging.getLogger(__name__)
 
@@ -225,3 +227,94 @@ def email_confirm(body):
     except service.AccountError:
         return _json({"ok": False, "error": "token_invalid"}, 400)
     return _json({"ok": True, "account": _account_view(account)})
+
+
+# ---------------------------------------------------------------------------
+# New customer flow, slice S4: what the account page shows, and the installers.
+# The JSON below is exactly what the website's BFF codes against
+# (website/functions/_lib/account-summary.ts and functions/api/account/downloads/*).
+
+def _licence_view(row) -> dict:
+    return {
+        "license_public_id": str(row.license.id), "product_code": row.product.product_code,
+        "product_name": row.product.name, "plan_code": row.plan.plan_code, "plan_name": row.plan.name,
+        "branch_label": row.subscription.branch_label,
+        "device_allowance": row.subscription.device_allowance if row.subscription.device_allowance is not None
+        else row.plan.included_device_count,
+        "trial": views.trial_view(row.pilot),
+    }
+
+
+@bp.route("/summary", methods=["GET", "POST"])
+@_gated
+def summary(body):
+    found = service.get_session(_text(body, "session_token", 256))
+    if found is None:
+        return _json({"ok": False, "error": "session_invalid"}, 401)
+    account = found[1]
+    _ip(body)  # the website always forwards it; a missing one is refused like everywhere else
+    offers = [] if account.password_must_change else [o.public_view() for o in customer_offers.offers_for_customer(account.customer_id)]
+    return _json({
+        "ok": True, "account": _account_view(account),
+        "licences": [_licence_view(row) for row in views.licence_rows(account.customer_id)],
+        "seller": views.seller_of(account.customer_id),
+        # The installer list is empty while the temporary password stands: the
+        # download endpoints refuse then too, so the page shows no dead buttons.
+        "downloads": offers,
+    })
+
+
+@bp.route("/downloads/authorize", methods=["GET", "POST"])
+@_gated
+def downloads_authorize(body):
+    found = service.get_session(_text(body, "session_token", 256))
+    if found is None:
+        return _json({"ok": False, "error": "session_invalid"}, 401)
+    account = found[1]
+    ip = _ip(body)
+    if account.password_must_change:
+        return _json({"ok": False, "error": "password_change_required"}, 403)
+    try:
+        ratelimit.check_and_increment("website_download_authorize", ratelimit.safe_bucket_component(str(account.id)))
+    except ratelimit.RateLimitExceeded as exc:
+        response = _json({"ok": False, "error": "rate_limited"}, 429)
+        response.headers["Retry-After"] = str(exc.retry_after_seconds)
+        return response
+    offer = customer_offers.find_offer(account.customer_id, _text(body, "offer_id", 64))
+    if offer is None:
+        return _json({"ok": False, "error": "offer_unavailable"}, 400)
+    ttl = current_app.config["WEBSITE_DOWNLOAD_TTL_SECONDS"]
+    uses = current_app.config["WEBSITE_DOWNLOAD_MAX_USES"]
+    _row, raw = distribution.authorize_customer_download(account, offer, ttl_seconds=ttl, max_uses=uses)
+    logger.info("website download link made for an account (ip bucket %s)", service.ip_bucket(ip))
+    return _json({"ok": True, "token": raw, "expires_in_seconds": ttl, "max_uses": uses,
+                  "filename": offer.filename, "size_bytes": offer.size_bytes})
+
+
+_FETCH_STATUS = {"TOKEN_NOT_FOUND": 404, "TOKEN_EXPIRED": 410, "TOKEN_ALREADY_USED": 410, "TOKEN_REVOKED": 410,
+                 "RELEASE_NOT_PUBLISHED": 410, "ARTIFACT_UNAVAILABLE": 503}
+
+
+@bp.route("/downloads/fetch", methods=["GET", "POST"])
+@_gated
+def downloads_fetch(body):
+    ip = _ip(body)
+    try:
+        ratelimit.check_and_increment("website_download_fetch", ratelimit.safe_bucket_component(service.ip_bucket(ip)))
+    except ratelimit.RateLimitExceeded as exc:
+        response = _json({"ok": False, "error": "rate_limited"}, 429)
+        response.headers["Retry-After"] = str(exc.retry_after_seconds)
+        return response
+    try:
+        download = distribution.open_customer_download(_text(body, "token", 256))
+    except distribution.DownloadAuthorizationRejected as exc:
+        db_session.rollback()
+        code = exc.internal_reason_code
+        return _json({"ok": False, "error": code.lower()}, _FETCH_STATUS.get(code, 400))
+    # STREAMED: Flask sends chunks as they are read; nothing holds the file in memory.
+    response = Response(download.chunks, status=200, mimetype=download.content_type, direct_passthrough=True)
+    response.headers["Content-Length"] = str(download.size_bytes)
+    response.headers["Content-Disposition"] = f'attachment; filename="{download.filename}"'
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response

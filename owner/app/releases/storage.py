@@ -53,3 +53,62 @@ def write_artifact_bytes(artifact_path: str, content: bytes) -> None:
     os.makedirs(os.path.dirname(candidate), exist_ok=True)
     with open(candidate, "wb") as f:
         f.write(content)
+
+
+# ---- streaming (new customer flow, S4): the website's 250 MB installer download ----
+#
+# read_artifact_bytes() loads the whole file; fine for a 40 MB device update, not for
+# an installer served to the website. These two never hold more than one chunk.
+
+STREAM_CHUNK_BYTES = 256 * 1024
+
+# (real path, size, mtime_ns) -> sha256 already computed for exactly that file state.
+# Re-hashing 250 MB on every fetch of the same unchanged file would be wasted disk
+# reads; any change to the file changes size or mtime and so misses the cache.
+_VERIFIED: dict = {}
+
+
+def _resolve(artifact_path: str) -> str:
+    root = os.path.realpath(_storage_root())
+    candidate = os.path.realpath(os.path.join(root, artifact_path))
+    if os.path.commonpath([root, candidate]) != root or not os.path.isfile(candidate):
+        raise ArtifactNotFound(artifact_path)
+    return candidate
+
+
+def artifact_sha256(artifact_path: str) -> tuple[str, int]:
+    """(sha256 hex, size) of the stored file, read in chunks (cached per file state)."""
+    import hashlib
+
+    path = _resolve(artifact_path)
+    info = os.stat(path)
+    key = (path, info.st_size, info.st_mtime_ns)
+    cached = _VERIFIED.get(key)
+    if cached is not None:
+        return cached, info.st_size
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(STREAM_CHUNK_BYTES), b""):
+            digest.update(chunk)
+    if len(_VERIFIED) > 64:
+        _VERIFIED.clear()
+    _VERIFIED[key] = digest.hexdigest()
+    return _VERIFIED[key], info.st_size
+
+
+def iter_artifact(artifact_path: str):
+    """Returns an iterator over the file in chunks; the file closes when the consumer
+    stops (finished, disconnected, or errored).
+
+    The path is resolved HERE, eagerly, not inside the generator: a WSGI server
+    iterates the response after Flask has popped the request/app context, and
+    `current_app` (used by _resolve) no longer exists by then. Found by the first
+    streaming test run (RuntimeError: Working outside of application context)."""
+    path = _resolve(artifact_path)
+
+    def chunks():
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(STREAM_CHUNK_BYTES), b""):
+                yield chunk
+
+    return chunks()

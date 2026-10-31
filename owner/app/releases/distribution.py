@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
@@ -233,7 +234,9 @@ def fetch_download(raw_token: str) -> tuple[bytes, ProductVersion]:
     authorization = db_session.execute(
         select(ReleaseDownloadAuthorization).where(ReleaseDownloadAuthorization.token_hash == token_hash)
     ).scalars().first()
-    if authorization is None:
+    if authorization is None or authorization.installation_id is None:
+        # A website customer's link (customer_account_id) is not a device link: it is
+        # redeemed only through the website API (open_customer_download).
         raise DownloadAuthorizationRejected("TOKEN_NOT_FOUND")
     if authorization.revoked_at is not None:
         raise DownloadAuthorizationRejected("TOKEN_REVOKED")
@@ -293,3 +296,104 @@ def fetch_download(raw_token: str) -> tuple[bytes, ProductVersion]:
         after_state={"product_version": release.version, "use_count": used.use_count},
     )
     return content, release
+
+
+# --------------------------------------------------------------------------
+# New customer flow (S4): the website's installer download for a signed-in customer.
+# A link is made for an ACCOUNT (customer_account_id), before any device exists:
+# 10 minutes, 3 uses (a phone reconnects; a download manager retries). It can only be
+# redeemed through the website API, and a device link can only be redeemed through the
+# device API (the table CHECK makes the two kinds exclusive).
+
+@dataclass(frozen=True)
+class CustomerDownload:
+    chunks: object  # an iterator of bytes; closes the file when finished or dropped
+    size_bytes: int
+    filename: str
+    content_type: str
+
+
+def authorize_customer_download(account, offer, *, ttl_seconds: int, max_uses: int) -> tuple[ReleaseDownloadAuthorization, str]:
+    """The caller has checked: session valid, password changed, offer currently
+    offered to this customer. Returns (row, raw_token); the raw token is shown once."""
+    raw_token = generate_token()
+    row = ReleaseDownloadAuthorization(
+        product_version_id=offer.release.id, license_id=None, installation_id=None, customer_account_id=account.id,
+        token_hash=hash_token(raw_token), expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+        max_uses=max_uses, use_count=0,
+    )
+    db_session.add(row)
+    db_session.commit()
+    audit_record(
+        actor_staff_user_id=None, actor_role_snapshot=None, action_code="WEBSITE_DOWNLOAD_AUTHORIZED",
+        entity_type="release_download_authorization", entity_public_id=str(row.id),
+        after_state={"customer_account_id": str(account.id), "product_version": offer.release.version, "platform": offer.platform},
+    )
+    return row, raw_token
+
+
+def open_customer_download(raw_token: str) -> CustomerDownload:
+    """Checks a website link, verifies the stored file, takes ONE use, and returns
+    the byte stream. The use is counted HERE -- after every refusal could still
+    happen (unknown / expired / used up / withdrawn / the file missing or not matching
+    its published checksum) and before the first byte is sent -- so a fetch that fails
+    for any of those reasons never burns a use, and a fetch whose stream starts always
+    has. Raises DownloadAuthorizationRejected."""
+    from app.models.customer_accounts import CustomerAccount
+    from app.releases import customer_offers
+
+    row = db_session.execute(
+        select(ReleaseDownloadAuthorization).where(ReleaseDownloadAuthorization.token_hash == hash_token(raw_token or ""))
+    ).scalars().first()
+    if row is None or row.customer_account_id is None:
+        raise DownloadAuthorizationRejected("TOKEN_NOT_FOUND")
+    if row.revoked_at is not None:
+        raise DownloadAuthorizationRejected("TOKEN_REVOKED")
+    now = datetime.now(timezone.utc)
+    if now > row.expires_at:
+        raise DownloadAuthorizationRejected("TOKEN_EXPIRED")
+    if row.use_count >= row.max_uses:
+        raise DownloadAuthorizationRejected("TOKEN_ALREADY_USED")
+    # The link is bound to the account: a disabled account, or one made to choose a new
+    # password again, stops downloading at once, not when the link would have expired.
+    account = db_session.get(CustomerAccount, row.customer_account_id)
+    if account is None or account.status != "ACTIVE" or account.password_must_change:
+        raise DownloadAuthorizationRejected("TOKEN_REVOKED")
+    release = db_session.get(ProductVersion, row.product_version_id)
+    if release is None or release.publication_state != "PUBLISHED":
+        raise DownloadAuthorizationRejected("RELEASE_NOT_PUBLISHED")
+    offer = customer_offers.find_offer(account.customer_id, str(release.id))
+    if offer is None:
+        # Still published, but this customer is no longer offered it (licence
+        # suspended / cancelled since the link was made).
+        raise DownloadAuthorizationRejected("TOKEN_REVOKED")
+    try:
+        actual, size = storage.artifact_sha256(release.artifact_path)
+    except storage.ArtifactNotFound:
+        raise DownloadAuthorizationRejected("ARTIFACT_UNAVAILABLE")
+    if actual != release.artifact_checksum_sha256 or size != release.artifact_size_bytes:
+        raise DownloadAuthorizationRejected("ARTIFACT_UNAVAILABLE")
+
+    used = db_session.execute(
+        update(ReleaseDownloadAuthorization)
+        .where(ReleaseDownloadAuthorization.id == row.id, ReleaseDownloadAuthorization.use_count < ReleaseDownloadAuthorization.max_uses)
+        .values(use_count=ReleaseDownloadAuthorization.use_count + 1, used_at=now)
+        .returning(ReleaseDownloadAuthorization.use_count)
+        .execution_options(synchronize_session=False)
+    ).first()
+    if used is None:
+        db_session.rollback()
+        raise DownloadAuthorizationRejected("TOKEN_ALREADY_USED")
+    authorization_id = row.id
+    version = release.version
+    artifact_path = release.artifact_path
+    db_session.commit()
+    audit_record(
+        actor_staff_user_id=None, actor_role_snapshot=None, action_code="WEBSITE_DOWNLOAD_STARTED",
+        entity_type="release_download_authorization", entity_public_id=str(authorization_id),
+        after_state={"product_version": version, "use_count": used.use_count},
+    )
+    return CustomerDownload(
+        chunks=storage.iter_artifact(artifact_path), size_bytes=size, filename=offer.filename,
+        content_type=customer_offers.CONTENT_TYPE[offer.platform],
+    )
