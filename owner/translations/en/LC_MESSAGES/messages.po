@@ -10172,3 +10172,301 @@ msgstr "No slip photo"
 msgid "Money received -- confirm and unlock the shop"
 msgstr "Money received -- confirm and unlock the shop"
 
+
+#: app/contracts
+msgid "A lawyer approved this exact text -- who and when"
+msgstr "A lawyer approved this exact text -- who and when"
+
+#: app/contracts
+msgid "A lawyer has read this exact text and approved it"
+msgstr "A lawyer has read this exact text and approved it"
+
+#: app/contracts
+msgid "A version with that name already exists for this audience and language."
+msgstr "A version with that name already exists for this audience and language."
+
+#: app/contracts
+msgid "Accept"
+msgstr "Accept"
+
+#: app/contracts
+msgid "Activation code"
+msgstr "Activation code"
+
+#: app/contracts
+msgid "Activation code for %(name)s"
+msgstr "Activation code for %(name)s"
+
+#: app/contracts
+msgid "All contracts"
+msgstr "All contracts"
+
+#: app/contracts
+msgid "An activation code can only be made for a licence that is issued."
+msgstr "An activation code can only be made for a licence that is issued."
+
+#: app/contracts
+msgid "Back to the licence"
+msgstr "Back to the licence"
+
+#: app/contracts
+msgid "Choose English or Arabic."
+msgstr "Choose English or Arabic."
+
+#: app/contracts
+msgid "Choose who this contract is for."
+msgstr "Choose who this contract is for."
+
+#: app/contracts
+msgid "Contract text (exactly what the person will read and accept)"
+msgstr "Contract text (exactly what the person will read and accept)"
+
+#: app/contracts
+msgid "Contracts"
+msgstr "Contracts"
+
+#: app/contracts
+msgid "Copy code"
+msgstr "Copy code"
+
+#: app/contracts
+msgid "Customer (shop owner, in the app)"
+msgstr "Customer (shop owner, in the app)"
+
+#: app/contracts
+msgid "DRAFT -- not yet approved by a lawyer"
+msgstr "DRAFT -- not yet approved by a lawyer"
+
+#: app/contracts
+msgid "Download"
+msgstr "Download"
+
+#: app/contracts
+msgid "Download the evidence (JSON)"
+msgstr "Download the evidence (JSON)"
+
+#: app/contracts
+msgid "For"
+msgstr "For"
+
+#: app/contracts
+msgid "For a customer who cannot sign in to the app: a one-time code, valid for 72 hours, that activates THIS licence on one device. It is shown once. Making a new one cancels the old one."
+msgstr "For a customer who cannot sign in to the app: a one-time code, valid for 72 hours, that activates THIS licence on one device. It is shown once. Making a new one cancels the old one."
+
+#: app/contracts
+msgid "From address"
+msgstr "From address"
+
+#: app/contracts
+msgid "I have read this agreement and I accept it"
+msgstr "I have read this agreement and I accept it"
+
+#: app/contracts
+msgid "If approved: who and when"
+msgstr "If approved: who and when"
+
+#: app/contracts
+msgid "Lawyer approved"
+msgstr "Lawyer approved"
+
+#: app/contracts
+msgid "Live"
+msgstr "Live"
+
+#: app/contracts
+msgid "Make activation code"
+msgstr "Make activation code"
+
+#: app/contracts
+msgid "Make activation code (requires recent authentication)"
+msgstr "Make activation code (requires recent authentication)"
+
+#: app/contracts
+msgid "Make an activation code for this licence?"
+msgstr "Make an activation code for this licence?"
+
+#: app/contracts
+msgid "Mark as approved by a lawyer"
+msgstr "Mark as approved by a lawyer"
+
+#: app/contracts
+msgid "Marked as approved by a lawyer."
+msgstr "Marked as approved by a lawyer."
+
+#: app/contracts
+msgid "New version"
+msgstr "New version"
+
+#: app/contracts
+msgid "No contract versions yet."
+msgstr "No contract versions yet."
+
+#: app/contracts
+msgid "Nobody yet."
+msgstr "Nobody yet."
+
+#: app/contracts
+msgid "Optional: the lawyer's PDF copy, stored encrypted for the record"
+msgstr "Optional: the lawyer's PDF copy, stored encrypted for the record"
+
+#: app/contracts
+msgid "PDF copy"
+msgstr "PDF copy"
+
+#: app/contracts
+msgid "PRACTICE MODE: this can be published without a lawyer. The app will show it with a DRAFT mark."
+msgstr "PRACTICE MODE: this can be published without a lawyer. The app will show it with a DRAFT mark."
+
+#: app/contracts
+msgid "PRACTICE MODE: versions that no lawyer has approved can be published. The app shows them with a DRAFT mark. Never use this for real customers."
+msgstr "PRACTICE MODE: versions that no lawyer has approved can be published. The app shows them with a DRAFT mark. Never use this for real customers."
+
+#: app/contracts
+msgid "Publish (requires recent authentication)"
+msgstr "Publish (requires recent authentication)"
+
+#: app/contracts
+msgid "Publish this version? It replaces the live one for this audience and language."
+msgstr "Publish this version? It replaces the live one for this audience and language."
+
+#: app/contracts
+msgid "Published. New sign-ins are asked to accept this text."
+msgstr "Published. New sign-ins are asked to accept this text."
+
+#: app/contracts
+msgid "Read the contract and tick the box to accept it."
+msgstr "Read the contract and tick the box to accept it."
+
+#: app/contracts
+msgid "Read this code to the customer, or send it to them. In the app they choose \"I have a code\" and type it. It works once, on one device, for the next 72 hours. It is shown only now and cannot be shown again."
+msgstr "Read this code to the customer, or send it to them. In the app they choose \"I have a code\" and type it. It works once, on one device, for the next 72 hours. It is shown only now and cannot be shown again."
+
+#: app/contracts
+msgid "Retire"
+msgstr "Retire"
+
+#: app/contracts
+msgid "Retire (requires recent authentication)"
+msgstr "Retire (requires recent authentication)"
+
+#: app/contracts
+msgid "Retire this version? Nobody will be asked to accept it any more."
+msgstr "Retire this version? Nobody will be asked to accept it any more."
+
+#: app/contracts
+msgid "Retired. It is no longer shown to anyone."
+msgstr "Retired. It is no longer shown to anyone."
+
+#: app/contracts
+msgid "Save as a draft"
+msgstr "Save as a draft"
+
+#: app/contracts
+msgid "Seller (staff, in Owner)"
+msgstr "Seller (staff, in Owner)"
+
+#: app/contracts
+msgid "Seller agreement"
+msgstr "Seller agreement"
+
+#: app/contracts
+msgid "State"
+msgstr "State"
+
+#: app/contracts
+msgid "Text fingerprint (SHA-256)"
+msgstr "Text fingerprint (SHA-256)"
+
+#: app/contracts
+msgid "Thank you. Your acceptance is recorded."
+msgstr "Thank you. Your acceptance is recorded."
+
+#: app/contracts
+msgid "The attached file must be a PDF of at most 10 MB."
+msgstr "The attached file must be a PDF of at most 10 MB."
+
+#: app/contracts
+msgid "The contract text is too long."
+msgstr "The contract text is too long."
+
+#: app/contracts
+msgid "The encryption key for stored files is not set up on this server, so a PDF cannot be stored."
+msgstr "The encryption key for stored files is not set up on this server, so a PDF cannot be stored."
+
+#: app/contracts
+msgid "The text customers accept the first time they sign in to the app, and the text sellers accept in Owner. A version never changes after it is saved: to fix a mistake, save a new version."
+msgstr "The text customers accept the first time they sign in to the app, and the text sellers accept in Owner. A version never changes after it is saved: to fix a mistake, save a new version."
+
+#: app/contracts
+msgid "The version name may only use letters, numbers, dots, dashes and spaces."
+msgstr "The version name may only use letters, numbers, dots, dashes and spaces."
+
+#: app/contracts
+msgid "There is no seller agreement to accept right now."
+msgstr "There is no seller agreement to accept right now."
+
+#: app/contracts
+msgid "This contract is no longer current. Please read the new one."
+msgstr "This contract is no longer current. Please read the new one."
+
+#: app/contracts
+msgid "This version is already published."
+msgstr "This version is already published."
+
+#: app/contracts
+msgid "This version is not marked as approved by a lawyer, so it cannot be published."
+msgstr "This version is not marked as approved by a lawyer, so it cannot be published."
+
+#: app/contracts
+msgid "This version was never published."
+msgstr "This version was never published."
+
+#: app/contracts
+msgid "Valid until %(when)s."
+msgstr "Valid until %(when)s."
+
+#: app/contracts
+msgid "Version name (for example 2026-11 v1)"
+msgstr "Version name (for example 2026-11 v1)"
+
+#: app/contracts
+msgid "Version saved as a draft. Publish it when it is ready."
+msgstr "Version saved as a draft. Publish it when it is ready."
+
+#: app/contracts
+msgid "Who"
+msgstr "Who"
+
+#: app/contracts
+msgid "Who accepted this version"
+msgstr "Who accepted this version"
+
+#: app/contracts
+msgid "Who accepts it"
+msgstr "Who accepts it"
+
+#: app/contracts
+msgid "Write a title."
+msgstr "Write a title."
+
+#: app/contracts
+msgid "Write the contract text."
+msgstr "Write the contract text."
+
+#: app/contracts
+msgid "Write who approved it and when (for example the lawyer's name and date)."
+msgstr "Write who approved it and when (for example the lawyer's name and date)."
+
+#: app/contracts
+msgid "You have accepted this version."
+msgstr "You have accepted this version."
+
+
+#: app/contracts
+msgid "Download (JSON)"
+msgstr "Download (JSON)"
+
+#: app/contracts
+msgid "Everything they accepted"
+msgstr "Everything they accepted"
+

@@ -10131,3 +10131,301 @@ msgstr "لا توجد صورة إيصال"
 msgid "Money received -- confirm and unlock the shop"
 msgstr "وصل المال -- أكّد وافتح المحل"
 
+
+#: app/contracts
+msgid "A lawyer approved this exact text -- who and when"
+msgstr "وافق محامٍ على هذا النص نفسه -- من ومتى"
+
+#: app/contracts
+msgid "A lawyer has read this exact text and approved it"
+msgstr "قرأ محامٍ هذا النص نفسه ووافق عليه"
+
+#: app/contracts
+msgid "A version with that name already exists for this audience and language."
+msgstr "يوجد إصدار بهذا الاسم لنفس الفئة واللغة."
+
+#: app/contracts
+msgid "Accept"
+msgstr "أوافق"
+
+#: app/contracts
+msgid "Activation code"
+msgstr "رمز التفعيل"
+
+#: app/contracts
+msgid "Activation code for %(name)s"
+msgstr "رمز التفعيل لـ %(name)s"
+
+#: app/contracts
+msgid "All contracts"
+msgstr "كل العقود"
+
+#: app/contracts
+msgid "An activation code can only be made for a licence that is issued."
+msgstr "لا يمكن إنشاء رمز تفعيل إلا لترخيص صادر."
+
+#: app/contracts
+msgid "Back to the licence"
+msgstr "العودة إلى الترخيص"
+
+#: app/contracts
+msgid "Choose English or Arabic."
+msgstr "اختر الإنجليزية أو العربية."
+
+#: app/contracts
+msgid "Choose who this contract is for."
+msgstr "اختر لمن هذا العقد."
+
+#: app/contracts
+msgid "Contract text (exactly what the person will read and accept)"
+msgstr "نص العقد (تماماً ما سيقرؤه الشخص ويوافق عليه)"
+
+#: app/contracts
+msgid "Contracts"
+msgstr "العقود"
+
+#: app/contracts
+msgid "Copy code"
+msgstr "نسخ الرمز"
+
+#: app/contracts
+msgid "Customer (shop owner, in the app)"
+msgstr "العميل (صاحب المحل، داخل التطبيق)"
+
+#: app/contracts
+msgid "DRAFT -- not yet approved by a lawyer"
+msgstr "مسودة -- لم يوافق عليها محامٍ بعد"
+
+#: app/contracts
+msgid "Download"
+msgstr "تنزيل"
+
+#: app/contracts
+msgid "Download the evidence (JSON)"
+msgstr "تنزيل الإثبات (JSON)"
+
+#: app/contracts
+msgid "For"
+msgstr "لـ"
+
+#: app/contracts
+msgid "For a customer who cannot sign in to the app: a one-time code, valid for 72 hours, that activates THIS licence on one device. It is shown once. Making a new one cancels the old one."
+msgstr "لعميل لا يستطيع تسجيل الدخول إلى التطبيق: رمز لمرة واحدة، صالح 72 ساعة، يفعّل هذا الترخيص على جهاز واحد. يظهر مرة واحدة فقط. إنشاء رمز جديد يلغي القديم."
+
+#: app/contracts
+msgid "From address"
+msgstr "من عنوان"
+
+#: app/contracts
+msgid "I have read this agreement and I accept it"
+msgstr "قرأت هذه الاتفاقية وأوافق عليها"
+
+#: app/contracts
+msgid "If approved: who and when"
+msgstr "إذا كانت موافَقاً عليها: من ومتى"
+
+#: app/contracts
+msgid "Lawyer approved"
+msgstr "موافقة المحامي"
+
+#: app/contracts
+msgid "Live"
+msgstr "ساري"
+
+#: app/contracts
+msgid "Make activation code"
+msgstr "إنشاء رمز تفعيل"
+
+#: app/contracts
+msgid "Make activation code (requires recent authentication)"
+msgstr "إنشاء رمز تفعيل (يتطلب تأكيد هوية حديثاً)"
+
+#: app/contracts
+msgid "Make an activation code for this licence?"
+msgstr "إنشاء رمز تفعيل لهذا الترخيص؟"
+
+#: app/contracts
+msgid "Mark as approved by a lawyer"
+msgstr "تسجيل موافقة المحامي"
+
+#: app/contracts
+msgid "Marked as approved by a lawyer."
+msgstr "سُجّلت موافقة المحامي."
+
+#: app/contracts
+msgid "New version"
+msgstr "إصدار جديد"
+
+#: app/contracts
+msgid "No contract versions yet."
+msgstr "لا توجد إصدارات عقود بعد."
+
+#: app/contracts
+msgid "Nobody yet."
+msgstr "لا أحد بعد."
+
+#: app/contracts
+msgid "Optional: the lawyer's PDF copy, stored encrypted for the record"
+msgstr "اختياري: نسخة PDF من المحامي، تُحفظ مشفّرة للأرشيف"
+
+#: app/contracts
+msgid "PDF copy"
+msgstr "نسخة PDF"
+
+#: app/contracts
+msgid "PRACTICE MODE: this can be published without a lawyer. The app will show it with a DRAFT mark."
+msgstr "وضع التجربة: يمكن نشر هذا دون محامٍ. سيعرضه التطبيق بعلامة مسودة."
+
+#: app/contracts
+msgid "PRACTICE MODE: versions that no lawyer has approved can be published. The app shows them with a DRAFT mark. Never use this for real customers."
+msgstr "وضع التجربة: يمكن نشر إصدارات لم يوافق عليها محامٍ. يعرضها التطبيق بعلامة مسودة. لا تستخدمه أبداً مع عملاء حقيقيين."
+
+#: app/contracts
+msgid "Publish (requires recent authentication)"
+msgstr "نشر (يتطلب تأكيد هوية حديثاً)"
+
+#: app/contracts
+msgid "Publish this version? It replaces the live one for this audience and language."
+msgstr "نشر هذا الإصدار؟ سيحل محل الإصدار الساري لهذه الفئة واللغة."
+
+#: app/contracts
+msgid "Published. New sign-ins are asked to accept this text."
+msgstr "تم النشر. سيُطلب من تسجيلات الدخول الجديدة الموافقة على هذا النص."
+
+#: app/contracts
+msgid "Read the contract and tick the box to accept it."
+msgstr "اقرأ العقد وضع إشارة في المربع للموافقة عليه."
+
+#: app/contracts
+msgid "Read this code to the customer, or send it to them. In the app they choose \"I have a code\" and type it. It works once, on one device, for the next 72 hours. It is shown only now and cannot be shown again."
+msgstr "اقرأ هذا الرمز للعميل أو أرسله له. في التطبيق يختار \"لدي رمز\" ويكتبه. يعمل مرة واحدة على جهاز واحد خلال 72 ساعة القادمة. يظهر الآن فقط ولا يمكن عرضه مرة أخرى."
+
+#: app/contracts
+msgid "Retire"
+msgstr "إيقاف"
+
+#: app/contracts
+msgid "Retire (requires recent authentication)"
+msgstr "إيقاف (يتطلب تأكيد هوية حديثاً)"
+
+#: app/contracts
+msgid "Retire this version? Nobody will be asked to accept it any more."
+msgstr "إيقاف هذا الإصدار؟ لن يُطلب من أحد الموافقة عليه بعد الآن."
+
+#: app/contracts
+msgid "Retired. It is no longer shown to anyone."
+msgstr "تم الإيقاف. لم يعد يُعرض لأي شخص."
+
+#: app/contracts
+msgid "Save as a draft"
+msgstr "حفظ كمسودة"
+
+#: app/contracts
+msgid "Seller (staff, in Owner)"
+msgstr "البائع (موظف، داخل Owner)"
+
+#: app/contracts
+msgid "Seller agreement"
+msgstr "اتفاقية البائع"
+
+#: app/contracts
+msgid "State"
+msgstr "الحالة"
+
+#: app/contracts
+msgid "Text fingerprint (SHA-256)"
+msgstr "بصمة النص (SHA-256)"
+
+#: app/contracts
+msgid "Thank you. Your acceptance is recorded."
+msgstr "شكراً. تم تسجيل موافقتك."
+
+#: app/contracts
+msgid "The attached file must be a PDF of at most 10 MB."
+msgstr "يجب أن يكون الملف المرفق PDF بحجم 10 ميجابايت كحد أقصى."
+
+#: app/contracts
+msgid "The contract text is too long."
+msgstr "نص العقد طويل جداً."
+
+#: app/contracts
+msgid "The encryption key for stored files is not set up on this server, so a PDF cannot be stored."
+msgstr "مفتاح تشفير الملفات المخزّنة غير مضبوط على هذا الخادم، لذلك لا يمكن حفظ ملف PDF."
+
+#: app/contracts
+msgid "The text customers accept the first time they sign in to the app, and the text sellers accept in Owner. A version never changes after it is saved: to fix a mistake, save a new version."
+msgstr "النص الذي يوافق عليه العملاء عند أول تسجيل دخول إلى التطبيق، والنص الذي يوافق عليه البائعون في Owner. لا يتغير أي إصدار بعد حفظه: لتصحيح خطأ احفظ إصداراً جديداً."
+
+#: app/contracts
+msgid "The version name may only use letters, numbers, dots, dashes and spaces."
+msgstr "يمكن أن يتضمن اسم الإصدار حروفاً وأرقاماً ونقاطاً وشرطات ومسافات فقط."
+
+#: app/contracts
+msgid "There is no seller agreement to accept right now."
+msgstr "لا توجد اتفاقية بائع للموافقة عليها الآن."
+
+#: app/contracts
+msgid "This contract is no longer current. Please read the new one."
+msgstr "هذا العقد لم يعد ساري المفعول. يرجى قراءة العقد الجديد."
+
+#: app/contracts
+msgid "This version is already published."
+msgstr "هذا الإصدار منشور بالفعل."
+
+#: app/contracts
+msgid "This version is not marked as approved by a lawyer, so it cannot be published."
+msgstr "هذا الإصدار غير مسجّل كموافَق عليه من محامٍ، لذلك لا يمكن نشره."
+
+#: app/contracts
+msgid "This version was never published."
+msgstr "لم يُنشر هذا الإصدار قط."
+
+#: app/contracts
+msgid "Valid until %(when)s."
+msgstr "صالح حتى %(when)s."
+
+#: app/contracts
+msgid "Version name (for example 2026-11 v1)"
+msgstr "اسم الإصدار (مثال: 2026-11 v1)"
+
+#: app/contracts
+msgid "Version saved as a draft. Publish it when it is ready."
+msgstr "تم حفظ الإصدار كمسودة. انشره عندما يصبح جاهزاً."
+
+#: app/contracts
+msgid "Who"
+msgstr "من"
+
+#: app/contracts
+msgid "Who accepted this version"
+msgstr "من وافق على هذا الإصدار"
+
+#: app/contracts
+msgid "Who accepts it"
+msgstr "من يوافق عليه"
+
+#: app/contracts
+msgid "Write a title."
+msgstr "اكتب عنواناً."
+
+#: app/contracts
+msgid "Write the contract text."
+msgstr "اكتب نص العقد."
+
+#: app/contracts
+msgid "Write who approved it and when (for example the lawyer's name and date)."
+msgstr "اكتب من وافق ومتى (مثلاً اسم المحامي والتاريخ)."
+
+#: app/contracts
+msgid "You have accepted this version."
+msgstr "لقد وافقت على هذا الإصدار."
+
+
+#: app/contracts
+msgid "Download (JSON)"
+msgstr "تنزيل (JSON)"
+
+#: app/contracts
+msgid "Everything they accepted"
+msgstr "كل ما وافق عليه"
+

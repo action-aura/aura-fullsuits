@@ -136,6 +136,10 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("trials.override_duplicate", "CUSTOMERS", "Create a second trial for a shop that already exists (with a written reason)"),
     ("trials.extend", "CUSTOMERS", "Extend a started trial once, by up to 7 days (with a written reason)"),
     ("customer_documents.view", "CUSTOMERS", "Open a customer's ID, commercial registration and payment-slip photos"),
+    # S5: the e-contract admin page (Super Admin only -- nobody else holds it), and
+    # "Make activation code" for the customer's "I have a code" path (Support).
+    ("contracts.manage", "CUSTOMERS", "Write, approve, publish and retire the e-contract; export who accepted it"),
+    ("activation_codes.make", "LICENSES", "Make a one-time activation code for a customer's licence"),
     ("quotes.create", "COMMERCIAL_SALES", "Create a quote"),
     ("quotes.approve", "COMMERCIAL_SALES", "Approve/send a quote"),
     ("orders.create", "COMMERCIAL_SALES", "Create a sales order"),
@@ -342,6 +346,7 @@ ROLES: dict[str, dict] = {
             "activation_service.view", "activation_requests.view", "device_keys.view",
             "pilots.view",
             "pending_activations.view", "pending_activations.decide",
+            "activation_codes.make",
             "device_slot_exceptions.view", "device_slot_exceptions.manage",
             # Phase 5 prerequisite #3 -- view-only, same precedent as
             # device_keys.view above: SUPPORT can see what's quarantined to

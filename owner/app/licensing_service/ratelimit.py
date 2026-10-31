@@ -77,6 +77,19 @@ POLICIES: dict[str, RateLimitPolicy] = {
     # Set-password / email-confirm links: tokens are 256-bit so guessing is not
     # the worry; this bounds work and noise per source.
     "customer_token_ip": RateLimitPolicy("customer_token_ip", max_requests=20, window_seconds=900),
+    # New customer flow (S5): the apps' account sign-in. Besides the website's
+    # shared email / IP lockout (service.authenticate), each DEVICE KEY gets its own
+    # budget so one machine cannot walk a list of emails even from many addresses:
+    # sign-ins 10 per 15 minutes; ticket actions (password change, contract
+    # acceptance) 20 per 15 minutes. The per-address flood guards below sit in
+    # front of authentication, sized like activation.
+    "account_signin_device": RateLimitPolicy("account_signin_device", max_requests=10, window_seconds=900),
+    "account_ticket_ops": RateLimitPolicy("account_ticket_ops", max_requests=20, window_seconds=900),
+    "account_signin_flood": RateLimitPolicy("account_signin_flood", max_requests=30, window_seconds=60),
+    # Website downloads (S4): authorizations per customer account, and a flood
+    # guard on the streaming fetch (many parallel tabs share a phone carrier IP).
+    "website_download_authorize": RateLimitPolicy("website_download_authorize", max_requests=20, window_seconds=3600),
+    "website_download_fetch": RateLimitPolicy("website_download_fetch", max_requests=60, window_seconds=60),
 }
 
 

@@ -11,6 +11,7 @@ from flask import Blueprint, current_app, jsonify, request
 
 from app.extensions import db_session
 from app.licensing_service import ratelimit
+from app.licensing_service import account_endpoints
 from app.licensing_service.activation import ActivationRejected, process_activation
 from app.licensing_service.checkin import CheckInRejected, process_checkin
 from app.licensing_service.deactivation import DeactivationRejected, process_deactivation
@@ -120,7 +121,8 @@ def activations():
                 ratelimit.check_and_increment("activation_invalid_signature", _client_bucket())
             except ratelimit.RateLimitExceeded:
                 pass
-        if exc.internal_reason_code in ("LICENSE_NOT_FOUND", "LICENSE_SUSPENDED", "LICENSE_REVOKED", "LICENSE_EXPIRED"):
+        if exc.internal_reason_code in ("LICENSE_NOT_FOUND", "LICENSE_SUSPENDED", "LICENSE_REVOKED", "LICENSE_EXPIRED",
+                                        "ACTIVATION_GRANT_INVALID"):
             try:
                 ratelimit.check_and_increment("activation_invalid_license", _client_bucket())
             except ratelimit.RateLimitExceeded:
@@ -191,6 +193,70 @@ def deactivations():
         db_session.rollback()
         current_app.logger.exception("Internal decision failure during deactivation (request body not logged).")
         return _error_response("INTERNAL_DECISION_FAILURE", 500, correlation_id)
+
+
+def _account_endpoint(handler, *, event_type: str):
+    """Shared shell of the three account endpoints (S5): feature gate (404 while
+    customer accounts are off), flood guard, JSON, then the handler; every refusal
+    through the one error shape. The handler's body dict holds a password / ticket:
+    nothing here logs it, and the unexpected-error log carries no body."""
+    if not current_app.config.get("CUSTOMER_ACCOUNTS_ENABLED"):
+        return _error_response("INVALID_REQUEST", 404)
+    try:
+        ratelimit.check_and_increment("account_signin_flood", _client_bucket())
+    except ratelimit.RateLimitExceeded as exc:
+        resp, status = _error_response("RATE_LIMITED", 429)
+        resp.headers["Retry-After"] = str(exc.retry_after_seconds)
+        return resp, status
+    body = _get_json_body()
+    if body is None:
+        return _error_response("INVALID_REQUEST", 400)
+    correlation_id = body.get("correlation_id") if isinstance(body, dict) else None
+    try:
+        payload, status = handler(body, source_ip=request.remote_addr, config=_service_config())
+        return jsonify(payload), status
+    except account_endpoints.AccountRejected as exc:
+        db_session.rollback()
+        if exc.internal_reason_code == "INVALID_SIGNATURE":
+            try:
+                ratelimit.check_and_increment("activation_invalid_signature", _client_bucket())
+            except ratelimit.RateLimitExceeded:
+                pass
+        resp, status = _error_response(exc.internal_reason_code, exc.http_status, correlation_id)
+        if exc.extra:
+            data = resp.get_json()
+            data.update(exc.extra)
+            resp = jsonify(data)
+        if exc.retry_after is not None:
+            resp.headers["Retry-After"] = str(exc.retry_after)
+        try:
+            account_endpoints.log_outcome(body, request.remote_addr, "REJECTED", exc.internal_reason_code, event_type)
+        except Exception:  # noqa: BLE001 -- the log row must never turn a refusal into a 500
+            db_session.rollback()
+        return resp, status
+    except Exception:
+        db_session.rollback()
+        current_app.logger.exception("Internal decision failure during %s (request body not logged).", event_type)
+        return _error_response("INTERNAL_DECISION_FAILURE", 500, correlation_id)
+
+
+@bp.route("/account-sign-ins", methods=["POST"])
+def account_sign_ins():
+    """New customer flow. email + password, signed by the device key -> a ticket."""
+    return _account_endpoint(
+        lambda body, **kw: (account_endpoints.process_account_sign_in(body, **kw), 200), event_type="ACCOUNT_SIGN_IN")
+
+
+@bp.route("/account-password-changes", methods=["POST"])
+def account_password_changes():
+    return _account_endpoint(
+        lambda body, **kw: (account_endpoints.process_password_change(body, **kw), 200), event_type="ACCOUNT_PASSWORD")
+
+
+@bp.route("/contract-acceptances", methods=["POST"])
+def contract_acceptances():
+    return _account_endpoint(
+        lambda body, **kw: (account_endpoints.process_contract_acceptance(body, **kw), 201), event_type="CONTRACT_ACCEPT")
 
 
 @bp.route("/signing-keys", methods=["GET"])

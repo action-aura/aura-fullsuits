@@ -488,6 +488,14 @@ _EXTERNAL_LICENSING_API_ENDPOINTS = (
     # notifications worker) and the same device signature + nonce
     # authentication; Owner's own UI never calls it.
     'api_external_licensing.mail_relay',
+    # New customer flow (S5): "sign in with your Aura account" in the shop app.
+    # Same caller (commercial_runtime's LicensingClient.account_sign_in /
+    # change_password / accept_contract) and the same device-signature + nonce
+    # authentication as activation; Owner's own UI never calls them, and they
+    # answer 404 unless OWNER_CUSTOMER_ACCOUNTS_ENABLED=true.
+    'api_external_licensing.account_sign_ins',
+    'api_external_licensing.account_password_changes',
+    'api_external_licensing.contract_acceptances',
     'api_external_licensing.service_info',
     'api_external_licensing.signing_keys',
 )
@@ -560,6 +568,7 @@ _WEBSITE_ACCOUNT_API_ENDPOINTS = (
     'website_account_api.password_set',
     'website_account_api.password_change',
     'website_account_api.email_confirm',
+    'website_account_api.email_verify',
 )
 
 _IMPLICIT_FORM_SIBLING_REASON = (

@@ -220,3 +220,35 @@ def replace(license_id):
     except InvalidLicenseTransitionError as exc:
         return jsonify({"error": str(exc)}), 400
     return redirect(url_for("licensing.detail", license_id=new_license.id))
+
+
+@bp.route("/<uuid:license_id>/activation-code", methods=["POST"])
+@require_permission("activation_codes.make")
+@require_recent_auth
+def make_activation_code(license_id):
+    """New customer flow (S5): "Make activation code" -- the customer's "I have a
+    code" path in the app. SUPPORT and SUPER_ADMIN only (a code is a key to the
+    licence while it lives), recent MFA, the same customer scope as every other
+    customer-account action, and only for a licence that can actually be activated.
+    The code is shown ONCE on the page that follows and never stored in the clear."""
+    from flask import abort, flash, render_template as render
+    from flask_babel import gettext as _
+
+    from app.customer_accounts import device_flow
+    from app.customer_accounts.staff_routes import can_reach_customer
+    from app.security.rbac import get_staff_permission_codes
+
+    if not current_app.config.get("CUSTOMER_ACCOUNTS_ENABLED"):
+        abort(404)
+    license_row = db_session.get(License, license_id)
+    actor = load_current_staff()
+    customer = db_session.get(Customer, license_row.customer_id) if license_row else None
+    if license_row is None or customer is None or not can_reach_customer(customer, actor, get_staff_permission_codes(actor)):
+        return jsonify({"error": "not_found"}), 404
+    if license_row.status not in ("ISSUED", "ACTIVE"):
+        flash(_("An activation code can only be made for a licence that is issued."), "error")
+        return redirect(url_for("licensing.detail", license_id=license_id))
+    code, expires = device_flow.make_activation_code(
+        license_row, actor_staff_user_id=actor.id, pepper=current_app.config["LICENSE_PEPPER"])
+    response = render("licensing/activation_code.html", license=license_row, customer=customer, code=code, expires=expires)
+    return response, 200, {"Cache-Control": "no-store"}

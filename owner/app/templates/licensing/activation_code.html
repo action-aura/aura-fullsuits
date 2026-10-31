@@ -1,0 +1,16 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Activation code") }}{% endblock %}
+{% block content %}
+<div class="card card--critical" style="max-width:640px;margin:0 auto;" data-activation-code-result="1">
+  <h2>{{ _("Activation code for %(name)s", name=customer.legal_name) }}</h2>
+  <p>{{ _("Read this code to the customer, or send it to them. In the app they choose \"I have a code\" and type it. It works once, on one device, for the next 72 hours. It is shown only now and cannot be shown again.") }}</p>
+  <p><code dir="ltr" id="activation-code-value" style="font-size:1.6rem;letter-spacing:0.08em;">{{ code }}</code></p>
+  <p>
+    <button type="button" class="secondary" data-copy-target="activation-code-value"
+            data-copy-label="{{ _('Copy code') }}" data-copy-success-label="{{ _('Copied') }}"
+            data-copy-fallback-label="{{ _('Selected -- press Ctrl+C') }}">{{ _("Copy code") }}</button>
+  </p>
+  <p>{{ _("Valid until %(when)s.", when=format_owner_datetime(expires)) }}</p>
+  <a class="btn" href="{{ url_for('licensing.detail', license_id=license.id) }}">{{ _("Back to the licence") }}</a>
+</div>
+{% endblock %}

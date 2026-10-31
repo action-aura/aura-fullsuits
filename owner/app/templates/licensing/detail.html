@@ -101,6 +101,22 @@
   </div>
   {% endif %}
 
+  {% if customer_accounts_enabled() and license.status in ("ISSUED", "ACTIVE") and has_permission("activation_codes.make") %}
+  <div class="card--action" data-activation-code="1">
+    <h3>{{ _("Activation code") }}</h3>
+    <p>{{ _("For a customer who cannot sign in to the app: a one-time code, valid for 72 hours, that activates THIS licence on one device. It is shown once. Making a new one cancels the old one.") }}</p>
+    {% if recent_auth_ok %}
+    <form method="post" action="{{ url_for('licensing.make_activation_code', license_id=license.id) }}"
+          data-confirm="{{ _('Make an activation code for this licence?') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="secondary">{{ _("Make activation code") }}</button>
+    </form>
+    {% else %}
+    <p><a href="{{ url_for('auth.reauth_form', next=url_for('licensing.detail', license_id=license.id)) }}">{{ _("Make activation code (requires recent authentication)") }}</a></p>
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if has_permission("entitlement_resolution.preview") %}
   <p><a href="{{ url_for('licensing_admin.entitlement_preview', license_id=license.id) }}">{{ _("Preview resolved entitlements") }}</a></p>
   {% endif %}

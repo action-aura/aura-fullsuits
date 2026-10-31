@@ -1,0 +1,25 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Seller agreement") }}{% endblock %}
+{% block content %}
+<div class="card" style="max-width:720px;margin:0 auto;">
+  {% if version is none %}
+  <h2>{{ _("Seller agreement") }}</h2>
+  <p>{{ _("There is no seller agreement to accept right now.") }}</p>
+  {% else %}
+  <h2>{{ version.title }}</h2>
+  {% if not version.lawyer_approved %}<p data-contract-draft="1"><strong>{{ _("DRAFT -- not yet approved by a lawyer") }}</strong></p>{% endif %}
+  <pre style="white-space:pre-wrap;" dir="auto">{{ version.body }}</pre>
+  {% if accepted %}
+  <p data-contract-accepted="1">{{ _("You have accepted this version.") }}</p>
+  {% else %}
+  <form method="post" action="{{ url_for('contracts.seller_accept') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="version_id" value="{{ version.id }}">
+    <input type="hidden" name="text_sha256" value="{{ version.body_sha256 }}">
+    <p><label><input type="checkbox" name="agree"> {{ _("I have read this agreement and I accept it") }}</label></p>
+    <button type="submit" class="btn--primary-action">{{ _("Accept") }}</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

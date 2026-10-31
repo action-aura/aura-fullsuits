@@ -499,6 +499,18 @@ def _apply_new_password(account: CustomerAccount, password: str) -> None:
     )
 
 
+def policy_check(account: CustomerAccount, password: str) -> None:
+    """Public form of the customer-password policy check for the app door."""
+    _policy_check(account, password)
+
+
+def apply_new_password(account: CustomerAccount, password: str) -> None:
+    """Public form of _apply_new_password for the app door (device_flow): sets the
+    hash, clears must-change, bumps session_version (killing website sessions AND
+    app tickets) and revokes invite/reset links. The caller commits."""
+    _apply_new_password(account, password)
+
+
 def set_password_with_token(raw_token: str, password: str, ip: str) -> CustomerAccount:
     """The ONLY way an account becomes ACTIVE (and so the email check): the
     invite / reset link. The token is checked and the password policy applied
@@ -534,6 +546,12 @@ def change_password(session_token: str, current_password: str, new_password: str
     if not _verify_password(current_password, account.password_hash or ""):
         raise SignInFailed()
     _policy_check(account, new_password)
+    if account.password_must_change and _verify_password(new_password, account.password_hash or ""):
+        # The FORCED change exists because a seller typed (and so knows) this password;
+        # "changing" it to itself would clear the flag and leave the account exactly as
+        # exposed as before. A voluntary change to the same password is harmless and
+        # stays allowed.
+        raise policy.PasswordPolicyError("same_as_old")
     _apply_new_password(account, new_password)
     new_token = _create_session(account, ip, user_agent)
     db_session.commit()
@@ -600,8 +618,13 @@ def _record_attempt(email: str, ip: str, success: bool, reason: str | None) -> N
     db_session.commit()
 
 
-def sign_in(email: str, password: str, ip: str, user_agent: str | None):
-    """Returns (raw_session_token, account) or raises SignInFailed / SignInLocked.
+def authenticate(email: str, password: str, ip: str) -> CustomerAccount:
+    """The ONE place a customer's email + password are checked, for every way in
+    (the website's sign-in and the apps' account sign-in). Returns the ACTIVE
+    account or raises SignInFailed / SignInLocked. Takes the three shared lockout
+    slots first and records every failed attempt, so a guess made through the app
+    counts against the same email budget as a guess made through the website.
+    Creates no session and records no success -- the caller does what its door needs.
 
     No user enumeration: every failure raises the same SignInFailed, and an
     unknown email, an INVITED/DISABLED account and a wrong password ALL run
@@ -628,6 +651,19 @@ def sign_in(email: str, password: str, ip: str, user_agent: str | None):
     if not _verify_password(password or "", account.password_hash):
         _record_attempt(normalized, ip, False, "BAD_PASSWORD")
         raise SignInFailed()
+    return account
+
+
+def record_success(account: CustomerAccount, ip: str) -> None:
+    """Writes the successful-attempt row (and commits the caller's pending work)."""
+    _record_attempt(account.email, ip, True, None)
+
+
+def sign_in(email: str, password: str, ip: str, user_agent: str | None):
+    """Returns (raw_session_token, account) or raises SignInFailed / SignInLocked
+    (see authenticate())."""
+    account = authenticate(email, password, ip)
+    normalized = account.email
     if passwords.needs_rehash(account.password_hash):
         account.password_hash = passwords.hash_secret_unchecked(password)
     account.last_sign_in_at = _now()

@@ -44,6 +44,14 @@ PUBLIC_REASON_CODES = frozenset(
         # Public on purpose: the caller already proved the key and the device.
         "TRIAL_REQUIRES_UPDATE",
         "TRIAL_DEVICE_ALREADY_USED",
+        # New customer flow (S5): signing in with an Aura account. One public
+        # failure for any wrong email/password/licence (ACCOUNT_SIGN_IN_FAILED) and
+        # one for any bad ticket or code (ACTIVATION_GRANT_INVALID), so a caller
+        # cannot tell which half was wrong.
+        "ACCOUNT_SIGN_IN_FAILED",
+        "ACTIVATION_GRANT_INVALID",
+        "PASSWORD_POLICY_FAILED",
+        "CONTRACT_ACCEPTANCE_REQUIRED",
         "SERVICE_TEMPORARILY_UNAVAILABLE",
         "RATE_LIMITED",
         # Real-email wave: an installation is over one of its mail-relay caps.

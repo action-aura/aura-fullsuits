@@ -127,6 +127,12 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_CLINIC_ACCOUNTS_ENABLED",
         "OWNER_KYC_KEYS",
         "OWNER_KYC_DIR",
+        # New customer flow (S5): practice-only switch that lets a contract version
+        # the lawyer has NOT approved be published (app/contracts/service.py).
+        "OWNER_CONTRACT_ALLOW_DRAFT",
+        # New customer flow (S4): release channels the website offers an installer from
+        # (comma list, default STABLE); a practice server may add RC.
+        "OWNER_WEBSITE_DOWNLOAD_CHANNELS",
         # Read directly by other modules (not by this Config class), but
         # still legitimate OWNER_* variables -- must not trip the unknown-key
         # check in strict mode.
@@ -384,6 +390,15 @@ class BaseConfig:
     # Where the encrypted blobs live (a docker named volume in production, so a
     # redeploy or a container swap keeps them).
     KYC_DIRECTORY = os.environ.get("OWNER_KYC_DIR", os.path.join(_OWNER_ROOT, "var", "kyc-documents"))
+    # PRACTICE ONLY (set to 1): allows PUBLISHING a contract version a lawyer has not
+    # approved; the app then shows a DRAFT watermark. Unset/anything else == a real
+    # customer can only ever be asked to accept lawyer-approved words.
+    CONTRACT_ALLOW_DRAFT = os.environ.get("OWNER_CONTRACT_ALLOW_DRAFT", "").strip() in ("1", "true", "TRUE", "True")
+    # Website downloads (S4): how long an installer link lives and how many times it
+    # may be opened (a phone retries; a download manager reconnects).
+    WEBSITE_DOWNLOAD_CHANNELS = os.environ.get("OWNER_WEBSITE_DOWNLOAD_CHANNELS", "STABLE").strip() or "STABLE"
+    WEBSITE_DOWNLOAD_TTL_SECONDS = 600
+    WEBSITE_DOWNLOAD_MAX_USES = 3
     # Customer mail: sender address (owner wants noreply@actionaura.me; unset =
     # the normal OWNER_SMTP_FROM) and Reply-To (unset = NO Reply-To header at
     # all; whether support@ is a real mailbox is not known yet).
@@ -617,6 +632,7 @@ class TestingConfig(BaseConfig):
     CUSTOMER_ONBOARDING_ENABLED = False
     CLINIC_ACCOUNTS_ENABLED = False
     KYC_KEYS = ""
+    CONTRACT_ALLOW_DRAFT = False
     KYC_DIRECTORY = os.environ.get("OWNER_TEST_KYC_DIR", os.path.join(_OWNER_ROOT, "var", "kyc-documents-test"))
 
 

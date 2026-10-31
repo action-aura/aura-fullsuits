@@ -221,6 +221,11 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.customer_onboarding.routes import bp as customer_onboarding_bp
 
     app.register_blueprint(customer_onboarding_bp)
+    # New customer flow (S5): the e-contract admin page (Super Admin) and the seller's
+    # own "accept the seller agreement" page. Permission-gated, nothing else changes.
+    from app.contracts.routes import bp as contracts_bp
+
+    app.register_blueprint(contracts_bp)
     app.jinja_env.globals["customer_accounts_enabled"] = lambda: bool(app.config.get("CUSTOMER_ACCOUNTS_ENABLED"))
 
     if app.config.get("EXTERNAL_API_ENABLED"):

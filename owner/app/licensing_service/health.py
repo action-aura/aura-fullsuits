@@ -2,6 +2,8 @@
 minimal and leaks nothing useful to an attacker."""
 from __future__ import annotations
 
+from flask import current_app
+
 from app.extensions import get_engine
 from app.licensing_service.replay import check_replay_protection_available
 from app.licensing_service.signing import get_active_signing_key, verify_signing_key_health
@@ -36,12 +38,18 @@ def public_service_info(signing_key_directory: str) -> dict:
     information -- ever (Part W's explicit list)."""
     health = internal_health(signing_key_directory)
     active_key = get_active_signing_key()
-    return {
+    info = {
         "service": "aura-owner-licensing",
         "status": health["overall"],
         "supported_contract_versions": ["v1"],
         "active_signing_key_id": active_key.key_id if active_key and health["overall"] == "OK" else None,
     }
+    # New customer flow (S5): tells an app which ways of activating this Owner offers.
+    # The key is OMITTED entirely while customer accounts are off, so an Owner that
+    # never turned them on answers exactly as it always did.
+    if current_app.config.get("CUSTOMER_ACCOUNTS_ENABLED"):
+        info["capabilities"] = ["account_activation", "activation_code", "contract_v1", "trial_v1"]
+    return info
 
 
 def is_service_ready(signing_key_directory: str, *, replay_protection_required: bool) -> tuple[bool, str | None]:

@@ -1,0 +1,57 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Contracts") }}{% endblock %}
+{% block content %}
+<h2>{{ _("Contracts") }}</h2>
+<p>{{ _("The text customers accept the first time they sign in to the app, and the text sellers accept in Owner. A version never changes after it is saved: to fix a mistake, save a new version.") }}</p>
+{% if draft_allowed %}
+<p class="card card--critical" data-contract-draft-allowed="1">{{ _("PRACTICE MODE: versions that no lawyer has approved can be published. The app shows them with a DRAFT mark. Never use this for real customers.") }}</p>
+{% endif %}
+
+<div class="card">
+  <table class="responsive-table">
+    <thead><tr>
+      <th>{{ _("For") }}</th><th>{{ _("Language") }}</th><th>{{ _("Version") }}</th><th>{{ _("Title") }}</th>
+      <th>{{ _("Lawyer approved") }}</th><th>{{ _("State") }}</th>
+    </tr></thead>
+    <tbody>
+    {% for v in versions %}
+    <tr>
+      <td>{{ v.audience }}</td><td>{{ v.language }}</td>
+      <td><a href="{{ url_for('contracts.detail', version_id=v.id) }}">{{ v.version_label }}</a></td>
+      <td>{{ v.title }}</td>
+      <td>{{ _("Yes") if v.lawyer_approved else _("No") }}</td>
+      <td>{% if v.retired_at %}{{ _("Retired") }}{% elif v.published_at %}<strong>{{ _("Live") }}</strong>{% else %}{{ _("Draft") }}{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="empty">{{ _("No contract versions yet.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h3>{{ _("New version") }}</h3>
+  <form method="post" action="{{ url_for('contracts.create') }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="contract-audience">{{ _("Who accepts it") }}</label>
+    <select id="contract-audience" name="audience">
+      <option value="CUSTOMER">{{ _("Customer (shop owner, in the app)") }}</option>
+      <option value="SELLER">{{ _("Seller (staff, in Owner)") }}</option>
+    </select>
+    <label for="contract-language">{{ _("Language") }}</label>
+    <select id="contract-language" name="language"><option value="ar">العربية</option><option value="en">English</option></select>
+    <label for="contract-label">{{ _("Version name (for example 2026-11 v1)") }}</label>
+    <input id="contract-label" name="version_label" maxlength="64" required>
+    <label for="contract-title">{{ _("Title") }}</label>
+    <input id="contract-title" name="title" maxlength="255" required>
+    <label for="contract-body">{{ _("Contract text (exactly what the person will read and accept)") }}</label>
+    <textarea id="contract-body" name="body" rows="14" required style="width:100%;"></textarea>
+    <label for="contract-pdf">{{ _("Optional: the lawyer's PDF copy, stored encrypted for the record") }}</label>
+    <input id="contract-pdf" type="file" name="pdf" accept="application/pdf">
+    <p><label><input type="checkbox" name="lawyer_approved"> {{ _("A lawyer has read this exact text and approved it") }}</label></p>
+    <label for="contract-approval-note">{{ _("If approved: who and when") }}</label>
+    <input id="contract-approval-note" name="approval_note" maxlength="500">
+    <div style="margin-top:0.75rem;"><button type="submit">{{ _("Save as a draft") }}</button></div>
+  </form>
+</div>
+{% endblock %}

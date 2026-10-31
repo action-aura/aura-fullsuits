@@ -1,0 +1,78 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ version.title }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('contracts.index') }}">{{ _("All contracts") }}</a></p>
+<h2>{{ version.title }}</h2>
+<div class="card">
+  <dl>
+    <dt>{{ _("For") }}</dt><dd>{{ version.audience }} / {{ version.language }}</dd>
+    <dt>{{ _("Version") }}</dt><dd>{{ version.version_label }}</dd>
+    <dt>{{ _("State") }}</dt>
+    <dd>{% if version.retired_at %}{{ _("Retired") }}{% elif version.published_at %}<strong>{{ _("Live") }}</strong>{% else %}{{ _("Draft") }}{% endif %}</dd>
+    <dt>{{ _("Lawyer approved") }}</dt>
+    <dd>{% if version.lawyer_approved %}{{ _("Yes") }}{% if version.lawyer_approval_note %} -- {{ version.lawyer_approval_note }}{% endif %}{% else %}{{ _("No") }}{% endif %}</dd>
+    <dt>{{ _("Text fingerprint (SHA-256)") }}</dt><dd><code dir="ltr">{{ version.body_sha256 }}</code></dd>
+    {% if version.pdf_sha256 %}
+    <dt>{{ _("PDF copy") }}</dt>
+    <dd><a href="{{ url_for('contracts.pdf', version_id=version.id) }}">{{ _("Download") }}</a> (<code dir="ltr">{{ version.pdf_sha256 }}</code>)</dd>
+    {% endif %}
+  </dl>
+  <pre style="white-space:pre-wrap;" dir="auto">{{ version.body }}</pre>
+</div>
+
+{% if not version.published_at %}
+<div class="card--action">
+  {% if not version.lawyer_approved %}
+  <form method="post" action="{{ url_for('contracts.approve', version_id=version.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="approval-note">{{ _("A lawyer approved this exact text -- who and when") }}</label>
+    <input id="approval-note" name="approval_note" maxlength="500" required>
+    <button type="submit" class="secondary">{{ _("Mark as approved by a lawyer") }}</button>
+  </form>
+  {% if draft_allowed %}
+  <p data-contract-draft-allowed="1">{{ _("PRACTICE MODE: this can be published without a lawyer. The app will show it with a DRAFT mark.") }}</p>
+  {% endif %}
+  {% endif %}
+  {% if recent_auth_ok %}
+  <form method="post" action="{{ url_for('contracts.publish', version_id=version.id) }}"
+        data-confirm="{{ _('Publish this version? It replaces the live one for this audience and language.') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn--primary-action">{{ _("Publish") }}</button>
+  </form>
+  {% else %}
+  <p><a href="{{ url_for('auth.reauth_form', next=url_for('contracts.detail', version_id=version.id)) }}">{{ _("Publish (requires recent authentication)") }}</a></p>
+  {% endif %}
+</div>
+{% elif not version.retired_at %}
+<div class="card--action">
+  {% if recent_auth_ok %}
+  <form method="post" action="{{ url_for('contracts.retire', version_id=version.id) }}"
+        data-confirm="{{ _('Retire this version? Nobody will be asked to accept it any more.') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="danger">{{ _("Retire") }}</button>
+  </form>
+  {% else %}
+  <p><a href="{{ url_for('auth.reauth_form', next=url_for('contracts.detail', version_id=version.id)) }}">{{ _("Retire (requires recent authentication)") }}</a></p>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>{{ _("Who accepted this version") }} ({{ acceptances|length }})</h3>
+  <p><a href="{{ url_for('contracts.version_evidence', version_id=version.id) }}">{{ _("Download the evidence (JSON)") }}</a></p>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("When") }}</th><th>{{ _("Who") }}</th><th>{{ _("From address") }}</th><th>{{ _("Device") }}</th><th>{{ _("Everything they accepted") }}</th></tr></thead>
+    <tbody>
+    {% for a in acceptances %}
+    <tr>
+      <td>{{ format_owner_datetime(a.accepted_at) }}</td><td>{{ a.email_snapshot }}</td><td>{{ a.ip or "-" }}</td>
+      <td><code dir="ltr">{{ (a.device_key_fingerprint or "-")[:12] }}</code></td>
+      <td>{% if a.customer_id %}<a href="{{ url_for('contracts.customer_evidence', customer_id=a.customer_id) }}">{{ _("Download (JSON)") }}</a>{% else %}<a href="{{ url_for('contracts.seller_evidence', staff_user_id=a.staff_user_id) }}">{{ _("Download (JSON)") }}</a>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="empty">{{ _("Nobody yet.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

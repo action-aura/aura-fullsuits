@@ -169,3 +169,5 @@ from app.models.cash_closing import (  # noqa: F401
 from app.models.report_snapshots import ReportSnapshot  # noqa: F401
 from app.models.sync import SyncEvent  # noqa: F401
 from app.models.release_distribution import ReleaseDownloadAuthorization  # noqa: F401
+from app.models.account_activation import CustomerActivationGrant  # noqa: F401
+from app.models.contracts import ContractVersion, ContractAcceptance  # noqa: F401

@@ -12,10 +12,12 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timezone
 
+from flask import current_app
 from sqlalchemy import select
 
 from app.audit.services import record as audit_record
 from app.commercial_ops.activation_policy import create_pending_activation, resolve_activation_mode
+from app.customer_accounts import device_flow
 from app.commercial_ops.device_slot_ops import resolve_effective_device_limit
 from app.extensions import db_session
 from app.installations.services import count_slot_consuming_installations
@@ -44,9 +46,15 @@ class ActivationRejected(Exception):
 
 REQUIRED_FIELDS = (
     "contract_version", "request_id", "correlation_id", "timestamp", "nonce", "product_code", "platform",
-    "app_version", "installation_id", "device_public_key", "device_public_key_algorithm", "license_key",
+    "app_version", "installation_id", "device_public_key", "device_public_key_algorithm",
     "idempotency_key", "signature",
 )
+
+# New customer flow (S5): a device proves which licence it may activate with EXACTLY
+# ONE of these (the plan's "one credential per request" rule: two would let a
+# half-valid one hide behind a good one, and the audit trail could not say which
+# authorised the activation).
+CREDENTIAL_FIELDS = ("license_key", "account_ticket", "activation_code")
 
 
 def _validate_shape(body: dict) -> None:
@@ -57,6 +65,13 @@ def _validate_shape(body: dict) -> None:
             raise ActivationRejected("INVALID_REQUEST")
     if body["contract_version"] not in SUPPORTED_CONTRACT_VERSIONS:
         raise ActivationRejected("UNSUPPORTED_CONTRACT_VERSION")
+    given = [name for name in CREDENTIAL_FIELDS if body.get(name) not in (None, "")]
+    if len(given) != 1:
+        raise ActivationRejected("INVALID_REQUEST")
+    if not all(isinstance(body[name], str) for name in given):
+        raise ActivationRejected("INVALID_REQUEST")
+    if given[0] == "account_ticket" and not isinstance(body.get("license_public_id"), str):
+        raise ActivationRejected("INVALID_REQUEST")
 
 
 def _signable_fields(body: dict) -> dict:
@@ -74,6 +89,41 @@ def _safe_request_fingerprint(body: dict) -> str:
         if k in ("product_code", "platform", "app_version", "release_channel", "installation_id", "device_public_key")
     }
     return canonicalize(stable)
+
+
+def _resolve_license(body: dict, source_ip: str | None, config: dict):
+    """Returns (licence row, grant or None). Raises ActivationRejected. The
+    credential (key, ticket or code) lives only in locals of this function."""
+    if body.get("license_key"):
+        # Steps 5-8 as always: normalize, HMAC, locate. The plaintext key lives ONLY
+        # in this local variable, for exactly these lines.
+        submitted_key = body["license_key"].strip().upper()
+        computed_hmac = hash_license_secret(submitted_key, config["license_pepper"])
+        license_row = db_session.execute(select(License).where(License.key_secret_hmac == computed_hmac)).scalars().first()
+        submitted_key = None  # noqa: F841 -- explicitly drop the reference the instant it's no longer needed
+        del computed_hmac
+        if license_row is None:
+            _log_rejected_request(body, source_ip, "LICENSE_NOT_FOUND")
+            raise ActivationRejected("LICENSE_NOT_FOUND")
+        return license_row, None
+
+    # Account tickets and activation codes exist only while customer accounts are on
+    # (OWNER_CUSTOMER_ACCOUNTS_ENABLED): an Owner that never enabled them behaves
+    # exactly as before.
+    if not current_app.config.get("CUSTOMER_ACCOUNTS_ENABLED"):
+        _log_rejected_request(body, source_ip, "ACTIVATION_GRANT_INVALID")
+        raise ActivationRejected("ACTIVATION_GRANT_INVALID")
+    try:
+        if body.get("account_ticket"):
+            fingerprint = device_identity.fingerprint_of(body["device_public_key"])
+            return device_flow.resolve_ticket_for_activation(body["account_ticket"], body["license_public_id"], fingerprint)
+        return device_flow.resolve_code_for_activation(body["activation_code"], config["license_pepper"])
+    except device_flow.GrantInvalid:
+        _log_rejected_request(body, source_ip, "ACTIVATION_GRANT_INVALID")
+        raise ActivationRejected("ACTIVATION_GRANT_INVALID")
+    except device_flow.ContractRequired:
+        _log_rejected_request(body, source_ip, "CONTRACT_ACCEPTANCE_REQUIRED")
+        raise ActivationRejected("CONTRACT_ACCEPTANCE_REQUIRED")
 
 
 def process_activation(body: dict, *, source_ip: str | None, config: dict) -> dict:
@@ -104,16 +154,12 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         _log_rejected_request(body, source_ip, "INVALID_SIGNATURE")
         raise ActivationRejected("INVALID_SIGNATURE")
 
-    # Steps 5-8: normalize, HMAC, constant-time compare, locate -- the
-    # plaintext key lives ONLY in this local variable, for exactly these lines.
-    submitted_key = body["license_key"].strip().upper()
-    computed_hmac = hash_license_secret(submitted_key, config["license_pepper"])
-    license_row = db_session.execute(select(License).where(License.key_secret_hmac == computed_hmac)).scalars().first()
-    submitted_key = None  # noqa: F841 -- explicitly drop the reference the instant it's no longer needed
-    del computed_hmac
-    if license_row is None:
-        _log_rejected_request(body, source_ip, "LICENSE_NOT_FOUND")
-        raise ActivationRejected("LICENSE_NOT_FOUND")
+    # Steps 5-8: find the licence this request is allowed to activate -- by licence
+    # key (original), by an account ticket the person got by signing in with their
+    # Aura account, or by an activation code staff made. One public failure for each
+    # kind (LICENSE_NOT_FOUND / ACTIVATION_GRANT_INVALID): the caller cannot tell
+    # which half was wrong.
+    license_row, grant = _resolve_license(body, source_ip, config)
 
     # Steps 9-11: product / platform / release channel
     product = db_session.execute(select(Product).where(Product.product_code == body["product_code"])).scalars().first()
@@ -372,6 +418,17 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
     record_pin_event(
         pin_outcome, installation=installation, license_id=locked_license.id, correlation_id=body.get("correlation_id")
     )
+
+    # New customer flow (S5): an account ticket / activation code is spent HERE --
+    # late, inside this transaction, in one conditional UPDATE. Late so that a
+    # refusal above (device limit, deactivated installation) or the trial refusal
+    # just below rolls it back and the person can try again; conditional so that two
+    # racing activations with one ticket cannot both pass.
+    if grant is not None:
+        try:
+            device_flow.consume_grant(grant)
+        except device_flow.GrantInvalid:
+            raise ActivationRejected("ACTIVATION_GRANT_INVALID")
 
     # New customer flow (S2): a licence that belongs to a 7-day trial starts the
     # trial's clock at the FIRST device that gets this far, under the licence row
