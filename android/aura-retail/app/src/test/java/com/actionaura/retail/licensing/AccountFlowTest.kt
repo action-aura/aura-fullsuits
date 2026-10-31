@@ -128,13 +128,24 @@ class AccountFlowTest {
     fun `steps come in the only allowed order`() {
         val s = session()
         assertThat(s.nextStep()).isEqualTo(AccountStep.PASSWORD)
-        assertThat(s.canActivate()).isFalse()
         s.markPasswordChanged()
         assertThat(s.nextStep()).isEqualTo(AccountStep.CONTRACT)
-        assertThat(s.canActivate()).isFalse()          // password done, contract not
         s.markContractAccepted()
         assertThat(s.nextStep()).isEqualTo(AccountStep.ACTIVATE)
+    }
+
+    @Test
+    fun `activation is refused until the password is changed and the contract accepted`() {
+        val s = session()
+        assertThat(s.canActivate()).isFalse()
+        s.markPasswordChanged()
+        assertThat(s.canActivate()).isFalse()          // password done, contract not
+        s.markContractAccepted()
         assertThat(s.canActivate()).isTrue()
+        // and the other way round: the contract alone is not enough
+        val t = session()
+        t.markContractAccepted()
+        assertThat(t.canActivate()).isFalse()
     }
 
     @Test
@@ -190,6 +201,7 @@ class AccountFlowTest {
     fun `a text not measured yet is never at the end`() {
         // Compose reports maxValue = Int.MAX_VALUE before the first layout.
         assertThat(ContractGate.reachedEnd(0, Int.MAX_VALUE)).isFalse()
+        assertThat(ContractGate.reachedEnd(Int.MAX_VALUE, Int.MAX_VALUE)).isFalse()   // the sentinel itself is never "the end"
         assertThat(ContractGate.reachedEnd(0, 0)).isTrue()          // fits without scrolling
         assertThat(ContractGate.reachedEnd(100, 1000)).isFalse()
         assertThat(ContractGate.reachedEnd(998, 1000)).isTrue()
