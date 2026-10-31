@@ -151,6 +151,27 @@ def test_trial_cutoff_and_days_left_arithmetic():
     assert trial_days_left(TERM_END, CUTOFF_UTC + timedelta(days=3)) == 0
 
 
+def test_a_seven_day_trial_shows_seven_on_day_zero_not_eight():
+    """rc.19, dress rehearsal 2026-10-31: the banner said '8 days left' on day 0 of a 7-day trial.
+    VERDICT: the client is right. It counts the term_end day itself (Amman end of day), so the number
+    is decided by the end date Owner signs. A 7-day trial created on Amman day D is D..D+6, i.e.
+    term_end = D+6 -> 7 on day 0 (at ANY hour of D). The rehearsal's Owner signed D+7 (8 calendar days
+    inclusive), and the client correctly said 8. Boundary pinned on both sides so neither half drifts:
+    changing the client to say 7 for D+7 would break the last-day check below (term_end day = 1 left)."""
+    from datetime import date
+    start = date(2026, 10, 31)                     # day 0, Amman
+    good_end = start + timedelta(days=6)           # 2026-11-06: what a 7-day trial must carry
+    amman_midnight = datetime(2026, 10, 30, 21, 0, tzinfo=UTC)     # 00:00 on D in Amman (UTC+3)
+    assert trial_days_left(good_end, amman_midnight + timedelta(seconds=1)) == 7     # first second of day 0
+    assert trial_days_left(good_end, amman_midnight + timedelta(hours=23, minutes=59)) == 7   # last minute of day 0
+    assert trial_days_left(good_end, amman_midnight + timedelta(days=1, seconds=1)) == 6       # day 1
+    assert trial_days_left(good_end, amman_midnight + timedelta(days=6, hours=12)) == 1        # the last day
+    assert trial_days_left(good_end, amman_midnight + timedelta(days=7)) == 0                  # over at 00:00 on D+7
+    # What the rehearsal's Owner signed (term_end = D+7) is an 8-day trial and is shown as 8: that is the
+    # server's end date being a day late, not the client counting wrong.
+    assert trial_days_left(start + timedelta(days=7), amman_midnight + timedelta(hours=13)) == 8
+
+
 def test_cutoff_survives_a_machine_with_no_timezone_database(monkeypatch):
     # Windows without tzdata / Chaquopy: the zone lookup fails; the lock must
     # still land on Amman midnight, never raise on the selling path.
