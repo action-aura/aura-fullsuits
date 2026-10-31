@@ -175,6 +175,7 @@ def sign_in(*, email: str, password: str, ip: str, fingerprint: str, product_cod
         trial = views.trial_view(r.pilot, today)
         licences.append({
             "license_public_id": str(r.license.id), "product_code": r.product.product_code, "plan_code": r.plan.plan_code,
+            **views.plan_names(r.plan),
             "branch_label": r.subscription.branch_label, "trial": {"state": trial["state"], "ends_on": trial["ends_on"]},
         })
     audit_record(

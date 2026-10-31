@@ -272,3 +272,47 @@ def test_a_paid_trial_makes_the_customer_active_and_the_page_shows_paid_until(ap
         db_session.commit()
     confirm(app, w, sale2)
     assert _lifecycle(app, other.customer_id) == "SUSPENDED"
+
+
+# ------------------------------------------ 6. the sign-in names the package
+
+from tests.test_account_activation import world  # noqa: E402,F401 -- a fixture: a trial customer with an account
+
+
+def test_account_sign_in_carries_the_package_name_in_both_languages_next_to_the_code(app, client, world):
+    from tests.conftest import make_device_keypair
+    from tests.test_account_activation import sign_in_ok
+
+    with app.app_context():
+        from sqlalchemy import select
+
+        from app.extensions import db_session
+        from app.models.catalog import Plan
+
+        plan = db_session.execute(select(Plan).where(Plan.id == world_plan_id(world))).scalar_one()
+        plan.name = "Aura Retail - Package 1 (yearly)"  # the launch package's stored name
+        db_session.commit()
+    body = sign_in_ok(client, make_device_keypair(), world)
+    (licence,) = body["licences"]
+    assert licence["plan_name"] == "Aura Retail - Package 1 (yearly)"
+    assert licence["plan_name_ar"] == "الباقة 1 (سنوية)"  # real Arabic, not the English again
+    assert licence["plan_code"].startswith("NF_")  # allow twin: the code is still there for code that keys on it
+    # a hand-made plan with no Arabic entry: the app still gets a name (the stored one), never nothing
+    with app.app_context():
+        from sqlalchemy import select
+
+        from app.extensions import db_session
+        from app.models.catalog import Plan
+
+        db_session.execute(select(Plan).where(Plan.id == world_plan_id(world))).scalar_one().name = "Corner Custom Plan"
+        db_session.commit()
+    (licence,) = sign_in_ok(client, make_device_keypair(), world)["licences"]
+    assert licence["plan_name"] == "Corner Custom Plan" and licence["plan_name_ar"] == "Corner Custom Plan"
+
+
+def world_plan_id(world):
+    from app.extensions import db_session
+    from app.models.licensing import License
+    import uuid
+
+    return db_session.get(License, uuid.UUID(str(world["licence_id"]))).plan_id

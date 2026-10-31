@@ -21,6 +21,20 @@ from app.models.staff import StaffUser
 from app.models.subscriptions import Subscription
 from app.operational_reports.periods import jordan_today
 
+def plan_names(plan) -> dict:
+    """The package's display name in both languages, for the apps' account sign-in and the
+    website summary. Rehearsal 2026-10-31: the shop app printed the raw code
+    "AURA_RETAIL_P1_YEARLY" because Owner sent only `plan_code`. `plan_name` is the stored
+    (English) name; `plan_name_ar` is that name looked up in the Arabic catalogue (a plan the
+    owner typed by hand has no translation and comes back unchanged, which the app then shows
+    as it is). `plan_code` stays alongside for code that keys on it."""
+    from flask_babel import force_locale, gettext
+
+    with force_locale("ar"):
+        arabic = gettext(plan.name)
+    return {"plan_name": plan.name, "plan_name_ar": arabic}
+
+
 # A licence the customer can still be shown / still download an installer for:
 # a trial, a paid shop, and a shop whose term lapsed (a locked shop must be able
 # to reinstall). Suspended / cancelled / revoked ones are not listed.
