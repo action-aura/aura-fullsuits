@@ -46,6 +46,12 @@ EVENT_TYPES = frozenset(
         # name THIS computer's registry device id, so this computer cannot sign
         # shop-authority changes yet (authority.local_signer_or_none).
         "REGISTRY_DEVICE_ID_NOT_ATTESTED",
+        # New customer flow (2026-10-31): details carry a reason code at most --
+        # never the e-mail, the password or the ticket.
+        "ACCOUNT_SIGN_IN_SUCCEEDED",
+        "ACCOUNT_SIGN_IN_FAILED",
+        "ACCOUNT_PASSWORD_CHANGED",
+        "CONTRACT_ACCEPTED",
     }
 )
 

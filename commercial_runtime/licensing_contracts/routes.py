@@ -32,8 +32,9 @@ from .activation import (
     make_trust_manifest_refresher,
     perform_activation,
 )
+from .account_routes import register_account_routes
 from .checkin_scheduler import LicenseCheckInScheduler
-from .client import LicensingClient, LicensingClientConfig
+from .client import ActivationCode, LicensingClient, LicensingClientConfig
 from .deactivation import DeactivationFailed, ingest_deactivation_response, perform_deactivation
 from .events import LicensingEventRecorder
 from .state_repository import LicenseStateRepository
@@ -192,16 +193,11 @@ def make_licensing_blueprint(
             payload["detail"] = "Owner licensing URL is not configured."
         return jsonify(payload), 200
 
-    @bp.route("/activate", methods=["POST"])
-    def activate():
-        if not owner_base_url:
-            return jsonify({"reason_code": "SERVICE_TEMPORARILY_UNAVAILABLE", "detail": "Owner licensing URL is not configured."}), 503
-
-        body = request.get_json(silent=True) or {}
-        license_key = body.get("license_key")
-        if not license_key or not isinstance(license_key, str):
-            return jsonify({"reason_code": "INVALID_REQUEST", "detail": "license_key is required."}), 400
-
+    def _run_activation(*, license_key=None, credential=None):
+        """The one activation path. `/activate` (a typed key or an activation
+        code) and `/account/activate` (an Aura-account ticket) both end here, so
+        verification, persistence, the post-activation hook and every error
+        mapping are identical -- the two entrances can never drift apart."""
         state_repository, event_recorder, trust_store, signer, client = _build_context()
 
         if not signer.has_key():
@@ -219,6 +215,7 @@ def make_licensing_blueprint(
                 app_version=app_version,
                 release_channel=release_channel,
                 license_key=license_key,
+                credential=credential,
                 device_public_key_fingerprint=_device_fingerprint(signer),
                 # Same last-resort recovery the Android path gets below: an
                 # install stranded by a DISCONTINUOUS Owner rotation cannot be
@@ -231,16 +228,39 @@ def make_licensing_blueprint(
             return jsonify({"result": "PENDING", "reason_code": exc.reason_code, "installation_id": exc.installation_id, "detail": str(exc)}), 202
         except ActivationFailed as exc:
             return jsonify({"reason_code": exc.reason_code, "detail": str(exc)}), 400
+
+        _run_activation_hook(on_activation_success)
+        return jsonify({"result": "SUCCESS", "state": result.state.value, "installation_id": result.owner_installation_id}), 200
+
+    @bp.route("/activate", methods=["POST"])
+    def activate():
+        if not owner_base_url:
+            return jsonify({"reason_code": "SERVICE_TEMPORARILY_UNAVAILABLE", "detail": "Owner licensing URL is not configured."}), 503
+
+        body = request.get_json(silent=True) or {}
+        license_key = body.get("license_key")
+        activation_code = body.get("activation_code")
+        have_key = bool(license_key) and isinstance(license_key, str)
+        have_code = bool(activation_code) and isinstance(activation_code, str)
+        # Exactly one: Owner accepts exactly one credential per request, and
+        # a page that sent both would be guessing which one it meant.
+        if have_key == have_code:
+            return jsonify({"reason_code": "INVALID_REQUEST", "detail": "Give a license_key or an activation_code, not both or neither."}), 400
+
+        try:
+            return _run_activation(
+                license_key=license_key if have_key else None,
+                credential=ActivationCode(activation_code.strip()) if have_code else None,
+            )
         finally:
             # Discard the local references to the full license key as soon
             # as this request is done with them (Part G) -- defense in
             # depth on top of perform_activation()'s own clearing.
             license_key = None
-            if "license_key" in body:
-                body["license_key"] = None
-
-        _run_activation_hook(on_activation_success)
-        return jsonify({"result": "SUCCESS", "state": result.state.value, "installation_id": result.owner_installation_id}), 200
+            activation_code = None
+            for secret_field in ("license_key", "activation_code"):
+                if secret_field in body:
+                    body[secret_field] = None
 
     @bp.route("/check-in", methods=["POST"])
     def check_in():
@@ -298,6 +318,17 @@ def make_licensing_blueprint(
         except DeactivationFailed as exc:
             return jsonify({"reason_code": exc.reason_code, "detail": str(exc)}), 400
         return jsonify({"result": "SUCCESS", "state": new_state.value}), 200
+
+    register_account_routes(
+        bp,
+        build_context=_build_context,
+        run_activation=_run_activation,
+        product_code=product_code,
+        platform=platform,
+        app_version=app_version,
+        owner_configured=bool(owner_base_url),
+        internal_shared_secret=internal_shared_secret,
+    )
 
     if internal_shared_secret:
         _register_internal_sync_routes(

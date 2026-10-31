@@ -152,8 +152,9 @@ def perform_activation(
     platform: str,
     app_version: str,
     release_channel: Optional[str],
-    license_key: str,
     device_public_key_fingerprint: str,
+    license_key: Optional[str] = None,
+    credential=None,
     anchor_recovery: Optional[Callable[[], bool]] = None,
     registry_device_id_provider: Optional[Callable[[], Optional[str]]] = None,
 ) -> ActivationResult:
@@ -161,7 +162,12 @@ def perform_activation(
     HTTP call. Calls Owner directly, then delegates to
     ingest_activation_response() for verification and persistence -- the
     exact same code Android's sync path uses for that half, so the two
-    platforms can never verify differently."""
+    platforms can never verify differently.
+
+    Exactly ONE of `license_key` (the original typed key) or `credential`
+    (client.AccountTicket | client.ActivationCode | client.LicenseKey -- the new
+    customer flow, 2026-10-31) identifies what is being activated. Whichever it
+    is, it is cleared in `finally`."""
     event_recorder.record("ACTIVATION_STARTED")
 
     client_side_installation_id = str(uuid.uuid4())
@@ -175,7 +181,7 @@ def perform_activation(
             release_channel=release_channel,
             installation_id=client_side_installation_id,
             device_public_key_b64=signer.get_public_key_b64(),
-            license_key=license_key,
+            **({"credential": credential} if credential is not None else {"license_key": license_key}),
             idempotency_key=idempotency_key,
             signer=signer,
             # AUDIT-033 fix round (verifier V finding #1): activation is the
@@ -188,6 +194,8 @@ def perform_activation(
         raise ActivationFailed(exc.reason_code, str(exc)) from exc
     finally:
         license_key = None  # noqa: F841 -- discard the local reference; caller owns clearing its own copy
+        if credential is not None:
+            credential.clear()
 
     return ingest_activation_response(
         response,

@@ -51,6 +51,65 @@ class MalformedResponseError(LicensingClientError):
     pass
 
 
+class LicenseKey:
+    """The full licence key a person typed. A credential object rather than a
+    bare string so every code path that handles one has the same
+    `body_fields()` / `clear()` contract (new customer flow, 2026-10-31)."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value: str):
+        self._value = value
+
+    def body_fields(self) -> dict:
+        return {"license_key": self._value}
+
+    def clear(self) -> None:
+        self._value = None
+
+    def __repr__(self) -> str:  # never let a key reach a log through repr()
+        return "LicenseKey(<redacted>)"
+
+
+class AccountTicket:
+    """A single-use Owner ticket proving 'this person signed in with their
+    Aura account on THIS device', plus the licence they picked."""
+
+    __slots__ = ("_ticket", "_license_public_id")
+
+    def __init__(self, ticket: str, license_public_id: str):
+        self._ticket = ticket
+        self._license_public_id = license_public_id
+
+    def body_fields(self) -> dict:
+        return {"account_ticket": self._ticket, "license_public_id": self._license_public_id}
+
+    def clear(self) -> None:
+        self._ticket = None
+        self._license_public_id = None
+
+    def __repr__(self) -> str:
+        return "AccountTicket(<redacted>)"
+
+
+class ActivationCode:
+    """A one-time activation code a staff member made for a customer."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value: str):
+        self._value = value
+
+    def body_fields(self) -> dict:
+        return {"activation_code": self._value}
+
+    def clear(self) -> None:
+        self._value = None
+
+    def __repr__(self) -> str:
+        return "ActivationCode(<redacted>)"
+
+
 def _new_nonce() -> str:
     return secrets.token_urlsafe(NONCE_LENGTH)
 
@@ -103,11 +162,21 @@ class LicensingClient:
         release_channel: Optional[str],
         installation_id: str,
         device_public_key_b64: str,
-        license_key: str,
         idempotency_key: str,
         signer: DeviceSigner,
+        license_key: Optional[str] = None,
         registry_device_id: Optional[str] = None,
+        credential=None,
     ) -> dict:
+        """Exactly ONE of `license_key` (a plain string, the original form) or
+        `credential` (LicenseKey | AccountTicket | ActivationCode) is given.
+        Owner accepts exactly one of `license_key` | `account_ticket` +
+        `license_public_id` | `activation_code` in the body, so sending two is
+        refused here before it can leave the device."""
+        if (license_key is None) == (credential is None):
+            raise ValueError("activate() needs exactly one of license_key or credential")
+        if credential is None:
+            credential = LicenseKey(license_key)
         body = {
             "contract_version": CONTRACT_VERSION,
             "request_id": str(uuid.uuid4()),
@@ -121,7 +190,7 @@ class LicensingClient:
             "installation_id": installation_id,
             "device_public_key": device_public_key_b64,
             "device_public_key_algorithm": "ed25519",
-            "license_key": license_key,
+            **credential.body_fields(),
             "idempotency_key": idempotency_key,
         }
         # AUDIT-033 fix round (verifier V finding #1): ask Owner to pin and
@@ -138,7 +207,10 @@ class LicensingClient:
             # The full license key must never linger in a local variable
             # longer than this call needs it (Part G) -- del is defense in
             # depth on top of the caller's own responsibility to discard it.
-            body["license_key"] = None
+            for secret_field in ("license_key", "account_ticket", "activation_code"):
+                if secret_field in body:
+                    body[secret_field] = None
+            credential.clear()
             del body
 
     def check_in(
@@ -169,6 +241,130 @@ class LicensingClient:
             "idempotency_key": idempotency_key,
         }
         return self._post_signed("/deactivations", body, signer)
+
+    # -- new customer flow (2026-10-31): sign in with an Aura account ---------
+    #
+    # All three are device-signed like every other call here, and all three go
+    # through _post_signed_once: NEVER retried. A retry would re-send a
+    # password (or burn a ticket) the person did not ask to re-send, and the
+    # lockout counters on Owner's side count attempts, so a client that
+    # silently re-tried would lock people out of their own account. A transport
+    # failure goes back to the person, who presses the button again.
+    #
+    # Each returns Owner's JSON body plus `http_status`; like every method here
+    # it does not raise on a business rejection, the CALLER decides from the
+    # body (a `ticket` / `reason_code`).
+
+    def account_sign_in(
+        self,
+        *,
+        email: str,
+        password: str,
+        product_code: str,
+        platform: str,
+        app_version: str,
+        device_public_key_b64: str,
+        signer: DeviceSigner,
+        installation_id: Optional[str] = None,
+    ) -> dict:
+        body = {
+            "contract_version": CONTRACT_VERSION,
+            "request_id": str(uuid.uuid4()),
+            "correlation_id": str(uuid.uuid4()),
+            "timestamp": _now_iso(),
+            "nonce": _new_nonce(),
+            "email": email,
+            "password": password,
+            "product_code": product_code,
+            "platform": platform,
+            "app_version": app_version,
+            "device_public_key": device_public_key_b64,
+            "device_public_key_algorithm": "ed25519",
+        }
+        if installation_id:
+            body["installation_id"] = installation_id
+        try:
+            return self._post_signed_once("/account-sign-ins", body, signer)
+        finally:
+            # The password lived in this dict for the length of one call and
+            # must not outlive it (same rule as the licence key in activate()).
+            body["password"] = None
+            del body
+
+    def change_password(
+        self,
+        *,
+        ticket: str,
+        new_password: str,
+        product_code: str,
+        platform: str,
+        app_version: str,
+        device_public_key_b64: str,
+        signer: DeviceSigner,
+    ) -> dict:
+        body = {
+            "contract_version": CONTRACT_VERSION,
+            "request_id": str(uuid.uuid4()),
+            "correlation_id": str(uuid.uuid4()),
+            "timestamp": _now_iso(),
+            "nonce": _new_nonce(),
+            "ticket": ticket,
+            "new_password": new_password,
+            "product_code": product_code,
+            "platform": platform,
+            "app_version": app_version,
+            "device_public_key": device_public_key_b64,
+            "device_public_key_algorithm": "ed25519",
+        }
+        try:
+            return self._post_signed_once("/account-password-changes", body, signer)
+        finally:
+            body["new_password"] = None
+            body["ticket"] = None
+            del body
+
+    def accept_contract(
+        self,
+        *,
+        ticket: str,
+        contract_version_id: str,
+        text_sha256: str,
+        language: str,
+        product_code: str,
+        platform: str,
+        app_version: str,
+        device_public_key_b64: str,
+        signer: DeviceSigner,
+        installation_id: Optional[str] = None,
+    ) -> dict:
+        """Records that THIS device's person accepted THIS exact text. The
+        `text_sha256` is the hash of the text the screen showed (the client has
+        already checked it against the body Owner sent), and the whole body is
+        covered by the device signature, so the acceptance is evidence of the
+        text, the person's account (via the ticket) and the device."""
+        body = {
+            "contract_version": CONTRACT_VERSION,
+            "request_id": str(uuid.uuid4()),
+            "correlation_id": str(uuid.uuid4()),
+            "timestamp": _now_iso(),
+            "nonce": _new_nonce(),
+            "ticket": ticket,
+            "contract_version_id": contract_version_id,
+            "text_sha256": text_sha256,
+            "language": language,
+            "product_code": product_code,
+            "platform": platform,
+            "app_version": app_version,
+            "device_public_key": device_public_key_b64,
+            "device_public_key_algorithm": "ed25519",
+        }
+        if installation_id:
+            body["installation_id"] = installation_id
+        try:
+            return self._post_signed_once("/contract-acceptances", body, signer)
+        finally:
+            body["ticket"] = None
+            del body
 
     def find_latest_release(
         self,
@@ -372,6 +568,55 @@ class LicensingClient:
         canonical_bytes = canonicalize_bytes(body)
         body_with_signature = {**body, "signature": signer.sign(canonical_bytes)}
         return self._request("POST", path, json_body=body_with_signature)
+
+    def _post_signed_once(self, path: str, body: dict, signer: DeviceSigner) -> dict:
+        """One attempt, no retry, and the HTTP status travels with the answer.
+
+        Account calls need both: a 401/429 carries the business answer (wrong
+        password, locked out) that the retrying `_request` would either retry
+        (429) or flatten, and a 201/204 may carry no body at all."""
+        canonical_bytes = canonicalize_bytes(body)
+        payload = {**body, "signature": signer.sign(canonical_bytes)}
+        canonical_bytes = None  # noqa: F841 -- the bytes hold the password; drop the reference
+        url = self._config.base_url.rstrip("/") + path
+        try:
+            response = self._session.request(
+                "POST",
+                url,
+                json=payload,
+                timeout=self._config.timeout_seconds,
+                verify=self._config.verify_tls,
+                headers={"Content-Type": "application/json"},
+            )
+        except requests.exceptions.Timeout as exc:
+            raise NetworkError("REQUEST_TIMED_OUT", str(exc)) from exc
+        except requests.exceptions.SSLError as exc:
+            raise NetworkError("TLS_VERIFICATION_FAILED", str(exc)) from exc
+        except requests.exceptions.RequestException as exc:
+            raise NetworkError("NETWORK_UNAVAILABLE", str(exc)) from exc
+
+        status = response.status_code
+        if status >= 500:
+            raise NetworkError("SERVICE_TEMPORARILY_UNAVAILABLE", f"HTTP {status}")
+        try:
+            parsed = response.json()
+        except ValueError:
+            parsed = None
+        if not isinstance(parsed, dict):
+            if 200 <= status < 300:
+                parsed = {}
+            elif status == 429:
+                parsed = {"reason_code": "RATE_LIMITED"}
+            else:
+                raise MalformedResponseError("MALFORMED_RESPONSE", f"HTTP {status} without a JSON object body")
+        answer = dict(parsed)
+        answer["http_status"] = status
+        if status == 429:
+            answer.setdefault("reason_code", "RATE_LIMITED")
+            retry_after = (response.headers or {}).get("Retry-After")
+            if retry_after and str(retry_after).isdigit():
+                answer["retry_after_seconds"] = int(retry_after)
+        return answer
 
     def _get(self, path: str) -> dict:
         return self._request("GET", path, json_body=None)
