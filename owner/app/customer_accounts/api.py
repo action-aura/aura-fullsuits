@@ -89,8 +89,19 @@ def _text(body: dict, key: str, limit: int = 1024) -> str:
     return value[:limit] if isinstance(value, str) else ""
 
 
+class _MissingClientIp(Exception):
+    pass
+
+
 def _ip(body: dict) -> str:
-    return service.clean_ip(_text(body, "client_ip", 64)) if body.get("client_ip") else service.clean_ip(request.remote_addr)
+    """The signed client address. The website always sends it; if it is missing the
+    only address we could use is the website server's own, which would put every
+    customer into ONE rate-limit bucket (one attacker locks everybody out) -- so
+    the request is refused instead of guessed."""
+    value = body.get("client_ip")
+    if not isinstance(value, str) or not value.strip():
+        raise _MissingClientIp()
+    return service.clean_ip(value[:64])
 
 
 def _locked(exc: service.SignInLocked):
@@ -108,7 +119,10 @@ def _gated(handler):
         body, early = _gate()
         if early is not None:
             return early
-        return handler(body)
+        try:
+            return handler(body)
+        except _MissingClientIp:
+            return _json({"ok": False, "error": "invalid_request"}, 400)
     return view
 
 

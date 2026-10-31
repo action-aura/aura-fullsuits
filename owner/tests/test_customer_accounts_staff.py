@@ -340,16 +340,6 @@ def test_the_branch_name_is_edited_on_the_licence_page_and_hidden_while_off(app,
         assert db_session.get(Subscription, sub.id).branch_label is None
 
 
-def test_a_seller_without_subscription_update_cannot_name_a_branch(app, client, seeded):
-    viewer = make_staff(app, "viewer@example.com", role_codes=["VIEWER"])
-    admin = make_staff(app, "admin@example.com", super_admin=True)
-    lic_id, _key = make_license(app, admin)
-    _enable(app)
-    force_login(client, app, viewer)
-    token = get_csrf(client.get("/auth/reauth").get_data(as_text=True))
-    assert client.post(f"/licenses/{lic_id}/branch-label", data={"csrf_token": token, "branch_label": "Hack"}).status_code == 403
-
-
 # ------------------------------------------------------------------ permissions
 
 def test_the_four_account_permissions_are_seeded_with_the_owners_role_split(app, seeded):
@@ -368,3 +358,199 @@ def test_the_four_account_permissions_are_seeded_with_the_owners_role_split(app,
     assert held["VIEWER"] == set() and held["SUPER_ADMIN"] == "*"
     # lost-phone reset stays exactly where it was: nobody gained it here
     assert "installations.replace_device" not in ROLES["SALES_MANAGER"]["permissions"]
+
+
+# ================================================================ fix round
+
+def _licence_for(app, admin, assigned_to):
+    lic_id, _key = make_license(app, admin)
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.customers import Customer
+        from app.models.licensing import License
+
+        lic = db_session.get(License, lic_id)
+        db_session.get(Customer, lic.customer_id).assigned_sales_staff_id = assigned_to
+        db_session.commit()
+    return lic_id
+
+
+def _branch_label(app, lic_id):
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.licensing import License
+
+        return db_session.get(License, lic_id).subscription.branch_label
+
+
+def _staff_with_only(app, email, permission_codes):
+    """A staff user on a one-off role holding exactly `permission_codes`. Used because
+    SALES lost subscriptions.update on release/seller-launch-owner (5302752f: the
+    free buttons moved to SALES_MANAGER), so no stock seller role reaches the
+    customer-scope check any more. The scope rule itself still binds anyone who
+    holds subscriptions.update without customers.view_all, and this proves it."""
+    staff_id = make_staff(app, email)
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.staff import Permission, Role, RolePermission, StaffRoleAssignment
+
+        role = Role(code="TEST_SUBS_EDITOR_" + email.split("@")[0].upper(), name="Test editor", description="test", is_system_role=False)
+        db_session.add(role)
+        db_session.flush()
+        for code in permission_codes:
+            perm = db_session.execute(select(Permission).where(Permission.code == code)).scalars().one()
+            db_session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+        db_session.add(StaffRoleAssignment(staff_user_id=staff_id, role_id=role.id))
+        db_session.commit()
+    return staff_id
+
+
+def test_a_staff_member_names_branches_only_for_their_own_customers(app, client, seeded):
+    """M2: the branch route had permission checks but no customer scope, so anyone
+    holding subscriptions.update could rename another seller's branches."""
+    editor = _staff_with_only(app, "editor@example.com", ["subscriptions.update", "customers.view"])
+    other = make_staff(app, "other@example.com", role_codes=["SALES"])
+    admin = make_staff(app, "admin@example.com", super_admin=True)
+    theirs = _licence_for(app, admin, other)
+    mine = _licence_for(app, admin, editor)
+    _enable(app)
+    force_login(client, app, editor)
+    token = get_csrf(client.get("/auth/reauth").get_data(as_text=True))
+    resp = client.post(f"/licenses/{theirs}/branch-label", data={"csrf_token": token, "branch_label": "Hijacked"})
+    assert resp.status_code == 404 and _branch_label(app, theirs) is None  # deny: answers like a missing licence
+    resp = client.post(f"/licenses/{mine}/branch-label", data={"csrf_token": token, "branch_label": "Dabouq"})
+    assert resp.status_code == 302 and _branch_label(app, mine) == "Dabouq"  # allow: their own
+
+
+def test_a_stock_seller_cannot_name_any_branch_since_the_free_buttons_moved(app, client, seeded):
+    """The seller-launch owner decision (5302752f): SALES no longer holds
+    subscriptions.update, so the branch route refuses them outright (403), their
+    own customer included. Pins that this branch's role split and the CA1 route agree."""
+    seller = make_staff(app, "seller@example.com", role_codes=["SALES"])
+    admin = make_staff(app, "admin@example.com", super_admin=True)
+    mine = _licence_for(app, admin, seller)
+    _enable(app)
+    force_login(client, app, seller)
+    token = get_csrf(client.get("/auth/reauth").get_data(as_text=True))
+    assert client.post(f"/licenses/{mine}/branch-label", data={"csrf_token": token, "branch_label": "Dabouq"}).status_code == 403
+    assert _branch_label(app, mine) is None
+
+
+def test_a_viewer_without_subscription_update_cannot_name_a_branch(app, client, seeded):
+    """The permission half only (the customer-scope half is the test above)."""
+    viewer = make_staff(app, "viewer@example.com", role_codes=["VIEWER"])
+    admin = make_staff(app, "admin@example.com", super_admin=True)
+    lic_id, _key = make_license(app, admin)
+    _enable(app)
+    force_login(client, app, viewer)
+    token = get_csrf(client.get("/auth/reauth").get_data(as_text=True))
+    assert client.post(f"/licenses/{lic_id}/branch-label", data={"csrf_token": token, "branch_label": "Hack"}).status_code == 403
+    assert _branch_label(app, lic_id) is None
+
+
+def test_staff_account_posts_need_a_csrf_token_and_only_four_blueprints_are_csrf_exempt(app, client, seeded):
+    """E12: the website API is exempt (its HMAC is its CSRF), the staff routes must not be."""
+    make_staff(app, "admin@example.com", super_admin=True, mfa=True)
+    _enable(app)
+    cid = new_customer(app)
+    login_and_verify_mfa(client, "admin@example.com")
+    resp = client.post(f"/customers/{cid}/website-account/create", data={"email": "a@b.example", "language": "en"})
+    assert resp.status_code == 400 and not _accounts(app)  # deny: refused, nothing written
+    allowed = client.post(f"/customers/{cid}/website-account/create",
+                          data={"csrf_token": _csrf(client, cid), "email": "a@b.example", "language": "en"})
+    assert allowed.status_code == 200 and len(_accounts(app)) == 1  # allow: same request with a token
+    exempt = {getattr(b, "name", b) for b in app.extensions["csrf"]._exempt_blueprints}
+    assert exempt == {"api_external_licensing", "sync", "website_account_api", "website_intake"}
+
+
+def test_the_arabic_panel_and_link_page_are_translated_and_right_to_left(app, client, seeded):
+    make_staff(app, "admin@example.com", super_admin=True, mfa=True)
+    _enable(app)
+    cid = new_customer(app)
+    login_and_verify_mfa(client, "admin@example.com")
+    client.get("/locale/ar?next=/")
+    page = client.get(f"/customers/{cid}").get_data(as_text=True)
+    assert 'dir="rtl"' in page
+    panel = page[page.index('id="website-account"'):]
+    panel = panel[:panel.index("</div>")]
+    for english in ("Website account", "This customer has no website account", "Create website account",
+                    "Email address of the person", "Language of the emails"):
+        assert english not in panel, english
+    token = get_csrf(page)
+    resp = client.post(f"/customers/{cid}/website-account/create",
+                       data={"csrf_token": token, "email": "ar@shop.example", "language": "ar"})
+    html = resp.get_data(as_text=True)
+    assert resp.status_code == 200 and "/ar/account/set-password/#t=" in html
+    assert "Copy this one-time link" not in html and "Back to the customer" not in html
+    detail = client.get(f"/customers/{cid}").get_data(as_text=True)
+    panel = detail[detail.index('id="website-account"'):]
+    for english in ("Invited -- password not set yet", "Send the invitation again", "Sign out everywhere", "Last sign-in"):
+        assert english not in panel, english
+    assert '<bdi dir="ltr">ar@shop.example</bdi>' in panel
+
+
+def _active_for(app, seller, email):
+    cid = _assigned_customer(app, seller)
+    with app.app_context():
+        from app.customer_accounts import service
+        from tests.test_customer_accounts_service import invite
+
+        service.set_password_with_token(token_of(invite(app, cid, email)), GOOD, IP)
+    return cid
+
+
+def _tokens(app, kind):
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.customer_accounts import CustomerAccountToken
+
+        return db_session.execute(select(func.count()).select_from(CustomerAccountToken)
+                                  .where(CustomerAccountToken.kind == kind)).scalar_one()
+
+
+def test_with_email_off_only_support_and_super_admin_are_shown_a_reset_link(app, client, seeded):
+    """A3: with email off a reset link for an ACTIVE account is shown to the staff
+    member -- a key to the customer's login. A seller may not be handed one."""
+    seller = make_staff(app, "seller@example.com", role_codes=["SALES"])
+    support = make_staff(app, "support@example.com", role_codes=["SUPPORT"])
+    _enable(app)
+    cid = _active_for(app, seller, "active@shop.example")
+    force_login(client, app, seller)
+    token = _csrf_any(client)
+    resp = client.post(BASE.format(cid=cid) + "/reset-link", data={"csrf_token": token})
+    assert resp.status_code == 403 and _tokens(app, "RESET") == 0  # deny: refused, nothing minted
+    # allow: the seller can still be shown an INVITE link for their own not-yet-active customer
+    cid2 = _assigned_customer(app, seller)
+    with app.app_context():
+        from tests.test_customer_accounts_service import invite
+
+        invite(app, cid2, "invited@shop.example")
+    shown = client.post(BASE.format(cid=cid2) + "/resend", data={"csrf_token": token})
+    assert shown.status_code == 200 and 'data-link-shown-once="1"' in shown.get_data(as_text=True)
+    # allow: Support is handed the reset link, and the audit row says it was shown to staff
+    support_client = app.test_client()
+    force_login(support_client, app, support)
+    shown = support_client.post(BASE.format(cid=cid) + "/reset-link", data={"csrf_token": _csrf_any(support_client)})
+    assert shown.status_code == 200 and 'data-link-shown-once="1"' in shown.get_data(as_text=True)
+    assert _tokens(app, "RESET") == 1
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.audit import AuditLog
+
+        row = db_session.execute(select(AuditLog).where(AuditLog.action_code == "CUSTOMER_ACCOUNT_RESET_LINK_ISSUED")).scalars().one()
+        assert row.after_state_redacted["link_shown_to_staff"] is True and row.actor_staff_user_id is not None
+
+
+def test_with_email_on_a_seller_may_trigger_a_reset_because_it_goes_to_the_customers_mailbox(app, client, seeded):
+    seller = make_staff(app, "seller@example.com", role_codes=["SALES"])
+    _enable(app, mail=True)
+    cid = _active_for(app, seller, "active@shop.example")
+    force_login(client, app, seller)
+    resp = client.post(BASE.format(cid=cid) + "/reset-link", data={"csrf_token": _csrf_any(client)})
+    assert resp.status_code == 200 and 'data-link-shown-once="1"' not in resp.get_data(as_text=True)
+    assert _tokens(app, "RESET") == 1
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.email_outbox import EmailOutbox
+
+        assert [r.kind for r in db_session.execute(select(EmailOutbox)).scalars().all()].count("customer_password_reset") == 1

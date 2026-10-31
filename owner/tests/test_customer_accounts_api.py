@@ -42,8 +42,14 @@ def header(path, body: bytes, *, secret=SECRET, kid="k1", ts=None, nonce=None, m
     return f"v1,kid={kid},ts={ts},nonce={nonce},sig={sig}"
 
 
-def call(client, action, payload, **kw):
+def call(client, action, payload, *, inject_ip=True, **kw):
+    """Signs and posts. The website always sends the customer's address as client_ip
+    (A1: a request without it is refused, not pinned to the website's own address),
+    so a call that does not say one gets IP -- pass inject_ip=False to send the body
+    exactly as given (the A1 test does, to prove the refusal)."""
     path = f"{BASE}/{action}"
+    if inject_ip and action != "me" and isinstance(payload, dict) and "client_ip" not in payload:
+        payload = {**payload, "client_ip": IP}
     body = json.dumps(payload).encode()
     headers = kw.pop("headers", None)
     if headers is None:
@@ -179,14 +185,26 @@ def test_secret_rotation_two_keys_work_together_and_a_retired_one_stops(app, cli
     assert call(client, "me", {"session_token": "x"}, secret=SECRET2, kid="k2").get_json()["error"] == "session_invalid"
 
 
-def test_oversized_and_non_json_bodies_are_refused_after_the_signature(app, client):
+def test_oversized_and_non_json_bodies_are_refused(app, client):
+    """Order, as the code runs it: size (cheap, before any crypto) -> signature ->
+    nonce -> JSON. So an oversized body is refused 413 WITHOUT burning a nonce, and a
+    signed non-JSON body is refused 400 AFTER the signature passed (nonce spent)."""
     enable(app)
     path = f"{BASE}/me"
+    app.config["MAX_REQUEST_BYTES"] = 300
+    big = json.dumps({"session_token": "x" * 400}).encode()
+    response = client.post(path, data=big, headers={"X-Aura-Site-Signature": header(path, big)},
+                           content_type="application/json")
+    assert response.status_code == 413 and response.get_json()["error"] == "too_large"
+    assert nonce_count(app) == 0
+    # allow: a body under the limit works
+    assert call(client, "me", {"session_token": "x"}).get_json()["error"] == "session_invalid"
     raw = b"not json"
     response = client.post(path, data=raw, headers={"X-Aura-Site-Signature": header(path, raw)})
     assert response.status_code == 400 and response.get_json()["error"] == "invalid_json"
     arr = b"[1]"
     assert client.post(path, data=arr, headers={"X-Aura-Site-Signature": header(path, arr)}).status_code == 400
+    assert nonce_count(app) == 3  # the valid call and the two signed-but-not-JSON ones; the oversized one burned none
 
 
 # ------------------------------------------------------------------- flows
@@ -258,14 +276,6 @@ def test_sign_in_is_rate_limited_per_email_and_address_with_a_retry_after(app, c
     assert other.status_code == 200
 
 
-def test_the_client_ip_comes_from_the_signed_body_and_junk_falls_back(app, client):
-    from app.customer_accounts import service
-
-    assert service.clean_ip("203.0.113.9") == "203.0.113.9"
-    assert service.clean_ip("2001:db8::1") == "2001:db8::1"
-    assert service.clean_ip("1.2.3.4, 5.6.7.8") == "unknown" and service.clean_ip(None) == "unknown"
-
-
 def test_email_confirm_through_the_api(app, client):
     from app.customer_accounts import service
     from app.extensions import db_session
@@ -280,3 +290,109 @@ def test_email_confirm_through_the_api(app, client):
     done = call(client, "email/confirm", {"token": raw, "client_ip": IP})
     assert done.status_code == 200 and done.get_json()["account"]["email"] == "moved@haddad.example"
     assert call(client, "email/confirm", {"token": raw, "client_ip": IP}).get_json()["error"] == "token_invalid"
+
+
+# ================================================================ fix round
+
+def test_a_unicode_digit_timestamp_is_a_401_not_a_500(app, client):
+    """L2: '²'.isdigit() is True but int('²') raises -- the old check turned a header
+    anyone could send into a server error."""
+    enable(app)
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    path = f"{BASE}/me"
+    body = b'{"session_token":"x"}'
+    for ts in ("²", "١٢٣", "12 ", "+123", "1" * 13):
+        bad = f"v1,kid=k1,ts={ts},nonce={uuid.uuid4().hex},sig={'a' * 64}"
+        resp = client.post(path, data=body, headers={"X-Aura-Site-Signature": bad}, content_type="application/json")
+        assert resp.status_code == 401 and resp.get_json() == {"ok": False, "error": "unauthorized"}, ts
+
+
+def test_the_signature_header_fields_must_be_plain_ascii_of_the_right_shape():
+    from app.customer_accounts import signature
+
+    good = f"v1,kid=k1,ts=1790000000,nonce={'n' * 16},sig={'a' * 64}"
+    assert signature.parse_header(good).ts == 1790000000  # allow
+    for bad in (
+        good.replace("ts=1790000000", "ts=17900000é0"),
+        good.replace("kid=k1", "kid=ké"),
+        good.replace("kid=k1", "kid=" + "k" * 33),
+        good.replace("kid=k1", "kid="),
+        good.replace("nonce=" + "n" * 16, "nonce=" + "n" * 15 + "é"),
+        good.replace("nonce=" + "n" * 16, "nonce=" + "n" * 15 + "\n"),
+        good.replace("sig=" + "a" * 64, "sig=" + "a" * 63 + "\n"),
+    ):
+        with pytest.raises(signature.SignatureError):
+            signature.parse_header(bad)
+
+
+def test_the_skew_window_is_exactly_sixty_seconds_and_the_path_and_body_are_signed():
+    from app.customer_accounts import signature
+
+    cfg = {"WEBSITE_ACCOUNT_KEY_ID": "k1", "WEBSITE_ACCOUNT_SECRET": "w" * 48}
+    ts = 1790000000
+    body = b"{}"
+    sig = signature.sign("w" * 48, "POST", "/p", str(ts), "n" * 16, body)
+    h = f"v1,kid=k1,ts={ts},nonce={'n' * 16},sig={sig}"
+    signature.verify(cfg, h, "POST", "/p", body, now=ts + 60)
+    signature.verify(cfg, h, "POST", "/p", body, now=ts - 60)
+    for now in (ts + 61, ts - 61):
+        with pytest.raises(signature.SignatureError):
+            signature.verify(cfg, h, "POST", "/p", body, now=now)
+    with pytest.raises(signature.SignatureError):
+        signature.verify(cfg, h, "POST", "/p", b"{ }", now=ts)
+    with pytest.raises(signature.SignatureError):
+        signature.verify(cfg, h, "POST", "/p/", body, now=ts)
+
+
+def test_a_query_string_is_not_part_of_the_signed_path(app, client):
+    enable(app)
+    path = f"{BASE}/me"
+    body = b'{"session_token":"x"}'
+    resp = client.post(path + "?evil=1", data=body, headers={"X-Aura-Site-Signature": header(path, body)},
+                       content_type="application/json")
+    assert resp.status_code == 401 and resp.get_json()["error"] == "session_invalid"  # got through the gate, no session
+
+
+def test_a_request_without_the_client_address_is_refused_not_pinned_to_the_websites_own(app, client):
+    """A1: without client_ip the old code used the website server's address, putting
+    every customer in ONE rate-limit bucket."""
+    enable(app)
+    make_active(app)
+    for action, extra in (("sign-in", {"email": "owner@haddad.example", "password": GOOD}),
+                          ("password/forgot", {"email": "owner@haddad.example"}),
+                          ("password/set", {"token": "x", "password": GOOD}),
+                          ("password/change", {"session_token": "x", "current_password": GOOD, "new_password": GOOD + "1"}),
+                          ("email/confirm", {"token": "x"})):
+        for payload in (extra, {**extra, "client_ip": ""}, {**extra, "client_ip": 5}, {**extra, "client_ip": None}):
+            resp = call(client, action, payload, inject_ip=False)
+            assert resp.status_code == 400 and resp.get_json() == {"ok": False, "error": "invalid_request"}, (action, payload)
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.customer_accounts import CustomerLoginAttempt
+
+        assert db_session.execute(select(func.count()).select_from(CustomerLoginAttempt)).scalar_one() == 0
+    # allow: with the address it works, and /me (which never needed one) is untouched
+    assert call(client, "sign-in", {"email": "owner@haddad.example", "password": GOOD, "client_ip": IP}).status_code == 200
+    assert call(client, "me", {"session_token": "x"}).get_json()["error"] == "session_invalid"
+
+
+def test_rate_limits_follow_the_signed_client_ip_in_the_body_not_the_connection(app, client):
+    """The test client always connects from 127.0.0.1; two body addresses must be two budgets."""
+    enable(app)
+    make_active(app)
+    statuses = [call(client, "sign-in", {"email": "owner@haddad.example", "password": "Wrong-Password-1",
+                                         "client_ip": "203.0.113.60"}).status_code for _ in range(6)]
+    assert statuses == [401] * 5 + [429]
+    other = call(client, "sign-in", {"email": "owner@haddad.example", "password": "Wrong-Password-1", "client_ip": "203.0.113.61"})
+    assert other.status_code == 401  # a different body address is not locked
+    v6 = [call(client, "sign-in", {"email": "owner@haddad.example", "password": "Wrong-Password-1",
+                                   "client_ip": f"2001:db8:eeee:1::{i + 1:x}"}).status_code for i in range(6)]
+    assert v6 == [401] * 5 + [429]  # a whole /64 is one budget
+
+
+def test_client_ip_cleaning(app):
+    from app.customer_accounts import service
+
+    assert service.clean_ip("203.0.113.9") == "203.0.113.9"
+    assert service.clean_ip("2001:db8::1") == "2001:db8::1"
+    assert service.clean_ip("1.2.3.4, 5.6.7.8") == "unknown" and service.clean_ip(None) == "unknown"

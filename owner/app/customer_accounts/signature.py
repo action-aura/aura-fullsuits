@@ -24,8 +24,12 @@ from app.config import BaseConfig
 HEADER = "X-Aura-Site-Signature"
 VERSION = "v1"
 MAX_SKEW_SECONDS = 60
-_NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
-_SIG_RE = re.compile(r"^[0-9a-f]{64}$")
+# ASCII only and anchored with \Z (a trailing newline would satisfy `$`). str.isdigit()
+# accepts digits such as superscript two that int() then cannot parse (a 500).
+_TS_RE = re.compile(r"[0-9]{1,12}\Z")
+_KID_RE = re.compile(r"[A-Za-z0-9_.-]{1,32}\Z")
+_NONCE_RE = re.compile(r"[A-Za-z0-9_-]{16,64}\Z")
+_SIG_RE = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class SignatureError(Exception):
@@ -73,7 +77,7 @@ def parse_header(value: str) -> ParsedSignature:
         fields[name] = val
     if set(fields) != {"kid", "ts", "nonce", "sig"}:
         raise SignatureError("malformed")
-    if not fields["ts"].isdigit() or len(fields["ts"]) > 12:
+    if not _TS_RE.match(fields["ts"]) or not _KID_RE.match(fields["kid"]):
         raise SignatureError("malformed")
     if not _NONCE_RE.match(fields["nonce"]) or not _SIG_RE.match(fields["sig"]):
         raise SignatureError("malformed")

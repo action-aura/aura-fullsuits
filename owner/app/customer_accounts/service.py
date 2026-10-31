@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.audit.services import record as audit_record
 from app.customer_accounts import mail, policy
@@ -90,6 +91,23 @@ def clean_ip(raw: str | None) -> str:
         return "unknown"
 
 
+def ip_bucket(ip: str) -> str:
+    """The key rate limits count an address under. IPv4 is itself. An IPv6 address
+    is counted as its /64: an ISP hands one customer (or attacker) a whole /64, so
+    per-address buckets would give them a fresh budget on every request.
+    IPv4-mapped IPv6 is the IPv4 address it wraps. Anything unparsable ('unknown')
+    is its own bucket."""
+    try:
+        parsed = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        return ip or "unknown"
+    if isinstance(parsed, ipaddress.IPv6Address):
+        if parsed.ipv4_mapped is not None:
+            return str(parsed.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{parsed}/64", strict=False))
+    return str(parsed)
+
+
 # --------------------------------------------------------------------- reads
 
 def get_account_for_customer(customer_id) -> CustomerAccount | None:
@@ -139,6 +157,19 @@ def _issue_token(account: CustomerAccount, kind: str, *, new_email: str | None =
     ))
     db_session.flush()
     return raw
+
+
+def _revoke_unused_links(account: CustomerAccount) -> None:
+    """Kills every unused INVITE and RESET link of the account. A link is a bearer
+    key sent to ONE mailbox; once the account's address changes (or is about to),
+    a link still sitting in the old mailbox must not be able to set the password.
+    The caller commits."""
+    db_session.execute(
+        update(CustomerAccountToken)
+        .where(CustomerAccountToken.account_id == account.id, CustomerAccountToken.kind.in_(("INVITE", "RESET")),
+               CustomerAccountToken.consumed_at.is_(None), CustomerAccountToken.revoked_at.is_(None))
+        .values(revoked_at=_now())
+    )
 
 
 def _consume_token(raw: str, kinds: tuple) -> CustomerAccountToken:
@@ -207,10 +238,19 @@ def create_account(customer: Customer, email: str, language: str, actor_staff_us
     mail.build_link("INVITE", "x", language)  # fail BEFORE writing anything if the portal URL is not set
     account = CustomerAccount(customer_id=customer.id, email=email, language=language, status="INVITED",
                               session_version=1, created_by_staff_user_id=actor_staff_user_id)
-    db_session.add(account)
-    db_session.flush()
-    raw = _issue_token(account, "INVITE", actor_staff_user_id=actor_staff_user_id)
-    db_session.commit()
+    try:
+        db_session.add(account)
+        db_session.flush()
+        raw = _issue_token(account, "INVITE", actor_staff_user_id=actor_staff_user_id)
+        db_session.commit()
+    except IntegrityError:
+        # Two staff members raced past the checks above and the database's unique
+        # constraint (one account per customer, one per email) caught the loser.
+        # That is a refusal the screen can word, not a 500.
+        db_session.rollback()
+        if get_account_for_customer(customer.id) is not None:
+            raise AccountError("account_exists")
+        raise AccountError("email_in_use")
     _audit("CUSTOMER_ACCOUNT_CREATED", account, actor_staff_user_id=actor_staff_user_id, after={"language": language})
     return _send_link(account, "INVITE", raw, "customer_invitation")
 
@@ -231,7 +271,8 @@ def issue_reset_link(account: CustomerAccount, actor_staff_user_id) -> IssuedLin
         raise AccountError("not_active")
     raw = _issue_token(account, "RESET", actor_staff_user_id=actor_staff_user_id)
     db_session.commit()
-    _audit("CUSTOMER_ACCOUNT_RESET_LINK_ISSUED", account, actor_staff_user_id=actor_staff_user_id)
+    _audit("CUSTOMER_ACCOUNT_RESET_LINK_ISSUED", account, actor_staff_user_id=actor_staff_user_id,
+           after={"link_shown_to_staff": not mail.email_is_set_up()})
     return _send_link(account, "RESET", raw, "customer_password_reset")
 
 
@@ -292,6 +333,15 @@ def request_email_change(account: CustomerAccount, new_email: str, reason: str, 
         raise AccountError("email_in_use")
     if account.status == "DISABLED":
         raise AccountError("account_disabled")
+    if account.status == "INVITED":
+        # The invitation already went to the OLD address, which staff are replacing
+        # (usually because it was mistyped). Whoever owns that mailbox must not be
+        # able to activate the account in the meantime. After the new address is
+        # confirmed the account is still INVITED and staff press 'resend' to send
+        # a fresh invitation to it -- confirming cannot do that itself: the person
+        # confirming is the website visitor and, with email off, nobody would be
+        # shown the new link.
+        _revoke_unused_links(account)
     raw = _issue_token(account, "EMAIL_CHANGE", new_email=new_email, actor_staff_user_id=actor_staff_user_id)
     db_session.commit()
     _audit("CUSTOMER_ACCOUNT_EMAIL_CHANGE_REQUESTED", account, actor_staff_user_id=actor_staff_user_id, reason=reason,
@@ -311,7 +361,14 @@ def confirm_email_change(raw_token: str, ip: str) -> CustomerAccount:
     old = account.email
     account.email = token.new_email
     _revoke_all_sessions(account, "EMAIL_CHANGED", bump_version=True)
-    db_session.commit()
+    # Any invite/reset link was mailed to the address that is going away.
+    _revoke_unused_links(account)
+    try:
+        db_session.commit()
+    except IntegrityError:
+        # Someone took the address between the check above and now.
+        db_session.rollback()
+        raise AccountError("email_in_use")
     _audit("CUSTOMER_ACCOUNT_EMAIL_CHANGED", account, after={"new_email_masked": mail.mask_email(account.email)})
     mail.queue("customer_email_changed_notice", old, lang=account.language, lines=[mail.mask_email(account.email)])
     return account
@@ -344,7 +401,7 @@ def _policy_check(account: CustomerAccount, password: str) -> None:
 
 def _take_token_slot(ip: str) -> None:
     try:
-        ratelimit.check_and_increment("customer_token_ip", ratelimit.safe_bucket_component(ip))
+        ratelimit.check_and_increment("customer_token_ip", ratelimit.safe_bucket_component(ip_bucket(ip)))
     except ratelimit.RateLimitExceeded as exc:
         raise SignInLocked(exc.retry_after_seconds)
 
@@ -414,12 +471,20 @@ def forgot_password(email: str, ip: str, lang: str | None = None) -> None:
     the per-IP flood guard may raise (SignInLocked), which says nothing about the
     address. A third request for one address within an hour is silently dropped."""
     try:
-        ratelimit.check_and_increment("customer_forgot_ip", ratelimit.safe_bucket_component(ip))
+        ratelimit.check_and_increment("customer_forgot_ip", ratelimit.safe_bucket_component(ip_bucket(ip)))
     except ratelimit.RateLimitExceeded as exc:
         raise SignInLocked(exc.retry_after_seconds)
     try:
         normalized = normalize_email(email)
     except AccountError:
+        return
+    if not mail.email_is_set_up():
+        # Email is off, so nothing can reach the customer from here. Issuing a
+        # token anyway would revoke the invite/reset link staff just handed over
+        # by hand (one family: only the newest works) and mail nothing -- anyone
+        # who knew the address could kill it from the public website. No token,
+        # no revocation, same public answer. (No address in the line.)
+        logger.info("forgot-password declined: customer email is not set up on this server")
         return
     try:
         ratelimit.check_and_increment("customer_forgot_address", ratelimit.safe_bucket_component(normalized))
@@ -446,7 +511,7 @@ def forgot_password(email: str, ip: str, lang: str | None = None) -> None:
 # ----------------------------------------------------------------- sign-in
 
 def _take_signin_slots(email: str, ip: str) -> None:
-    e, i = ratelimit.safe_bucket_component(email), ratelimit.safe_bucket_component(ip)
+    e, i = ratelimit.safe_bucket_component(email), ratelimit.safe_bucket_component(ip_bucket(ip))
     for policy_name, key in (("customer_signin_pair", f"{e}:{i}"), ("customer_signin_email", e), ("customer_signin_ip", i)):
         try:
             ratelimit.check_and_increment(policy_name, key)

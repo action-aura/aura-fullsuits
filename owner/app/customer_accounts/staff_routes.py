@@ -34,6 +34,7 @@ from app.security.rbac import get_staff_permission_codes, require_permission, re
 bp = Blueprint("customer_accounts", __name__, url_prefix="/customers/<uuid:customer_id>/website-account")
 
 GLOBAL_SCOPE_PERMISSIONS = ("customers.view_all", "customer_accounts.disable")
+RESET_LINK_SHOWN_PERMISSIONS = ("customer_accounts.disable",)
 
 
 def accounts_enabled() -> bool:
@@ -162,8 +163,16 @@ def resend(customer_id):
 @bp.route("/reset-link", methods=["POST"])
 @require_permission("customer_accounts.manage")
 def reset_link(customer_id):
-    customer, actor, _codes = _context(customer_id)
+    customer, actor, codes = _context(customer_id)
     account = _account_or_404(customer)
+    if not mail.email_is_set_up() and not any(code in codes for code in RESET_LINK_SHOWN_PERMISSIONS):
+        # Email is off, so this link would be SHOWN to the staff member, and a reset
+        # link for an ACTIVE account is a key to the customer's login. Only Support
+        # and Super Admin (the roles that hold customer_accounts.disable) may be
+        # handed one; with email on the link goes to the customer's own mailbox, so
+        # any manager may trigger that. (Invite links for a customer's own, not yet
+        # activated account stay available to the seller.)
+        abort(403)
     try:
         issued = service.issue_reset_link(account, actor.id)
     except service.AccountError as exc:

@@ -6,12 +6,14 @@ AND the matching allow test (the invite must work, the lockout must not trip ear
 disabling must block sign-in but leave the licence alone)."""
 from __future__ import annotations
 
+import threading
 import uuid
+from collections import Counter
 from datetime import timedelta
 from urllib.parse import unquote
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from tests.conftest import make_license, make_staff
 
@@ -199,8 +201,9 @@ def test_resending_revokes_the_earlier_link(acc):
     first = token_of(invite(acc, cid))
     account = db_session.execute(select(CustomerAccount)).scalars().one()
     second = token_of(service.resend_invitation(account, None))
-    with pytest.raises(service.AccountError):
+    with pytest.raises(service.AccountError) as old:
         service.set_password_with_token(first, GOOD, IP)  # deny: the old link
+    assert old.value.code == "token_invalid"
     assert service.set_password_with_token(second, GOOD, IP).status == "ACTIVE"  # allow: the new one
 
 
@@ -625,10 +628,12 @@ def test_a_reset_token_cannot_confirm_an_email_change_and_the_reverse(acc):
     account = db_session.execute(select(CustomerAccount)).scalars().one()
     reset = token_of(service.issue_reset_link(account, None))
     change = token_of(service.request_email_change(account, "n@shop.example", "x", None))
-    with pytest.raises(service.AccountError):
+    with pytest.raises(service.AccountError) as wrong_way:
         service.confirm_email_change(reset, IP)
-    with pytest.raises(service.AccountError):
+    assert wrong_way.value.code == "token_invalid"
+    with pytest.raises(service.AccountError) as other_way:
         service.set_password_with_token(change, GOOD + "x", IP)
+    assert other_way.value.code == "token_invalid"
 
 
 # ---------------------------------------------------------------- mail / links
@@ -716,3 +721,388 @@ def test_account_actions_are_audited_without_secrets(acc):
     assert {r.action_code for r in rows} >= {"CUSTOMER_ACCOUNT_CREATED", "CUSTOMER_ACCOUNT_PASSWORD_SET", "CUSTOMER_ACCOUNT_DISABLED"}
     blob = " ".join(str(r.after_state_redacted) + str(r.reason) for r in rows)
     assert raw not in blob and GOOD not in blob and account.password_hash not in blob
+
+
+
+# ================================================================ fix round
+# Written after an adversarial verifier found real defects (and guards no test
+# pinned). Each test names the code path it fails without.
+
+def _run_together(app, n, work):
+    """Runs work(i) on n threads released at the same instant; returns outcomes as
+    'ok' / 'ExcName:code' strings."""
+    barrier = threading.Barrier(n)
+    outcomes, lock = [], threading.Lock()
+
+    def worker(i):
+        with app.app_context():
+            from app.extensions import db_session
+            try:
+                db_session.execute(text("SELECT 1"))
+                barrier.wait(timeout=30)
+                result = work(i)
+            except Exception as exc:  # noqa: BLE001
+                result = f"{type(exc).__name__}:{getattr(exc, 'code', '')}"
+            finally:
+                db_session.remove()
+            with lock:
+                outcomes.append(result)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=90)
+    assert len(outcomes) == n, outcomes
+    return outcomes
+
+
+def test_concurrent_wrong_passwords_stop_exactly_at_the_lockout_edge(app):
+    setup_accounts(app)
+    with app.app_context():
+        _, email = active_account(app)
+    from app.customer_accounts import service
+
+    def work(i):
+        service.sign_in(email, "Wrong-Password-1", IP, None)
+        return "ok"
+
+    c = Counter(_run_together(app, 12, work))
+    assert c["SignInFailed:invalid_credentials"] == 5 and c["SignInLocked:rate_limited"] == 7, c
+
+
+def test_one_invite_link_used_by_eight_requests_at_once_activates_exactly_one(app):
+    setup_accounts(app)
+    with app.app_context():
+        raw = token_of(invite(app, new_customer(app)))
+    from app.customer_accounts import service
+
+    def work(i):
+        service.set_password_with_token(raw, f"Winner-phrase-{i}-xyzzy", f"198.51.100.{i + 1}")
+        return f"ok:{i}"
+
+    outcomes = _run_together(app, 8, work)
+    wins = [o for o in outcomes if o.startswith("ok:")]
+    assert len(wins) == 1, Counter(outcomes)
+    assert all(o == "AccountError:token_invalid" for o in outcomes if not o.startswith("ok:")), Counter(outcomes)
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.customer_accounts import CustomerAccount
+
+        acct = db_session.execute(select(CustomerAccount)).scalars().one()
+        assert service._verify_password(f"Winner-phrase-{wins[0][3:]}-xyzzy", acct.password_hash)
+
+
+def test_concurrent_create_with_one_email_on_six_customers_gives_one_account_and_five_refusals(app):
+    """L1: the unique constraint catches the race; the loser gets email_in_use, not a 500."""
+    setup_accounts(app)
+    cids = [new_customer(app) for _ in range(6)]
+    variants = ["dup@shop.example", "DUP@shop.example", " dup@SHOP.example ", "Dup@Shop.Example", "dup@shop.example", "dUp@shop.example"]
+    from app.customer_accounts import service
+
+    def work(i):
+        from app.extensions import db_session
+        from app.models.customers import Customer
+
+        service.create_account(db_session.get(Customer, cids[i]), variants[i], "en", None)
+        return "ok"
+
+    c = Counter(_run_together(app, 6, work))
+    assert c["ok"] == 1 and c["AccountError:email_in_use"] == 5, c
+
+
+def test_concurrent_create_twice_for_one_customer_gives_one_account_and_five_refusals(app):
+    """L1: same, for the one-account-per-customer constraint."""
+    setup_accounts(app)
+    cid = new_customer(app)
+    from app.customer_accounts import service
+
+    def work(i):
+        from app.extensions import db_session
+        from app.models.customers import Customer
+
+        service.create_account(db_session.get(Customer, cid), f"p{i}@shop.example", "en", None)
+        return "ok"
+
+    c = Counter(_run_together(app, 6, work))
+    assert c["ok"] == 1 and c["AccountError:account_exists"] == 5, c
+
+
+def test_two_confirmations_racing_for_one_new_address_leave_one_winner(app):
+    """L1: confirm_email_change takes the unique-constraint hit as email_in_use."""
+    setup_accounts(app)
+    from app.customer_accounts import service
+
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.customer_accounts import CustomerAccount
+
+        active_account(app, "one@shop.example")
+        active_account(app, "two@shop.example")
+        accounts = {a.email: a for a in db_session.execute(select(CustomerAccount)).scalars().all()}
+        raws = [token_of(service.request_email_change(accounts["one@shop.example"], "same@shop.example", "x", None)),
+                token_of(service.request_email_change(accounts["two@shop.example"], "same@shop.example", "x", None))]
+
+    def work(i):
+        service.confirm_email_change(raws[i], f"198.51.100.{i + 1}")
+        return "ok"
+
+    c = Counter(_run_together(app, 2, work))
+    assert c["ok"] == 1 and c["AccountError:email_in_use"] == 1, c
+
+
+# ---------------------------------------------- email change vs. old links (H1)
+
+def test_changing_an_invited_accounts_email_kills_the_invite_in_the_old_mailbox_at_once(acc):
+    """The invite went to a mistyped address. From the moment staff start the change
+    (not only once it is confirmed) whoever owns that mailbox cannot activate it."""
+    from app.customer_accounts import service
+    from app.extensions import db_session
+    from app.models.customer_accounts import CustomerAccount
+
+    wrong_invite = token_of(invite(acc, new_customer(acc), "typo@wrong.example"))
+    account = db_session.execute(select(CustomerAccount)).scalars().one()
+    issued = service.request_email_change(account, "real@shop.example", "typo", None)
+    with pytest.raises(service.AccountError) as stranger:  # deny, BEFORE the change is confirmed
+        service.set_password_with_token(wrong_invite, "Stranger-chose-this-1", IP)
+    assert stranger.value.code == "token_invalid"
+    service.confirm_email_change(token_of(issued), IP)
+    db_session.expire_all()
+    account = db_session.execute(select(CustomerAccount)).scalars().one()
+    assert account.email == "real@shop.example" and account.status == "INVITED"
+    with pytest.raises(service.AccountError) as still:  # deny: still dead after the confirmation
+        service.set_password_with_token(wrong_invite, "Stranger-chose-this-1", IP)
+    assert still.value.code == "token_invalid"
+    # allow: staff resend to the new address and the real owner activates
+    fresh = token_of(service.resend_invitation(account, None))
+    assert service.set_password_with_token(fresh, GOOD, IP).status == "ACTIVE"
+
+
+def test_confirming_an_email_change_kills_a_reset_link_mailed_to_the_old_address(acc):
+    from app.customer_accounts import service
+    from app.extensions import db_session
+    from app.models.customer_accounts import CustomerAccount
+
+    active_account(acc, "old@shop.example")
+    account = db_session.execute(select(CustomerAccount)).scalars().one()
+    old_reset = token_of(service.issue_reset_link(account, None))  # went to old@
+    issued = service.request_email_change(account, "new@shop.example", "old mailbox compromised", None)
+    service.confirm_email_change(token_of(issued), IP)
+    with pytest.raises(service.AccountError) as attacker:
+        service.set_password_with_token(old_reset, "Attacker-chose-this-1", IP)
+    assert attacker.value.code == "token_invalid"
+    # allow: a reset issued after the change (to the new address) works
+    fresh = token_of(service.issue_reset_link(account, None))
+    assert service.set_password_with_token(fresh, "Brand-new-phrase-42", IP).status == "ACTIVE"
+
+
+# ----------------------------------------- forgot-password with email off (M1)
+
+def test_forgot_with_email_off_leaves_the_staff_shown_invite_working(acc, caplog):
+    import logging
+
+    from app.customer_accounts import service
+    from app.extensions import db_session
+    from app.models.customer_accounts import CustomerAccountToken
+    from app.models.email_outbox import EmailOutbox
+
+    issued = invite(acc, new_customer(acc), "victim@shop.example")
+    assert issued.emailed is False
+    tokens_before = db_session.execute(select(func.count()).select_from(CustomerAccountToken)).scalar_one()
+    # create_app() replaces the ROOT logger's handlers (observability/logging_config.py),
+    # which drops pytest's caplog handler; attach it to the service's own logger so the
+    # line is captured whatever the root has become.
+    service.logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.INFO, logger=service.logger.name):
+            assert service.forgot_password("victim@shop.example", "198.51.100.66") is None  # same public answer
+    finally:
+        service.logger.removeHandler(caplog.handler)
+    assert db_session.execute(select(func.count()).select_from(EmailOutbox)).scalar_one() == 0
+    assert db_session.execute(select(func.count()).select_from(CustomerAccountToken)).scalar_one() == tokens_before
+    declined = [r.getMessage() for r in caplog.records if "forgot-password declined" in r.getMessage()]
+    assert declined and not any("victim" in m or "shop.example" in m for m in declined)  # the log names no address
+    assert service.set_password_with_token(token_of(issued), GOOD, IP).status == "ACTIVE"
+
+
+def test_forgot_with_email_off_leaves_the_staff_shown_reset_working(acc):
+    from app.customer_accounts import service
+    from app.extensions import db_session
+    from app.models.customer_accounts import CustomerAccount
+
+    _, email = active_account(acc, "victim2@shop.example")
+    account = db_session.execute(select(CustomerAccount)).scalars().one()
+    staff_reset = token_of(service.issue_reset_link(account, None))
+    service.forgot_password(email, "198.51.100.67")
+    assert service.set_password_with_token(staff_reset, "Brand-new-phrase-42", IP).status == "ACTIVE"
+
+
+def test_forgot_on_an_invited_account_with_email_on_sends_a_fresh_invitation(app):
+    """A5: the customer lost the first mail; 'forgot password' re-invites (the old
+    link dies, the new one activates). Nothing but the invitation is sent."""
+    from app.customer_accounts import service
+    from app.extensions import db_session
+    from app.models.email_outbox import EmailOutbox
+
+    setup_accounts(app, mail=True)
+    with app.app_context():
+        first = token_of(invite(app, new_customer(app), "lost@shop.example"))
+        assert service.forgot_password("lost@shop.example", IP) is None
+        rows = db_session.execute(select(EmailOutbox).order_by(EmailOutbox.created_at)).scalars().all()
+        assert [r.kind for r in rows] == ["customer_invitation", "customer_invitation"]
+        assert rows[1].to_address == "lost@shop.example" and f"{PORTAL}/en/account/set-password/#t=" in rows[1].body_text
+        with pytest.raises(service.AccountError):
+            service.set_password_with_token(first, GOOD, IP)  # the lost link is dead
+        second = unquote(rows[1].body_text.split("#t=", 1)[1].split()[0])
+        assert service.set_password_with_token(second, GOOD, IP).status == "ACTIVE"
+
+
+def test_a_newer_reset_kills_an_older_reset(acc):
+    from app.customer_accounts import service
+    from app.extensions import db_session
+    from app.models.customer_accounts import CustomerAccount
+
+    active_account(acc, "r@shop.example")
+    account = db_session.execute(select(CustomerAccount)).scalars().one()
+    first = token_of(service.issue_reset_link(account, None))
+    second = token_of(service.issue_reset_link(account, None))
+    with pytest.raises(service.AccountError) as exc:
+        service.set_password_with_token(first, "Brand-new-phrase-43", IP)
+    assert exc.value.code == "token_invalid"
+    assert service.set_password_with_token(second, "Brand-new-phrase-44", IP).status == "ACTIVE"
+
+
+def test_sessions_stay_dead_after_disable_then_enable(acc):
+    from app.customer_accounts import service
+    from app.extensions import db_session
+    from app.models.customer_accounts import CustomerAccount
+
+    _, email = active_account(acc, "d@shop.example")
+    tok, _a = service.sign_in(email, GOOD, "198.51.100.3", None)
+    account = db_session.execute(select(CustomerAccount)).scalars().one()
+    service.disable_account(account, "x", None)
+    service.enable_account(account, None)
+    assert service.get_session(tok) is None
+    assert service.sign_in(email, GOOD, "198.51.100.4", None)[0]
+
+
+def test_resend_is_for_invited_accounts_only(acc):
+    """A4: resending to an ACTIVE account would mint a working set-password link
+    (a reset without the reset rules). Staff use 'reset link' for those."""
+    from app.customer_accounts import service
+    from app.extensions import db_session
+    from app.models.customer_accounts import CustomerAccount, CustomerAccountToken
+
+    active_account(acc)
+    account = db_session.execute(select(CustomerAccount)).scalars().one()
+    before = db_session.execute(select(func.count()).select_from(CustomerAccountToken)).scalar_one()
+    with pytest.raises(service.AccountError) as exc:
+        service.resend_invitation(account, None)
+    assert exc.value.code == "not_invited"
+    assert db_session.execute(select(func.count()).select_from(CustomerAccountToken)).scalar_one() == before
+
+
+# ------------------------------------------------------- limits nobody pinned
+
+def test_one_email_is_limited_to_fifty_tries_an_hour_whatever_addresses_they_come_from(acc):
+    """The email-alone limit: 50 wrong passwords from 50 DIFFERENT addresses (each
+    under the pair and per-address limits) and the 51st, with the right password
+    from a 51st address, is still locked."""
+    from app.customer_accounts import service
+
+    _, email = active_account(acc)
+    for i in range(50):
+        with pytest.raises(service.SignInFailed):
+            service.sign_in(email, "Wrong-Password-1", f"10.7.{i // 200}.{i % 200 + 1}", None)
+    with pytest.raises(service.SignInLocked):
+        service.sign_in(email, GOOD, "10.9.0.1", None)
+    with pytest.raises(service.SignInFailed):  # allow: another email from a fresh address is just a wrong login, not locked
+        service.sign_in("someone-else@shop.example", GOOD, "10.9.0.2", None)
+
+
+def test_using_links_is_limited_per_address_for_set_password_and_email_confirm(acc):
+    """20 tries per 15 minutes per address, counted whatever the token was."""
+    from app.customer_accounts import service
+
+    for call_ in (service.set_password_with_token, service.confirm_email_change):
+        ip = "198.51.100.200" if call_ is service.set_password_with_token else "198.51.100.201"
+        for _ in range(20):
+            args = ("not-a-real-token", GOOD, ip) if call_ is service.set_password_with_token else ("not-a-real-token", ip)
+            with pytest.raises(service.AccountError) as exc:
+                call_(*args)
+            assert exc.value.code == "token_invalid"
+        with pytest.raises(service.SignInLocked):
+            call_(*(("not-a-real-token", GOOD, ip) if call_ is service.set_password_with_token else ("not-a-real-token", ip)))
+        # allow: another address is not caught
+        other = ("not-a-real-token", GOOD, "198.51.100.202") if call_ is service.set_password_with_token else ("not-a-real-token", "198.51.100.203")
+        with pytest.raises(service.AccountError) as ok:
+            call_(*other)
+        assert ok.value.code == "token_invalid"
+
+
+def test_forgot_password_is_limited_to_twenty_requests_an_hour_per_address(acc):
+    from app.customer_accounts import service
+
+    for i in range(20):  # twenty different emails: the per-email limit never trips
+        assert service.forgot_password(f"nobody{i}@shop.example", "198.51.100.77") is None
+    with pytest.raises(service.SignInLocked):
+        service.forgot_password("nobody99@shop.example", "198.51.100.77")
+    assert service.forgot_password("nobody99@shop.example", "198.51.100.78") is None  # allow: another address
+
+
+def test_the_password_minimum_is_exactly_ten_characters():
+    from app.customer_accounts import policy
+
+    policy.validate("kV7!qz93Lm")  # 10: accepted
+    with pytest.raises(policy.PasswordPolicyError) as exc:
+        policy.validate("kV7!qz93L")  # 9: refused
+    assert exc.value.code == "too_short"
+
+
+# ----------------------------------------------------- IPv6 /64 buckets (A2)
+
+def test_ip_bucket_keeps_ipv4_and_folds_ipv6_to_its_64():
+    from app.customer_accounts import service
+
+    assert service.ip_bucket("203.0.113.5") == "203.0.113.5"
+    assert service.ip_bucket("2001:db8:aaaa:1::1") == service.ip_bucket("2001:db8:aaaa:1:ffff:ffff:ffff:ffff") == "2001:db8:aaaa:1::/64"
+    assert service.ip_bucket("2001:db8:aaaa:2::1") != service.ip_bucket("2001:db8:aaaa:1::1")
+    assert service.ip_bucket("::ffff:203.0.113.5") == "203.0.113.5"  # an IPv4 wearing an IPv6 coat
+    assert service.ip_bucket("unknown") == "unknown"
+
+
+def test_a_whole_ipv6_64_shares_one_sign_in_budget_but_another_64_and_ipv4_do_not(acc):
+    from app.customer_accounts import service
+
+    _, email = active_account(acc)
+    for i in range(5):  # five different addresses, one /64
+        with pytest.raises(service.SignInFailed):
+            service.sign_in(email, "Wrong-Password-1", f"2001:db8:aaaa:1::{i + 1:x}", None)
+    with pytest.raises(service.SignInLocked):  # a sixth NEW address in that /64
+        service.sign_in(email, GOOD, "2001:db8:aaaa:1:ffff::9", None)
+    assert service.sign_in(email, GOOD, "2001:db8:aaaa:2::1", None)[0]  # allow: another /64
+    assert service.sign_in(email, GOOD, "198.51.100.9", None)[0]  # allow: IPv4 is unchanged
+
+
+def test_a_whole_ipv6_64_shares_the_per_address_sign_in_flood_limit(acc):
+    from app.customer_accounts import service
+
+    for i in range(30):  # 30 different emails from 30 addresses in one /64
+        with pytest.raises(service.SignInFailed):
+            service.sign_in(f"user{i}@shop.example", GOOD, f"2001:db8:bbbb:1::{i + 1:x}", None)
+    with pytest.raises(service.SignInLocked):
+        service.sign_in("user99@shop.example", GOOD, "2001:db8:bbbb:1:abcd::1", None)
+
+
+def test_forgot_and_link_limits_also_count_an_ipv6_64_once(acc):
+    from app.customer_accounts import service
+
+    for i in range(20):
+        assert service.forgot_password(f"nobody{i}@shop.example", f"2001:db8:cccc:1::{i + 1:x}") is None
+    with pytest.raises(service.SignInLocked):
+        service.forgot_password("nobody99@shop.example", "2001:db8:cccc:1:ffff::1")
+    for i in range(20):
+        with pytest.raises(service.AccountError):
+            service.set_password_with_token("not-a-real-token", GOOD, f"2001:db8:dddd:1::{i + 1:x}")
+    with pytest.raises(service.SignInLocked):
+        service.set_password_with_token("not-a-real-token", GOOD, "2001:db8:dddd:1:ffff::1")

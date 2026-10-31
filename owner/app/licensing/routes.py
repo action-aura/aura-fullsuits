@@ -103,14 +103,23 @@ def set_branch_label(license_id):
 
     if not current_app.config.get("CUSTOMER_ACCOUNTS_ENABLED"):
         abort(404)
+    from app.customer_accounts.staff_routes import can_reach_customer
+    from app.security.rbac import get_staff_permission_codes
+
     license_row = db_session.get(License, license_id)
     if license_row is None:
+        return jsonify({"error": "not_found"}), 404
+    # Same customer scope as every CA1 staff route: a seller may name branches only
+    # for customers assigned to them, and another seller's licence answers exactly
+    # like a licence that does not exist.
+    actor = load_current_staff()
+    customer = db_session.get(Customer, license_row.customer_id)
+    if customer is None or not can_reach_customer(customer, actor, get_staff_permission_codes(actor)):
         return jsonify({"error": "not_found"}), 404
     label = " ".join((request.form.get("branch_label") or "").split())
     if len(label) > BRANCH_LABEL_MAX:
         flash(_("The branch name can be at most %(max)s characters.", max=BRANCH_LABEL_MAX), "error")
         return redirect(url_for("licensing.detail", license_id=license_id))
-    actor = load_current_staff()
     subscription = license_row.subscription
     before = subscription.branch_label
     subscription.branch_label = label or None
