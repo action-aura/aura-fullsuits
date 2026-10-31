@@ -39,7 +39,7 @@ from flask_babel import gettext as _
 from sqlalchemy import select
 
 from app.auth.session import has_recent_auth, load_current_staff
-from app.commercial_sales.catalog_for_sales import describe_plan_for_sale
+from app.commercial_sales.catalog_for_sales import describe_plan_for_sale, open_to_sellers
 from app.commercial_sales.direct_sale import (
     CHOOSE_SELLER_PERMISSION,
     CONFIRM_SALE_PERMISSIONS,
@@ -86,7 +86,7 @@ def _sellable_packages() -> list[dict]:
     packages = []
     for plan in plans:
         described = describe_plan_for_sale(plan.id)
-        if described is not None:
+        if described is not None and open_to_sellers(described):
             packages.append(described)
     return packages
 

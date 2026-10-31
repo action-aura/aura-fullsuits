@@ -46,7 +46,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import OperationalError
 
 from app.audit.services import record as audit_record
-from app.commercial_sales.catalog_for_sales import describe_plan_for_sale
+from app.commercial_sales.catalog_for_sales import describe_plan_for_sale, open_to_sellers
 from app.commercial_ops.pilot_lifecycle import approve_pilot, activate_pilot
 from app.customer_accounts import policy, service as account_service
 from app.customer_onboarding import documents, trial
@@ -312,7 +312,7 @@ def sellable_packages(product_code: str = DEFAULT_PRODUCT_CODE) -> list[dict]:
     plans = db_session.execute(
         select(Plan).join(Product, Product.id == Plan.product_id).where(Product.product_code == product_code).order_by(Plan.name)
     ).scalars().all()
-    return [item for item in (describe_plan_for_sale(plan.id) for plan in plans) if item is not None]
+    return [item for item in (describe_plan_for_sale(plan.id) for plan in plans) if item is not None and open_to_sellers(item)]
 
 
 # ------------------------------------------------------------- the action

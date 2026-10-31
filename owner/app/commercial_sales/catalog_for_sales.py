@@ -12,6 +12,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
+from flask import current_app
 from sqlalchemy import select
 
 from app.extensions import db_session
@@ -71,6 +72,26 @@ def _yearly_activation_fee(plan):
     from app.commercial_sales.packages import yearly_activation_fee
 
     return yearly_activation_fee(plan)
+
+
+CLINIC_PRODUCT_CODE = "AURA_CLINIC"
+
+
+def open_to_sellers(described: dict) -> bool:
+    """May a SELLER offer this described plan (a describe_plan_for_sale result)?
+
+    Aura Clinic is not sold yet: its plan ("Aura Clinic Standard", 99 USD) sits
+    in the catalog as a sellable plan and used to appear in the sellers'
+    package dropdowns. The customer-onboarding flag OWNER_CLINIC_ACCOUNTS_ENABLED
+    is the one switch for "Clinic is live", so the seller screens follow it
+    instead of a hard-coded plan code. There is no per-plan 'sellable by
+    sellers' column (adding one is a schema change); the Retail test plans are
+    handled in data instead -- `flask seed-packages --retire-other-retail-plans`
+    retires everything but the owner's three packages. Not applied to
+    describe_plan_for_sale itself: the quote/order pipeline keeps its own bar."""
+    if described["product_code"] == CLINIC_PRODUCT_CODE and not current_app.config.get("CLINIC_ACCOUNTS_ENABLED"):
+        return False
+    return True
 
 
 def describe_plan_for_sale(plan_id: uuid.UUID, *, as_of: date | None = None) -> dict | None:

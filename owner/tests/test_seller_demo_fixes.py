@@ -105,3 +105,62 @@ def test_cash_conversion_needs_no_slip_but_every_other_method_does(app, seeded, 
     sell(app, w, trial, slip=None, method="CASH")
     after = money_rows(app)
     assert (after["orders"], after["payments"], after["slips"]) == (base["orders"] + 1, base["payments"] + 1, base["slips"])
+
+
+# ------------------------------------------------------- 3. package lists
+
+def _clinic_plan(app):
+    """A priced, currently sellable Aura Clinic plan (what `seed-plans` leaves behind)."""
+    with app.app_context():
+        from sqlalchemy import select
+
+        from app.catalog.services import seed_canonical_plans
+        from app.extensions import db_session
+        from app.models.catalog import Plan, Product
+
+        seed_canonical_plans()
+        for product in db_session.execute(select(Product).where(Product.product_code == "AURA_CLINIC")).scalars():
+            product.is_sellable = True
+            product.is_active = True
+        db_session.commit()
+        return db_session.execute(
+            select(Plan).join(Product, Product.id == Plan.product_id).where(Product.product_code == "AURA_CLINIC")
+        ).scalars().first().id
+
+
+def test_clinic_plan_is_not_offered_or_sellable_by_a_seller_until_clinic_accounts_are_on(app, client, seeded):
+    from tests.test_issuance_sale import _record, _world as sale_world
+
+    w = sale_world(app)
+    clinic = _clinic_plan(app)
+    # the shared bar still sees the clinic plan, so a missing row below is the seller rule, not an empty catalog
+    with app.app_context():
+        from app.commercial_sales.catalog_for_sales import describe_plan_for_sale
+
+        assert describe_plan_for_sale(clinic)["product_code"] == "AURA_CLINIC"
+    force_login(client, app, w["seller"])
+    page = lambda: client.get("/licenses/issuance/new").get_data(as_text=True)  # noqa: E731
+
+    app.config.update(CLINIC_ACCOUNTS_ENABLED=False)
+    off = page()
+    assert str(clinic) not in off and "Aura Clinic" not in off
+    assert str(w["plan"]) in off  # ... while the Retail package is still on the form
+    from app.commercial_sales.direct_sale import DirectSaleError
+
+    try:
+        _record(app, w, plan_id=clinic)
+    except DirectSaleError as exc:
+        assert exc.code == "PACKAGE_NOT_SELLABLE"
+    else:
+        raise AssertionError("a hand-edited form must not sell Clinic")
+    with app.app_context():
+        from app.customer_onboarding import service
+
+        assert service.sellable_packages("AURA_CLINIC") == []
+
+    app.config.update(CLINIC_ACCOUNTS_ENABLED=True)  # the allow half: once Clinic is live it appears
+    assert str(clinic) in page()
+    with app.app_context():
+        from app.customer_onboarding import service
+
+        assert [p["plan_id"] for p in service.sellable_packages("AURA_CLINIC")] == [str(clinic)]

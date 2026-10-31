@@ -80,6 +80,7 @@ from app.commercial_sales.catalog_for_sales import (
     EXTRA_DEVICE_PAIR_ADDON_CODE,
     describe_addon_for_sale,
     describe_plan_for_sale,
+    open_to_sellers,
 )
 from app.commercial_sales.errors import CommercialSalesError
 from app.commercial_sales.fulfillment import fulfill_order
@@ -390,7 +391,8 @@ def _price_sale(plan: Plan, extra_device_pairs: int) -> tuple[dict, dict | None,
     a posted pair count was ignored: P1 at 100 with 2 pairs was recorded as
     one 100.00 package line and the licence had the included 2 devices."""
     plan_item = describe_plan_for_sale(plan.id)
-    if plan_item is None:
+    # open_to_sellers: a hand-edited form must not sell what the dropdown hides (Clinic).
+    if plan_item is None or not open_to_sellers(plan_item):
         raise DirectSaleError("PACKAGE_NOT_SELLABLE")
     if not plan_item["supported_platform_codes"]:
         raise DirectSaleError("PACKAGE_NO_PLATFORMS")
