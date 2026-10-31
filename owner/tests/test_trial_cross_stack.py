@@ -91,7 +91,7 @@ def test_the_product_locks_an_ended_trial_and_unlocks_it_when_the_paid_lease_arr
     installation_id = activated["installation_id"]
     amman = timezone(timedelta(hours=3))
     day = jordan_today()
-    term_end = day + timedelta(days=7)
+    term_end = day + timedelta(days=6)  # a 7-day trial: day D .. D+6, the end day counts
     during = datetime.combine(day + timedelta(days=3), datetime.min.time(), tzinfo=amman) + timedelta(hours=12)
     last_second = datetime.combine(term_end, datetime.min.time(), tzinfo=amman) + timedelta(hours=23, minutes=59)
     after = datetime.combine(term_end + timedelta(days=1), datetime.min.time(), tzinfo=amman) + timedelta(minutes=1)

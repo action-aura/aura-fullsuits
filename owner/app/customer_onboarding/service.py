@@ -627,7 +627,7 @@ def _ensure_trial_pilot(subscription, plan, key, today: date, actor_staff_user_i
         pilot = PilotRecord(
             id=_row_id_for(key, _PILOT_ROW_KIND), subscription_id=subscription.id, customer_id=subscription.customer_id,
             product_id=subscription.product_id, pilot_start=today,
-            pilot_end=today + timedelta(days=trial.FALLBACK_START_AFTER_DAYS + trial.TRIAL_LENGTH_DAYS),
+            pilot_end=trial.trial_end_for(today + timedelta(days=trial.FALLBACK_START_AFTER_DAYS)),
             allowed_device_count=plan.included_device_count, support_level=plan.support_level,
             sales_owner_staff_user_id=actor_staff_user_id, max_extensions_allowed=trial.MAX_TRIAL_EXTENSIONS,
             created_by_staff_user_id=actor_staff_user_id, status="DRAFT", pilot_kind="TRIAL",

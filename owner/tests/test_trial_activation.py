@@ -83,18 +83,18 @@ def test_the_first_device_starts_the_seven_day_clock_and_the_lease_says_so(app, 
     today = jordan_today()
     assert payload["subscription_status"] == "PILOT" and payload["pilot_status"] == "ACTIVE"
     assert payload["term_start"] == today.isoformat()
-    assert payload["term_end"] == (today + timedelta(days=7)).isoformat()  # signed up on the 1st -> sells through the 8th
+    assert payload["term_end"] == (today + timedelta(days=6)).isoformat()  # a 7-day trial: the 1st .. the 7th, the end day counts
     sub, pilot, lic = _trial(app, result.customer_id)
-    assert sub == {"status": "PILOT", "start": today, "end": today + timedelta(days=7)}
-    assert pilot["started"] is not None and pilot["start"] == today and pilot["end"] == today + timedelta(days=7)
-    assert lic["from"] == today and lic["until"] == today + timedelta(days=7)
+    assert sub == {"status": "PILOT", "start": today, "end": today + timedelta(days=6)}
+    assert pilot["started"] is not None and pilot["start"] == today and pilot["end"] == today + timedelta(days=6)
+    assert lic["from"] == today and lic["until"] == today + timedelta(days=6)
     assert _marks(app) == 1
     with app.app_context():
         # the ID photos now carry the real retention date: trial end + 90 days
         from app.customer_onboarding import documents
 
         for row in documents.documents_of(result.customer_id):
-            assert row.purge_after.date() == today + timedelta(days=7 + 90)
+            assert row.purge_after.date() == today + timedelta(days=6 + 90)
 
 
 def test_a_second_device_of_the_same_shop_does_not_move_the_clock(app, client, seeded, kyc, signing_key):
@@ -112,12 +112,12 @@ def test_a_second_device_of_the_same_shop_does_not_move_the_clock(app, client, s
         three_days_ago = jordan_today() - timedelta(days=3)
         pilot = db_session.execute(select(PilotRecord)).scalars().one()
         sub = db_session.get(Subscription, pilot.subscription_id)
-        sub.start_date, sub.end_date = three_days_ago, three_days_ago + timedelta(days=7)
+        sub.start_date, sub.end_date = three_days_ago, three_days_ago + timedelta(days=6)
         pilot.pilot_start, pilot.pilot_end = sub.start_date, sub.end_date
         db_session.commit()
     resp = _activate(client, make_device_keypair(), result.license_key, installation="d2")
     assert resp.status_code == 200
-    assert resp.get_json()["signed_assertion"]["payload"]["term_end"] == (jordan_today() + timedelta(days=4)).isoformat()
+    assert resp.get_json()["signed_assertion"]["payload"]["term_end"] == (jordan_today() + timedelta(days=3)).isoformat()
     sub, pilot, _ = _trial(app, result.customer_id)
     assert sub["start"] == jordan_today() - timedelta(days=3)  # untouched by the second device
     assert _marks(app) == 2  # but the second device is marked too
@@ -204,8 +204,8 @@ def test_a_trial_nobody_opened_starts_by_itself_after_fourteen_days(app, seeded,
         assert start_overdue_trials(today=created + timedelta(days=14)) == 1  # allow: day 14
         assert start_overdue_trials(today=created + timedelta(days=30)) == 0  # idempotent
     sub, pilot, lic = _trial(app, result.customer_id)
-    assert sub["start"] == created + timedelta(days=14) and sub["end"] == created + timedelta(days=21)
-    assert pilot["started"] is not None and lic["until"] == created + timedelta(days=21)
+    assert sub["start"] == created + timedelta(days=14) and sub["end"] == created + timedelta(days=20)
+    assert pilot["started"] is not None and lic["until"] == created + timedelta(days=20)
 
 
 def test_the_fallback_clock_counts_from_the_amman_day_the_shop_was_made(app, seeded, kyc):
@@ -243,7 +243,7 @@ def test_a_manager_may_extend_a_started_trial_once_by_up_to_seven_days(app, clie
     from app.customer_onboarding.trial import TrialError, extend_trial
 
     w, result = _started(app, client)
-    end = jordan_today() + timedelta(days=7)
+    end = jordan_today() + timedelta(days=6)
     with app.app_context():
         from app.extensions import db_session
         from app.models.commercial_ops import PilotExtension, PilotRecord
@@ -281,7 +281,7 @@ def test_a_double_click_on_extend_extends_once(app, client, seeded, kyc, signing
     from app.customer_onboarding.trial import TrialError, extend_trial
 
     w, result = _started(app, client)
-    end = jordan_today() + timedelta(days=7)
+    end = jordan_today() + timedelta(days=6)
     barrier = threading.Barrier(2)
     done, errors = [], []
 
@@ -314,7 +314,7 @@ def test_an_extended_trial_keeps_the_id_files_ninety_days_after_the_new_end(app,
     from app.customer_onboarding.trial import extend_trial
 
     w, result = _started(app, client)
-    end = jordan_today() + timedelta(days=7)
+    end = jordan_today() + timedelta(days=6)
 
     def purge_dates():
         with app.app_context():
@@ -426,3 +426,16 @@ def test_the_expiry_scan_never_touches_a_trial(app, seeded, kyc):
         run_expiry_scan(as_of=date(2030, 1, 1), dry_run=False)
         db_session.expire_all()
         assert db_session.get(Subscription, result.subscription_id).status == "PILOT"
+
+
+def test_a_seven_day_trial_counts_seven_selling_days_the_end_day_included():
+    """Rehearsal 2026-10-31: a trial made on the 31st ended on 11-07, eight selling days,
+    because the end was start + 7 and the shop counts the end day too. Boundary: the
+    start day is day 1, so the last day is start + 6, and it crosses a month end."""
+    from app.customer_onboarding.trial import TRIAL_LENGTH_DAYS, trial_end_for
+
+    start = date(2026, 10, 31)
+    end = trial_end_for(start)
+    assert end == date(2026, 11, 6)
+    assert (end - start).days + 1 == 7 == TRIAL_LENGTH_DAYS  # allow: day 7 is still a selling day
+    assert (end + timedelta(days=1) - start).days + 1 == 8   # deny: day 8 is past the end

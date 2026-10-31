@@ -504,7 +504,7 @@ def test_account_activation_runs_the_trial_hook_and_signs_the_same_lease(app, cl
     payload = ok.get_json()["signed_assertion"]["payload"]
     today = jordan_today()
     assert payload["subscription_status"] == "PILOT" and payload["pilot_status"] == "ACTIVE"
-    assert payload["term_start"] == today.isoformat() and payload["term_end"] == (today + timedelta(days=7)).isoformat()
+    assert payload["term_start"] == today.isoformat() and payload["term_end"] == (today + timedelta(days=6)).isoformat()
     assert payload["device_key_fingerprint"] == fingerprint_of(key)
     assert payload["license_public_id"] == world["licence_id"]
     assert set(ok.get_json()) >= {"result", "installation_id", "signed_assertion"}
@@ -545,7 +545,7 @@ def test_an_activation_code_activates_one_licence_once(app, client, world):
     ok = activate(client, key, code=code.lower().replace("-", " "))  # typed in lower case with spaces
     assert ok.status_code == 200, ok.get_json()
     assert ok.get_json()["signed_assertion"]["payload"]["license_public_id"] == world["licence_id"]
-    assert ok.get_json()["signed_assertion"]["payload"]["term_end"] == (jordan_today() + timedelta(days=7)).isoformat()
+    assert ok.get_json()["signed_assertion"]["payload"]["term_end"] == (jordan_today() + timedelta(days=6)).isoformat()
     again = activate(client, make_device_keypair(), code=code)
     assert again.status_code == 400 and reason(again) == "ACTIVATION_GRANT_INVALID"
 

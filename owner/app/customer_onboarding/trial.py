@@ -12,9 +12,11 @@ THE RULES (owner, 2026-10-30/31)
   - If nobody ever signs in, the clock starts anyway 14 days after the customer was
     created (start_overdue_trials, run by `flask commercial start-overdue-trials`),
     so an abandoned account cannot sit "in trial" for ever.
-  - The trial ends at the END of Amman day (start + 7): signed up on the 1st, the
-    shop sells through the whole of the 8th (the product's trial_cutoff(term_end)
-    is the first instant AFTER term_end's Amman day). Subscription.end_date is the
+  - The trial ends at the END of Amman day (start + 6): a 7-day trial that starts
+    on the 1st sells through the whole of the 7th (the product's
+    trial_cutoff(term_end) is the first instant AFTER term_end's Amman day, and the
+    shop counts the end day itself as a day it can sell). The first rehearsal
+    (2026-10-31) signed start + 7 and gave 8 calendar days. Subscription.end_date is the
     term_end the lease signs; the product does the locking, Owner only has to put
     the right date in the lease and never move a trial to EXPIRED by itself.
   - One trial per physical device, ever: the device-key fingerprint is recorded in
@@ -65,7 +67,10 @@ class TrialError(ValueError):
 
 
 def trial_end_for(start: date) -> date:
-    return start + timedelta(days=TRIAL_LENGTH_DAYS)
+    """The LAST selling day of a trial that starts on `start`: the start day is day 1
+    and the end day is day TRIAL_LENGTH_DAYS, so 7 days is start + 6 (not + 7, which
+    is 8 calendar days inclusive)."""
+    return start + timedelta(days=TRIAL_LENGTH_DAYS - 1)
 
 
 def trial_pilot_for_subscription(subscription_id) -> PilotRecord | None:
