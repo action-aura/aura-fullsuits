@@ -77,7 +77,9 @@ def _form_context(*, error=None, values=None, key=None, status=200):
         values=values or {},
         may_override=service.OVERRIDE_PERMISSION in codes,
         kyc_ready=documents.storage_is_ready(),
-    ), status
+        # The form can carry the temporary password the seller typed (kept after a refusal), so a browser
+        # or proxy must never store the page.
+    ), status, {"Cache-Control": "no-store"}
 
 
 @bp.route("/new-trial", methods=["GET"])
@@ -99,10 +101,11 @@ def create():
     actor = load_current_staff()
     form = request.form
     key = form.get("idempotency_key") or ""
-    # The form's text is handed back on a refusal; the password and the photos
-    # are not (a browser cannot refill a file input anyway, and a password has
-    # no business travelling back in a page).
-    echo = {k: v for k, v in form.items() if k not in ("csrf_token", "temp_password")}
+    # The form's text is handed back on a refusal, the temporary password included: the seller
+    # typed it (or made one) and has probably already told the customer -- blanking it made them
+    # invent and tell a different one (rehearsal 2026-10-31). The page is served no-store. The
+    # photos cannot be handed back (a browser never refills a file input); the form says so.
+    echo = {k: v for k, v in form.items() if k != "csrf_token"}
     try:
         result = service.create_trial_customer(
             idempotency_key=key,
@@ -133,7 +136,12 @@ def create():
         # Keep the key: the corrected resubmit is the SAME form (nothing was written).
         return _form_context(error=localize_onboarding_error(exc.code, **exc.params), values=echo,
                              key=key or None, status=400)
-    response = render_template("customer_onboarding/result.html", result=result, customer=db_session.get(Customer, result.customer_id))
+    # The temporary password is shown ONCE on this page, from what was just typed; a replayed form shows
+    # nothing (it may carry a different password from the one the account was made with).
+    response = render_template(
+        "customer_onboarding/result.html", result=result, customer=db_session.get(Customer, result.customer_id),
+        temp_password=None if result.replayed else form.get("temp_password", ""),
+    )
     return response, 200, {"Cache-Control": "no-store"}
 
 

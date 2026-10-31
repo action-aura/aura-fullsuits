@@ -9969,8 +9969,8 @@ msgid "Make one"
 msgstr "Make one"
 
 #: app/customer_onboarding
-msgid "Tell it to the customer now. They must choose their own at the first sign-in. It is never shown again."
-msgstr "Tell it to the customer now. They must choose their own at the first sign-in. It is never shown again."
+msgid "Tell it to the customer now. They must choose their own at the first sign-in. You will see it once more on the next page, and never again after that."
+msgstr "Tell it to the customer now. They must choose their own at the first sign-in. You will see it once more on the next page, and never again after that."
 
 #: app/customer_onboarding
 msgid "Manager only"
@@ -10794,3 +10794,19 @@ msgstr "No slip (cash the seller collected). Check that it was handed over."
 #: app/templates/customers/_trial.html
 msgid "Paid until"
 msgstr "Paid until"
+
+#: app/templates/customer_onboarding/new.html
+msgid "Your photos could not be kept. Please attach both photos again before you press the button."
+msgstr "Your photos could not be kept. Please attach both photos again before you press the button."
+
+#: app/templates/customer_onboarding/result.html
+msgid "Temporary password: give it to the customer now"
+msgstr "Temporary password: give it to the customer now"
+
+#: app/templates/customer_onboarding/result.html
+msgid "This is the only time it is shown. When you leave this page, nobody can see it again."
+msgstr "This is the only time it is shown. When you leave this page, nobody can see it again."
+
+#: app/templates/customer_onboarding/result.html
+msgid "Copy password"
+msgstr "Copy password"

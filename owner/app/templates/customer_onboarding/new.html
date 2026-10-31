@@ -80,6 +80,9 @@
 
     <fieldset>
       <legend>{{ _("3. Photos") }}</legend>
+      {% if error %}
+      <p class="error" role="alert" data-reattach-photos="1">{{ _("Your photos could not be kept. Please attach both photos again before you press the button.") }}</p>
+      {% endif %}
       <label for="nc-id">{{ _("Photo of the owner's ID") }}</label>
       <input id="nc-id" type="file" name="id_photo" accept="image/*,application/pdf" capture="environment" required>
       <label for="nc-crphoto">{{ _("Photo of the commercial registration") }}</label>
@@ -116,10 +119,10 @@
       <label for="nc-pw">{{ _("Temporary password") }}</label>
       <div class="nc-row">
         <input id="nc-pw" type="text" name="temp_password" required minlength="10" maxlength="128" dir="ltr"
-               autocomplete="off" autocapitalize="none" spellcheck="false">
+               autocomplete="off" autocapitalize="none" spellcheck="false" value="{{ values.get('temp_password', '') }}">
         <button type="button" class="secondary nc-btn" id="nc-genpw" style="flex:none;">{{ _("Make one") }}</button>
       </div>
-      <p class="nc-hint">{{ _("Tell it to the customer now. They must choose their own at the first sign-in. It is never shown again.") }}</p>
+      <p class="nc-hint">{{ _("Tell it to the customer now. They must choose their own at the first sign-in. You will see it once more on the next page, and never again after that.") }}</p>
       <label for="nc-lang">{{ _("Language") }}</label>
       <select id="nc-lang" name="language">
         <option value="ar" {% if values.get('language', 'ar') == 'ar' %}selected{% endif %}>{{ _("Arabic") }}</option>

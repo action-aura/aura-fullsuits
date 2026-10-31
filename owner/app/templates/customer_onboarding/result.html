@@ -8,6 +8,18 @@
   {% else %}
   <h2>{{ _("Customer created -- the 7-day trial is ready") }}</h2>
   <p><strong>{{ customer.legal_name }}</strong></p>
+  {% if temp_password %}
+  <div class="card card--critical" data-temp-password-card="1">
+    <h3>{{ _("Temporary password: give it to the customer now") }}</h3>
+    <p><strong>{{ _("This is the only time it is shown. When you leave this page, nobody can see it again.") }}</strong></p>
+    <p>
+      <code dir="ltr" id="onboarding-temp-password" data-temp-password="1">{{ temp_password }}</code>
+      <button type="button" class="secondary" data-copy-target="onboarding-temp-password"
+              data-copy-label="{{ _('Copy password') }}" data-copy-success-label="{{ _('Copied') }}"
+              data-copy-fallback-label="{{ _('Selected -- press Ctrl+C') }}">{{ _("Copy password") }}</button>
+    </p>
+  </div>
+  {% endif %}
   <ol>
     <li>{{ _("Tell the customer to sign in at actionaura.me with their email and the temporary password you typed. They will choose their own password first.") }}</li>
     <li>{{ _("Then they open Downloads, install the app, and sign in there with the same email and password.") }}</li>

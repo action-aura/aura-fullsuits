@@ -699,17 +699,20 @@ def test_posting_the_form_creates_the_customer_and_shows_the_key_once(app, clien
     html = resp.get_data(as_text=True)
     assert resp.status_code == 200 and resp.headers["Cache-Control"] == "no-store"
     assert 'data-onboarding-result="1"' in html and "AURA-" in html and 'data-link-shown-once="1"' in html
-    assert GOOD not in html  # the password never travels back
+    # 2026-10-31: the temporary password is shown ONCE, in the one-time card on this page, and nowhere
+    # else (it used to never come back; the seller had no way to read it to the customer).
+    assert html.count(GOOD) == 1 and 'id="onboarding-temp-password"' in html
     assert counts(app)["Customer"] == 1 and counts(app)["CustomerDocument"] == 2
 
 
-def test_a_refused_post_keeps_the_text_but_not_the_password_and_writes_nothing(app, client, seeded, kyc):
+def test_a_refused_post_keeps_the_text_and_the_password_and_writes_nothing(app, client, seeded, kyc):
     w = _world(app)
     force_login(client, app, w["seller"])
     resp = _post_form(client, w, business_name="Typed Shop", consent="")
     html = resp.get_data(as_text=True)
     assert resp.status_code == 400 and 'data-onboarding-error="1"' in html
-    assert 'value="Typed Shop"' in html and GOOD not in html
+    # 2026-10-31: the password is handed back too (the seller already told the customer); the photos cannot be.
+    assert 'value="Typed Shop"' in html and f'value="{GOOD}"' in html
     assert counts(app) == NOTHING
 
 

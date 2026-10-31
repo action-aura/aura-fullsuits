@@ -316,3 +316,41 @@ def world_plan_id(world):
     import uuid
 
     return db_session.get(License, uuid.UUID(str(world["licence_id"]))).plan_id
+
+
+# --------------------------------- 7. the new-customer form: password kept, shown once
+
+def test_a_refused_new_customer_form_keeps_the_password_and_asks_for_the_photos_again(app, client, seeded, kyc):
+    from tests.test_customer_onboarding import GOOD, _post_form, _world
+
+    w = _world(app)
+    force_login(client, app, w["seller"])
+    typed = "Typed-By-Seller-77!"
+    resp = _post_form(client, w, temp_password=typed, consent="")  # no consent -> refused
+    html = resp.get_data(as_text=True)
+    assert resp.status_code == 400 and 'data-onboarding-error="1"' in html
+    assert re.search(r'name="temp_password"[^>]*value="Typed-By-Seller-77!"', html)  # deny: it is not blanked
+    assert 'data-reattach-photos="1"' in html  # the photos cannot be kept, and the form says so
+    assert "no-store" in resp.headers.get("Cache-Control", "")
+    # allow twin: a fresh form (nothing refused) shows neither the note nor a password
+    fresh = client.get("/customers/new-trial").get_data(as_text=True)
+    assert 'data-reattach-photos' not in fresh and 'value="Typed-By-Seller-77!"' not in fresh
+
+
+def test_the_new_customer_result_shows_the_temporary_password_once_with_a_copy_button(app, client, seeded, kyc):
+    from tests.test_customer_onboarding import _post_form, _world
+
+    w = _world(app)
+    force_login(client, app, w["seller"])
+    typed = "Shown-Once-Pass-91!"
+    key = str(uuid.uuid4())
+    same = dict(idempotency_key=key, business_name="Replay Shop", phone="079 555 1212", cr_number="RCR-REPLAY-1",
+                email="replay@route.example")
+    resp = _post_form(client, w, temp_password=typed, **same)
+    html = resp.get_data(as_text=True)
+    assert resp.status_code == 200 and 'data-temp-password-card="1"' in html
+    assert re.search(r'id="onboarding-temp-password"[^>]*>Shown-Once-Pass-91!</code>', html)
+    assert 'data-copy-target="onboarding-temp-password"' in html and "only time it is shown" in html
+    # deny twin: pressing the same form again (same key) is a replay and shows no password
+    again = _post_form(client, w, temp_password="Another-Pass-55!!", **same).get_data(as_text=True)
+    assert "Already created" in again and "data-temp-password" not in again and "Another-Pass-55" not in again

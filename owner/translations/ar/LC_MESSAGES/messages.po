@@ -9928,8 +9928,8 @@ msgid "Make one"
 msgstr "أنشئ واحدة"
 
 #: app/customer_onboarding
-msgid "Tell it to the customer now. They must choose their own at the first sign-in. It is never shown again."
-msgstr "أخبر العميل بها الآن. سيختار كلمة مرور خاصة به عند أول تسجيل دخول. لن تظهر مرة أخرى."
+msgid "Tell it to the customer now. They must choose their own at the first sign-in. You will see it once more on the next page, and never again after that."
+msgstr "أخبر العميل بها الآن. عليه أن يختار كلمة مرور خاصة به عند أول تسجيل دخول. ستراها مرة أخيرة في الصفحة التالية، ثم لن تظهر أبدًا."
 
 #: app/customer_onboarding
 msgid "Manager only"
@@ -10753,3 +10753,19 @@ msgstr "لا يوجد إيصال (نقد حصّله البائع). تأكد من
 #: app/templates/customers/_trial.html
 msgid "Paid until"
 msgstr "مدفوع حتى"
+
+#: app/templates/customer_onboarding/new.html
+msgid "Your photos could not be kept. Please attach both photos again before you press the button."
+msgstr "تعذّر الاحتفاظ بالصورتين. أرفق الصورتين مرة أخرى قبل الضغط على الزر."
+
+#: app/templates/customer_onboarding/result.html
+msgid "Temporary password: give it to the customer now"
+msgstr "كلمة المرور المؤقتة: سلّمها للعميل الآن"
+
+#: app/templates/customer_onboarding/result.html
+msgid "This is the only time it is shown. When you leave this page, nobody can see it again."
+msgstr "هذه هي المرة الوحيدة التي تظهر فيها. عند مغادرة هذه الصفحة لن يستطيع أحد رؤيتها مجددًا."
+
+#: app/templates/customer_onboarding/result.html
+msgid "Copy password"
+msgstr "نسخ كلمة المرور"
