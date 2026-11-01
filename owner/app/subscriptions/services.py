@@ -191,6 +191,16 @@ def record_renewal(
     return renewal
 
 
+def _send_payment_notice(payment: PaymentRecord) -> None:
+    """The shop's receipt (legal review v2 (d)-3): one mail per payment per status, to the
+    customer account. record_payment and correct_payment are the ONLY writers of
+    PaymentRecord.status, so every route - the one-screen sale, the payments screen, the
+    older subscriptions routes - sends it. Runs after the commit; never raises."""
+    from app.mail import notices
+
+    notices.queue_payment_notice(payment, payment.status)
+
+
 def record_payment(fields: dict, actor_staff_user_id, *, in_same_transaction=None, audit_extra: dict | None = None) -> PaymentRecord:
     """`in_same_transaction(payment)`, when given, runs after the payment is
     added and flushed and BEFORE the one commit, so whatever it adds commits
@@ -236,6 +246,7 @@ def record_payment(fields: dict, actor_staff_user_id, *, in_same_transaction=Non
         # own keys, never over the three above.
         after_state={**(audit_extra or {}), "amount": str(payment.amount), "currency": payment.currency, "status": payment.status},
     )
+    _send_payment_notice(payment)
     return payment
 
 
@@ -389,3 +400,4 @@ def correct_payment(payment: PaymentRecord, new_status: str, note: str, actor_st
         reason=note,
     )
     ladder.write_pending_audit(actor_staff_user_id)
+    _send_payment_notice(payment)

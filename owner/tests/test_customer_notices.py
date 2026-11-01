@@ -457,3 +457,102 @@ def test_staff_see_the_consents_and_the_flag_and_only_the_right_people_can_clear
     assert _audit_count(app, "CUSTOMER_ID_VERIFIED_BY_HAND") == 1
     html = staff.get(f"/customers/{world['customer_id']}").get_data(as_text=True)
     assert 'data-id-verification-flag="1"' not in html and 'data-consent-kind="id_documents"' in html,         "the flag is gone, the recorded answers stay"
+
+
+# =====================================================================  N3 payment receipts
+
+def _record_payment(app, w, *, customer_id=None, amount="125.50", method="CLIQ", reference="CLQ-9981", status="PENDING"):
+    from decimal import Decimal
+
+    from app.subscriptions.services import record_payment
+
+    with app.app_context():
+        payment = record_payment(
+            {"customer_id": customer_id or w["customer_id"], "amount": Decimal(amount), "currency": "JOD",
+             "method": method, "payment_date": jordan_today(), "status": status, "reference": reference},
+            w["seller"])
+        return payment.id
+
+
+def _correct(app, payment_id, status, actor, note="checked"):
+    from app.extensions import db_session
+    from app.models.subscriptions import PaymentRecord
+    from app.subscriptions.services import correct_payment
+
+    with app.app_context():
+        correct_payment(db_session.get(PaymentRecord, payment_id), status, note, actor)
+
+
+TAX_EN = "Prices include 16% general sales tax"
+TAX_AR = "الأسعار شاملة ضريبة المبيعات العامة 16%"
+
+
+def test_a_recorded_payment_is_mailed_to_the_shop_as_received_and_waiting(app, client, world):
+    _mail_on(app)
+    pid = _record_payment(app, world)
+    (mail,) = _mails(app, "customer_payment_pending")
+    assert mail.to_address == world["email"] and mail.dedupe_key == f"customer_payment_pending:{pid}"
+    for needed in ("125.50", "JOD", "CLIQ", "CLQ-9981", f"PAY-{str(pid)[:8].upper()}", jordan_today().isoformat(),
+                   "received by our seller, waiting for confirmation", TAX_EN, TAX_AR, "info@actionaura.me"):
+        assert needed in mail.body_text, needed
+    assert _mails(app, "customer_payment_confirmed") == [] and _mails(app, "customer_payment_rejected") == []
+
+
+def test_confirming_and_rejecting_each_mail_the_shop_once(app, client, world):
+    _mail_on(app)
+    pid = _record_payment(app, world)
+    _correct(app, pid, "CONFIRMED", world["manager"])
+    (confirmed,) = _mails(app, "customer_payment_confirmed")
+    assert "Confirmed" in confirmed.body_text and TAX_EN in confirmed.body_text and "125.50" in confirmed.body_text
+    # re-saving the same status (a note fix) is the same event: no second mail
+    _correct(app, pid, "CONFIRMED", world["manager"], note="note fix")
+    assert len(_mails(app, "customer_payment_confirmed")) == 1
+
+    other = _record_payment(app, world, reference="CLQ-2")
+    _correct(app, other, "FAILED", world["manager"], note="bounced")
+    (rejected,) = _mails(app, "customer_payment_rejected")
+    assert "contact us" in rejected.body_text and rejected.dedupe_key == f"customer_payment_rejected:{other}"
+    assert len(_mails(app, "customer_payment_pending")) == 2
+
+
+def test_a_refused_correction_sends_nothing(app, client, world):
+    """The recorder may not confirm their own payment: the refusal must not mail 'confirmed'."""
+    from app.subscriptions.services import PaymentSelfVerificationError
+
+    _mail_on(app)
+    pid = _record_payment(app, world)
+    with pytest.raises(PaymentSelfVerificationError):
+        _correct(app, pid, "CONFIRMED", world["seller"])
+    assert _mails(app, "customer_payment_confirmed") == []
+
+
+def test_a_payment_for_a_customer_with_no_account_sends_nothing_and_does_not_fail(app, client, world):
+    """Decision: the notice goes to the customer ACCOUNT's email. A customer record with no
+    account (an internal / legacy payment) has nobody to write to: no mail, no error."""
+    from app.extensions import db_session
+    from app.models.customers import Customer
+
+    _mail_on(app)
+    with app.app_context():
+        bare = Customer(legal_name="No Account Co")
+        db_session.add(bare)
+        db_session.commit()
+        bare_id = bare.id
+    pid = _record_payment(app, world, customer_id=bare_id)
+    _correct(app, pid, "CONFIRMED", world["manager"])
+    assert _mails(app) == []
+
+
+def test_with_email_off_payments_still_record_and_confirm(app, client, world):
+    app.config.update(SMTP_HOST="")
+    pid = _record_payment(app, world)
+    _correct(app, pid, "CONFIRMED", world["manager"])
+    assert _mails(app) == []
+
+
+def test_voided_and_refunded_payments_are_not_mailed(app, client, world):
+    """Only recorded / confirmed / rejected are the shop's receipts (decision, stated in the plan)."""
+    _mail_on(app)
+    pid = _record_payment(app, world)
+    _correct(app, pid, "VOIDED", world["manager"], note="duplicate entry")
+    assert [m.kind for m in _mails(app)] == ["customer_payment_pending"]
