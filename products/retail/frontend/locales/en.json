@@ -3024,5 +3024,10 @@
   "The boss computer sets up the shop, the staff and the settings. Every shop needs one.": "The boss computer sets up the shop, the staff and the settings. Every shop needs one.",
   "This is a cashier computer": "This is a cashier computer",
   "A cashier computer sells at the counter. It gets its staff from the boss computer.": "A cashier computer sells at the counter. It gets its staff from the boss computer.",
-  "Create the boss account for this computer. Choose a password for signing in here; it is separate from your Aura account password.": "Create the boss account for this computer. Choose a password for signing in here; it is separate from your Aura account password."
+  "Create the boss account for this computer. Choose a password for signing in here; it is separate from your Aura account password.": "Create the boss account for this computer. Choose a password for signing in here; it is separate from your Aura account password.",
+  "I agree that Action Aura keeps the photos of my ID and commercial registration to verify my account (deleted one year after my subscription ends).": "I agree that Action Aura keeps the photos of my ID and commercial registration to verify my account (deleted one year after my subscription ends).",
+  "I agree that my account and shop data are stored on Action Aura's servers outside Jordan (Germany and Cloudflare).": "I agree that my account and shop data are stored on Action Aura's servers outside Jordan (Germany and Cloudflare).",
+  "Without this, our team will verify your identity by phone.": "Without this, our team will verify your identity by phone.",
+  "The shop owner (or their authorised person) must accept personally; the seller may not accept on their behalf.": "The shop owner (or their authorised person) must accept personally; the seller may not accept on their behalf.",
+  "Please tick the box about storing data outside Jordan to continue.": "Please tick the box about storing data outside Jordan to continue."
 }

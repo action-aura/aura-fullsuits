@@ -3024,5 +3024,10 @@
   "The boss computer sets up the shop, the staff and the settings. Every shop needs one.": "جهاز المدير يُعدّ المتجر والموظفين والإعدادات. كل متجر يحتاج إلى جهاز واحد منه.",
   "This is a cashier computer": "هذا جهاز كاشير",
   "A cashier computer sells at the counter. It gets its staff from the boss computer.": "جهاز الكاشير يبيع عند الصندوق. يحصل على الموظفين من جهاز المدير.",
-  "Create the boss account for this computer. Choose a password for signing in here; it is separate from your Aura account password.": "أنشئ حساب المدير لهذا الجهاز. اختر كلمة مرور لتسجيل الدخول هنا؛ وهي منفصلة عن كلمة مرور حساب Aura."
+  "Create the boss account for this computer. Choose a password for signing in here; it is separate from your Aura account password.": "أنشئ حساب المدير لهذا الجهاز. اختر كلمة مرور لتسجيل الدخول هنا؛ وهي منفصلة عن كلمة مرور حساب Aura.",
+  "I agree that Action Aura keeps the photos of my ID and commercial registration to verify my account (deleted one year after my subscription ends).": "أوافق على احتفاظ Action Aura بصورتي هويتي وسجلي التجاري للتحقق من حسابي (تُحذف بعد سنة من انتهاء اشتراكي).",
+  "I agree that my account and shop data are stored on Action Aura's servers outside Jordan (Germany and Cloudflare).": "أوافق على حفظ بيانات حسابي ومتجري على خوادم Action Aura خارج الأردن (ألمانيا وCloudflare).",
+  "Without this, our team will verify your identity by phone.": "بدون هذه الموافقة سيتحقق فريقنا من هويتك هاتفيًا.",
+  "The shop owner (or their authorised person) must accept personally; the seller may not accept on their behalf.": "يجب أن يوافق صاحب المتجر أو المفوَّض بنفسه، ولا يجوز للمندوب الموافقة نيابة عنه.",
+  "Please tick the box about storing data outside Jordan to continue.": "يرجى الموافقة على حفظ البيانات خارج الأردن للمتابعة."
 }

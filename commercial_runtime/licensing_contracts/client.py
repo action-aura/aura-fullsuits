@@ -336,6 +336,7 @@ class LicensingClient:
         device_public_key_b64: str,
         signer: DeviceSigner,
         installation_id: Optional[str] = None,
+        consents: Optional[dict] = None,
     ) -> dict:
         """Records that THIS device's person accepted THIS exact text. The
         `text_sha256` is the hash of the text the screen showed (the client has
@@ -357,6 +358,13 @@ class LicensingClient:
             "app_version": app_version,
             "device_public_key": device_public_key_b64,
             "device_public_key_algorithm": "ed25519",
+            # Two separate, individually recorded consents (Owner 2026-11-01). ALWAYS
+            # present, strictly booleans: a missing field would read as "not asked",
+            # and Owner refuses data_outside_jordan=false itself.
+            "consents": {
+                "id_documents": bool(consents and consents.get("id_documents") is True),
+                "data_outside_jordan": bool(consents and consents.get("data_outside_jordan") is True),
+            },
         }
         if installation_id:
             body["installation_id"] = installation_id

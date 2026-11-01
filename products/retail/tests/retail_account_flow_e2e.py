@@ -9,7 +9,9 @@ SYSTEM Python, the backend and the fake Owner need the repo venv). Run with the 
      -> a WRONG password is refused and the field is blanked
      -> the temporary password -> forced password change (too short / mismatch refused)
      -> the contract modal: cannot be dismissed (Escape, click outside), box locked until scrolled to the
-        end, Accept locked until ticked, DRAFT watermark -> Accept
+        end, Accept locked until the contract box AND the data-outside-Jordan box are ticked (the
+        ID-document box is optional, with a note while unticked), the personal-acceptance line,
+        DRAFT watermark -> Accept
      -> activate -> ROLE step -> ADMIN (e-mail prefilled, separate local password) -> Employees
      -> create a cashier user -> the cashier signs in -> a real sale is accepted
      -> the Aura passwords are nowhere: not storage, not the DOM, not any file in the app data, not the log
@@ -61,6 +63,18 @@ MUTANTS = {
                        "const agree = el('input', { id: 'contract-agree', type: 'checkbox' });"),
     "accept_ignores_tick": ("**/licensing-account.js", "accept.disabled = !(reachedEnd && agree.checked);",
                             "accept.disabled = !reachedEnd;"),
+    # 2026-11-01 consents: Accept must wait for the mandatory data-outside-Jordan box (A4k..A4m).
+    "accept_ignores_outside": ("**/licensing-account.js", "return reachedEnd && agree.checked && outside.checked;",
+                               "return reachedEnd && agree.checked;"),
+    # ... and the two boxes must travel to the backend, each as its own boolean (A4r, A6c2, B3b).
+    "consents_not_sent": ("**/licensing-account.js", "consents: { id_documents: idDocs.checked, data_outside_jordan: outside.checked },", ""),
+    "id_docs_always_true": ("**/licensing-account.js", "consents: { id_documents: idDocs.checked,", "consents: { id_documents: true,"),
+    "outside_swapped_for_id_docs": ("**/licensing-account.js", "data_outside_jordan: outside.checked }", "data_outside_jordan: idDocs.checked }"),
+    # the optional-box note shows exactly while it is unticked (A4n, A4o)
+    "id_note_always_hidden": ("**/licensing-account.js", "idDocsNote.hidden = idDocs.checked;", "idDocsNote.hidden = true;"),
+    "id_note_never_hidden": ("**/licensing-account.js", "idDocsNote.hidden = idDocs.checked;", "idDocsNote.hidden = false;"),
+    # Owner's CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED has its own sentence (A4q)
+    "consent_error_unmapped": ("**/licensing-account.js", "CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED: '", "CONSENT_UNMAPPED_X: '"),
     "draft_hidden": ("**/licensing-account.js", "if (c.draft) {", "if (false) {"),
     "draft_always": ("**/licensing-account.js", "if (c.draft) {", "if (true) {"),
     "password_mismatch_ok": ("**/licensing-account.js", "if (a.input.value !== b.input.value) {", "if (false) {"),
@@ -232,6 +246,10 @@ def scenario_admin(pw, fake, backend):
           page.get_attribute("#contract-title", "lang") == "ar" and page.get_attribute("#contract-body", "dir") == "rtl")
     check("A4d the box is locked before the end is reached", page.locator("#contract-agree").is_disabled())
     check("A4e Accept is locked", page.locator("#contract-accept-btn").is_disabled())
+    # 2026-11-01: two separate consents, both UNticked on arrival.
+    check("A4d2 both consent boxes start unticked",
+          not page.locator("#contract-consent-id-docs").is_checked()
+          and not page.locator("#contract-consent-outside-jordan").is_checked())
     page.keyboard.press("Escape")
     page.mouse.click(4, 4)
     page.wait_for_timeout(300)
@@ -241,12 +259,66 @@ def scenario_admin(pw, fake, backend):
     check("A4g reaching the end unlocks the box", page.locator("#contract-agree").is_enabled())
     check("A4h ... but Accept stays locked until it is ticked", page.locator("#contract-accept-btn").is_disabled())
     page.check("#contract-agree")
-    check("A4i ticking unlocks Accept", page.locator("#contract-accept-btn").is_enabled())
+    check("A4k the contract box alone does NOT unlock Accept (the data-outside-Jordan box is mandatory)",
+          page.locator("#contract-accept-btn").is_disabled())
+    page.check("#contract-consent-outside-jordan")
+    check("A4i contract box + data-outside-Jordan box unlock Accept (ID-document box is optional)",
+          page.locator("#contract-accept-btn").is_enabled())
+    page.uncheck("#contract-consent-outside-jordan")
+    check("A4l un-ticking the data-outside-Jordan box locks Accept again", page.locator("#contract-accept-btn").is_disabled())
+    page.check("#contract-consent-outside-jordan")
     page.uncheck("#contract-agree")
-    check("A4j un-ticking locks Accept again", page.locator("#contract-accept-btn").is_disabled())
-    page.screenshot(path=str(OUT / "A4_contract.png"))
+    check("A4j un-ticking the contract box locks Accept again", page.locator("#contract-accept-btn").is_disabled())
     page.check("#contract-agree")
+    page.uncheck("#contract-consent-outside-jordan")
+    page.check("#contract-consent-id-docs")
+    check("A4m ticking only the ID-document box never unlocks Accept by itself",
+          page.locator("#contract-accept-btn").is_disabled())
+    page.uncheck("#contract-consent-id-docs")
+    page.check("#contract-consent-outside-jordan")
+    check("A4n with the ID-document box unticked its phone-verification note shows (AR + EN)",
+          visible(page, "#contract-consent-id-docs-note", 2000)
+          and "هاتفيًا" in page.inner_text("#contract-consent-id-docs-note")
+          and "verify your identity by phone" in page.inner_text("#contract-consent-id-docs-note"))
+    page.check("#contract-consent-id-docs")
+    page.wait_for_timeout(200)
+    check("A4o ... and it goes away once the ID-document box is ticked", not page.locator("#contract-consent-id-docs-note").is_visible())
+    page.uncheck("#contract-consent-id-docs")
+    pn = page.inner_text("#contract-personal-note")
+    check("A4p the owner-must-accept-personally line sits above Accept, in Arabic and English",
+          "للمندوب" in pn and "may not accept on their behalf" in pn
+          and page.evaluate("() => { const n = document.getElementById('contract-personal-note'), b = document.getElementById('contract-accept-btn');"
+                            " return !!(n.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING); }"))
+    page.screenshot(path=str(OUT / "A4_contract.png"))
+    # What the page really sends. First Owner's refusal of the mandatory box is simulated on the wire
+    # (the button cannot be clicked without it) to prove the code gets its own plain sentence; the
+    # second click goes through for real.
+    sent_bodies = []
+    page.on("request", lambda r: sent_bodies.append(r.post_data_json) if r.url.endswith("/account/contract/accept") else None)
+    # Refuse the FIRST accept only, then let later ones through. (Calling page.unroute from inside the
+    # handler made Playwright mark the route handled twice -- "Route is already handled!" -- so the
+    # handler keeps a flag instead and the second request is continued untouched.)
+    refused_once = []
+
+    def _refuse_first_accept(route):
+        if refused_once:
+            route.continue_()
+            return
+        refused_once.append(True)
+        route.fulfill(status=400, content_type="application/json",
+                      body=json.dumps({"reason_code": "CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED"}))
+
+    page.route("**/account/contract/accept", _refuse_first_accept)
     page.click("#contract-accept-btn")
+    page.wait_for_timeout(800)
+    msg = page.locator("#message-area").inner_text() if page.locator("#message-area").count() else ""
+    check("A4q Owner's CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED shows its own sentence and keeps the popup",
+          "box about storing data outside Jordan" in msg and page.locator("#contract-modal").count() == 1, msg)
+    page.click("#contract-accept-btn")
+    page.wait_for_timeout(1200)
+    check("A4r the request body carries consents with the two booleans (ID docs unticked, outside Jordan ticked)",
+          len(sent_bodies) == 2 and all(b.get("consents") == {"id_documents": False, "data_outside_jordan": True}
+                                        and b.get("agreed") is True for b in sent_bodies), sent_bodies)
 
     # A5: activate
     check("A5 one licence -> ready to activate", visible(page, "#account-activate-btn"))
@@ -262,6 +334,8 @@ def scenario_admin(pw, fake, backend):
     st = fake.state()
     check("A6c Owner recorded exactly one acceptance of the exact text",
           len(st["acceptances"]) == 1 and len(st["acceptances"][0]["sha256"]) == 64, st["acceptances"])
+    check("A6c2 Owner recorded the two consents separately (ID docs false, outside Jordan true)",
+          st["acceptances"][0].get("consents") == {"id_documents": False, "data_outside_jordan": True}, st["acceptances"])
     check("A6d Owner activated by account ticket", [a["kind"] for a in st["activations"]] == ["account_ticket"], st["activations"])
     check("A6e every signed request verified (no bad signature)", st["bad_signatures"] == 0, st["bad_signatures"])
 
@@ -356,8 +430,13 @@ def scenario_cashier(pw, fake, backend):
     check("B2b NO draft watermark on an approved text", page.locator("#contract-draft").count() == 0)
     page.evaluate("() => { const b = document.getElementById('contract-body'); b.scrollTop = b.scrollHeight; }")
     page.check("#contract-agree")
+    page.check("#contract-consent-id-docs")
+    page.check("#contract-consent-outside-jordan")
     page.click("#contract-accept-btn")
     check("B3 ready to activate", visible(page, "#account-activate-btn"))
+    check("B3b Owner recorded BOTH consents as true when both boxes were ticked",
+          fake.state()["acceptances"][-1].get("consents") == {"id_documents": True, "data_outside_jordan": True},
+          fake.state()["acceptances"])
     page.click("#account-activate-btn")
     check("B4 role step appears", visible(page, "#role-cashier-btn"))
     page.click("#role-cashier-btn")

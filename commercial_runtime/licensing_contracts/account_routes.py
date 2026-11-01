@@ -3,7 +3,8 @@
 
     POST /api/licensing/account/sign-in         {email, password}
     POST /api/licensing/account/password        {flow_id, new_password}
-    POST /api/licensing/account/contract/accept {flow_id, agreed: true}
+    POST /api/licensing/account/contract/accept {flow_id, agreed: true,
+                                                consents: {id_documents, data_outside_jordan}}
     POST /api/licensing/account/activate        {flow_id, license_public_id}
 
     (Android only, shared-secret, see routes.py)
@@ -24,6 +25,7 @@ from typing import Callable, Optional
 from flask import Blueprint, jsonify, request
 
 from .account_flow import (
+    CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED,
     CONTRACT_HASH_MISMATCH,
     CONTRACT_REQUIRED,
     GRANT_INVALID,
@@ -54,6 +56,7 @@ _STATUS_FOR = {
     PASSWORD_POLICY_FAILED: 400,
     CONTRACT_HASH_MISMATCH: 502,
     CONTRACT_REQUIRED: 409,
+    CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED: 400,
     GRANT_INVALID: 400,
 }
 _TRANSPORT_CODES = frozenset({
@@ -185,11 +188,19 @@ def register_account_routes(
         # some other request that merely names a flow.
         if body.get("agreed") is not True:
             return jsonify({"reason_code": INVALID_REQUEST, "detail": "agreed must be true."}), 400
+        # The two separate consents. Only a literal JSON `true` counts; anything else
+        # (missing, "true", 1) is False -- Owner is the authority on which are required.
+        raw_consents = body.get("consents") if isinstance(body.get("consents"), dict) else {}
+        consents = {
+            "id_documents": raw_consents.get("id_documents") is True,
+            "data_outside_jordan": raw_consents.get("data_outside_jordan") is True,
+        }
         _, event_recorder, _, signer, client = build_context()
         try:
             accept_contract(
                 client=client, signer=signer, ticket=entry.ticket, contract=entry.result.contract,
                 product_code=product_code, platform=platform, app_version=app_version,
+                consents=consents,
             )
         except AccountFlowError as exc:
             if exc.reason_code == SIGN_IN_FAILED:

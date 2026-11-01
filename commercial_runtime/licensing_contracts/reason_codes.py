@@ -52,6 +52,9 @@ PUBLIC_REASON_CODES = frozenset(
         "TRIAL_REQUIRES_UPDATE",
         "ACTIVATION_GRANT_INVALID",
         "PASSWORD_POLICY_FAILED",
+        # Owner 2026-11-01: the contract popup's second consent (data stored outside
+        # Jordan) was not ticked.
+        "CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED",
     }
 )
 

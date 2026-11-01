@@ -150,7 +150,10 @@ class LicensingCoordinator(context: Context) {
         mapOf("result" to "SUCCESS")
     }
 
-    suspend fun acceptContract(): Map<String, Any?> = withContext(Dispatchers.IO) {
+    suspend fun acceptContract(
+        consentIdDocuments: Boolean,
+        consentDataOutsideJordan: Boolean,
+    ): Map<String, Any?> = withContext(Dispatchers.IO) {
         val session = AccountFlowStore.get() ?: return@withContext refusal("ACCOUNT_FLOW_EXPIRED")
         if (session.passwordPending) return@withContext refusal("PASSWORD_CHANGE_REQUIRED")
         val c = session.view.contract
@@ -167,6 +170,7 @@ class LicensingCoordinator(context: Context) {
             ownerClient().acceptAccountContract(
                 productCode, "ANDROID", appVersion, identity.getPublicKeyB64(),
                 ticket, versionId, sha.lowercase(), c.language ?: "ar", identity,
+                consentIdDocuments, consentDataOutsideJordan,
             )
         } catch (exc: OwnerClientError) {
             return@withContext refusal(exc.reasonCode, exc.message ?: "")

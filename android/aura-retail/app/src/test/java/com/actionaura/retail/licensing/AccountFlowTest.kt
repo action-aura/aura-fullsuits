@@ -192,9 +192,23 @@ class AccountFlowTest {
     fun `the box is locked until the end and accept needs both`() {
         assertThat(ContractGate.boxEnabled(false)).isFalse()
         assertThat(ContractGate.boxEnabled(true)).isTrue()
-        assertThat(ContractGate.acceptEnabled(reachedEnd = true, ticked = false)).isFalse()
-        assertThat(ContractGate.acceptEnabled(reachedEnd = false, ticked = true)).isFalse()
-        assertThat(ContractGate.acceptEnabled(reachedEnd = true, ticked = true)).isTrue()
+        assertThat(ContractGate.acceptEnabled(reachedEnd = true, ticked = false, dataOutsideJordanTicked = true)).isFalse()
+        assertThat(ContractGate.acceptEnabled(reachedEnd = false, ticked = true, dataOutsideJordanTicked = true)).isFalse()
+        assertThat(ContractGate.acceptEnabled(reachedEnd = true, ticked = true, dataOutsideJordanTicked = true)).isTrue()
+    }
+
+    @Test
+    fun `accept also needs the mandatory data-outside-Jordan box and never the optional ID box`() {
+        // the contract box alone is not enough: the data-outside-Jordan consent is mandatory
+        assertThat(ContractGate.acceptEnabled(reachedEnd = true, ticked = true, dataOutsideJordanTicked = false)).isFalse()
+        // ... and that box alone is not enough either
+        assertThat(ContractGate.acceptEnabled(reachedEnd = true, ticked = false, dataOutsideJordanTicked = true)).isFalse()
+    }
+
+    @Test
+    fun `the phone-verification note shows exactly while the optional ID box is unticked`() {
+        assertThat(ContractGate.idDocumentsNoteVisible(idDocumentsTicked = false)).isTrue()
+        assertThat(ContractGate.idDocumentsNoteVisible(idDocumentsTicked = true)).isFalse()
     }
 
     @Test
@@ -212,11 +226,14 @@ class AccountFlowTest {
     @Test
     fun `every known refusal has its own plain sentence and unknown ones a safe default`() {
         val codes = listOf("ACCOUNT_SIGN_IN_FAILED", "RATE_LIMITED", "TRIAL_REQUIRES_UPDATE", "CONTRACT_HASH_MISMATCH",
-            "ACCOUNT_FLOW_EXPIRED", "CONTRACT_ACCEPTANCE_REQUIRED", "ACTIVATION_GRANT_INVALID", "DEVICE_LIMIT_REACHED")
+            "ACCOUNT_FLOW_EXPIRED", "CONTRACT_ACCEPTANCE_REQUIRED", "ACTIVATION_GRANT_INVALID", "DEVICE_LIMIT_REACHED",
+            "CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED")
         assertThat(codes.map { accountReasonKey(it) }.toSet()).hasSize(codes.size)
         assertThat(accountReasonKey("PASSWORD_POLICY_FAILED", "too_short")).contains("10 characters")
         assertThat(accountReasonKey("PASSWORD_POLICY_FAILED", "same_as_old")).contains("different")
         assertThat(accountReasonKey("SOMETHING_NEW")).isEqualTo("Please check the information entered.")
+        assertThat(accountReasonKey("CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED"))
+            .isEqualTo("Please tick the box about storing data outside Jordan to continue.")
         // a wrong password never says which half was wrong
         assertThat(accountReasonKey("ACCOUNT_SIGN_IN_FAILED")).contains("email or password")
     }
@@ -287,11 +304,38 @@ class AccountFlowTest {
 
         server.enqueue(MockResponse().setResponseCode(201).setBody("""{"accepted":true}"""))
         client().acceptAccountContract("AURA_RETAIL", "ANDROID", "1.0.0-rc.17", identity.getPublicKeyB64(),
-            "tk_1", "contract-v1", contractSha256("abc"), "ar", identity)
+            "tk_1", "contract-v1", contractSha256("abc"), "ar", identity,
+            consentIdDocuments = false, consentDataOutsideJordan = true)
         val ca = parse(server.takeRequest().body.readUtf8())
         assertThat(ca["contract_version_id"]).isEqualTo("contract-v1")
         assertThat(ca["text_sha256"]).isEqualTo(contractSha256("abc"))
         assertThat(ca["language"]).isEqualTo("ar")
+    }
+
+    @Test
+    fun `the acceptance body carries both consents as separate booleans`() {
+        for ((idDocs, outside) in listOf(true to true, false to true, true to false, false to false)) {
+            server.enqueue(MockResponse().setResponseCode(201).setBody("""{"accepted":true}"""))
+            client().acceptAccountContract("AURA_RETAIL", "ANDROID", "1.0.0-rc.17", identity.getPublicKeyB64(),
+                "tk_1", "contract-v1", contractSha256("abc"), "ar", identity,
+                consentIdDocuments = idDocs, consentDataOutsideJordan = outside)
+            val consents = parse(server.takeRequest().body.readUtf8())["consents"] as Map<*, *>
+            assertThat(consents).containsExactly("id_documents", idDocs, "data_outside_jordan", outside)
+        }
+    }
+
+    @Test
+    fun `owner's refusal of the data-outside-Jordan consent reaches the screen with its own sentence`() {
+        server.enqueue(MockResponse().setResponseCode(400).setBody("""{"reason_code":"CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED"}"""))
+        val raw = client().acceptAccountContract("AURA_RETAIL", "ANDROID", "1.0.0-rc.17", identity.getPublicKeyB64(),
+            "tk_1", "contract-v1", contractSha256("abc"), "ar", identity,
+            consentIdDocuments = true, consentDataOutsideJordan = false)
+        val code = parse(raw)["reason_code"] as String
+        assertThat(code).isEqualTo("CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED")
+        assertThat(accountReasonKey(code)).isEqualTo("Please tick the box about storing data outside Jordan to continue.")
+        // and Arabic exists for it (the screen wraps the key in tr())
+        assertThat(com.actionaura.retail.ui.i18n.arabicFor(accountReasonKey(code)))
+            .isEqualTo("يرجى الموافقة على حفظ البيانات خارج الأردن للمتابعة.")
     }
 
     @Test
@@ -323,7 +367,11 @@ class AccountFlowTest {
         assertThat(screen).contains("dismissOnBackPress = false")
         assertThat(screen).contains("dismissOnClickOutside = false")
         assertThat(screen).contains("onDismissRequest = {}")
-        assertThat(screen).contains("ContractGate.acceptEnabled(reachedEnd, ticked)")
+        assertThat(screen).contains("ContractGate.acceptEnabled(reachedEnd, ticked, dataOutsideJordanTicked)")
+        // both consents travel to the coordinator, each as its own boolean
+        assertThat(screen).contains("onAccept(idDocumentsTicked, dataOutsideJordanTicked)")
+        assertThat(screen).contains("coordinator.acceptContract(idDocuments, dataOutsideJordan)")
+        assertThat(screen).contains("ContractGate.idDocumentsNoteVisible(idDocumentsTicked)")
         assertThat(screen).contains("ContractGate.boxEnabled(reachedEnd)")
     }
 

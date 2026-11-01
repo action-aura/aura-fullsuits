@@ -183,6 +183,10 @@ object AccountFlowStore {
  * plain JVM test can pin them (Compose is not unit-testable in this project).
  * The box is locked until the text has been scrolled to its end; Accept is
  * locked until the box is ticked AND the end was reached.
+ *
+ * Owner 2026-11-01: two SEPARATE consents sit under the text. "My data is stored outside
+ * Jordan" is mandatory (Accept stays locked without it); "Action Aura keeps my ID photos"
+ * is optional (unticked means the team verifies the identity by phone instead).
  */
 object ContractGate {
     /** Compose's ScrollState reports maxValue = Int.MAX_VALUE until the first layout; that is
@@ -191,7 +195,11 @@ object ContractGate {
         maxValue != Int.MAX_VALUE && value >= maxValue - slackPx
 
     fun boxEnabled(reachedEnd: Boolean): Boolean = reachedEnd
-    fun acceptEnabled(reachedEnd: Boolean, ticked: Boolean): Boolean = reachedEnd && ticked
+    fun acceptEnabled(reachedEnd: Boolean, ticked: Boolean, dataOutsideJordanTicked: Boolean): Boolean =
+        reachedEnd && ticked && dataOutsideJordanTicked
+
+    /** The optional ID-document box's phone-verification note shows exactly while it is unticked. */
+    fun idDocumentsNoteVisible(idDocumentsTicked: Boolean): Boolean = !idDocumentsTicked
 }
 
 /** Plain-language message KEY (English; the caller wraps it in tr()) for a refusal. */
@@ -204,6 +212,7 @@ fun accountReasonKey(code: String?, policyCode: String? = null): String = when (
         "The agreement text could not be checked, so it was not shown. Please try again, or contact support."
     "ACCOUNT_FLOW_EXPIRED" -> "Your sign-in timed out. Please sign in again."
     "CONTRACT_ACCEPTANCE_REQUIRED" -> "The agreement must be accepted before this computer can be activated."
+    "CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED" -> "Please tick the box about storing data outside Jordan to continue."
     "ACTIVATION_GRANT_INVALID" ->
         "This computer could not be activated with that account. Sign in again, or contact your seller."
     "DEVICE_LIMIT_REACHED" -> "This account has reached its computer limit. Contact your seller to add a device."

@@ -1600,6 +1600,16 @@ private val AR_STRINGS: Map<String, String> = mapOf(
         "اقرأ العقد حتى نهايته ثم ضع علامة في المربع للمتابعة.",
     "I have read the agreement and I accept it" to
         "قرأت العقد وأوافق عليه",
+    "I agree that Action Aura keeps the photos of my ID and commercial registration to verify my account (deleted one year after my subscription ends)." to
+        "أوافق على احتفاظ Action Aura بصورتي هويتي وسجلي التجاري للتحقق من حسابي (تُحذف بعد سنة من انتهاء اشتراكي).",
+    "I agree that my account and shop data are stored on Action Aura's servers outside Jordan (Germany and Cloudflare)." to
+        "أوافق على حفظ بيانات حسابي ومتجري على خوادم Action Aura خارج الأردن (ألمانيا وCloudflare).",
+    "Without this, our team will verify your identity by phone." to
+        "بدون هذه الموافقة سيتحقق فريقنا من هويتك هاتفيًا.",
+    "The shop owner (or their authorised person) must accept personally; the seller may not accept on their behalf." to
+        "يجب أن يوافق صاحب المتجر أو المفوَّض بنفسه، ولا يجوز للمندوب الموافقة نيابة عنه.",
+    "Please tick the box about storing data outside Jordan to continue." to
+        "يرجى الموافقة على حفظ البيانات خارج الأردن للمتابعة.",
     "Scroll to the end of the agreement to enable the box." to
         "مرّر إلى نهاية العقد لتفعيل المربع.",
     "Accept" to

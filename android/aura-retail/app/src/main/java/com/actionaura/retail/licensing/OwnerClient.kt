@@ -169,6 +169,7 @@ class OwnerClient(
     fun acceptAccountContract(
         productCode: String, platform: String, appVersion: String, devicePublicKeyB64: String,
         ticket: String, contractVersionId: String, textSha256: String, language: String, identity: DeviceIdentity,
+        consentIdDocuments: Boolean, consentDataOutsideJordan: Boolean,
     ): String {
         var lastBody: LinkedHashMap<String, Any?>? = null
         try {
@@ -178,6 +179,12 @@ class OwnerClient(
                 body["contract_version_id"] = contractVersionId
                 body["text_sha256"] = textSha256
                 body["language"] = language
+                // Two separate, individually recorded consents (Owner 2026-11-01), always sent as
+                // real booleans; Owner refuses data_outside_jordan=false with its own reason code.
+                body["consents"] = linkedMapOf<String, Any?>(
+                    "id_documents" to consentIdDocuments,
+                    "data_outside_jordan" to consentDataOutsideJordan,
+                )
                 lastBody = body
                 sign(body, identity)
             }

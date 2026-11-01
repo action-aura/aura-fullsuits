@@ -77,12 +77,14 @@ def _sign_in(client, email=EMAIL, password=TEMP_PASSWORD):
     return client.post("/api/licensing/account/sign-in", json={"email": email, "password": password})
 
 
-def _through_password_and_contract(client):
+def _through_password_and_contract(client, id_documents=True):
     flow = _sign_in(client).get_json()["flow_id"]
     assert client.post("/api/licensing/account/password",
                        json={"flow_id": flow, "new_password": NEW_PASSWORD}).status_code == 200
     assert client.post("/api/licensing/account/contract/accept",
-                       json={"flow_id": flow, "agreed": True}).status_code == 200
+                       json={"flow_id": flow, "agreed": True,
+                             "consents": {"id_documents": id_documents,
+                                          "data_outside_jordan": True}}).status_code == 200
     return flow
 
 
@@ -159,6 +161,50 @@ def test_owner_unreachable_is_a_503_not_a_wrong_password(tmp_path, fake):
     fake.stop()
     r = _sign_in(c)
     assert r.status_code == 503 and r.get_json()["reason_code"] in ("NETWORK_UNAVAILABLE", "REQUEST_TIMED_OUT")
+
+
+# -- the two separate consents ------------------------------------------------
+
+def _to_contract_step(client):
+    flow = _sign_in(client).get_json()["flow_id"]
+    assert client.post("/api/licensing/account/password",
+                       json={"flow_id": flow, "new_password": NEW_PASSWORD}).status_code == 200
+    return flow
+
+
+@pytest.mark.parametrize("id_documents", [True, False])
+def test_the_acceptance_carries_both_consents_each_recorded_on_its_own(client, fake, id_documents):
+    # (a) ticked or UNticked is a legitimate choice: both are accepted, and the unticked one
+    # is recorded as false (not missing). (b) is ticked, as the screen insists.
+    _through_password_and_contract(client, id_documents=id_documents)
+    assert fake.acceptances[-1]["consents"] == {"id_documents": id_documents, "data_outside_jordan": True}
+    assert fake.bad_signatures == 0, "the signature must cover the consents object too"
+
+
+def test_a_consent_that_is_not_literally_true_is_sent_as_false(client, fake):
+    flow = _to_contract_step(client)
+    r = client.post("/api/licensing/account/contract/accept", json={
+        "flow_id": flow, "agreed": True,
+        "consents": {"id_documents": "true", "data_outside_jordan": 1}})
+    # "true" / 1 are not booleans: both read as false, so Owner refuses on the mandatory one.
+    assert r.status_code == 400 and r.get_json()["reason_code"] == "CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED"
+    sent = [b for p, b in fake.requests if p.endswith("contract-acceptances")][-1]
+    assert sent["consents"] == {"id_documents": False, "data_outside_jordan": False}
+
+
+def test_owner_refusing_the_data_outside_jordan_consent_reaches_the_screen_and_keeps_the_flow(client, fake):
+    flow = _to_contract_step(client)
+    for body in ({"flow_id": flow, "agreed": True},                                   # no consents at all
+                 {"flow_id": flow, "agreed": True,
+                  "consents": {"id_documents": True, "data_outside_jordan": False}}):
+        r = client.post("/api/licensing/account/contract/accept", json=body)
+        assert r.status_code == 400, r.get_json()
+        assert r.get_json()["reason_code"] == "CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED"
+    assert fake.acceptances == []
+    # The refusal is recoverable: the same flow can still accept once (b) is ticked.
+    ok = client.post("/api/licensing/account/contract/accept", json={
+        "flow_id": flow, "agreed": True, "consents": {"id_documents": False, "data_outside_jordan": True}})
+    assert ok.status_code == 200 and len(fake.acceptances) == 1
 
 
 # -- the order of the steps ---------------------------------------------------

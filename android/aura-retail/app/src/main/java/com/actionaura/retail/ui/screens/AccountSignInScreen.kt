@@ -171,10 +171,10 @@ fun AccountSignInPanel(
                         draft = session.view.contract.draft,
                         busy = busy,
                         error = error,
-                        onAccept = {
+                        onAccept = { idDocuments, dataOutsideJordan ->
                             scope.launch {
                                 error = null; busy = true
-                                val result = try { coordinator.acceptContract() } catch (e: Exception) {
+                                val result = try { coordinator.acceptContract(idDocuments, dataOutsideJordan) } catch (e: Exception) {
                                     mapOf<String, Any?>("reason_code" to "NETWORK_UNAVAILABLE")
                                 }
                                 busy = false
@@ -260,12 +260,16 @@ private fun ContractDialog(
     draft: Boolean,
     busy: Boolean,
     error: String?,
-    onAccept: () -> Unit,
+    onAccept: (idDocuments: Boolean, dataOutsideJordan: Boolean) -> Unit,
     onDecline: () -> Unit,
 ) {
     val scroll = rememberScrollState()
     var reachedEnd by remember { mutableStateOf(false) }
     var ticked by remember { mutableStateOf(false) }
+    // The two SEPARATE consents (Owner 2026-11-01), both unticked on arrival. Outside-Jordan is
+    // mandatory; ID documents is optional. Neither waits for the scroll.
+    var idDocumentsTicked by remember { mutableStateOf(false) }
+    var dataOutsideJordanTicked by remember { mutableStateOf(false) }
     // Latched: once the end was seen it stays seen (scrolling back up must not re-lock it).
     LaunchedEffect(scroll.value, scroll.maxValue) {
         if (ContractGate.reachedEnd(scroll.value, scroll.maxValue)) reachedEnd = true
@@ -310,11 +314,42 @@ private fun ContractDialog(
                 if (!reachedEnd) {
                     Text(tr("Scroll to the end of the agreement to enable the box."), style = MaterialTheme.typography.bodySmall)
                 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = idDocumentsTicked, onCheckedChange = { idDocumentsTicked = it })
+                    Column {
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                            Text("أوافق على احتفاظ Action Aura بصورتي هويتي وسجلي التجاري للتحقق من حسابي (تُحذف بعد سنة من انتهاء اشتراكي).", style = MaterialTheme.typography.bodyMedium)
+                        }
+                        Text(tr("I agree that Action Aura keeps the photos of my ID and commercial registration to verify my account (deleted one year after my subscription ends)."), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                if (ContractGate.idDocumentsNoteVisible(idDocumentsTicked)) {
+                    Column(Modifier.padding(start = 12.dp)) {
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                            Text("بدون هذه الموافقة سيتحقق فريقنا من هويتك هاتفيًا.", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text(tr("Without this, our team will verify your identity by phone."), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = dataOutsideJordanTicked, onCheckedChange = { dataOutsideJordanTicked = it })
+                    Column {
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                            Text("أوافق على حفظ بيانات حسابي ومتجري على خوادم Action Aura خارج الأردن (ألمانيا وCloudflare).", style = MaterialTheme.typography.bodyMedium)
+                        }
+                        Text(tr("I agree that my account and shop data are stored on Action Aura's servers outside Jordan (Germany and Cloudflare)."), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                // The shop owner (or their authorised person) accepts in person -- never the seller.
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                    Text("يجب أن يوافق صاحب المتجر أو المفوَّض بنفسه، ولا يجوز للمندوب الموافقة نيابة عنه.", style = MaterialTheme.typography.bodySmall)
+                }
+                Text(tr("The shop owner (or their authorised person) must accept personally; the seller may not accept on their behalf."), style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
-                        enabled = !busy && ContractGate.acceptEnabled(reachedEnd, ticked),
-                        onClick = onAccept,
+                        enabled = !busy && ContractGate.acceptEnabled(reachedEnd, ticked, dataOutsideJordanTicked),
+                        onClick = { onAccept(idDocumentsTicked, dataOutsideJordanTicked) },
                     ) { Text("أوافق / " + tr("Accept")) }
                     OutlinedButton(enabled = !busy, onClick = onDecline) { Text(tr("Decline and go back")) }
                 }

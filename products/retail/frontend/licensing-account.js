@@ -114,6 +114,7 @@
     ACCOUNT_FLOW_EXPIRED: 'Your sign-in timed out. Please sign in again.',
     PASSWORD_CHANGE_REQUIRED: 'You must choose a new password first.',
     CONTRACT_ACCEPTANCE_REQUIRED: 'The agreement must be accepted before this computer can be activated.',
+    CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED: 'Please tick the box about storing data outside Jordan to continue.',
     ACTIVATION_GRANT_INVALID: 'This computer could not be activated with that account. Sign in again, or contact your seller.',
     DEVICE_LIMIT_REACHED: 'This account has reached its computer limit. Contact your seller to add a device.',
     PASSWORD_POLICY_FAILED: 'That password is not allowed. Choose a longer one you have not used before.',
@@ -333,9 +334,34 @@
         el('span', { text: ' / ' + t('I have read the agreement and I accept it') }),
       ]);
       card.appendChild(agreeLabel);
+      // Two SEPARATE consents (Owner 2026-11-01), unticked, each recorded on its own.
+      // (b) data outside Jordan is mandatory; (a) ID-document retention is optional --
+      // without it the team verifies the identity by phone. Neither waits for the scroll.
+      const idDocs = el('input', { id: 'contract-consent-id-docs', type: 'checkbox' });
+      card.appendChild(el('label', { className: 'contract-agree', htmlFor: 'contract-consent-id-docs' }, [
+        idDocs,
+        el('span', { lang: 'ar', dir: 'rtl', text: ' أوافق على احتفاظ Action Aura بصورتي هويتي وسجلي التجاري للتحقق من حسابي (تُحذف بعد سنة من انتهاء اشتراكي).' }),
+        el('span', { text: ' / ' + t('I agree that Action Aura keeps the photos of my ID and commercial registration to verify my account (deleted one year after my subscription ends).') }),
+      ]));
+      const idDocsNote = el('p', { id: 'contract-consent-id-docs-note', className: 'contract-hint' }, [
+        el('span', { lang: 'ar', dir: 'rtl', text: 'بدون هذه الموافقة سيتحقق فريقنا من هويتك هاتفيًا.' }),
+        el('span', { text: ' / ' + t('Without this, our team will verify your identity by phone.') }),
+      ]);
+      card.appendChild(idDocsNote);
+      const outside = el('input', { id: 'contract-consent-outside-jordan', type: 'checkbox' });
+      card.appendChild(el('label', { className: 'contract-agree', htmlFor: 'contract-consent-outside-jordan' }, [
+        outside,
+        el('span', { lang: 'ar', dir: 'rtl', text: ' أوافق على حفظ بيانات حسابي ومتجري على خوادم Action Aura خارج الأردن (ألمانيا وCloudflare).' }),
+        el('span', { text: ' / ' + t("I agree that my account and shop data are stored on Action Aura's servers outside Jordan (Germany and Cloudflare).") }),
+      ]));
       const note = el('p', { id: 'contract-scroll-note', className: 'contract-hint', text: t('Scroll to the end of the agreement to enable the box.') });
       card.appendChild(note);
 
+      // The shop owner (or their authorised person) accepts in person -- never the seller.
+      card.appendChild(el('p', { id: 'contract-personal-note', className: 'contract-hint' }, [
+        el('span', { lang: 'ar', dir: 'rtl', text: 'يجب أن يوافق صاحب المتجر أو المفوَّض بنفسه، ولا يجوز للمندوب الموافقة نيابة عنه.' }),
+        el('span', { text: ' / ' + t('The shop owner (or their authorised person) must accept personally; the seller may not accept on their behalf.') }),
+      ]));
       const accept = el('button', { id: 'contract-accept-btn', text: 'أوافق / ' + t('Accept'), disabled: true });
       const back = el('button', { id: 'contract-decline-btn', className: 'secondary', text: t('Decline and go back') });
       card.appendChild(el('div', { className: 'row' }, [accept, back]));
@@ -351,7 +377,17 @@
         }
       };
       body.addEventListener('scroll', onScroll);
-      agree.addEventListener('change', function () { accept.disabled = !(reachedEnd && agree.checked); });
+      // Accept needs: the end reached, the contract box, AND the mandatory data-outside-Jordan box.
+      // The ID-document box is optional, but its note shows while it is unticked.
+      const canAccept = function () { return reachedEnd && agree.checked && outside.checked; };
+      const refresh = function () {
+        accept.disabled = !canAccept();
+        idDocsNote.hidden = idDocs.checked;
+      };
+      agree.addEventListener('change', refresh);
+      outside.addEventListener('change', refresh);
+      idDocs.addEventListener('change', refresh);
+      refresh();
 
       // Cannot be dismissed: Escape and a click on the dark area do nothing.
       const swallowEscape = function (ev) {
@@ -366,11 +402,14 @@
       accept.addEventListener('click', async function () {
         // Belt and braces: the buttons are disabled until both conditions hold,
         // but a script clicking a disabled-then-enabled node must not slip past.
-        if (!(reachedEnd && agree.checked)) return;
+        if (!canAccept()) return;
         busy(accept, true);
         let res;
         try {
-          res = await api.post('/api/licensing/account/contract/accept', { flow_id: flowId, agreed: true });
+          res = await api.post('/api/licensing/account/contract/accept', {
+            flow_id: flowId, agreed: true,
+            consents: { id_documents: idDocs.checked, data_outside_jordan: outside.checked },
+          });
         } catch (err) {
           busy(accept, false);
           api.say(t(MESSAGES.NETWORK_UNAVAILABLE), 'error');

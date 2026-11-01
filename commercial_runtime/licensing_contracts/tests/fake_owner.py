@@ -241,10 +241,15 @@ class FakeOwner:
             if (body.get("contract_version_id") != c["version_id"]
                     or body.get("text_sha256") != sha256_hex(c["body"])):
                 return jsonify({"reason_code": "CONTRACT_ACCEPTANCE_REQUIRED"}), 409
+            # Owner 2026-11-01: two separate consents ride with the acceptance. Storing the
+            # data outside Jordan is mandatory; ID-document retention is optional.
+            consents = body.get("consents") if isinstance(body.get("consents"), dict) else {}
+            if consents.get("data_outside_jordan") is not True:
+                return jsonify({"reason_code": "CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED"}), 400
             t["contract_accepted"] = True
             self.acceptances.append({"email": t["email"], "version": body["contract_version_id"],
                                      "sha256": body["text_sha256"], "language": body.get("language"),
-                                     "fingerprint": t["fingerprint"]})
+                                     "fingerprint": t["fingerprint"], "consents": consents})
             return jsonify({"accepted": True}), 201
 
         @app.route(base + "/activations", methods=["POST"])

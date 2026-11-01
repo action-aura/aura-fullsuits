@@ -39,6 +39,9 @@ PASSWORD_POLICY_FAILED = "PASSWORD_POLICY_FAILED"  # pragma: allowlist secret --
 RATE_LIMITED = "RATE_LIMITED"
 #: Local (never from Owner): the contract body does not hash to what Owner said.
 CONTRACT_HASH_MISMATCH = "CONTRACT_HASH_MISMATCH"
+#: Owner refuses an acceptance whose consents.data_outside_jordan is not true
+#: (the account and shop data live on servers outside Jordan; that must be agreed).
+CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED = "CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED"
 
 #: A new password must be at least this long (Owner's customer policy: 10).
 #: Checked here only to answer instantly; Owner stays the authority.
@@ -319,6 +322,7 @@ def accept_contract(
     product_code: str,
     platform: str,
     app_version: str,
+    consents: Optional[dict] = None,
 ) -> None:
     if not (contract.required and contract.version_id and contract.sha256 and contract.body):
         raise AccountFlowError(CONTRACT_HASH_MISMATCH, "There is no contract to accept.")
@@ -336,6 +340,7 @@ def accept_contract(
             app_version=app_version,
             device_public_key_b64=signer.get_public_key_b64(),
             signer=signer,
+            consents=consents,
         )
     except LicensingClientError as exc:
         raise AccountFlowError(exc.reason_code, str(exc)) from exc

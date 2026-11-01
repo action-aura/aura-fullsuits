@@ -147,6 +147,8 @@ object LicensingMessages {
         // AccountFlow.kt's accountReasonKey() and the desktop's licensing-account.js.
         "ACCOUNT_SIGN_IN_FAILED" to "The email or password is not right. Check them and try again.",
         "CONTRACT_ACCEPTANCE_REQUIRED" to "The agreement must be accepted before this computer can be activated.",
+        // Owner 2026-11-01: the contract popup's mandatory second box (data stored outside Jordan).
+        "CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED" to "Please tick the box about storing data outside Jordan to continue.",
         "TRIAL_REQUIRES_UPDATE" to
             "This version of Aura Retail is too old to start a trial. Please download the newest version from actionaura.me and install it.",
         "ACTIVATION_GRANT_INVALID" to
