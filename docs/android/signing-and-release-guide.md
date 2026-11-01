@@ -5,17 +5,37 @@ independently — they are separate apps with separate identities, and **must ne
 share a signing key** in production, since that would let one app's update silently
 carry the other's signature).
 
-## Current status (this phase)
+## Current status
 
-**No production signing key exists.** No real keystore was generated, used, or
-committed in Phase 4. Any `release`/`assembleRelease` artifact produced in this
-phase is **unsigned** (or, if `apksigner` auto-signs with a debug key via AGP's
-default behavior for an unconfigured `release` signingConfig, that is a debug-only
-signature — never distribute it). Do not describe a build from this phase as a
-"signed release" unless a real, protected production key was actually used — see
-`android-{retail,clinic}-build-report.md` for exactly what was and wasn't signed.
+**A production signing key exists for Aura Retail** (`com.actionaura.retail`),
+generated 2026-08-20 (alias `aura`, RSA 4096, valid to 2054). It is the one and
+only Retail release key; every Retail release APK must be signed with it, or
+existing installs can never update.
 
-## Setting up a real signing key (when you're ready to ship)
+Where it lives (paths only; the passwords are in the credentials file, never in
+this repo):
+
+- `C:\Users\MSI\.aura-signing\aura-release.jks` plus `CREDENTIALS.txt` beside it
+  (the working copy `keystore.properties` points at).
+- A byte-identical copy of both in `C:\Users\MSI\Desktop\Aura-CRITICAL-BACKUPS\`.
+- GitHub Actions secrets `AURA_RELEASE_KEYSTORE_B64`, `AURA_RELEASE_KEY_ALIAS`,
+  `AURA_RELEASE_KEY_PASSWORD`, `AURA_RELEASE_STORE_PASSWORD` (set 2026-10-01).
+
+**Still owed: an off-laptop backup.** Both local copies are on the same machine,
+so a disk loss would lose the key. Put the `.jks` and `CREDENTIALS.txt` in a
+password manager or encrypted offline storage before relying on this key for
+real customers. (The GitHub secrets are write-only, so they cannot serve as a
+backup.)
+
+**Aura Clinic has no production key yet.** It must get its own, separate key; do
+not reuse the Retail one. Until then a Clinic `assembleRelease` is unsigned
+(never distribute it).
+
+A release built without `keystore.properties` on disk is **unsigned** (or carries
+only a debug signature). Never describe such a build as a "signed release"; see
+`android-{retail,clinic}-build-report.md` for exactly what each build was signed with.
+
+## Setting up a signing key (a new product, or rebuilding the setup on a new machine)
 
 1. Generate the keystore **once**, and reuse it for every future update — Android
    only preserves a user's app data across an update if the new APK is signed with
