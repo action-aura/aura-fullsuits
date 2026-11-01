@@ -279,6 +279,41 @@ def test_the_manager_page_needs_payments_confirm_and_lists_everyones_cash(app, w
         assert page.status_code == 200 and str(a.id) in text and str(b.id) in text, who
 
 
+def test_the_overdue_row_links_to_a_prefilled_sanction_case_only_for_holders_of_sellers_discipline(app, w):
+    """Clause 16 shortcut: an overdue hand-in carries 'Open a sanction case' (seller + CASH_HAND_IN link
+    prefilled) for a holder of sellers.discipline. Deny halves: a payments.confirm holder WITHOUT that
+    permission (finance) sees the same overdue row but no link, a seller cannot even load the page, and a
+    row that is not overdue has no link for the manager. Allow half: the link target really opens a case."""
+    from app.extensions import db_session
+    from app.models.sellers import SellerCashHandIn
+
+    c1, c2 = make_customer(app, w["seller"]), make_customer(app, w["seller2"])
+    late = _handins(app, payment_record_id=record(app, w["seller"], c1))[0]
+    fresh = _handins(app, payment_record_id=record(app, w["seller2"], c2))[0]
+    with app.app_context():
+        row = db_session.get(SellerCashHandIn, late.id)
+        row.collected_at = row.collected_at - timedelta(days=3)
+        row.due_at = row.due_at - timedelta(days=3)
+        db_session.commit()
+    marker = f'data-open-sanction-case="{late.id}"'
+    manager = client_for(app, w["sm"]).get("/sellers/cash/manage").get_data(as_text=True)
+    assert 'data-handin-overdue="1"' in manager and marker in manager
+    assert f'data-open-sanction-case="{fresh.id}"' not in manager  # not overdue: no link
+    assert f"link_kind=CASH_HAND_IN&amp;link_id={late.id}" in manager and f"seller={w['seller']}" in manager
+    assert marker in client_for(app, w["admin"]).get("/sellers/cash/manage").get_data(as_text=True)
+    finance = client_for(app, w["finance"]).get("/sellers/cash/manage")
+    assert finance.status_code == 200 and 'data-handin-overdue="1"' in finance.get_data(as_text=True)
+    assert "data-open-sanction-case" not in finance.get_data(as_text=True)
+    assert client_for(app, w["seller"]).get("/sellers/cash/manage").status_code == 403
+    # the target: the new-case form accepts the link and carries it through
+    with app.test_request_context():
+        from flask import url_for
+
+        target = url_for("seller_discipline.new_case", seller=w["seller"], link_kind="CASH_HAND_IN", link_id=late.id)
+    form = client_for(app, w["sm"]).get(target)
+    assert form.status_code == 200 and 'value="CASH_HAND_IN"' in form.get_data(as_text=True)
+
+
 def test_the_seller_dashboard_tile_counts_only_their_own_and_goes_red_when_overdue(app, w):
     from app.sellers import cash_handin
 

@@ -44,6 +44,11 @@
             <button type="submit">{{ _("Cash received at the office") }}</button>
           </form>
         {% endif %}
+        {# Clause 16: being overdue starts nothing by itself. Only a holder of sellers.discipline (not every
+           payments.confirm holder) gets the shortcut into the sanction form, pre-linked to this hand-in. #}
+        {% if r.overdue and has_permission('sellers.discipline') %}
+          <a href="{{ url_for('seller_discipline.new_case', seller=r.seller_id, link_kind='CASH_HAND_IN', link_id=r.row.id) }}" data-open-sanction-case="{{ r.row.id }}">{{ _("Open a sanction case") }}</a>
+        {% endif %}
       </td>
     </tr>
     {% else %}

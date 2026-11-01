@@ -11667,3 +11667,7 @@ msgstr "No deal"
 #: app/templates/seller_discipline/new_case.html
 msgid "Open the case and tell the seller"
 msgstr "Open the case and tell the seller"
+
+#: app/templates/sellers/cash_manage.html
+msgid "Open a sanction case"
+msgstr "Open a sanction case"

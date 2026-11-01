@@ -11626,3 +11626,7 @@ msgstr "بلا صفقة"
 #: app/templates/seller_discipline/new_case.html
 msgid "Open the case and tell the seller"
 msgstr "فتح القضية وإبلاغ البائع"
+
+#: app/templates/sellers/cash_manage.html
+msgid "Open a sanction case"
+msgstr "فتح قضية عقوبة"
