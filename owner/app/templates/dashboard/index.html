@@ -177,6 +177,17 @@
   {% if summary.cash_mine.next_due_at %}<p class="hint">{{ _("Next deadline: %(when)s", when=format_owner_datetime(summary.cash_mine.next_due_at)) }}</p>{% endif %}
 </div>
 {% endif %}
+{% if summary.expiring_soon %}
+<div class="card" data-expiring-card="1">
+  <h3>{{ _("Customers you are about to lose") }}</h3>
+  <p class="muted">{{ _("Your right in these customers ends within 3 days. A subscription or a note / logged visit from you keeps them.") }}</p>
+  <ul>
+    {% for item in summary.expiring_soon %}
+    <li><a href="{{ url_for('customers.detail', customer_id=item.id) }}">{{ item.name }}</a> — {{ _("Your right ends on %(date)s", date=format_owner_date(item.ends)) }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
 {% if summary.cash_owed_all is not none %}
 <div class="card" data-cash-manage-card="1">
   <h3>{{ _("Sellers' cash hand-in") }}</h3>

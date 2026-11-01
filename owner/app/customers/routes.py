@@ -186,9 +186,12 @@ def detail(customer_id):
     from app.customer_onboarding.panel import panel_context as trial_panel_context
 
     trial_panel = trial_panel_context(customer, codes)
+    from app.sellers.ownership import describe as describe_ownership
+
+    ownership_view = describe_ownership(customer)
 
     return render_template(
-        "customers/detail.html", customer=customer, website_account_panel=website_account_panel, trial_panel=trial_panel, notes=notes, interactions=interactions, followups=followups,
+        "customers/detail.html", customer=customer, ownership_view=ownership_view, website_account_panel=website_account_panel, trial_panel=trial_panel, notes=notes, interactions=interactions, followups=followups,
         locations=locations, assignment_history=assignment_history, followup_status=followup_status,
         is_overdue=is_overdue, error=error_text,
         quotes=quotes, orders=orders, invoices=invoices, payments=payments, subscriptions=subscriptions,

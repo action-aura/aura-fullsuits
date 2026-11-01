@@ -11116,3 +11116,67 @@ msgstr "Slips cannot be stored on this server yet. Nothing was saved. Ask the ad
 #: app/i18n_labels.py
 msgid "Write why the slip is rejected."
 msgstr "Write why the slip is rejected."
+
+#: app/templates/customers/detail.html
+msgid "Ownership"
+msgstr "Ownership"
+
+#: app/templates/customers/detail.html
+msgid "Yours until %(date)s unless it gets a subscription or you record activity on it."
+msgstr "Yours until %(date)s unless it gets a subscription or you record activity on it."
+
+#: app/templates/customers/detail.html
+msgid "Fixed: the customer has a subscription."
+msgstr "Fixed: the customer has a subscription."
+
+#: app/templates/customers/detail.html
+msgid "Open: any seller may claim this customer."
+msgstr "Open: any seller may claim this customer."
+
+#: app/templates/dashboard/index.html
+msgid "Customers you are about to lose"
+msgstr "Customers you are about to lose"
+
+#: app/templates/dashboard/index.html
+msgid "Your right in these customers ends within 3 days. A subscription or a note / logged visit from you keeps them."
+msgstr "Your right in these customers ends within 3 days. A subscription or a note / logged visit from you keeps them."
+
+#: app/templates/dashboard/index.html
+msgid "Your right ends on %(date)s"
+msgstr "Your right ends on %(date)s"
+
+#: app/templates/layout/_nav_model.html
+msgid "Open customers"
+msgstr "Open customers"
+
+#: app/templates/sellers/customers_open.html
+msgid "These customers have no seller: the 15 days of the seller who registered them ran out with no subscription and no documented activity. Any seller may take one. You keep it for good once it has a subscription; until then, record your activity on it or it opens again after 15 days."
+msgstr "These customers have no seller: the 15 days of the seller who registered them ran out with no subscription and no documented activity. Any seller may take one. You keep it for good once it has a subscription; until then, record your activity on it or it opens again after 15 days."
+
+#: app/templates/sellers/customers_open.html
+msgid "Open since"
+msgstr "Open since"
+
+#: app/templates/sellers/customers_open.html
+msgid "Claim this customer"
+msgstr "Claim this customer"
+
+#: app/templates/sellers/customers_open.html
+msgid "There are no open customers right now."
+msgstr "There are no open customers right now."
+
+#: app/sellers/ownership_routes.py
+msgid "The customer is yours now. Your 15 days start today."
+msgstr "The customer is yours now. Your 15 days start today."
+
+#: app/i18n_labels.py
+msgid "That customer does not exist."
+msgstr "That customer does not exist."
+
+#: app/i18n_labels.py
+msgid "This customer already belongs to a seller, so it cannot be claimed."
+msgstr "This customer already belongs to a seller, so it cannot be claimed."
+
+#: app/i18n_labels.py
+msgid "Only a seller can claim a customer."
+msgstr "Only a seller can claim a customer."

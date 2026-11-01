@@ -1277,6 +1277,10 @@ def localize_seller_error(code: str, **params) -> str:
         "HANDIN_SLIP_STORAGE_NOT_READY": _("Slips cannot be stored on this server yet. Nothing was saved. Ask the administrator."),
         "HANDIN_REJECT_REASON_REQUIRED": _("Write why the slip is rejected."),
         "HANDIN_REASON_TOO_LONG": _("The text is too long."),
+        # clause 8: customer ownership
+        "CUSTOMER_NOT_FOUND": _("That customer does not exist."),
+        "CUSTOMER_NOT_OPEN": _("This customer already belongs to a seller, so it cannot be claimed."),
+        "CLAIM_SELLERS_ONLY": _("Only a seller can claim a customer."),
     }
     template = messages.get(code)
     if template is None:

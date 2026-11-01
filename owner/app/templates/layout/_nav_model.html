@@ -95,6 +95,9 @@
 {% if has_permission('sellers.self_service') %}
   {% set _unused = sales_links.append({'endpoint': 'seller_cash.mine', 'label': _('Cash to hand in')}) %}
 {% endif %}
+{% if has_permission('sellers.self_service') %}
+  {% set _unused = sales_links.append({'endpoint': 'seller_customers.open_list', 'label': _('Open customers')}) %}
+{% endif %}
 {% if has_permission('payments.confirm') %}
   {% set _unused = sales_links.append({'endpoint': 'seller_cash.manage', 'label': _("Sellers' cash hand-in")}) %}
 {% endif %}

@@ -11075,3 +11075,67 @@ msgstr "لا يمكن حفظ الإيصالات على هذا الخادم بع�
 #: app/i18n_labels.py
 msgid "Write why the slip is rejected."
 msgstr "اكتب سبب رفض الإيصال."
+
+#: app/templates/customers/detail.html
+msgid "Ownership"
+msgstr "الملكية"
+
+#: app/templates/customers/detail.html
+msgid "Yours until %(date)s unless it gets a subscription or you record activity on it."
+msgstr "لك حتى %(date)s ما لم يحصل على اشتراك أو تسجّل عليه نشاطًا."
+
+#: app/templates/customers/detail.html
+msgid "Fixed: the customer has a subscription."
+msgstr "ثابت: للعميل اشتراك."
+
+#: app/templates/customers/detail.html
+msgid "Open: any seller may claim this customer."
+msgstr "مفتوح: يحق لأي مندوب أن يتبنى هذا العميل."
+
+#: app/templates/dashboard/index.html
+msgid "Customers you are about to lose"
+msgstr "عملاء على وشك فقدانهم"
+
+#: app/templates/dashboard/index.html
+msgid "Your right in these customers ends within 3 days. A subscription or a note / logged visit from you keeps them."
+msgstr "ينتهي حقك في هؤلاء العملاء خلال 3 أيام. الاشتراك أو ملاحظة أو زيارة تسجّلها يُبقيهم لك."
+
+#: app/templates/dashboard/index.html
+msgid "Your right ends on %(date)s"
+msgstr "ينتهي حقك في %(date)s"
+
+#: app/templates/layout/_nav_model.html
+msgid "Open customers"
+msgstr "العملاء المفتوحون"
+
+#: app/templates/sellers/customers_open.html
+msgid "These customers have no seller: the 15 days of the seller who registered them ran out with no subscription and no documented activity. Any seller may take one. You keep it for good once it has a subscription; until then, record your activity on it or it opens again after 15 days."
+msgstr "هؤلاء العملاء بلا مندوب: انقضت الأيام الخمسة عشر للمندوب الذي سجّلهم دون اشتراك ودون نشاط موثّق. يحق لأي مندوب أن يتبنى أحدهم. يبقى لك نهائيًا متى صار له اشتراك؛ وإلى ذلك الحين سجّل نشاطك عليه وإلا عاد مفتوحًا بعد 15 يومًا."
+
+#: app/templates/sellers/customers_open.html
+msgid "Open since"
+msgstr "مفتوح منذ"
+
+#: app/templates/sellers/customers_open.html
+msgid "Claim this customer"
+msgstr "تبنَّ هذا العميل"
+
+#: app/templates/sellers/customers_open.html
+msgid "There are no open customers right now."
+msgstr "لا يوجد عملاء مفتوحون حاليًا."
+
+#: app/sellers/ownership_routes.py
+msgid "The customer is yours now. Your 15 days start today."
+msgstr "أصبح العميل لك. تبدأ أيامك الخمسة عشر اليوم."
+
+#: app/i18n_labels.py
+msgid "That customer does not exist."
+msgstr "هذا العميل غير موجود."
+
+#: app/i18n_labels.py
+msgid "This customer already belongs to a seller, so it cannot be claimed."
+msgstr "هذا العميل ملك لمندوب بالفعل، فلا يمكن تبنّيه."
+
+#: app/i18n_labels.py
+msgid "Only a seller can claim a customer."
+msgstr "المندوب وحده يستطيع تبنّي عميل."
