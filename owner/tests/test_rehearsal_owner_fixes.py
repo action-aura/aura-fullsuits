@@ -6,6 +6,7 @@ Each class of test pairs a DENY half with its ALLOW twin, and was mutation-prove
 from __future__ import annotations
 
 from tests.conftest import force_login, make_staff
+from tests.test_commission_statements import clock, w  # noqa: F401 -- fixtures: the statement world and its pinned clock
 from tests.test_customer_onboarding import kyc  # noqa: F401 -- a fixture
 
 
@@ -69,6 +70,69 @@ def test_a_sellers_dashboard_counts_only_their_own_customers_a_managers_counts_a
     client.get("/auth/logout")
     force_login(client, app, w["manager"])
     assert 'data-dashboard-scoped="1"' not in client.get("/").get_data(as_text=True)
+
+
+def _scoped_answerer(app):
+    """A staff user the objections card IS drawn for AND whose dashboard is scoped.
+
+    No seeded role is both: a seller (customers.view_own) cannot answer objections, and
+    everyone who can has customers.view_all. Without such a user the template's own
+    permission check would hide the card from a seller whether or not the numbers were
+    scoped, so a page test on a plain seller could not tell the two apart (review r33)."""
+    from tests.conftest import make_staff as _make
+
+    with app.app_context():
+        from sqlalchemy import select
+
+        from app.extensions import db_session
+        from app.models.staff import Permission, Role, RolePermission
+
+        sales = db_session.execute(select(Role).where(Role.code == "SALES")).scalar_one()
+        answer = db_session.execute(select(Permission).where(Permission.code == "commission_objections.answer")).scalar_one()
+        role = Role(code="SCOPED_ANSWERER", name="Scoped answerer (test)", description="test only", is_system_role=False)
+        db_session.add(role)
+        db_session.flush()
+        for perm_id in {rp.permission_id for rp in db_session.execute(
+                select(RolePermission).where(RolePermission.role_id == sales.id)).scalars()} | {answer.id}:
+            db_session.add(RolePermission(role_id=role.id, permission_id=perm_id))
+        db_session.commit()
+    return _make(app, f"scoped-{uuid.uuid4().hex[:6]}@example.com", role_codes=["SCOPED_ANSWERER"], mfa=True)
+
+
+def _objection_tiles(html):
+    """(open, overdue) as drawn in the dashboard's objections card."""
+    values = re.findall(r'aura-stat-tile__value">\s*(\d+)\s*</span>\s*<span class="aura-stat-tile__label">(?:Open|Overdue) objections', html)
+    assert len(values) == 2, html[:300]
+    return int(values[0]), int(values[1])
+
+
+def test_a_sellers_dashboard_does_not_carry_other_sellers_statement_objections(app, client, seeded, w, clock):
+    from app.commissions import statements
+    from tests.test_commission_statements import JUNE, UTC, _client, _object, amman
+
+    answerer = _scoped_answerer(app)
+    # two objections that belong to OTHER sellers: one past its deadline, one still inside it
+    clock.set(amman(2026, 7, 2, 10))
+    _object(app, w, "seller", JUNE, amman(2026, 7, 2, 10).astimezone(UTC))   # due end of Mon 6 July
+    _object(app, w, "other", JUNE, amman(2026, 7, 6, 10).astimezone(UTC))    # due end of Wed 8 July
+    clock.set(amman(2026, 7, 7, 0, 0, 1))
+    with app.app_context():
+        assert statements.open_and_overdue_counts() == (2, 1)  # the setup really has something to leak
+
+    # allow half: a manager still sees the company's real counts, in the data and on the page
+    manager = _summary(app, "manager", w)
+    assert manager["scoped"] is False
+    assert (manager["open_statement_objections"], manager["overdue_statement_objections"]) == (2, 1)
+    assert _objection_tiles(_client(app, w["manager"]).get("/").get_data(as_text=True)) == (2, 1)
+
+    # deny half: someone whose dashboard is scoped sees 0 / 0, in the data and on the page
+    scoped = _summary(app, "answerer", {"answerer": answerer})
+    assert scoped["scoped"] is True
+    assert (scoped["open_statement_objections"], scoped["overdue_statement_objections"]) == (0, 0)
+    page = _client(app, answerer).get("/").get_data(as_text=True)
+    assert 'data-objections-card="1"' in page  # the card is drawn, so the zeros are what the page really says
+    assert _objection_tiles(page) == (0, 0)
+    assert "aura-stat-tile--danger" not in page.split('data-objections-card="1"')[1].split("</div>")[0]
 
 
 # ------------------------------------- 2. the generic sale form + legacy form
@@ -153,6 +217,33 @@ def test_the_old_record_payment_form_is_for_finance_and_managers_not_sellers(app
     client.get("/auth/logout")
     force_login(client, app, w["admin"])
     assert client.get(legacy, follow_redirects=False).status_code == 200  # allow: finance / admins keep it
+
+
+def _legacy_payment_post(client, app, who_id, customer_id):
+    force_login(client, app, who_id)
+    page = client.get("/profile").get_data(as_text=True)  # any page of the signed-in user carries the CSRF token
+    return client.post("/payments", data={
+        "csrf_token": get_csrf(page), "customer_id": str(customer_id), "amount": "10.00", "currency": "JOD",
+        "method": "CASH", "payment_date": jordan_today().isoformat(), "reference": "LEGACY-" + uuid.uuid4().hex[:6],
+    }, follow_redirects=False)
+
+
+def test_a_seller_cannot_record_a_bare_payment_by_posting_to_the_old_form_directly(app, client, seeded, kyc):
+    from tests.test_customer_onboarding import _codes, _world, onboard
+
+    w = _world(app)
+    customer_id = onboard(app, w).customer_id
+    assert "payments.create" in _codes(app, w["seller"]) and "payments.confirm" not in _codes(app, w["seller"])
+    base = money_rows(app)
+    # deny: the seller holds payments.create but not payments.confirm -- sent to "Sell a licence", nothing recorded
+    resp = _legacy_payment_post(client, app, w["seller"], customer_id)
+    assert money_rows(app)["payments"] == base["payments"]  # the count first: this is what must not move
+    assert resp.status_code == 302 and resp.headers["Location"].endswith("/licenses/issuance/new")
+    client.get("/auth/logout")
+    # allow: someone who holds payments.confirm still records the payment through the same route
+    resp = _legacy_payment_post(client, app, w["admin"], customer_id)
+    assert resp.status_code == 302 and "/payments/" in resp.headers["Location"]
+    assert money_rows(app)["payments"] == base["payments"] + 1
 
 
 # ------------------------------------ 1. the trial's payment page pre-fills

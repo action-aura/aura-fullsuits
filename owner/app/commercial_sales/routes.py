@@ -616,6 +616,10 @@ def new_payment_form():
 @bp.route("/payments", methods=["POST"])
 @require_permission("payments.create")
 def submit_payment_route():
+    # Same rule as the GET above, on the POST too: hiding the form alone left the
+    # bare-payment route reachable by a seller posting to it directly (review r33).
+    if "payments.confirm" not in get_staff_permission_codes(load_current_staff()):
+        return redirect(url_for("license_issuance.new_form"))
     staff, _profile = _actor()
     # The check must be made BEFORE the payment is recorded: a recorded (pending)
     # payment counts toward the subscription, so afterwards the "next payment

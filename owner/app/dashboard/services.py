@@ -116,7 +116,9 @@ def get_dashboard_summary(actor=None, codes=None) -> dict:
     # and the ones past their 2-working-day deadline (flagged in red on the manager dashboard).
     from app.commissions.statements import open_and_overdue_counts
 
-    open_objections, overdue_objections = open_and_overdue_counts()
+    # A company-wide queue like the ones above: a seller sees only their own numbers
+    # (review r33, 2026-11-01 -- a seller's dashboard still carried every seller's count).
+    open_objections, overdue_objections = (0, 0) if scoped else open_and_overdue_counts()
 
     return {
         "scoped": scoped,

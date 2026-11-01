@@ -54,9 +54,14 @@ def _seed_customer_and_plan(app, staff_id, plan_code):
 def test_full_quote_to_paid_invoice_via_web_forms(app, client, seeded):
     staff_sales = make_staff(app, "webs1@example.com", role_codes=["SALES"])
     staff_finance = make_staff(app, "webs2@example.com", role_codes=["FINANCE"])
+    # The bare-payment form is for payment confirmers (rehearsal 2026-10-31): a seller records money
+    # through "Sell a licence". The person who records here is therefore an admin, NOT the finance user
+    # who confirms -- the two-person rule is unchanged.
+    staff_admin = make_staff(app, "webs2b@example.com", super_admin=True, mfa=True)
     with app.app_context():
         _make_profile(app, staff_sales, "EMP-WEBS1")
         _make_profile(app, staff_finance, "EMP-WEBS2")
+        _make_profile(app, staff_admin, "EMP-WEBS2B")
     customer_id, plan_id = _seed_customer_and_plan(app, staff_sales, "WEBS_PLAN")
 
     force_login(client, app, staff_sales)
@@ -112,7 +117,7 @@ def test_full_quote_to_paid_invoice_via_web_forms(app, client, seeded):
     resp = client.get(f"/invoices/{invoice_id}")
     assert resp.status_code == 200
 
-    force_login(client, app, staff_sales)
+    force_login(client, app, staff_admin)
     csrf = _csrf(client)
     resp = client.post(
         "/payments",
