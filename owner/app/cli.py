@@ -390,6 +390,48 @@ def register_cli(app: Flask) -> None:
             )
         )
 
+    @commercial_group.command("seed-late-payment-policy")
+    @click.option("--dry-run", "dry_run", is_flag=True, default=False,
+                  help="Create nothing: print the policy that would be created and every subscription the nightly "
+                       "scan would move today.")
+    @click.option("--actor-email", default=None, help="The Super Admin recording this (required unless --dry-run).")
+    def seed_late_payment_policy_cmd(dry_run: bool, actor_email: str | None):
+        """Switch on the late-payment rule for Aura Retail (owner, 2026-10-30):
+        a shop that has not paid when its paid time ends gets 7 days of grace,
+        then the till locks (data kept, debts can still be collected). Until
+        this row exists the nightly expiry scan skips every subscription, so
+        nobody ever lapses. Idempotent: a second run creates nothing. Covers
+        all three packages together (a policy is per product). Run --dry-run
+        first: it lists every subscription that would be moved, including ones
+        already so late they expire on the second night. See
+        app/commercial_ops/late_payment_policy.py."""
+        from app.commercial_ops.late_payment_policy import (
+            LatePaymentPolicyError,
+            report_late_payment_policy,
+            seed_late_payment_policy,
+        )
+
+        try:
+            report = report_late_payment_policy()
+            result = {
+                "dry_run": dry_run, "as_of": report.as_of.isoformat(), "product": report.product_code,
+                "policy": report.policy, "already_exists": report.already_exists, "would_create": report.would_create,
+                "conflicting_policy_codes": report.conflicting_policy_codes,
+                "subscriptions_scanned": report.scanned_subscriptions,
+                "would_become_past_due": report.would_become_past_due, "would_expire": report.would_expire,
+                "would_expire_on_second_nightly_run": report.expire_on_second_run,
+            }
+            if not dry_run:
+                if not actor_email:
+                    raise click.ClickException("--actor-email is required (a Super Admin) unless --dry-run.")
+                actor = _staff_by_email(actor_email, require_super_admin=True)
+                policy, created = seed_late_payment_policy(actor_staff_user_id=actor.id)
+                result["created"] = created
+                result["policy_id"] = str(policy.id)
+        except LatePaymentPolicyError as exc:
+            raise click.ClickException(str(exc))
+        click.echo(json.dumps(result, indent=2, default=str))
+
     @commercial_group.command("reconcile")
     @click.option("--apply", "apply_", is_flag=True, default=False, help="Actually write notifications. Default is dry-run (report only).")
     @click.option("--as-of", default=None, help="ISO date to evaluate the state-inconsistency check against (default: today).")

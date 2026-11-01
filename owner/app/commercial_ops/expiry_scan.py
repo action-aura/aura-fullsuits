@@ -61,7 +61,18 @@ def _notification_type_for_offset(offset: int) -> str:
     return f"SUBSCRIPTION_EXPIRING_{offset}_DAYS"
 
 
-def run_expiry_scan(*, as_of: date | None = None, dry_run: bool = True, actor_staff_user_id=None) -> ExpiryScanResult:
+def run_expiry_scan(
+    *, as_of: date | None = None, dry_run: bool = True, actor_staff_user_id=None, policy_resolver=None
+) -> ExpiryScanResult:
+    """policy_resolver(subscription, as_of=...) -> CommercialPolicy | None
+    replaces resolve_policy_for_subscription. It exists so
+    `commercial seed-late-payment-policy --dry-run` can report what the scan
+    WOULD do once a policy exists, before that policy row does; it is refused
+    for a write run, where a policy that is not a stored row would sign grace
+    dates no other reader could reproduce."""
+    if policy_resolver is not None and not dry_run:
+        raise ValueError("A custom policy_resolver is only for dry runs.")
+    resolve_policy = policy_resolver or resolve_policy_for_subscription
     as_of = as_of or utcnow().date()
     result = ExpiryScanResult(as_of=as_of, dry_run=dry_run)
 
@@ -73,7 +84,7 @@ def run_expiry_scan(*, as_of: date | None = None, dry_run: bool = True, actor_st
 
     for subscription in subscriptions:
         result.scanned_count += 1
-        policy = resolve_policy_for_subscription(subscription, as_of=as_of)
+        policy = resolve_policy(subscription, as_of=as_of)
         if policy is None:
             result.findings.append(ExpiryScanFinding(str(subscription.id), "SKIPPED_NO_POLICY", {}))
             continue
