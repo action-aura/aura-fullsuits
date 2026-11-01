@@ -120,6 +120,10 @@ run_job "commercial start-overdue-trials" commercial start-overdue-trials
 # the customer (or the seller) is gone. This sets the dates, deletes what is due (audited)
 # and unlinks purged customers from their trial-device marks. Idempotent.
 run_job "documents purge-due" documents purge-due
+# Added 2026-11-01 (feat/shop-reminders): the mails a shop gets about its clock -- trial ending / ended,
+# renewal due, grace started, selling paused -- each queued once per subscription + kind + period.
+# Runs AFTER commercial expiry-scan (above), which is what moves a subscription to PAST_DUE / EXPIRED.
+run_job "notices shop-reminders --apply" notices shop-reminders --apply
 
 report_currency="$(env_value REPORT_CURRENCY)"
 if [ -z "$report_currency" ]; then

@@ -267,6 +267,9 @@ def create_app(config_name: str | None = None) -> Flask:
 
     app.register_blueprint(seller_discipline_bp)
     register_seller_discipline_cli(app)
+    from app.shop_reminders.cli import register_cli as register_shop_reminders_cli
+
+    register_shop_reminders_cli(app)
     app.jinja_env.globals["customer_accounts_enabled"] = lambda: bool(app.config.get("CUSTOMER_ACCOUNTS_ENABLED"))
 
     if app.config.get("EXTERNAL_API_ENABLED"):

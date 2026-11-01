@@ -59,6 +59,13 @@ _SUBJECTS = {
                                  "Action Aura: تم تسجيل دفعة وهي بانتظار التأكيد"),
     "customer_payment_confirmed": ("Action Aura: payment confirmed", "Action Aura: تم تأكيد الدفعة"),
     "customer_payment_rejected": ("Action Aura: payment not accepted", "Action Aura: لم تُقبل الدفعة"),
+    # Shop reminders (feat/shop-reminders): the clock-driven mails about a shop's trial and paid
+    # time. Built by app/shop_reminders; each queued once per subscription + kind + period.
+    "customer_trial_ending": ("Action Aura: your free trial ends soon", "Action Aura: تقترب نهاية تجربتك المجانية"),
+    "customer_trial_ended": ("Action Aura: your free trial has ended", "Action Aura: انتهت تجربتك المجانية"),
+    "customer_renewal_due": ("Action Aura: time to renew your subscription", "Action Aura: حان موعد تجديد اشتراكك"),
+    "customer_grace_started": ("Action Aura: payment overdue, 7 days of grace", "Action Aura: الدفعة متأخرة، ولديك 7 أيام مهلة"),
+    "customer_locked": ("Action Aura: selling is paused until you pay", "Action Aura: تم إيقاف البيع إلى حين السداد"),
 }
 
 # Messages that are a record the person may need to dispute: the footer invites a
@@ -67,6 +74,8 @@ _SUBJECTS = {
 NOTICE_KINDS = frozenset({
     "customer_contract_accepted", "seller_contract_accepted",
     "customer_payment_pending", "customer_payment_confirmed", "customer_payment_rejected",
+    "customer_trial_ending", "customer_trial_ended", "customer_renewal_due", "customer_grace_started",
+    "customer_locked",
 })
 NOTICE_CONTACT = "info@actionaura.me"
 
@@ -125,6 +134,16 @@ _INTROS = {
                                    "أكدت Action Aura هذه الدفعة الخاصة بمتجرك:"),
     "customer_payment_rejected": ("Action Aura could not accept this payment record for your shop. Please contact us:",
                                   "لم تتمكن Action Aura من قبول سجل هذه الدفعة الخاص بمتجرك. يرجى التواصل معنا:"),
+    "customer_trial_ending": ("Your free trial of Aura Retail ends soon. To keep selling without a break, pay your seller or send a bank transfer or CliQ payment (details below):",
+                              "تنتهي قريباً تجربتك المجانية لتطبيق Aura Retail. لتستمر في البيع دون انقطاع، ادفع لبائعك أو أرسل حوالة بنكية أو دفعة عبر CliQ (التفاصيل أدناه):"),
+    "customer_trial_ended": ("Your free trial of Aura Retail has ended, so selling is paused. Your data is safe and nothing was deleted. To start selling again, pay your seller or send a bank transfer or CliQ payment (details below):",
+                             "انتهت تجربتك المجانية لتطبيق Aura Retail، لذلك تم إيقاف البيع. بياناتك بأمان ولم يُحذف شيء. لتعود إلى البيع، ادفع لبائعك أو أرسل حوالة بنكية أو دفعة عبر CliQ (التفاصيل أدناه):"),
+    "customer_renewal_due": ("The time you paid for in Aura Retail is about to end. To keep selling without a break, renew before then: pay your seller or send a bank transfer or CliQ payment (details below):",
+                             "تقترب نهاية المدة التي دفعتها في Aura Retail. لتستمر في البيع دون انقطاع، جدّد قبل ذلك: ادفع لبائعك أو أرسل حوالة بنكية أو دفعة عبر CliQ (التفاصيل أدناه):"),
+    "customer_grace_started": ("The time you paid for in Aura Retail has ended and the payment has not reached us. You have 7 days of grace: you can keep selling, then selling pauses. Your data stays safe. To avoid the pause, pay your seller or send a bank transfer or CliQ payment (details below):",
+                               "انتهت المدة التي دفعتها في Aura Retail ولم تصلنا الدفعة. لديك مهلة 7 أيام: يمكنك متابعة البيع، ثم يتوقف البيع. بياناتك تبقى بأمان. لتجنّب التوقف، ادفع لبائعك أو أرسل حوالة بنكية أو دفعة عبر CliQ (التفاصيل أدناه):"),
+    "customer_locked": ("Selling in Aura Retail is paused because the paid time ended and the 7 days of grace have passed. Your data is safe and nothing was deleted. To start selling again, pay your seller or send a bank transfer or CliQ payment (details below):",
+                        "تم إيقاف البيع في Aura Retail لأن المدة المدفوعة انتهت ومرّت أيام المهلة السبعة. بياناتك بأمان ولم يُحذف شيء. لتعود إلى البيع، ادفع لبائعك أو أرسل حوالة بنكية أو دفعة عبر CliQ (التفاصيل أدناه):"),
 }
 
 _LINK_NOTES = {
