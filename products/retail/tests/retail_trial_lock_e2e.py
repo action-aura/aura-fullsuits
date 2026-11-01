@@ -13,13 +13,17 @@ Sequence (signup first while unlicensed, THEN seed, per retail_smoke_e2e.py's ha
      writes that state), POST /sales = 403, backup create = 200 + a real file download, reads = 200,
      the licensing page shows the lock screen; screenshots saved
   4. flip the lease to a PAID ACTIVE one (term_end next year) -> Check Now -> unlocked, POST /sales = 200
+  5. (owner 2026-10-30, later) UNPAID LOCK on a PAID shop: PAST_DUE inside its 7-day grace still sells; PAST_DUE past
+     the grace and EXPIRED both evaluate to UNPAID_LOCKED -> sale POST 403 with the "payment is overdue" message,
+     return POST 403, customer debt payment still 200, reads/backup 200, the till banner and the licence page say the
+     PAYMENT is overdue (never "free trial"); a PAID lease unlocks the same running backend
 """
 import importlib.util
 import json
 import os
 import subprocess
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 WT = Path(__file__).resolve().parents[3]
@@ -47,7 +51,9 @@ results = []
 
 def check(name, ok, detail=""):
     results.append((name, bool(ok), detail))
-    print(("PASS " if ok else "FAIL ") + name + (("  :: " + str(detail)) if detail else ""), flush=True)
+    line = ("PASS " if ok else "FAIL ") + name + (("  :: " + str(detail)) if detail else "")
+    # The unpaid-lock checks carry Arabic text; a cp1252 console would crash the harness on it.
+    print(line.encode("ascii", "backslashreplace").decode("ascii"), flush=True)
 
 
 def banner_text(page):
@@ -59,8 +65,9 @@ def banner_text(page):
     return page.evaluate("() => document.getElementById('aura-license-banner').innerText")
 
 
-def seed(app_data, term_end, status="PILOT"):
-    r = subprocess.run([VENV, SEED, str(app_data), term_end, status], capture_output=True, text=True)
+def seed(app_data, term_end, status="PILOT", grace_end=None):
+    cmd = [VENV, SEED, str(app_data), term_end, status] + ([grace_end] if grace_end else [])
+    r = subprocess.run(cmd, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     return json.loads(r.stdout.strip().splitlines()[-1])
 
@@ -205,6 +212,71 @@ def main():
             check("4b a paid shop's licence page says 'Paid until <term_end>' (and no trial countdown)",
                   ("Paid until" in card) and (nextyear in card) and ("Free trial" not in card),
                   {"card": card[:200], "state": (st4["body"] or {}).get("current_state")})
+
+            # ---- 5. unpaid lock on a PAID shop (owner 2026-10-30, later) --------------------------------
+            OVERDUE = "Your subscription payment is overdue"
+            now = datetime.now(timezone.utc)
+            cu = api("POST", "/api/sub/retail/customers", {"name": "Unpaid Lock Customer"})
+            cust_id = ((cu["body"] or {}).get("data") or {}).get("id")
+            sale2 = api("POST", "/api/sub/retail/sales", {"items": [{"product_id": pid, "quantity": 2}]})
+            sdata = (sale2["body"] or {}).get("data") or {}
+            sale_id = sdata.get("id") or sdata.get("sale_id")
+            ret_body = {"sale_id": sale_id, "items": [{"product_id": pid, "quantity": 1}]}
+            ret_ok = api("POST", "/api/sub/retail/returns", ret_body)
+            check("5 premise: a PAID shop can add a customer, ring a sale and take a return",
+                  cu["status"] == 200 and cust_id and sale2["status"] == 200 and sale_id and ret_ok["status"] == 200,
+                  {"customer": cu["status"], "sale": sale2["status"], "return": ret_ok["status"], "ret_body": ret_ok["body"]})
+
+            seed(backend.app_data_dir, past, "PAST_DUE", (now + timedelta(days=3)).isoformat())
+            chk = api("POST", "/api/licensing/check-in", {})
+            sale = api("POST", "/api/sub/retail/sales", {"items": [{"product_id": pid, "quantity": 1}]})
+            check("5a PAST_DUE INSIDE its 7-day grace still sells (sale 200, not locked)",
+                  sale["status"] == 200 and chk["body"]["current_state"] not in ("UNPAID_LOCKED", "TRIAL_ENDED", "RESTRICTED"),
+                  {"state": chk["body"].get("current_state"), "sale": sale["status"]})
+
+            for label, status, grace in (("5b PAST_DUE past its grace", "PAST_DUE", (now - timedelta(days=1)).isoformat()),
+                                         ("5c EXPIRED", "EXPIRED", None)):
+                seed(backend.app_data_dir, past, status, grace)
+                chk = api("POST", "/api/licensing/check-in", {})
+                after = stored_state(backend.app_data_dir)
+                check(label + " evaluates to UNPAID_LOCKED (not the trial lock)",
+                      after[0] == "UNPAID_LOCKED" and chk["body"]["current_state"] == "UNPAID_LOCKED", {"stored": after})
+                sale = api("POST", "/api/sub/retail/sales", {"items": [{"product_id": pid, "quantity": 1}]})
+                body = sale["body"] or {}
+                check(label + ": a sale is REFUSED (403) with the payment-overdue message, English + Arabic",
+                      sale["status"] == 403 and body.get("reason_code") == "LICENSE_INACTIVE"
+                      and body.get("message", "").startswith(OVERDUE) and "message_ar" in body
+                      and "trial" not in body.get("message", "").lower(), sale)
+                ret = api("POST", "/api/sub/retail/returns", ret_body)
+                check(label + ": a return is REFUSED (403 LICENSE_INACTIVE)",
+                      ret["status"] == 403 and (ret["body"] or {}).get("reason_code") == "LICENSE_INACTIVE", ret)
+                pay = api("POST", "/api/sub/retail/customers/%s/payments" % cust_id, {"amount": 5, "method": "cash"})
+                check(label + ": a customer DEBT PAYMENT still goes through (200)", pay["status"] == 200, pay)
+                check(label + ": reads still work (200)", api("GET", "/api/sub/retail/products")["status"] == 200)
+                bk = api("POST", "/api/backup/create", {})
+                check(label + ": BACKUP succeeds while unpaid-locked", bk["status"] == 200, bk["status"])
+
+            page.goto(backend2.base_url, wait_until="domcontentloaded")
+            page.wait_for_timeout(1500)
+            banner = banner_text(page)
+            check("5d the till banner says the PAYMENT is overdue, never 'free trial'",
+                  banner and OVERDUE in banner and "free trial" not in banner.lower(), banner)
+            page.screenshot(path=str(OUT / "05_unpaid_till_locked.png"))
+            page.goto(backend2.base_url + "/static/licensing.html", wait_until="domcontentloaded")
+            page.locator("#trial-ended-panel").wait_for(state="visible", timeout=WAIT_MS)
+            panel_text = page.locator("#trial-ended-panel").inner_text()
+            check("5e the licence page lock screen is about the overdue payment and keeps the data buttons",
+                  OVERDUE in panel_text and "free trial" not in panel_text.lower()
+                  and page.locator("#trial-backup-btn").count() == 1 and page.locator("#trial-export-btn").count() == 1,
+                  panel_text[:160].replace("\n", " | "))
+            page.screenshot(path=str(OUT / "05_unpaid_lock_screen.png"), full_page=True)
+
+            seed(backend.app_data_dir, nextyear, "ACTIVE")
+            chk = api("POST", "/api/licensing/check-in", {})
+            sale = api("POST", "/api/sub/retail/sales", {"items": [{"product_id": pid, "quantity": 1}]})
+            check("5f a PAID lease unlocks the same running backend (no restart): sale 200",
+                  sale["status"] == 200 and chk["body"]["current_state"] != "UNPAID_LOCKED",
+                  {"state": chk["body"]["current_state"], "sale": sale["status"]})
         finally:
             browser.close()
             for b in (backend2, backend):

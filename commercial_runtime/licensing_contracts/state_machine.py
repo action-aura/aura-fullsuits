@@ -33,6 +33,12 @@ class LicenseState(str, Enum):
     # RESTRICTED: RESTRICTED still means "commercial mutation is blocked"
     # (refund/cancel/offline hard-expiry), and folding the unpaid case into
     # it is exactly what used to stop an unpaid shop's till.
+    #
+    # SUPERSEDED 2026-10-30 (owner, later the same day): evaluate() no longer
+    # returns this -- an unpaid lapse past its grace is UNPAID_LOCKED below and
+    # STOPS selling. The member stays only so a licensing.db written by an
+    # earlier build still resolves to a real state (an unknown string would be
+    # read as LOCAL_STATE_CORRUPT); the first re-evaluation replaces it.
     SUBSCRIPTION_LAPSED = "SUBSCRIPTION_LAPSED"
     # New-customer flow (owner voice note 2026-10-30): the 7-day trial is a
     # signed PILOT subscription, and once its term_end day is over the till
@@ -44,6 +50,15 @@ class LicenseState(str, Enum):
     # SELLING_FAMILY and NOT in SYNC_PAUSED_STATES: sync stays on so the
     # device sees the paid lease the moment it reconnects and unlocks itself.
     TRIAL_ENDED = "TRIAL_ENDED"
+    # Owner decision 2026-10-30 (overrides the 2026-10-24 keep-selling rule): a
+    # PAID subscription that ran out unpaid (signed subscription_status EXPIRED,
+    # or PAST_DUE past its signed commercial_grace_end -- Owner gives 7 days of
+    # grace first) locks selling EXACTLY like TRIAL_ENDED: data, reports, backup,
+    # export and customer debt payments stay; new sales and returns stop; sync
+    # and the LAN hub keep running so the paid lease is seen the moment the shop
+    # pays. A separate member (not TRIAL_ENDED) only so the till says "payment
+    # overdue" instead of "free trial has ended".
+    UNPAID_LOCKED = "UNPAID_LOCKED"
     DEVICE_DEACTIVATED = "DEVICE_DEACTIVATED"
     DEVICE_REPLACED = "DEVICE_REPLACED"
     CLOCK_REVIEW_REQUIRED = "CLOCK_REVIEW_REQUIRED"
@@ -85,6 +100,7 @@ DATA_PRESERVED_FAMILY = ACTIVE_FAMILY | frozenset(
         LicenseState.EXPIRED,
         LicenseState.SUBSCRIPTION_LAPSED,
         LicenseState.TRIAL_ENDED,
+        LicenseState.UNPAID_LOCKED,
         LicenseState.DEVICE_DEACTIVATED,
         LicenseState.CLOCK_REVIEW_REQUIRED,
         LicenseState.LOCAL_STATE_CORRUPT,
@@ -98,6 +114,12 @@ DATA_PRESERVED_FAMILY = ACTIVE_FAMILY | frozenset(
 # this install currently paid up" for the hub/sync decisions, and an unpaid
 # shop must keep selling without getting the paid extras back.
 SELLING_FAMILY = ACTIVE_FAMILY | frozenset({LicenseState.SUBSCRIPTION_LAPSED})
+
+# The "never paid / stopped paying" lock: selling AND returns are refused, data
+# stays reachable (capability_guard.py reads this), and the LAN hub still starts
+# (products/retail/backend/config.py). One set so the two lock states cannot
+# drift apart on what they allow.
+UNPAID_LOCK_STATES = frozenset({LicenseState.TRIAL_ENDED, LicenseState.UNPAID_LOCKED})
 
 # States in which multi-device sync (cloud relay AND the in-shop LAN hub) is
 # paused for commercial reasons. Only the unpaid lapse -- every other state
@@ -164,6 +186,11 @@ _TRANSITIONS: dict[LicenseState, dict[str, LicenseState]] = {
     },
     LicenseState.TRIAL_ENDED: {
         # Payment lands in Owner -> the next check-in carries an ACTIVE lease.
+        "checkin_succeeded": LicenseState.ACTIVE_ONLINE,
+    },
+    LicenseState.UNPAID_LOCKED: {
+        # Same exit as TRIAL_ENDED: the renewal is applied in Owner and the next
+        # check-in carries an ACTIVE lease.
         "checkin_succeeded": LicenseState.ACTIVE_ONLINE,
     },
     LicenseState.SUSPENDED: {

@@ -6021,6 +6021,9 @@ const SubsystemApp = {
     // TRIAL_ENDED (new-customer flow): the 7-day trial is over and unpaid. Selling is locked,
     // the data is not; it gets its own wording in _renderLicenseBanner.
     'TRIAL_ENDED',
+    // UNPAID_LOCKED (owner 2026-10-30): a paid subscription that lapsed unpaid past its 7-day grace
+    // locks the till exactly like the ended trial, with its own "payment overdue" wording.
+    'UNPAID_LOCKED',
     'NOT_CONFIGURED', 'ACTIVATION_REQUIRED', 'ACTIVATING', 'RESTRICTED',
     'SUSPENDED', 'REVOKED', 'EXPIRED', 'DEVICE_DEACTIVATED',
     'CLOCK_REVIEW_REQUIRED', 'LOCAL_STATE_CORRUPT',
@@ -6319,6 +6322,27 @@ const SubsystemApp = {
         + 'padding:6px 16px;border-radius:8px;border:1px solid var(--state-warning-border);'
         + 'background:transparent;color:var(--state-warning-text);font-weight:700;cursor:pointer;">'
         + t('Renew subscription') + '</button>';
+      this._reflowTopBanners();
+      return;
+    }
+    if (state === 'UNPAID_LOCKED') {
+      // Same front door as the ended trial, but the words are about an overdue PAYMENT: this shop
+      // did pay once, so "your free trial has ended" would be false. Warning triad: nothing is lost.
+      el.style.cssText = 'position:sticky;top:0;inset-inline:0;background:var(--state-warning-surface);'
+        + 'border-bottom:2px solid var(--state-warning-border);color:var(--state-warning-text);'
+        + 'padding:9px 18px;font-size:13px;line-height:1.45;text-align:center;z-index:99998;'
+        + 'display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px;'
+        + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
+      el.innerHTML =
+        '<span style="display:inline-flex;align-items:center;gap:6px;font-weight:700;color:var(--state-warning-text);">'
+        + (window.AuraIcons ? AuraIcons.render('triangle-alert', 15) : '')
+        + t('Your subscription payment is overdue. Selling is paused until the payment is confirmed. Your data is safe.')
+        + '</span>'
+        + '<button type="button" onclick="SubsystemApp.openLicensing()" '
+        + 'style="min-inline-size:var(--touch-target-min);min-block-size:var(--touch-target-min);'
+        + 'padding:6px 16px;border-radius:8px;border:1px solid var(--state-warning-border);'
+        + 'background:transparent;color:var(--state-warning-text);font-weight:700;cursor:pointer;">'
+        + t('How to unlock') + '</button>';
       this._reflowTopBanners();
       return;
     }

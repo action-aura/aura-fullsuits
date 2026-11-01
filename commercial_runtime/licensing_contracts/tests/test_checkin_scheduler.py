@@ -725,18 +725,18 @@ def test_check_in_re_anchor_fires_only_for_an_unknown_signing_key(owner_key, tru
     assert "TRUST_ANCHOR_READMITTED" not in [e.event_type for e in events.recent()]
 
 
-# ── Owner decision 2026-10-24: an unpaid lapse keeps selling, and keeps checking in ──
-# SUBSCRIPTION_LAPSED is NOT a "not yet activated" state: the device still has
+# ── Owner decision 2026-10-30 (was 2026-10-24 keep-selling): an unpaid lapse LOCKS selling, and keeps checking in ──
+# UNPAID_LOCKED (and the legacy SUBSCRIPTION_LAPSED) is NOT a "not yet activated" state: the device still has
 # an installation id, and the check-in is the ONLY way the shop learns it has
 # renewed. If the scheduler treated LAPSED as terminal, a shop that paid would
 # stay lapsed forever.
 
-def _seed_lapsed_record(state_repo, envelope):
+def _seed_lapsed_record(state_repo, envelope, current_state="UNPAID_LOCKED"):
     import json
 
     return _seed_activated_record(
         state_repo,
-        current_state="SUBSCRIPTION_LAPSED",
+        current_state=current_state,
         assertion_envelope_json=json.dumps(envelope),
         trusted_time_anchor_server_time=NOW.isoformat(),
         last_successful_checkin_at=NOW.isoformat(),
@@ -781,8 +781,25 @@ def test_lapsed_device_stays_lapsed_while_owner_still_says_expired(owner_key, tr
     result = scheduler.run_once()
 
     assert client.checkin_calls == 1
-    assert result == LicenseState.SUBSCRIPTION_LAPSED
-    assert state_repo.load().current_state == "SUBSCRIPTION_LAPSED"
+    assert result == LicenseState.UNPAID_LOCKED
+    assert state_repo.load().current_state == "UNPAID_LOCKED"
+
+
+def test_a_legacy_subscription_lapsed_row_heals_to_the_lock_on_the_next_evaluation(
+    owner_key, trust_store, state_repo, events
+):
+    # An install upgraded from the 2026-10-24 build can hold the old keep-selling state. The first
+    # re-evaluation must replace it with the lock, not leave it selling (the owner's new rule).
+    envelope = _envelope(owner_key, "owner-1", _payload(subscription_status="EXPIRED"))
+    _seed_lapsed_record(state_repo, envelope, current_state="SUBSCRIPTION_LAPSED")
+    again = _envelope(
+        owner_key, "owner-1",
+        _payload(assertion_id="a-4", subscription_status="EXPIRED", issued_at=(NOW + timedelta(seconds=5)).isoformat()),
+    )
+    client = FakeClient(checkin_responses=[{"result": "SUCCESS", "signed_assertion": again}])
+    result = _scheduler(client, trust_store, state_repo, events).run_once()
+    assert result == LicenseState.UNPAID_LOCKED
+    assert state_repo.load().current_state == "UNPAID_LOCKED"
 
 
 # ── An assertion that EXPIRED while the shop was offline is still genuine ──
@@ -877,7 +894,7 @@ def test_expired_assertion_for_another_device_is_still_local_state_corrupt(
     assert scheduler.run_once() == LicenseState.LOCAL_STATE_CORRUPT
 
 
-def test_expired_assertion_signed_subscription_expired_is_lapsed_and_sells(
+def test_expired_assertion_signed_subscription_expired_is_unpaid_locked(
     owner_key, trust_store, state_repo, events
 ):
     _expired_assertion_record(
@@ -885,7 +902,7 @@ def test_expired_assertion_signed_subscription_expired_is_lapsed_and_sells(
     )
     _, scheduler = _offline_scheduler(trust_store, state_repo, events)
 
-    assert scheduler.run_once() == LicenseState.SUBSCRIPTION_LAPSED
+    assert scheduler.run_once() == LicenseState.UNPAID_LOCKED
 
 
 def test_expired_assertion_past_grace_with_restrict_policy_is_still_restricted(
@@ -950,14 +967,14 @@ def test_expired_assertion_inside_warning_window_after_restart_is_warning_and_se
     assert result == LicenseState.WARNING
 
 
-def test_expired_assertion_with_signed_subscription_expired_after_restart_is_lapsed(
+def test_expired_assertion_with_signed_subscription_expired_after_restart_is_unpaid_locked(
     owner_key, trust_store, state_repo, events
 ):
     result = _run_expired(
         owner_key, trust_store, state_repo, events, days_ago=365,
         payload_overrides={"subscription_status": "EXPIRED"},
     )
-    assert result == LicenseState.SUBSCRIPTION_LAPSED
+    assert result == LicenseState.UNPAID_LOCKED
 
 
 def test_restored_older_database_30_days_since_checkin_is_restricted_under_restrict_policy(

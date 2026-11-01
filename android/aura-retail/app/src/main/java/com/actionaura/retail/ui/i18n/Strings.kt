@@ -1020,6 +1020,11 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Subscription unpaid" to "الاشتراك غير مدفوع",
     "Trial ended" to
         "انتهت التجربة",
+    // Owner 2026-10-30: unpaid lock. The long sentence is also state_guidance.py's 403 message, verbatim.
+    "Payment overdue" to "الدفعة متأخرة",
+    "Your subscription payment is overdue" to "دفعة اشتراكك متأخرة",
+    "Your subscription payment is overdue. Selling is paused until the payment is confirmed. Your data is safe." to
+        "دفعة اشتراكك متأخرة. البيع متوقف حتى تأكيد الدفعة. بياناتك محفوظة.",
     "Free trial" to
         "التجربة المجانية",
     "Trial: 1 day left" to

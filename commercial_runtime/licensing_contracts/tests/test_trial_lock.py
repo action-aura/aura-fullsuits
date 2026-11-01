@@ -241,13 +241,18 @@ def test_extension_still_relieves_a_paid_expired_subscription():
     assert state == LicenseState.ACTIVE_ONLINE
 
 
-def test_paid_expired_subscription_stays_lapsed_and_keeps_selling():
-    # The owner's keep-selling rule must not regress: a PAID subscription whose
-    # term_end is long past is SUBSCRIPTION_LAPSED (sells), never TRIAL_ENDED.
+def test_paid_expired_subscription_is_the_unpaid_lock_not_the_trial_lock():
+    # CHANGED 2026-10-30 (was: ..._stays_lapsed_and_keeps_selling, SUBSCRIPTION_LAPSED,
+    # 2026-10-24 keep-selling rule, now overridden by the owner). A PAID subscription
+    # that is EXPIRED locks selling, but as UNPAID_LOCKED -- never TRIAL_ENDED, so the
+    # till says "payment overdue" and not "free trial has ended". Can no longer catch:
+    # "an expired paid shop keeps selling". Still catches: "expired is ignored" and
+    # "expired is reported as an ended trial".
     after = datetime(2026, 12, 1, 9, 0, tzinfo=UTC)
     state = _eval(_evidence(status="EXPIRED"), after)
-    assert state == LicenseState.SUBSCRIPTION_LAPSED
-    assert state in SELLING_FAMILY
+    assert state == LicenseState.UNPAID_LOCKED
+    assert state != LicenseState.TRIAL_ENDED
+    assert state not in SELLING_FAMILY
 
 
 def test_paid_active_subscription_with_a_past_term_end_is_untouched():
@@ -506,10 +511,11 @@ def test_a_locked_trial_stays_locked_while_owner_still_says_pilot(owner_key, tru
     assert _scheduler(client, trust_store, state_repo, events).run_once() == LicenseState.TRIAL_ENDED
 
 
-def test_paid_expired_through_the_real_scheduler_is_still_lapsed_and_sells(owner_key, trust_store, state_repo, events):
+def test_paid_expired_through_the_real_scheduler_is_unpaid_locked_and_does_not_sell(owner_key, trust_store, state_repo, events):
     envelope, issued = _trial_envelope(owner_key, term_end=(NOW - timedelta(days=30)).date(), status="EXPIRED")
     _seed_trial(state_repo, envelope, issued, status="EXPIRED")
     client = FakeClient(checkin_responses=[LicensingClientError("NETWORK_UNAVAILABLE", "down")])
     result = _scheduler(client, trust_store, state_repo, events).run_once()
-    assert result == LicenseState.SUBSCRIPTION_LAPSED
-    assert result in SELLING_FAMILY
+    # CHANGED 2026-10-30: was SUBSCRIPTION_LAPSED + "in SELLING_FAMILY" (keep-selling, 10-24).
+    assert result == LicenseState.UNPAID_LOCKED
+    assert result not in SELLING_FAMILY

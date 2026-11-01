@@ -12,7 +12,10 @@ HOW THE LEASE IS FORGED (and why it is honest):
     persisted through LicenseStateRepository.save as the stored assertion, with the state still
     ACTIVE_ONLINE. NOTHING writes TRIAL_ENDED: the app must reach it by evaluating this lease.
 
-usage: retail_trial_lock_seed.py <app_data_dir> <term_end YYYY-MM-DD> [PILOT|COMPLETED|EXPIRED|ACTIVE]
+usage: retail_trial_lock_seed.py <app_data_dir> <term_end YYYY-MM-DD> [PILOT|COMPLETED|EXPIRED|PAST_DUE|ACTIVE] [commercial_grace_end ISO]
+
+  PAST_DUE + a commercial_grace_end is what Owner signs inside the 7-day payment grace (grace_end ahead = still
+  selling, grace_end behind = the till must lock as UNPAID_LOCKED); EXPIRED is what it signs after the grace.
 """
 import base64
 import json
@@ -35,6 +38,7 @@ from commercial_runtime.licensing_contracts.trust_store import OwnerTrustStore  
 app_data = Path(sys.argv[1])
 term_end = sys.argv[2]
 status = sys.argv[3] if len(sys.argv) > 3 else "PILOT"
+grace_end = sys.argv[4] if len(sys.argv) > 4 else None
 
 licensing_dir = app_data / "licensing"
 licensing_dir.mkdir(parents=True, exist_ok=True)
@@ -72,6 +76,8 @@ payload = {
     "contract_version": "v1", "plan_code": "RETAIL_TRIAL", "term_start": "2026-10-13",
     "term_end": term_end, "pilot_status": "ACTIVE" if status == "PILOT" else None,
 }
+if grace_end:
+    payload["commercial_grace_end"] = grace_end
 envelope = {
     "payload": payload, "signing_key_id": "proof-owner-1", "algorithm": "ed25519", "assertion_version": 1,
     "signature": base64.b64encode(owner_key.sign(canonicalize_bytes(payload))).decode(),

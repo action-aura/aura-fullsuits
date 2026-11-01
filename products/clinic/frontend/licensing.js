@@ -38,6 +38,8 @@
     EXPIRED: { text: 'Expired', cls: 'state-restricted' },
     // Keep-selling rule: unpaid subscription. Work continues; only sync/updates pause.
     SUBSCRIPTION_LAPSED: { text: 'Subscription unpaid', cls: 'state-warning' },
+    // Owner 2026-10-30: unpaid past the 7-day grace locks new work (shared evaluator), data stays.
+    UNPAID_LOCKED: { text: 'Payment overdue', cls: 'state-restricted' },
     DEVICE_DEACTIVATED: { text: 'Device deactivated', cls: 'state-neutral' },
     CLOCK_REVIEW_REQUIRED: { text: 'Clock review required', cls: 'state-warning' },
     LOCAL_STATE_CORRUPT: { text: 'Local state needs reset', cls: 'state-restricted' },

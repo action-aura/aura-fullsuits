@@ -94,6 +94,7 @@
     SUBSCRIPTION_LAPSED: ['Subscription unpaid', 'warn'],
     // New-customer flow: trial over, not paid -- selling locked, data/backup/export open.
     TRIAL_ENDED: ['Trial ended', 'bad'],
+    UNPAID_LOCKED: ['Payment overdue', 'bad'],
     LOCAL_STATE_CORRUPT: ['Local state needs reset', 'bad'],
     DEVICE_DEACTIVATED: ['Computer deactivated', 'bad'],
     DEVICE_REPLACED: ['Computer replaced', 'bad'],

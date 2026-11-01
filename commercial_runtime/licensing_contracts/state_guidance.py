@@ -16,7 +16,8 @@ read/backup/export/returns open in this state, and a scared owner who thinks
 the data is gone does worse things), and says to restart afterwards (the
 licence check re-evaluates on its next tick or on restart).
 
-Only states a shopkeeper can fix on their own belong here. SUSPENDED / REVOKED /
+Only states a shopkeeper can fix on their own belong here. UNPAID_LOCKED joined
+(2026-10-30): the fix is to pay, and the text says so. SUSPENDED / REVOKED /
 EXPIRED are commercial decisions, LOCAL_STATE_CORRUPT needs support -- writing
 "fix it yourself" text for those would be false advice.
 
@@ -45,8 +46,19 @@ CLOCK_REVIEW_MESSAGE_AR = (
     "بياناتك بأمان، ويمكنك متابعة التقارير والمرتجعات والنسخ الاحتياطي."
 )
 
+# Owner-given wording (2026-10-30) for the unpaid lock. The till's 403 carries it
+# so a refused sale says WHY (payment overdue) rather than the generic refusal or,
+# worse, "trial ended". The shopkeeper fixes it by paying; the lock lifts on the
+# next check-in after Owner confirms the payment.
+UNPAID_LOCKED_MESSAGE_EN = (
+    "Your subscription payment is overdue. Selling is paused until the payment is confirmed. "
+    "Your data is safe."
+)
+UNPAID_LOCKED_MESSAGE_AR = "دفعة اشتراكك متأخرة. البيع متوقف حتى تأكيد الدفعة. بياناتك محفوظة."
+
 _GUIDANCE = {
     LicenseState.CLOCK_REVIEW_REQUIRED: (CLOCK_REVIEW_MESSAGE_EN, CLOCK_REVIEW_MESSAGE_AR),
+    LicenseState.UNPAID_LOCKED: (UNPAID_LOCKED_MESSAGE_EN, UNPAID_LOCKED_MESSAGE_AR),
 }
 
 

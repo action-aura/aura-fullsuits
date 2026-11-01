@@ -47,6 +47,8 @@ class TrialStatusTest {
     @Test
     fun every_lock_screen_string_has_an_arabic_translation() {
         val keys = listOf(
+            "Payment overdue", "Your subscription payment is overdue",
+            "Your subscription payment is overdue. Selling is paused until the payment is confirmed. Your data is safe.",
             "Trial ended", "Free trial", "Trial: 1 day left", "Trial: 2 days left", "Trial: %s days left",
             "Your free trial has ended",
             "Your data is safe. You can still look at your records and reports, and make a backup or an export. Selling is locked until you pay.",
@@ -67,5 +69,8 @@ class TrialStatusTest {
         val screen = File("src/main/java/com/actionaura/retail/ui/screens/LicensingScreen.kt")
         assumeTrue("LicensingScreen.kt not reachable from the test working directory", screen.isFile)
         assertThat(screen.readText()).contains("\"TRIAL_ENDED\" -> \"Trial ended\"")
+        // The unpaid lock (owner 2026-10-30) must be known on both sides too, or the phone shows a raw state name.
+        assertThat(py.readText()).contains("UNPAID_LOCKED = \"UNPAID_LOCKED\"")
+        assertThat(screen.readText()).contains("\"UNPAID_LOCKED\" -> \"Payment overdue\"")
     }
 }

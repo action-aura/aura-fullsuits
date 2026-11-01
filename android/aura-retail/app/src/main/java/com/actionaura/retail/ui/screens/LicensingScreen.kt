@@ -92,6 +92,8 @@ private fun stateLabel(state: String): Pair<String, Color> = when (state) {
     "SUBSCRIPTION_LAPSED" -> "Subscription unpaid" to Warning
     // New-customer flow: the 7-day trial is over and unpaid. Selling is locked; data and backup are not.
     "TRIAL_ENDED" -> "Trial ended" to Danger
+    // Owner 2026-10-30: a paid subscription that lapsed unpaid past its 7-day grace locks selling like the trial.
+    "UNPAID_LOCKED" -> "Payment overdue" to Danger
     "RESTRICTED" -> "Restricted" to Danger
     "SUSPENDED" -> "Suspended" to Danger
     "REVOKED" -> "Revoked" to Danger
@@ -126,17 +128,25 @@ internal fun trialDaysLeftText(days: Int): String = when (days) {
 }
 
 /**
- * The lock screen for TRIAL_ENDED: the data is safe, how to get it out, how to unlock. Android has no
+ * The lock screen for TRIAL_ENDED (and UNPAID_LOCKED, which locks the same way but says the PAYMENT is
+ * overdue, not that a trial ended): the data is safe, how to get it out, how to unlock. Android has no
  * sales-CSV screen, so "back up" (which the Backup screen lets the shop save or share) is its export.
  * Unlocking needs no key: once Owner has the payment, the next check-in carries the paid lease.
  */
 @Composable
-private fun TrialEndedPanel(onOpenBackup: (() -> Unit)?) {
+private fun TrialEndedPanel(onOpenBackup: (() -> Unit)?, unpaid: Boolean = false) {
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(tr("Your free trial has ended"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Text(
-                tr("Your data is safe. You can still look at your records and reports, and make a backup or an export. Selling is locked until you pay."),
+                if (unpaid) tr("Your subscription payment is overdue") else tr("Your free trial has ended"),
+                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+            )
+            Text(
+                if (unpaid) {
+                    tr("Your subscription payment is overdue. Selling is paused until the payment is confirmed. Your data is safe.")
+                } else {
+                    tr("Your data is safe. You can still look at your records and reports, and make a backup or an export. Selling is locked until you pay.")
+                },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (onOpenBackup != null) {
@@ -561,6 +571,9 @@ fun LicensingScreen(
 
             if (state == "TRIAL_ENDED") {
                 TrialEndedPanel(onOpenBackup)
+            }
+            if (state == "UNPAID_LOCKED") {
+                TrialEndedPanel(onOpenBackup, unpaid = true)
             }
 
             if (state in setOf("RESTRICTED", "GRACE_PERIOD", "WARNING")) {

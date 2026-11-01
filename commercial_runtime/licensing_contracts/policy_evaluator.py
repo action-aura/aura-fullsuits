@@ -212,27 +212,31 @@ def evaluate(
         and now < policy.emergency_extension_until
     )
     if not emergency_extension_effective:
-        # Owner decision 2026-10-24 (Aura Growth Plan): a shop whose
-        # subscription lapses UNPAID keeps selling. Only an EXPIRED
-        # subscription, or PAST_DUE past its signed commercial grace, is an
-        # unpaid lapse -> SUBSCRIPTION_LAPSED (sells; multi-device sync, online
-        # extras and updates pause). Before this, both returned RESTRICTED and
-        # a till that had not paid stopped taking money.
+        # Owner decision 2026-10-30 (overrides the 2026-10-24 keep-selling rule):
+        # a shop whose PAID subscription lapses UNPAID gets Owner's grace (7 days,
+        # signed as commercial_grace_end) and then the till LOCKS exactly like the
+        # ended trial -> UNPAID_LOCKED. Only an EXPIRED subscription, or PAST_DUE
+        # past its signed commercial grace, is an unpaid lapse. Inside the grace
+        # (PAST_DUE, grace_end still ahead) nothing is decided here: it falls
+        # through to the normal timers and the shop keeps selling.
         # CANCELLED (deliberate end) and SUSPENDED (a full refund in Owner)
-        # are NOT unpaid lapses and the owner has not said they keep selling,
-        # so they deliberately stay RESTRICTED until that is decided.
+        # are NOT unpaid lapses and stay RESTRICTED.
         if evidence.subscription_status == "EXPIRED":
-            return LicenseState.SUBSCRIPTION_LAPSED
+            return LicenseState.UNPAID_LOCKED
         if evidence.subscription_status == "CANCELLED":
             return LicenseState.RESTRICTED
         if evidence.subscription_status == "SUSPENDED":
             return LicenseState.RESTRICTED
+        # trial_now, not now: the same offline-floor-adjusted clock the trial lock
+        # uses, so a till that sat offline across a restart (anchor re-pinned to the
+        # last check-in) cannot keep an expired grace alive. It only ever moves the
+        # clock LATER, so a rolled-back wall clock still cannot extend the grace.
         if (
             evidence.subscription_status == "PAST_DUE"
             and evidence.commercial_grace_end is not None
-            and now > evidence.commercial_grace_end
+            and trial_now > evidence.commercial_grace_end
         ):
-            return LicenseState.SUBSCRIPTION_LAPSED
+            return LicenseState.UNPAID_LOCKED
 
     if now < evidence.not_before or now > evidence.expires_at:
         # Assertion is not currently valid by its own signed dates -- fall

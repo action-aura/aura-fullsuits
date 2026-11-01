@@ -14,7 +14,8 @@ import logging
 import os
 import sys
 
-from commercial_runtime.licensing_contracts.state_machine import ACTIVE_FAMILY, SELLING_FAMILY, LicenseState
+from commercial_runtime.licensing_contracts.state_machine import (
+    ACTIVE_FAMILY, SELLING_FAMILY, UNPAID_LOCK_STATES, LicenseState)
 
 if os.environ.get('AURA_BUNDLE_DIR'):
     BASE_DIR = os.environ['AURA_BUNDLE_DIR']
@@ -762,7 +763,9 @@ def site_relay_should_start(override, license_state, platform):
     # rebooted after the lock would have no hub, and its other devices could not converge or unlock.
     # Unlike the lapsed hub it serves sync data normally -- there is no per-request pause for it. Only
     # this one non-selling state is added; RESTRICTED, EXPIRED, ... still do not start a hub.
-    return license_state in (SELLING_FAMILY | {LicenseState.TRIAL_ENDED})
+    # Owner decision 2026-10-30 (later): a subscription that lapsed unpaid past its grace is locked
+    # like the ended trial (UNPAID_LOCKED) -- same reasoning, so it starts the hub too.
+    return license_state in (SELLING_FAMILY | UNPAID_LOCK_STATES)
 
 
 # A SEPARATE port from the UI listener, deliberately. The existing loopback

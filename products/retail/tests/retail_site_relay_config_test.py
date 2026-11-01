@@ -153,8 +153,10 @@ def test_every_license_state_is_classified_by_active_family_membership():
     # state that also starts the hub, so the derived expectation gains it explicitly. What this loop can no
     # longer catch by itself: TRIAL_ENDED silently leaving the start set -- the hand-written test
     # test_an_ended_trial_still_starts_the_hub_and_no_other_non_selling_state_does below pins that, both ways.
+    # CHANGED 2026-10-30 (later): UNPAID_LOCKED (unpaid past the grace) joins TRIAL_ENDED as a non-selling
+    # state that starts the hub; test_an_unpaid_locked_till_starts_the_hub_like_an_ended_trial pins it by hand.
     for state in LicenseState:
-        expected = state in SELLING_FAMILY or state == LicenseState.TRIAL_ENDED
+        expected = state in SELLING_FAMILY or state in (LicenseState.TRIAL_ENDED, LicenseState.UNPAID_LOCKED)
         assert config.site_relay_should_start(None, state, 'WINDOWS') is expected, (
             f"{state} should {'start' if expected else 'not start'} the "
             f"relay under automatic (unset) mode"
@@ -185,6 +187,18 @@ def test_an_ended_trial_still_starts_the_hub_and_no_other_non_selling_state_does
     # A handset still never self-elects, trial or not; an explicit '0' still wins.
     assert config.site_relay_should_start(None, LicenseState.TRIAL_ENDED, 'ANDROID') is False
     assert config.site_relay_should_start('0', LicenseState.TRIAL_ENDED, 'WINDOWS') is False
+
+
+def test_an_unpaid_locked_till_starts_the_hub_like_an_ended_trial():
+    """Owner 2026-10-30: an unpaid lapse past the grace locks selling exactly like the ended trial, and
+    sync stays on for it, so its hub must still start (else the shop's other devices lose their hub after
+    a reboot and cannot see the paid lease). Hand-written, not derived from the family constants."""
+    assert config.site_relay_should_start(None, LicenseState.UNPAID_LOCKED, 'WINDOWS') is True
+    # Twin: a handset never self-elects, and an explicit '0' still wins.
+    assert config.site_relay_should_start(None, LicenseState.UNPAID_LOCKED, 'ANDROID') is False
+    assert config.site_relay_should_start('0', LicenseState.UNPAID_LOCKED, 'WINDOWS') is False
+    # Twin: the neighbouring non-selling states still do not start one.
+    assert config.site_relay_should_start(None, LicenseState.RESTRICTED, 'WINDOWS') is False
 
 
 def test_near_miss_values_fall_back_to_automatic_not_to_a_guess():

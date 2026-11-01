@@ -134,8 +134,27 @@ function testEndedTrialShowsTheLockWording() {
   console.log('PASS: TRIAL_ENDED shows the lock wording and a way to the how-to-pay screen');
 }
 
+// Owner 2026-10-30 (later): a PAID subscription that lapsed unpaid past its 7-day grace is locked like an
+// ended trial but must say the PAYMENT is overdue -- "your free trial has ended" would be false to a shop
+// that paid for months.
+function testUnpaidLockShowsPaymentOverdueNotTrialEnded() {
+  const app = render(null, 'UNPAID_LOCKED', { is_trial: false, ended: false, days_left: null });
+  const html = app._licenseBannerEl.innerHTML;
+  assert.ok(app.LICENSE_BANNER_BLOCKED_STATES.includes('UNPAID_LOCKED'));
+  assert.ok(html.includes('Your subscription payment is overdue. Selling is paused until the payment is confirmed. Your data is safe.'), html);
+  assert.ok(html.includes('How to unlock') && /openLicensing\(\)/.test(html), html);
+  assert.ok(!html.includes('free trial'), 'the unpaid lock borrowed the trial wording: ' + html);
+  assert.ok(!html.includes('This device is not licensed'), 'fell through to the generic "not licensed" wording');
+  // The sibling: the ended trial must NOT pick up the payment wording.
+  const trial = render(null, 'TRIAL_ENDED', { is_trial: true, ended: true, days_left: null });
+  assert.ok(!trial._licenseBannerEl.innerHTML.includes('payment is overdue'), 'the ended trial says payment overdue');
+  console.log('PASS: UNPAID_LOCKED says the payment is overdue (never "trial ended"), TRIAL_ENDED unchanged');
+}
+
 function testEveryTrialStringHasARealArabicTranslation() {
   const keys = [
+    'Your subscription payment is overdue. Selling is paused until the payment is confirmed. Your data is safe.',
+    'Payment overdue',
     'Trial: 1 day left', 'Trial: 2 days left', 'Trial: {n} days left', 'Trial details',
     'Contact your Aura seller to keep using Aura after the trial.',
     'Your free trial has ended', 'Your data is safe. Selling is locked until you pay.', 'How to unlock',
@@ -158,6 +177,16 @@ function testEveryTrialStringHasARealArabicTranslation() {
 }
 
 function testMutations() {
+  mustThrow('losing the UNPAID_LOCKED wording is caught', () => {
+    const src = mutate("if (state === 'UNPAID_LOCKED') {", 'if (false) {');
+    const app = render(src, 'UNPAID_LOCKED', { is_trial: false, ended: false });
+    assert.ok(app._licenseBannerEl.innerHTML.includes('payment is overdue'), 'generic wording shown');
+  });
+  mustThrow('UNPAID_LOCKED leaving the blocked list is caught', () => {
+    const src = mutate("    'UNPAID_LOCKED',\n", '');
+    const app = render(src, 'UNPAID_LOCKED', { is_trial: false, ended: false });
+    assert.ok(app.LICENSE_BANNER_BLOCKED_STATES.includes('UNPAID_LOCKED'), 'not a blocked state');
+  });
   mustThrow('dropping the trial bar is caught', () => {
     const src = mutate('if (trialRunning) {\n        this._renderTrialBanner', 'if (false) {\n        this._renderTrialBanner');
     assert.ok(render(src, 'ACTIVE_ONLINE', RUNNING(3))._licenseBannerEl, 'a running trial rendered no bar');
@@ -177,6 +206,7 @@ function testMutations() {
 [
   testRunningTrialShowsDaysLeftAndStillSells, testSingularAndDualHaveTheirOwnWording,
   testNoTrialBarOnAPaidOrFinishedOrUnknownTill, testTrialBarClearsWhenThePaidLeaseArrives,
-  testEndedTrialShowsTheLockWording, testEveryTrialStringHasARealArabicTranslation, testMutations,
+  testEndedTrialShowsTheLockWording, testUnpaidLockShowsPaymentOverdueNotTrialEnded,
+  testEveryTrialStringHasARealArabicTranslation, testMutations,
 ].forEach((fn) => fn());
 console.log('PASS retail_trial_banner_test.js');

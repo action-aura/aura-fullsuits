@@ -50,6 +50,7 @@
     // New-customer flow: the 7-day trial is over and the shop has not paid. Selling is locked;
     // data, backup and export are not (see appendTrialEndedPanel).
     TRIAL_ENDED: { text: 'Trial ended', cls: 'state-restricted' },
+    UNPAID_LOCKED: { text: 'Payment overdue', cls: 'state-restricted' },
     DEVICE_DEACTIVATED: { text: 'Computer deactivated', cls: 'state-neutral' },
     CLOCK_REVIEW_REQUIRED: { text: 'Clock review required', cls: 'state-warning' },
     LOCAL_STATE_CORRUPT: { text: 'Local state needs reset', cls: 'state-restricted' },
@@ -1121,12 +1122,21 @@
   // The lock screen for TRIAL_ENDED. Says the three things the shop needs: the data is safe (and
   // the two buttons that prove it), how to unlock, and that unlocking is automatic once Owner has
   // the payment -- there is no key to type, so "Check Now" below is the only action after paying.
-  function appendTrialEndedPanel() {
+  // UNPAID_LOCKED (owner 2026-10-30) reuses the same panel -- same buttons, same unlock path -- with
+  // heading/body about the overdue payment instead of the trial.
+  function appendTrialEndedPanel(unpaid) {
     const panel = el('section', { id: 'trial-ended-panel', className: 'trial-ended-panel' });
-    panel.appendChild(el('h2', { text: t('Your free trial has ended') }));
+    panel.appendChild(el('h2', { text: unpaid ? t('Your subscription payment is overdue') : t('Your free trial has ended') }));
     panel.appendChild(el('p', {
-      text: t('Your data is safe. You can still look at your records and reports, and make a backup or an export. Selling is locked until you pay.'),
+      text: unpaid
+        ? t('Your subscription payment is overdue. Selling is paused until the payment is confirmed. Your data is safe.')
+        : t('Your data is safe. You can still look at your records and reports, and make a backup or an export. Selling is locked until you pay.'),
     }));
+    if (unpaid) {
+      panel.appendChild(el('p', {
+        text: t('You can still look at your records and reports, take customer debt payments, and make a backup or an export.'),
+      }));
+    }
     const row = el('div', { className: 'row' });
     const backupBtn = el('button', { id: 'trial-backup-btn', text: t('Back up my data') });
     backupBtn.addEventListener('click', () => onTrialBackupClicked(backupBtn));
@@ -1190,7 +1200,10 @@
       }));
     }
     if (state === 'TRIAL_ENDED') {
-      appendTrialEndedPanel();
+      appendTrialEndedPanel(false);
+    }
+    if (state === 'UNPAID_LOCKED') {
+      appendTrialEndedPanel(true);
     }
     if (state === 'SUSPENDED' || state === 'REVOKED' || state === 'EXPIRED') {
       content.appendChild(el('p', {
