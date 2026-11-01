@@ -368,4 +368,6 @@ def test_the_table_has_the_planned_columns(app):
     assert cols == {
         "id", "kind", "to_address", "subject", "body_text", "body_html", "status", "attempt_count", "next_attempt_at",
         "lease_expires_at", "last_error", "source", "installation_id", "created_at", "sent_at",
+        # cn1 (feat/customer-notices): one mail per EVENT for the notices; NULL on every older kind.
+        "dedupe_key",
     }

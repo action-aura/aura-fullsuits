@@ -110,3 +110,36 @@ class ContractAcceptance(Base, UUIDPKMixin, TimestampMixin):
     language: Mapped[str] = mapped_column(String(8), nullable=False)
     text_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+CONSENT_KINDS = ("id_documents", "data_outside_jordan")
+
+
+class ContractConsent(Base, UUIDPKMixin, TimestampMixin):
+    """The customer's two SEPARATE consents given at the acceptance step (feat/
+    customer-notices, N2): (a) keep a photo of the owner's ID and commercial
+    registration, (b) host the shop's data outside Jordan. One row per kind per
+    acceptance, APPEND-ONLY (a DB trigger refuses UPDATE and DELETE), because it is
+    evidence exactly like the acceptance row it hangs off.
+
+    Why not columns on owner_contract_acceptances: that table is append-only and
+    already in production use; a missing consents object (an older app build) must
+    mean "recorded nothing", which a column default could not tell apart from "said no".
+    """
+
+    __tablename__ = "owner_contract_consents"
+    __table_args__ = (
+        CheckConstraint("kind IN ('id_documents', 'data_outside_jordan')", name="ck_owner_contract_consents_kind"),
+        UniqueConstraint("acceptance_id", "kind", name="uq_owner_contract_consents_acceptance_kind"),
+    )
+
+    acceptance_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_contract_acceptances.id"), nullable=False, index=True
+    )
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    given: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    given_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    installation_id: Mapped[str | None] = mapped_column(String(128))

@@ -43,7 +43,8 @@ def _now() -> datetime:
 
 
 def enqueue(*, kind: str, to_address: str, subject: str, body_text: str, body_html: Optional[str] = None,
-            source: str = "owner", installation_id: Optional[uuid.UUID] = None) -> EmailOutbox:
+            source: str = "owner", installation_id: Optional[uuid.UUID] = None,
+            dedupe_key: Optional[str] = None) -> EmailOutbox:
     """Header-injection guard lives HERE, not only in the relay: whatever
     produced the recipient or the subject, a CR/LF in either would let the
     sender add headers (Bcc:) to the message."""
@@ -53,6 +54,7 @@ def enqueue(*, kind: str, to_address: str, subject: str, body_text: str, body_ht
     row = EmailOutbox(
         kind=kind, to_address=to_address, subject=subject, body_text=body_text, body_html=body_html,
         status="QUEUED", attempt_count=0, source=source, installation_id=installation_id, created_at=_now(),
+        dedupe_key=dedupe_key,
     )
     db_session.add(row)
     db_session.flush()

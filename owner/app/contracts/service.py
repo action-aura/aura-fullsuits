@@ -31,7 +31,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-from flask import current_app
+from flask import current_app, has_request_context, url_for
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -286,6 +286,12 @@ def record_customer_acceptance(
         entity_type="contract_acceptance", entity_public_id=str(row.id),
         after_state={"customer_id": str(account.customer_id), "version_id": str(version.id), "sha256": version.body_sha256},
     )
+    # Clause 20: the shop gets a copy of what it accepted, and is TOLD (7-day "this was not
+    # me" window). Only a row THIS call wrote reaches here -- an idempotent repeat and a
+    # lost race return above -- and the notice is deduped per acceptance as well.
+    from app.mail import notices
+
+    notices.queue_contract_copy(row, version, audience="CUSTOMER", to_address=account.email, lang=account.language)
     return row
 
 
@@ -328,6 +334,13 @@ def record_seller_acceptance(*, staff, version: ContractVersion, ip: str | None)
         entity_type="contract_acceptance", entity_public_id=str(row.id),
         after_state={"version_id": str(version.id), "sha256": version.body_sha256},
     )
+    from app.mail import notices
+
+    link = None
+    if has_request_context():  # the signed-in copy download (the same route the agreement page links)
+        link = url_for("contracts.seller_copy", version_id=version.id, _external=True)
+    notices.queue_contract_copy(
+        row, version, audience="SELLER", to_address=staff.email, lang=getattr(staff, "locale", None), link=link)
     return row
 
 

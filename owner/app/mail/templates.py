@@ -43,7 +43,26 @@ _SUBJECTS = {
     "customer_email_change": ("Confirm your new Action Aura email address", "تأكيد بريدك الإلكتروني الجديد في Action Aura"),
     "customer_email_changed_notice": ("The email address on your Action Aura account is changing",
                                       "يجري تغيير البريد الإلكتروني في حسابك على Action Aura"),
+    # Customer / seller notices (feat/customer-notices). Built by app/mail/notices.py,
+    # never reachable from the product relay's KINDS. Each is queued once per event.
+    "customer_contract_accepted": ("Your copy of the Action Aura contract you accepted",
+                                   "نسختك من عقد Action Aura الذي وافقت عليه"),
+    "seller_contract_accepted": ("Your copy of the Action Aura seller agreement you accepted",
+                                 "نسختك من اتفاقية البائع في Action Aura التي وافقت عليها"),
+    "customer_payment_pending": ("Action Aura: payment recorded, waiting for confirmation",
+                                 "Action Aura: تم تسجيل دفعة وهي بانتظار التأكيد"),
+    "customer_payment_confirmed": ("Action Aura: payment confirmed", "Action Aura: تم تأكيد الدفعة"),
+    "customer_payment_rejected": ("Action Aura: payment not accepted", "Action Aura: لم تُقبل الدفعة"),
 }
+
+# Messages that are a record the person may need to dispute: the footer invites a
+# reply instead of saying "do not reply" (see _footer), and the mail carries its own
+# per-language lines and, for a contract copy, the accepted text itself.
+NOTICE_KINDS = frozenset({
+    "customer_contract_accepted", "seller_contract_accepted",
+    "customer_payment_pending", "customer_payment_confirmed", "customer_payment_rejected",
+})
+NOTICE_CONTACT = "info@actionaura.me"
 
 # Kinds whose body carries a live one-time link. The sender clears the body the
 # moment such a message is SENT (app/mail/outbox.py::mark_sent), so a finished
@@ -84,6 +103,16 @@ _INTROS = {
                                       "If this was not you, contact Action Aura at once.",
                                       "يجري تغيير بريد تسجيل الدخول لحسابك في Action Aura إلى العنوان أدناه. "
                                       "إذا لم تكن أنت، تواصل مع Action Aura فوراً."),
+    "customer_contract_accepted": ("You accepted the Action Aura contract below. This message is your copy: the details of your acceptance, then the exact text you accepted.",
+                                   "لقد وافقت على عقد Action Aura أدناه. هذه الرسالة هي نسختك: تفاصيل موافقتك ثم النص الذي وافقت عليه حرفياً."),
+    "seller_contract_accepted": ("You accepted the Action Aura seller agreement below. This message is your copy: the details of your acceptance, then the exact text you accepted.",
+                                 "لقد وافقت على اتفاقية البائع في Action Aura أدناه. هذه الرسالة هي نسختك: تفاصيل موافقتك ثم النص الذي وافقت عليه حرفياً."),
+    "customer_payment_pending": ("Our seller recorded a payment for your shop. It is received by our seller and waiting for confirmation by Action Aura:",
+                                 "سجّل بائعنا دفعة عن متجرك. استلمها بائعنا وهي بانتظار التأكيد من Action Aura:"),
+    "customer_payment_confirmed": ("Action Aura confirmed this payment for your shop:",
+                                   "أكدت Action Aura هذه الدفعة الخاصة بمتجرك:"),
+    "customer_payment_rejected": ("Action Aura could not accept this payment record for your shop. Please contact us:",
+                                  "لم تتمكن Action Aura من قبول سجل هذه الدفعة الخاص بمتجرك. يرجى التواصل معنا:"),
 }
 
 _LINK_NOTES = {
@@ -105,10 +134,24 @@ _LINK_NOTES = {
                                   "إذا لم تكن أنت، أعد تعيين كلمة المرور الآن من صفحة تسجيل الدخول وتواصل مع Action Aura."),
     "customer_email_change": ("The link works once and expires in 24 hours. Until you use it, the old address stays in force.",
                               "يعمل الرابط مرة واحدة وتنتهي صلاحيته خلال 24 ساعة. يبقى العنوان القديم ساري المفعول إلى أن تستخدمه."),
+    # The 7-day "this was not me" window the contract promises (cl. 20) for an acceptance.
+    "customer_contract_accepted": (f"If you did not accept this yourself, reply to this email or write to {NOTICE_CONTACT} within 7 days.",
+                                   f"إذا لم تقم بالموافقة بنفسك، فردّ على هذه الرسالة أو راسل {NOTICE_CONTACT} خلال 7 أيام."),
+    "seller_contract_accepted": (f"If you did not accept this yourself, reply to this email or write to {NOTICE_CONTACT} within 7 days.",
+                                 f"إذا لم تقم بالموافقة بنفسك، فردّ على هذه الرسالة أو راسل {NOTICE_CONTACT} خلال 7 أيام."),
+    "customer_payment_pending": (f"If this is not right, reply to this email or write to {NOTICE_CONTACT}.",
+                                 f"إذا كان في هذا خطأ، فردّ على هذه الرسالة أو راسل {NOTICE_CONTACT}."),
+    "customer_payment_confirmed": (f"If this is not right, reply to this email or write to {NOTICE_CONTACT}.",
+                                   f"إذا كان في هذا خطأ، فردّ على هذه الرسالة أو راسل {NOTICE_CONTACT}."),
+    "customer_payment_rejected": (f"Reply to this email or write to {NOTICE_CONTACT} so we can sort it out together.",
+                                  f"ردّ على هذه الرسالة أو راسل {NOTICE_CONTACT} لنحلّ الأمر معاً."),
 }
 
 
 def _footer(kind: str = "") -> tuple:
+    if kind in NOTICE_KINDS:
+        return ("Sent by Action Aura. Questions: " + NOTICE_CONTACT,
+                "أُرسلت من Action Aura. للاستفسار: " + NOTICE_CONTACT)
     if kind.startswith(CUSTOMER_KIND_PREFIX):
         # No support address: whether that mailbox exists is not known yet, and
         # a customer must not be told to write to one that bounces.
@@ -122,7 +165,16 @@ def _footer(kind: str = "") -> tuple:
     return en, ar
 
 
-def _block_text(kind: str, idx: int, link: Optional[str], lines: list) -> str:
+def _lines_for(lines, idx: int) -> list:
+    """`lines` is one list shared by both language blocks, or {"en": [...], "ar": [...]}
+    when the lines themselves are words (a notice's amounts and labels)."""
+    if isinstance(lines, dict):
+        return list(lines.get(("en", "ar")[idx]) or [])
+    return list(lines or [])
+
+
+def _block_text(kind: str, idx: int, link: Optional[str], lines) -> str:
+    lines = _lines_for(lines, idx)
     parts = [_INTROS[kind][idx]]
     if link:
         parts += ["", link]
@@ -135,7 +187,8 @@ def _block_text(kind: str, idx: int, link: Optional[str], lines: list) -> str:
     return "\n".join(parts)
 
 
-def _block_html(kind: str, idx: int, link: Optional[str], lines: list) -> str:
+def _block_html(kind: str, idx: int, link: Optional[str], lines) -> str:
+    lines = _lines_for(lines, idx)
     rtl = idx == 1
     out = [f'<div dir="{"rtl" if rtl else "ltr"}" style="margin:0 0 24px 0">',
            f"<p>{escape(_INTROS[kind][idx])}</p>"]
@@ -151,16 +204,24 @@ def _block_html(kind: str, idx: int, link: Optional[str], lines: list) -> str:
     return "".join(out)
 
 
-def render(kind: str, *, lang: str = "en", link: Optional[str] = None, lines: Optional[list] = None) -> tuple:
+def render(kind: str, *, lang: str = "en", link: Optional[str] = None, lines=None,
+           appendix: Optional[str] = None) -> tuple:
     """Returns (subject, body_text, body_html). `link` and `lines` must already
-    have been validated by the caller; they are placed in the body only."""
+    have been validated by the caller; they are placed in the body only.
+    `appendix` is a block of verbatim text after both language blocks (a contract
+    copy: the exact words accepted); it is escaped for HTML and never in the subject."""
     if kind not in _SUBJECTS:
         raise KeyError(kind)
     if link is not None and len(link) > LINK_MAX:
         raise ValueError("link too long")
-    lines = list(lines or [])
+    if not isinstance(lines, dict):
+        lines = list(lines or [])
     order = (1, 0) if lang == "ar" else (0, 1)
     subject = _SUBJECTS[kind][order[0]]
-    body_text = ("\n\n" + "-" * 24 + "\n\n").join(_block_text(kind, i, link, lines) for i in order)
+    divider = "\n\n" + "-" * 24 + "\n\n"
+    body_text = divider.join(_block_text(kind, i, link, lines) for i in order)
     body_html = "".join(_block_html(kind, i, link, lines) for i in order)
+    if appendix:
+        body_text += divider + appendix
+        body_html += f'<pre dir="auto" style="white-space:pre-wrap;font-family:inherit">{escape(appendix)}</pre>'
     return subject, body_text, body_html

@@ -22,7 +22,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -39,6 +39,11 @@ class EmailOutbox(Base, UUIDPKMixin):
         Index("ix_owner_email_outbox_status_next_attempt", "status", "next_attempt_at"),
         # The relay caps: how many messages did this installation queue lately.
         Index("ix_owner_email_outbox_installation_created", "installation_id", "created_at"),
+        # One message per EVENT for the notices (a contract acceptance, a payment status):
+        # the key names the event ("customer_contract_accepted:<acceptance id>"), the
+        # database refuses a second row for it, so a retried request or a re-run job
+        # cannot mail the same person twice. NULL (every older kind) is not constrained.
+        Index("uq_owner_email_outbox_dedupe_key", "dedupe_key", unique=True, postgresql_where=text("dedupe_key IS NOT NULL")),
     )
 
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -55,3 +60,4 @@ class EmailOutbox(Base, UUIDPKMixin):
     installation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_installations.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dedupe_key: Mapped[str | None] = mapped_column(String(200))
