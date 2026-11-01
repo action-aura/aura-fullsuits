@@ -3,16 +3,20 @@ import { dict, type Lang } from '../i18n/index';
 import { pagePath } from '../lib/seo';
 import StatusPill from './StatusPill.astro';
 import { PHONE_TEL, waLink } from '../lib/lang';
+import { ACCOUNTS_ON, accountPath } from '../lib/accounts';
 
 interface Props {
   lang: Lang;
   slug: string;
+  // Pages whose slug has sub-pages (the account area) say where the other language's twin lives.
+  switchPath?: string;
 }
 
-const { lang, slug } = Astro.props;
+const { lang, slug, switchPath } = Astro.props;
 const t = dict(lang);
 const other: Lang = lang === 'en' ? 'ar' : 'en';
 const cur = (s: string) => (s === slug ? 'page' : undefined);
+const otherHref = switchPath ?? pagePath(other, slug);
 ---
 {/* Phone strip: city, phone, WhatsApp. Phones only (CSS), master navy, scrolls away. Phone is a single LTR run inside RTL text. */}
 <div class="phone-strip">
@@ -35,7 +39,8 @@ const cur = (s: string) => (s === slug ? 'page' : undefined);
     <a class="nav-link" data-chapter-link="gym" href={pagePath(lang, '') + '#gym'}>{t.nav.gym}</a>
     <StatusPill kind="coming" lang={lang} />
     <a class="nav-link" href={pagePath(lang, 'about')} aria-current={cur('about')}>{t.nav.about}</a>
-    <a class="nav-lang" hreflang={other} lang={other} href={pagePath(other, slug)}>{t.nav.switchTo}</a>
+    {ACCOUNTS_ON && <a class="nav-link nav-account" href={accountPath(lang)} aria-current={cur('account')}>{t.nav.signIn}</a>}
+    <a class="nav-lang" hreflang={other} lang={other} href={otherHref}>{t.nav.switchTo}</a>
     <a class="nav-demo" href={pagePath(lang, 'contact')} aria-current={cur('contact')}>{t.nav.demo}</a>
   </nav>
 
@@ -49,7 +54,8 @@ const cur = (s: string) => (s === slug ? 'page' : undefined);
     <a class="nav-sheet-link" data-chapter-link="clinic" href={pagePath(lang, 'aura-clinic')} aria-current={cur('aura-clinic')}>{t.nav.clinic}</a>
     <a class="nav-sheet-link" data-chapter-link="gym" href={pagePath(lang, '') + '#gym'}>{t.nav.gym} <StatusPill kind="coming" lang={lang} /></a>
     <a class="nav-sheet-link" href={pagePath(lang, 'about')} aria-current={cur('about')}>{t.nav.about}</a>
-    <a class="nav-sheet-link nav-lang" hreflang={other} lang={other} href={pagePath(other, slug)}>{t.nav.switchTo}</a>
+    {ACCOUNTS_ON && <a class="nav-sheet-link nav-account" href={accountPath(lang)} aria-current={cur('account')}>{t.nav.signIn}</a>}
+    <a class="nav-sheet-link nav-lang" hreflang={other} lang={other} href={otherHref}>{t.nav.switchTo}</a>
     <a class="nav-sheet-link nav-demo" href={pagePath(lang, 'contact')} aria-current={cur('contact')}>{t.nav.demo}</a>
   </div>
 </header>

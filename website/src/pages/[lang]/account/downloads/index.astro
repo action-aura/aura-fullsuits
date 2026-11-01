@@ -1,0 +1,25 @@
+---
+import AccountLayout from '../../../../layouts/AccountLayout.astro';
+import { dict, type Lang } from '../../../../i18n';
+import { accountStaticPaths } from '../../../../lib/accounts';
+
+
+export function getStaticPaths() { return accountStaticPaths(); }
+const lang = Astro.params.lang as Lang;
+const a = dict(lang).pages.account;
+---
+<AccountLayout lang={lang} sub="downloads" title={a.meta.downloads.title} description={a.meta.downloads.description}
+  heading={a.downloads.title} lead={a.downloads.lead} strings={{ ...a, lang }}>
+  <p id="acct-msg" class="acct-msg" role="alert" hidden></p>
+  <p id="acct-loading" class="acct-loading" role="status">{a.common.loading}</p>
+  <div id="acct-root" hidden>
+    <ul id="dl-list" class="acct-downloads"></ul>
+    <p class="acct-note">{a.downloads.linkNote}</p>
+    <section class="acct-card" aria-labelledby="steps-h">
+      <h2 id="steps-h">{a.downloads.stepsTitle}</h2>
+      <ol class="acct-steps">{a.downloads.steps.map((s) => <li>{s}</li>)}</ol>
+    </section>
+    <p><a class="acct-link" href={`/${lang}/account/`}>{a.downloads.back}</a></p>
+  </div>
+</AccountLayout>
+<script>import '../../../../scripts/account/downloads';</script>

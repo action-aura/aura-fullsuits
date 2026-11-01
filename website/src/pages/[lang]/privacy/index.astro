@@ -8,7 +8,7 @@ const t = dict(lang);
 const doc = t.pages.legal.privacy;
 ---
 <ReadPage lang={lang} slug="privacy" title={t.meta.privacy.title} description={t.meta.privacy.description}
-  heading={doc.title} draftNote={doc.draftNote}
+  heading={doc.title}
   jsonld={[breadcrumbLd(lang, [{ name: t.nav.brand, slug: '' }, { name: doc.title, slug: 'privacy' }])]}>
   <p class="updated">{doc.updated}</p>
   {doc.sections.map((s) => (<section><h2>{s.h}</h2>{s.p.map((para) => <p>{para}</p>)}</section>))}

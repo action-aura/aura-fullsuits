@@ -3,6 +3,7 @@ import { dict, type Lang } from '../i18n';
 import { pagePath } from '../lib/seo';
 import { PHONE_TEL, waLink, INSTAGRAM } from '../lib/lang';
 import StatusPill from './StatusPill.astro';
+import { ACCOUNTS_ON, accountPath } from '../lib/accounts';
 
 interface Props {
   lang: Lang;
@@ -45,6 +46,7 @@ const [tagBefore, tagAfter] = f.tagline.split('·').map((s) => s.trim());
         <li><a href={pagePath(lang, 'contact')}>{t.nav.demo}</a></li>
         <li><a href={pagePath(lang, 'privacy')}>{f.privacy}</a></li>
         <li><a href={pagePath(lang, 'terms')}>{f.terms}</a></li>
+        {ACCOUNTS_ON && <li><a href={accountPath(lang)}>{t.nav.signIn}</a></li>}
       </ul>
     </nav>
   </div>

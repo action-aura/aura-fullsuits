@@ -1,0 +1,34 @@
+---
+import AccountLayout from '../../../../layouts/AccountLayout.astro';
+import { dict, type Lang } from '../../../../i18n';
+import { accountStaticPaths } from '../../../../lib/accounts';
+
+
+export function getStaticPaths() { return accountStaticPaths(); }
+const lang = Astro.params.lang as Lang;
+const a = dict(lang).pages.account;
+---
+<AccountLayout lang={lang} sub="set-password" title={a.meta.setPassword.title} description={a.meta.setPassword.description}
+  heading={a.setPassword.titleToken} lead={a.setPassword.leadToken} strings={{ ...a, lang }}>
+  <p id="acct-msg" class="acct-msg" role="alert" hidden></p>
+  <form id="acct-form" class="acct-form" method="post" action="javascript:void(0)" novalidate>
+    <div class="field" id="row-current" hidden>
+      <label for="f-current">{a.setPassword.current}</label>
+      <input id="f-current" name="current" type="password" autocomplete="current-password" dir="ltr" />
+    </div>
+    <div class="field">
+      <label for="f-next">{a.setPassword.next}</label>
+      <input id="f-next" name="next" type="password" autocomplete="new-password" dir="ltr" aria-describedby="f-rules" />
+      <p id="f-rules" class="field-help">{a.setPassword.rules}</p>
+    </div>
+    <div class="field">
+      <label for="f-again">{a.setPassword.again}</label>
+      <input id="f-again" name="again" type="password" autocomplete="new-password" dir="ltr" />
+    </div>
+    <div class="form-actions">
+      <button type="submit" id="acct-submit" class="btn-send-wa" data-label={a.setPassword.submit}>{a.setPassword.submit}</button>
+      <a id="acct-ask-new" class="acct-link" href={`/${lang}/account/forgot/`} hidden>{a.setPassword.askNewLink}</a>
+    </div>
+  </form>
+</AccountLayout>
+<script>import '../../../../scripts/account/set-password';</script>
