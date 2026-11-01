@@ -325,7 +325,8 @@ def test_a_separate_manual_disable_is_not_overridden_when_the_suspension_ends(ap
         staff.disabled_at, staff.disabled_reason = utcnow(), "left the company"
         db_session.commit()
         scan.run_due(now=until + timedelta(days=1))
-    assert _account(app, w["seller"])[1:] == (False, "ACTIVE")  # profile re-opened, the account stays blocked
+    # profile re-opened, but the account stays blocked: still inactive AND still carrying its manual disable
+    assert _account(app, w["seller"]) == (False, False, "ACTIVE")
     assert _sign_in(app, w["seller"]) == "account_disabled"
 
 
