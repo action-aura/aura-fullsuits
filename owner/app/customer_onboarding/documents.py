@@ -13,8 +13,9 @@ HOW A FILE IS STORED
   2. JPEG and PNG have their metadata stripped (EXIF carries the phone's GPS
      position and the device name; a customer's home address does not belong in a
      KYC file). Done by editing the file's own segments/chunks, with no image
-     library: a PDF is stored as it is (a PDF cannot be cleaned safely here; the
-     form only offers camera/photo inputs, a PDF is an upload someone chose).
+     library: a PDF is stored as it is (a PDF cannot be cleaned safely here), so a
+     PDF is REFUSED for the ID and the registration (clean_identity_file) and only
+     the payment slip may still be one.
   3. A fresh random 256-bit key (the DEK) encrypts the file with AES-256-GCM. The
      DEK is itself encrypted ("wrapped") with the key-encryption key (KEK) from
      OWNER_KYC_KEYS and stored in the file's header. Both use the document's id
@@ -200,6 +201,20 @@ def strip_png_metadata(data: bytes) -> bytes:
     return bytes(out)
 
 
+IMAGE_TYPES = ("image/jpeg", "image/png")
+
+
+def clean_identity_file(content: bytes) -> tuple[bytes, str]:
+    """clean_file() for the owner's ID and the commercial registration: a PICTURE only.
+    A PDF is stored as it is (it cannot be cleaned safely here) and keeps its metadata
+    (author, device, dates), which an identity document must not. The payment slip keeps
+    using clean_file() and may still be a PDF."""
+    cleaned, content_type = clean_file(content)
+    if content_type not in IMAGE_TYPES:
+        raise DocumentError("DOCUMENT_TYPE_NOT_ALLOWED")
+    return cleaned, content_type
+
+
 def clean_file(content: bytes) -> tuple[bytes, str]:
     """(bytes to store, content type). Raises DocumentError for an empty, too big,
     unknown-type or unparseable file."""
@@ -266,7 +281,7 @@ def store_document(
     CALLER commits, so the row and the rest of its action are one transaction;
     if that commit fails the blob is an unreferenced orphan, never a row without
     a file -- discard_blob() removes it)."""
-    cleaned, content_type = clean_file(content)
+    cleaned, content_type = (clean_identity_file if kind != "PAYMENT_SLIP" else clean_file)(content)
     kid, kek = active_key()
     now = now or datetime.now(timezone.utc)
     document_id = uuid.uuid4()

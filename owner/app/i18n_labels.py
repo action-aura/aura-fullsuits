@@ -1186,7 +1186,7 @@ def localize_onboarding_error(code: str, **params) -> str:
         "LOCATION_INVALID": _("The captured location is not valid. Capture it again or leave it empty."),
         "ID_PHOTO_REQUIRED": _("Add a photo of the owner's ID."),
         "CR_PHOTO_REQUIRED": _("Add a photo of the commercial registration."),
-        "DOCUMENT_TYPE_NOT_ALLOWED": _("Photos must be JPEG or PNG pictures (or a PDF)."),
+        "DOCUMENT_TYPE_NOT_ALLOWED": _("Photos must be JPEG or PNG pictures."),
         "DOCUMENT_TOO_LARGE": _("A photo is too large (at most %(max_mb)s MB)."),
         "DOCUMENT_EMPTY": _("A photo file is empty."),
         "DOCUMENT_CORRUPT": _("A photo file is damaged. Take it again."),

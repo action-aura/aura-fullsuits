@@ -9756,8 +9756,8 @@ msgid "Add a photo of the commercial registration."
 msgstr "أضف صورة السجل التجاري."
 
 #: app/customer_onboarding
-msgid "Photos must be JPEG or PNG pictures (or a PDF)."
-msgstr "يجب أن تكون الصور بصيغة JPEG أو PNG (أو ملف PDF)."
+msgid "Photos must be JPEG or PNG pictures."
+msgstr "يجب أن تكون الصور بصيغة JPEG أو PNG."
 
 #: app/customer_onboarding
 msgid "A photo is too large (at most %(max_mb)s MB)."

@@ -84,9 +84,9 @@
       <p class="error" role="alert" data-reattach-photos="1">{{ _("Your photos could not be kept. Please attach both photos again before you press the button.") }}</p>
       {% endif %}
       <label for="nc-id">{{ _("Photo of the owner's ID") }}</label>
-      <input id="nc-id" type="file" name="id_photo" accept="image/*,application/pdf" capture="environment" required>
+      <input id="nc-id" type="file" name="id_photo" accept="image/*" capture="environment" required>
       <label for="nc-crphoto">{{ _("Photo of the commercial registration") }}</label>
-      <input id="nc-crphoto" type="file" name="cr_photo" accept="image/*,application/pdf" capture="environment" required>
+      <input id="nc-crphoto" type="file" name="cr_photo" accept="image/*" capture="environment" required>
       <p class="nc-hint">{{ _("Up to 10 MB each. They are stored encrypted and only a Sales Manager can open them.") }}</p>
     </fieldset>
 

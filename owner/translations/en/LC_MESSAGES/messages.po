@@ -9797,8 +9797,8 @@ msgid "Add a photo of the commercial registration."
 msgstr "Add a photo of the commercial registration."
 
 #: app/customer_onboarding
-msgid "Photos must be JPEG or PNG pictures (or a PDF)."
-msgstr "Photos must be JPEG or PNG pictures (or a PDF)."
+msgid "Photos must be JPEG or PNG pictures."
+msgstr "Photos must be JPEG or PNG pictures."
 
 #: app/customer_onboarding
 msgid "A photo is too large (at most %(max_mb)s MB)."
