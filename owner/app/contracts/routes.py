@@ -3,7 +3,7 @@
   GET  /contracts                        all versions + the "new version" form   (contracts.manage)
   POST /contracts/new                    create a version (text, optional PDF)
   GET  /contracts/<id>                   one version: text, status, who accepted
-  POST /contracts/<id>/approve           record that a lawyer read THIS text
+  POST /contracts/<id>/approve           record that THIS text was reviewed and approved for publication
   POST /contracts/<id>/publish           make it the live one (+ recent MFA)
   POST /contracts/<id>/retire            stop showing it (+ recent MFA)
   GET  /contracts/<id>/acceptances.json  evidence export for one version
@@ -16,8 +16,13 @@
   GET  /contracts/seller/copy/<id>       the seller's own copy of what they accepted (.txt)
 
 Everything but the last two is Super Admin only (permission contracts.manage, which
-only the Super Admin role holds). Publishing a version a lawyer has not approved is
-refused unless the server runs with OWNER_CONTRACT_ALLOW_DRAFT=1 (practice only).
+only the Super Admin role holds). Publishing a version nobody has approved for publication
+is refused unless the server runs with OWNER_CONTRACT_ALLOW_DRAFT=1 (practice only).
+(The stored field is still called lawyer_approved: the screens say "approved for
+publication" because the person who signs a text off is not always a lawyer.)
+
+The two PDF routes serve a download by default and the same bytes for the on-page viewer
+with ?inline=1 (the only response in the app that may be framed, and only by this site).
 """
 from __future__ import annotations
 
@@ -53,9 +58,9 @@ def _message(code: str) -> str:
     if code == "BODY_TOO_LONG":
         return _("The contract text is too long.")
     if code == "APPROVAL_NOTE_REQUIRED":
-        return _("Write who approved it and when (for example the lawyer's name and date).")
+        return _("Write who reviewed this text and how (for example: in-house review, approved by the general manager, date).")
     if code == "NOT_LAWYER_APPROVED":
-        return _("This version is not marked as approved by a lawyer, so it cannot be published.")
+        return _("This text has not been approved for publication yet, so it cannot be published.")
     if code == "ALREADY_PUBLISHED":
         return _("This version is already published.")
     if code == "NOT_PUBLISHED":
@@ -72,6 +77,21 @@ def _version_or_404(version_id):
     if version is None:
         abort(404)
     return version
+
+
+def _pdf_response(content: bytes, filename: str, *, inline: bool) -> Response:
+    """The archived PDF. A download by default; ``inline`` is for the viewer embedded in
+    the page, which the app's blanket anti-framing headers would otherwise blank out
+    (X-Frame-Options DENY + frame-ancestors 'none'). Only this response relaxes them,
+    and only to this same site -- never to another origin."""
+    response = Response(content, mimetype="application/pdf")
+    response.headers["Content-Disposition"] = f'{"inline" if inline else "attachment"}; filename="{filename}"'
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if inline:
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'self'"
+    return response
 
 
 def _json_download(payload: dict, filename: str) -> Response:
@@ -92,7 +112,16 @@ def _audit_export(what: str, entity_id: str, actor) -> None:
 @bp.route("", methods=["GET"])
 @require_permission("contracts.manage")
 def index():
-    return render_template("contracts/index.html", versions=service.list_versions(), draft_allowed=service.allow_draft_publish(),
+    versions = service.list_versions()
+    counts = service.acceptance_counts()
+    # Two groups, each in the order the list already has (language, newest first), with the
+    # one number and the one word per row computed here so the template only shows them.
+    groups = [
+        (audience, [{"v": v, "status": service.version_status(v), "accepted": counts.get(v.id, 0)}
+                    for v in versions if v.audience == audience])
+        for audience in ("CUSTOMER", "SELLER")
+    ]
+    return render_template("contracts/index.html", groups=groups, draft_allowed=service.allow_draft_publish(),
                            recent_auth_ok=has_recent_auth())
 
 
@@ -120,8 +149,13 @@ def create():
 @require_permission("contracts.manage")
 def detail(version_id):
     version = _version_or_404(version_id)
+    status = service.version_status(version)
+    # 1 Review the text -> 2 Approve for publication -> 3 Publish. Once it is live (or was)
+    # every step is behind us, so the strip shows all three done.
+    step = {"DRAFT": 2, "APPROVED": 3}.get(status, 4)
     return render_template("contracts/detail.html", version=version, acceptances=service.acceptances_of_version(version.id),
-                           draft_allowed=service.allow_draft_publish(), recent_auth_ok=has_recent_auth())
+                           draft_allowed=service.allow_draft_publish(), recent_auth_ok=has_recent_auth(),
+                           status=status, step=step)
 
 
 @bp.route("/<uuid:version_id>/approve", methods=["POST"])
@@ -133,7 +167,7 @@ def approve(version_id):
     except service.ContractError as exc:
         flash(_message(exc.code), "error")
     else:
-        flash(_("Marked as approved by a lawyer."), "success")
+        flash(_("Approved for publication. You can publish it now."), "success")
     return redirect(url_for("contracts.detail", version_id=version.id))
 
 
@@ -201,12 +235,9 @@ def pdf(version_id):
     audit_record(
         actor_staff_user_id=load_current_staff().id, actor_role_snapshot=None, action_code="CONTRACT_PDF_VIEWED",
         entity_type="contract_version", entity_public_id=str(version.id),
+        after_state={"inline": request.args.get("inline") == "1"},
     )
-    response = Response(content, mimetype="application/pdf")
-    response.headers["Content-Disposition"] = f'attachment; filename="contract-{version.version_label}.pdf"'
-    response.headers["Cache-Control"] = "no-store"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    return response
+    return _pdf_response(content, f"contract-{version.version_label}.pdf", inline=request.args.get("inline") == "1")
 
 
 # ---- the seller's own acceptance (any signed-in staff member) ----
@@ -269,13 +300,9 @@ def seller_pdf(version_id):
         abort(404)
     audit_record(
         actor_staff_user_id=actor.id, actor_role_snapshot=None, action_code="CONTRACT_PDF_VIEWED",
-        entity_type="contract_version", entity_public_id=str(version.id), after_state={"by": "seller"},
+        entity_type="contract_version", entity_public_id=str(version.id), after_state={"by": "seller", "inline": request.args.get("inline") == "1"},
     )
-    response = Response(content, mimetype="application/pdf")
-    response.headers["Content-Disposition"] = f'attachment; filename="seller-agreement-{version.version_label}.pdf"'
-    response.headers["Cache-Control"] = "no-store"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    return response
+    return _pdf_response(content, f"seller-agreement-{version.version_label}.pdf", inline=request.args.get("inline") == "1")
 
 
 @bp.route("/seller/copy/<uuid:version_id>", methods=["GET"])

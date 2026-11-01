@@ -1,45 +1,62 @@
 {% extends "layout/base.html" %}
 {% block title %}{{ _("Seller agreement") }}{% endblock %}
 {% block content %}
-<div class="card" style="max-width:720px;margin:0 auto;">
+<div style="max-width:860px;margin:0 auto;">
   {% if version is none %}
-  <h2>{{ _("Seller agreement") }}</h2>
-  <p>{{ _("There is no seller agreement to accept right now.") }}</p>
+  <div class="card">
+    <h2>{{ _("Seller agreement") }}</h2>
+    <p>{{ _("There is no seller agreement to accept right now.") }}</p>
+  </div>
   {% else %}
-  <h2>{{ version.title }}</h2>
-  {% if required and not accepted %}
-  <p data-contract-required="1"><strong>{{ _("To keep working in Aura Owner you must read and accept the seller agreement below.") }}</strong></p>
-  {% endif %}
-  {% if not version.lawyer_approved %}<p data-contract-draft="1"><strong>{{ _("DRAFT -- not yet approved by a lawyer") }}</strong></p>{% endif %}
-  <pre style="white-space:pre-wrap;" dir="auto">{{ version.body }}</pre>
-  {% if version.pdf_sha256 %}
-  <p><a data-contract-pdf="1" href="{{ url_for('contracts.seller_pdf', version_id=version.id) }}">{{ _("Download the full agreement (PDF)") }}</a></p>
-  {% endif %}
-  {% if accepted %}
-  <p data-contract-accepted="1">{{ _("You have accepted this version.") }}</p>
-  {% else %}
-  <form method="post" action="{{ url_for('contracts.seller_accept') }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="version_id" value="{{ version.id }}">
-    <input type="hidden" name="text_sha256" value="{{ version.body_sha256 }}">
-    <p><label><input type="checkbox" name="agree"> {{ _("I have read this agreement and I accept it") }}</label></p>
-    <button type="submit" class="btn--primary-action">{{ _("Accept") }}</button>
-  </form>
-  {% endif %}
+  {% set text_dir = "rtl" if version.language == "ar" else "ltr" %}
+  <div class="card">
+    <h2>{{ version.title }}</h2>
+    {% if required and not accepted %}
+    <p data-contract-required="1"><strong>{{ _("To keep working in Aura Owner you must read and accept the seller agreement below.") }}</strong></p>
+    {% endif %}
+    {% if not version.lawyer_approved %}<p data-contract-draft="1"><strong>{{ _("DRAFT — not yet approved for publication") }}</strong></p>{% endif %}
+    <p class="cs-note">{{ _("Read the agreement below. When you have read it, tick the box and press Accept at the bottom of the page.") }}</p>
+
+    {% if version.pdf_sha256 %}
+    <iframe class="cs-pdf" data-contract-pdf-viewer="1" src="{{ url_for('contracts.seller_pdf', version_id=version.id, inline=1) }}"
+            title="{{ _('The agreement as a PDF') }}"></iframe>
+    <p class="cs-actions"><a class="btn secondary" data-contract-pdf="1" href="{{ url_for('contracts.seller_pdf', version_id=version.id) }}">{{ _("Download the full agreement (PDF)") }}</a></p>
+    {% endif %}
+
+    <h3>{{ _("The agreement text") }}</h3>
+    <pre class="cs-text" data-contract-text="1" dir="{{ text_dir }}" lang="{{ version.language }}">{{ version.body }}</pre>
+  </div>
+
+  <div class="card card--action">
+    {% if accepted %}
+    <p data-contract-accepted="1"><strong>{{ _("You have accepted this version.") }}</strong></p>
+    <p class="cs-actions"><a class="btn secondary" data-contract-copy="1" href="{{ url_for('contracts.seller_copy', version_id=version.id) }}">{{ _("Download my copy") }}</a></p>
+    {% else %}
+    <form method="post" action="{{ url_for('contracts.seller_accept') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="version_id" value="{{ version.id }}">
+      <input type="hidden" name="text_sha256" value="{{ version.body_sha256 }}">
+      <p><label><input type="checkbox" name="agree"> {{ _("I have read this agreement and I accept it") }}</label></p>
+      <button type="submit" class="btn--primary-action">{{ _("Accept") }}</button>
+    </form>
+    {% endif %}
+  </div>
   {% endif %}
 
   {% if history %}
-  <h3>{{ _("Your copies") }}</h3>
-  <p>{{ _("You can download a copy of every version you accepted, with the date, time and address it was accepted from.") }}</p>
-  <ul>
-    {% for row, ver in history %}
-    <li>
-      {{ ver.version_label }} -- {{ format_owner_datetime(row.accepted_at) }}
-      -- <a data-contract-copy="1" href="{{ url_for('contracts.seller_copy', version_id=ver.id) }}">{{ _("Download the text") }}</a>
-      {% if ver.pdf_sha256 %}-- <a href="{{ url_for('contracts.seller_pdf', version_id=ver.id) }}">{{ _("Download the PDF") }}</a>{% endif %}
-    </li>
-    {% endfor %}
-  </ul>
+  <div class="card">
+    <h3>{{ _("Your copies") }}</h3>
+    <p>{{ _("You can download a copy of every version you accepted, with the date, time and address it was accepted from.") }}</p>
+    <ul>
+      {% for row, ver in history %}
+      <li>
+        {{ ver.version_label }} — {{ format_owner_datetime(row.accepted_at) }}
+        — <a data-contract-copy="1" href="{{ url_for('contracts.seller_copy', version_id=ver.id) }}">{{ _("Download my copy") }}</a>
+        {% if ver.pdf_sha256 %}— <a href="{{ url_for('contracts.seller_pdf', version_id=ver.id) }}">{{ _("Download the PDF") }}</a>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
   {% endif %}
 </div>
 {% endblock %}

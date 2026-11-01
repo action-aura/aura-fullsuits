@@ -2,25 +2,47 @@
 {% block title %}{{ _("Contracts") }}{% endblock %}
 {% block content %}
 <h2>{{ _("Contracts") }}</h2>
-<p>{{ _("The text customers accept the first time they sign in to the app, and the text sellers accept in Owner. A version never changes after it is saved: to fix a mistake, save a new version.") }}</p>
+<p class="cs-note" data-contracts-intro="1">{{ _("These are the agreements people must accept: shop owners accept theirs the first time they sign in to the app, and sellers accept theirs in Aura Owner. To put a new text in front of them: save it, approve it for publication, then publish it. A saved text never changes: to fix a mistake, save a new version.") }}</p>
 {% if draft_allowed %}
-<p class="card card--critical" data-contract-draft-allowed="1">{{ _("PRACTICE MODE: versions that no lawyer has approved can be published. The app shows them with a DRAFT mark. Never use this for real customers.") }}</p>
+<p class="card card--critical" data-contract-draft-allowed="1">{{ _("PRACTICE MODE: versions that nobody has approved for publication can be published. The app shows them with a DRAFT mark. Never use this for real customers.") }}</p>
 {% endif %}
 
-<div class="card">
+{% for audience, rows in groups %}
+<div class="card" data-contract-group="{{ audience }}">
+  <h3>{% if audience == "CUSTOMER" %}{{ _("Shop contracts") }}{% else %}{{ _("Seller agreements") }}{% endif %}</h3>
+  <p class="cs-note">{% if audience == "CUSTOMER" %}{{ _("What a shop owner accepts before using the app.") }}{% else %}{{ _("What each seller accepts before working in Aura Owner.") }}{% endif %}</p>
   <table class="responsive-table">
     <thead><tr>
-      <th>{{ _("For") }}</th><th>{{ _("Language") }}</th><th>{{ _("Version") }}</th><th>{{ _("Title") }}</th>
-      <th>{{ _("Lawyer approved") }}</th><th>{{ _("State") }}</th>
+      <th>{{ _("Language") }}</th><th>{{ _("Version") }}</th><th>{{ _("Status") }}</th>
+      <th>{{ _("Dates") }}</th><th>{{ _("Accepted by") }}</th><th></th>
     </tr></thead>
     <tbody>
-    {% for v in versions %}
-    <tr>
-      <td>{{ v.audience }}</td><td>{{ v.language }}</td>
-      <td><a href="{{ url_for('contracts.detail', version_id=v.id) }}">{{ v.version_label }}</a></td>
-      <td>{{ v.title }}</td>
-      <td>{{ _("Yes") if v.lawyer_approved else _("No") }}</td>
-      <td>{% if v.retired_at %}{{ _("Retired") }}{% elif v.published_at %}<strong>{{ _("Live") }}</strong>{% else %}{{ _("Draft") }}{% endif %}</td>
+    {% for row in rows %}
+    {% set v = row.v %}
+    <tr data-contract-row="{{ row.status }}">
+      <td>{% if v.language == "ar" %}العربية{% else %}{{ _("English") }}{% endif %}</td>
+      <td><a href="{{ url_for('contracts.detail', version_id=v.id) }}">{{ v.version_label }}</a><br><span class="cs-muted">{{ v.title }}</span></td>
+      <td>
+        {% if row.status == "DRAFT" %}<span class="badge draft">{{ _("Draft") }}</span>
+        {% elif row.status == "APPROVED" %}<span class="badge info">{{ _("Approved") }}</span>
+        {% elif row.status == "LIVE" %}<span class="badge active">{{ _("Live") }}</span>
+        {% else %}<span class="badge retired">{{ _("Retired") }}</span>{% endif %}
+      </td>
+      <td class="cs-muted">
+        {{ _("Saved") }} {{ format_owner_date(v.created_at) }}
+        {% if v.published_at %}<br>{{ _("Live since") }} {{ format_owner_date(v.published_at) }}{% endif %}
+        {% if v.retired_at %}<br>{{ _("Retired on") }} {{ format_owner_date(v.retired_at) }}{% endif %}
+      </td>
+      <td>{{ row.accepted }}</td>
+      <td>
+        {% if row.status == "DRAFT" %}
+        <a class="btn" href="{{ url_for('contracts.detail', version_id=v.id) }}">{{ _("Review and publish") }}</a>
+        {% elif row.status == "APPROVED" %}
+        <a class="btn" href="{{ url_for('contracts.detail', version_id=v.id) }}">{{ _("Publish this text") }}</a>
+        {% else %}
+        <a class="btn secondary" href="{{ url_for('contracts.detail', version_id=v.id) }}">{{ _("View") }}</a>
+        {% endif %}
+      </td>
     </tr>
     {% else %}
     <tr><td colspan="6" class="empty">{{ _("No contract versions yet.") }}</td></tr>
@@ -28,6 +50,7 @@
     </tbody>
   </table>
 </div>
+{% endfor %}
 
 <div class="card">
   <h3>{{ _("New version") }}</h3>
@@ -46,10 +69,10 @@
     <input id="contract-title" name="title" maxlength="255" required>
     <label for="contract-body">{{ _("Contract text (exactly what the person will read and accept)") }}</label>
     <textarea id="contract-body" name="body" rows="14" required style="width:100%;"></textarea>
-    <label for="contract-pdf">{{ _("Optional: the lawyer's PDF copy, stored encrypted for the record") }}</label>
+    <label for="contract-pdf">{{ _("Optional: the PDF copy of the contract, stored encrypted for the record") }}</label>
     <input id="contract-pdf" type="file" name="pdf" accept="application/pdf">
-    <p><label><input type="checkbox" name="lawyer_approved"> {{ _("A lawyer has read this exact text and approved it") }}</label></p>
-    <label for="contract-approval-note">{{ _("If approved: who and when") }}</label>
+    <p><label><input type="checkbox" name="lawyer_approved"> {{ _("This exact text has already been reviewed and approved for publication") }}</label></p>
+    <label for="contract-approval-note">{{ _("If approved: who reviewed it and how (for example: in-house review, approved by the general manager, date)") }}</label>
     <input id="contract-approval-note" name="approval_note" maxlength="500">
     <div style="margin-top:0.75rem;"><button type="submit">{{ _("Save as a draft") }}</button></div>
   </form>

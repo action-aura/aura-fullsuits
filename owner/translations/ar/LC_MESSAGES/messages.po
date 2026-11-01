@@ -11630,3 +11630,191 @@ msgstr "فتح القضية وإبلاغ البائع"
 #: app/templates/sellers/cash_manage.html
 msgid "Open a sanction case"
 msgstr "فتح قضية عقوبة"
+
+#: app/templates/contracts/index.html
+msgid "These are the agreements people must accept: shop owners accept theirs the first time they sign in to the app, and sellers accept theirs in Aura Owner. To put a new text in front of them: save it, approve it for publication, then publish it. A saved text never changes: to fix a mistake, save a new version."
+msgstr "هذه هي الاتفاقيات التي يجب على الناس قبولها: يقبل أصحاب المتاجر اتفاقيتهم عند أول تسجيل دخول إلى التطبيق، ويقبل البائعون اتفاقيتهم داخل Aura Owner. لعرض نص جديد عليهم: احفظه، ثم وافق عليه للنشر، ثم انشره. النص المحفوظ لا يتغير أبدًا: لتصحيح خطأ احفظ إصدارًا جديدًا."
+
+#: app/templates/contracts/index.html
+msgid "PRACTICE MODE: versions that nobody has approved for publication can be published. The app shows them with a DRAFT mark. Never use this for real customers."
+msgstr "وضع التجربة: يمكن نشر الإصدارات التي لم يوافق عليها أحد للنشر. يعرضها التطبيق بعلامة مسودة. لا تستخدمه أبدًا مع عملاء حقيقيين."
+
+#: app/templates/contracts/index.html
+msgid "Shop contracts"
+msgstr "عقود المتاجر"
+
+#: app/templates/contracts/index.html
+msgid "Seller agreements"
+msgstr "اتفاقيات البائعين"
+
+#: app/templates/contracts/index.html
+msgid "What a shop owner accepts before using the app."
+msgstr "ما يقبله صاحب المتجر قبل استخدام التطبيق."
+
+#: app/templates/contracts/index.html
+msgid "What each seller accepts before working in Aura Owner."
+msgstr "ما يقبله كل بائع قبل العمل في Aura Owner."
+
+#: app/templates/contracts/index.html
+msgid "Dates"
+msgstr "التواريخ"
+
+#: app/templates/contracts/index.html
+msgid "Accepted by"
+msgstr "عدد من قبلوه"
+
+#: app/templates/contracts/index.html
+msgid "Saved"
+msgstr "حُفظ في"
+
+#: app/templates/contracts/index.html
+msgid "Live since"
+msgstr "منشور منذ"
+
+#: app/templates/contracts/index.html
+msgid "Retired on"
+msgstr "أُوقف في"
+
+#: app/templates/contracts/index.html
+msgid "Review and publish"
+msgstr "مراجعة ونشر"
+
+#: app/templates/contracts/index.html
+msgid "Publish this text"
+msgstr "نشر هذا النص"
+
+#: app/templates/contracts/index.html
+msgid "Optional: the PDF copy of the contract, stored encrypted for the record"
+msgstr "اختياري: نسخة PDF من العقد، تُحفظ مشفّرة للأرشيف"
+
+#: app/templates/contracts/index.html
+msgid "This exact text has already been reviewed and approved for publication"
+msgstr "تمت مراجعة هذا النص بالضبط والموافقة عليه للنشر"
+
+#: app/templates/contracts/index.html
+msgid "If approved: who reviewed it and how (for example: in-house review, approved by the general manager, date)"
+msgstr "إذا تمت الموافقة: من راجعه وكيف (مثلًا: مراجعة داخلية، موافقة المدير العام، التاريخ)"
+
+#: app/templates/contracts/detail.html
+msgid "Shop contract"
+msgstr "عقد متجر"
+
+#: app/templates/contracts/detail.html
+msgid "Review the text"
+msgstr "مراجعة النص"
+
+#: app/templates/contracts/detail.html
+msgid "Approve for publication"
+msgstr "الموافقة على النشر"
+
+#: app/templates/contracts/detail.html
+msgid "1. Review the text"
+msgstr "١. مراجعة النص"
+
+#: app/templates/contracts/detail.html
+msgid "This is the PDF that people will be able to download. Read it, and the text underneath."
+msgstr "هذا هو ملف PDF الذي سيتمكن الناس من تنزيله. اقرأه، واقرأ النص الموجود تحته."
+
+#: app/templates/contracts/detail.html
+msgid "The contract as a PDF"
+msgstr "العقد بصيغة PDF"
+
+#: app/templates/contracts/detail.html
+msgid "No PDF is attached to this version. The text below is the whole contract."
+msgstr "لا يوجد ملف PDF مرفق بهذا الإصدار. النص أدناه هو العقد كاملًا."
+
+#: app/templates/contracts/detail.html
+msgid "The text people will read and accept"
+msgstr "النص الذي سيقرؤه الناس ويقبلونه"
+
+#: app/templates/contracts/detail.html
+msgid "Technical fingerprints (for the record)"
+msgstr "البصمات التقنية (للتوثيق)"
+
+#: app/templates/contracts/detail.html
+msgid "People are being asked to accept this text."
+msgstr "يُطلب من الناس الآن قبول هذا النص."
+
+#: app/templates/contracts/detail.html
+msgid "Approved for publication"
+msgstr "تمت الموافقة عليه للنشر"
+
+#: app/templates/contracts/detail.html
+msgid "Confirm with your authenticator code to retire"
+msgstr "أكّد برمز تطبيق المصادقة لإيقافه"
+
+#: app/templates/contracts/detail.html
+msgid "Nobody is asked to accept this text any more. Those who already accepted it keep their record below."
+msgstr "لم يعد يُطلب من أحد قبول هذا النص. من قبلوه سابقًا يبقى سجلهم في الأسفل."
+
+#: app/templates/contracts/detail.html
+msgid "2. Approve this text for publication"
+msgstr "٢. الموافقة على هذا النص للنشر"
+
+#: app/templates/contracts/detail.html
+msgid "Once you have read the text, record that it was reviewed. Nothing goes live yet."
+msgstr "بعد أن تقرأ النص، سجّل أنه تمت مراجعته. لن يُنشر شيء بعد."
+
+#: app/templates/contracts/detail.html
+msgid "Who reviewed this text and how (for example: in-house review, approved by the general manager, date)"
+msgstr "من راجع هذا النص وكيف (مثلًا: مراجعة داخلية، موافقة المدير العام، التاريخ)"
+
+#: app/templates/contracts/detail.html
+msgid "PRACTICE MODE: this can be published without being approved. The app will show it with a DRAFT mark."
+msgstr "وضع التجربة: يمكن نشر هذا دون موافقة. سيعرضه التطبيق بعلامة مسودة."
+
+#: app/templates/contracts/detail.html
+msgid "3. Publish"
+msgstr "٣. النشر"
+
+#: app/templates/contracts/detail.html
+msgid "Publishing unlocks after step 2: approve the text first."
+msgstr "يُفتح النشر بعد الخطوة ٢: وافق على النص أولًا."
+
+#: app/templates/contracts/detail.html
+msgid "After publishing, this text can never be changed; sellers/shops must accept it."
+msgstr "بعد النشر لا يمكن تغيير هذا النص أبدًا، وعلى البائعين أو المتاجر قبوله."
+
+#: app/templates/contracts/detail.html
+msgid "Publish now"
+msgstr "انشر الآن"
+
+#: app/templates/contracts/detail.html
+msgid "Publishing needs a fresh check that it is really you."
+msgstr "يحتاج النشر إلى تأكيد جديد أنك أنت فعلًا."
+
+#: app/templates/contracts/detail.html
+msgid "Confirm with your authenticator code to publish"
+msgstr "أكّد برمز تطبيق المصادقة لتتمكن من النشر"
+
+#: app/templates/contracts/seller.html
+msgid "DRAFT — not yet approved for publication"
+msgstr "مسودة — لم تتم الموافقة عليها للنشر بعد"
+
+#: app/templates/contracts/seller.html
+msgid "Read the agreement below. When you have read it, tick the box and press Accept at the bottom of the page."
+msgstr "اقرأ الاتفاقية أدناه. بعد أن تقرأها ضع علامة في المربع واضغط «قبول» في أسفل الصفحة."
+
+#: app/templates/contracts/seller.html
+msgid "The agreement as a PDF"
+msgstr "الاتفاقية بصيغة PDF"
+
+#: app/templates/contracts/seller.html
+msgid "The agreement text"
+msgstr "نص الاتفاقية"
+
+#: app/templates/contracts/seller.html
+msgid "Download my copy"
+msgstr "تنزيل نسختي"
+
+#: app/contracts/routes.py
+msgid "Write who reviewed this text and how (for example: in-house review, approved by the general manager, date)."
+msgstr "اكتب من راجع هذا النص وكيف (مثلًا: مراجعة داخلية، موافقة المدير العام، التاريخ)."
+
+#: app/contracts/routes.py
+msgid "This text has not been approved for publication yet, so it cannot be published."
+msgstr "لم تتم الموافقة على هذا النص للنشر بعد، لذلك لا يمكن نشره."
+
+#: app/contracts/routes.py
+msgid "Approved for publication. You can publish it now."
+msgstr "تمت الموافقة للنشر. يمكنك نشره الآن."

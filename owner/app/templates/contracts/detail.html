@@ -1,50 +1,53 @@
 {% extends "layout/base.html" %}
 {% block title %}{{ version.title }}{% endblock %}
 {% block content %}
+{% set text_dir = "rtl" if version.language == "ar" else "ltr" %}
 <p><a href="{{ url_for('contracts.index') }}">{{ _("All contracts") }}</a></p>
-<h2>{{ version.title }}</h2>
+<h2>{{ version.title }}
+  {% if status == "DRAFT" %}<span class="badge draft">{{ _("Draft") }}</span>
+  {% elif status == "APPROVED" %}<span class="badge info">{{ _("Approved") }}</span>
+  {% elif status == "LIVE" %}<span class="badge active">{{ _("Live") }}</span>
+  {% else %}<span class="badge retired">{{ _("Retired") }}</span>{% endif %}
+</h2>
+<p class="cs-note">
+  {% if version.audience == "CUSTOMER" %}{{ _("Shop contract") }}{% else %}{{ _("Seller agreement") }}{% endif %}
+  · {% if version.language == "ar" %}العربية{% else %}{{ _("English") }}{% endif %}
+  · {{ _("Version") }} {{ version.version_label }}
+</p>
+
+{# The 3-step road: review the text, approve it for publication, publish it. #}
+<ol class="cs-steps" data-contract-steps="1" data-current-step="{{ step }}">
+  <li class="cs-step {% if step > 1 %}cs-step--done{% endif %}" data-step="1"><span class="cs-step__num">1</span> {{ _("Review the text") }}</li>
+  <li class="cs-step {% if step > 2 %}cs-step--done{% elif step == 2 %}cs-step--current{% endif %}" data-step="2"{% if step == 2 %} aria-current="step"{% endif %}><span class="cs-step__num">2</span> {{ _("Approve for publication") }}</li>
+  <li class="cs-step {% if step > 3 %}cs-step--done{% elif step == 3 %}cs-step--current{% endif %}" data-step="3"{% if step == 3 %} aria-current="step"{% endif %}><span class="cs-step__num">3</span> {{ _("Publish") }}</li>
+</ol>
+
 <div class="card">
-  <dl>
-    <dt>{{ _("For") }}</dt><dd>{{ version.audience }} / {{ version.language }}</dd>
-    <dt>{{ _("Version") }}</dt><dd>{{ version.version_label }}</dd>
-    <dt>{{ _("State") }}</dt>
-    <dd>{% if version.retired_at %}{{ _("Retired") }}{% elif version.published_at %}<strong>{{ _("Live") }}</strong>{% else %}{{ _("Draft") }}{% endif %}</dd>
-    <dt>{{ _("Lawyer approved") }}</dt>
-    <dd>{% if version.lawyer_approved %}{{ _("Yes") }}{% if version.lawyer_approval_note %} -- {{ version.lawyer_approval_note }}{% endif %}{% else %}{{ _("No") }}{% endif %}</dd>
-    <dt>{{ _("Text fingerprint (SHA-256)") }}</dt><dd><code dir="ltr">{{ version.body_sha256 }}</code></dd>
-    {% if version.pdf_sha256 %}
-    <dt>{{ _("PDF copy") }}</dt>
-    <dd><a href="{{ url_for('contracts.pdf', version_id=version.id) }}">{{ _("Download") }}</a> (<code dir="ltr">{{ version.pdf_sha256 }}</code>)</dd>
-    {% endif %}
-  </dl>
-  <pre style="white-space:pre-wrap;" dir="auto">{{ version.body }}</pre>
+  <h3>{{ _("1. Review the text") }}</h3>
+  {% if version.pdf_sha256 %}
+  <p class="cs-note">{{ _("This is the PDF that people will be able to download. Read it, and the text underneath.") }}</p>
+  <iframe class="cs-pdf" data-contract-pdf-viewer="1" src="{{ url_for('contracts.pdf', version_id=version.id, inline=1) }}"
+          title="{{ _('The contract as a PDF') }}"></iframe>
+  <p class="cs-actions"><a class="btn secondary" data-contract-pdf-download="1" href="{{ url_for('contracts.pdf', version_id=version.id) }}">{{ _("Download the PDF") }}</a></p>
+  {% else %}
+  <p class="cs-note" data-contract-no-pdf="1">{{ _("No PDF is attached to this version. The text below is the whole contract.") }}</p>
+  {% endif %}
+  <h4>{{ _("The text people will read and accept") }}</h4>
+  <pre class="cs-text" data-contract-text="1" dir="{{ text_dir }}" lang="{{ version.language }}">{{ version.body }}</pre>
+  <details>
+    <summary>{{ _("Technical fingerprints (for the record)") }}</summary>
+    <dl>
+      <dt>{{ _("Text fingerprint (SHA-256)") }}</dt><dd><code dir="ltr">{{ version.body_sha256 }}</code></dd>
+      {% if version.pdf_sha256 %}<dt>{{ _("PDF copy") }}</dt><dd><code dir="ltr">{{ version.pdf_sha256 }}</code></dd>{% endif %}
+    </dl>
+  </details>
 </div>
 
-{% if not version.published_at %}
-<div class="card--action">
-  {% if not version.lawyer_approved %}
-  <form method="post" action="{{ url_for('contracts.approve', version_id=version.id) }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="approval-note">{{ _("A lawyer approved this exact text -- who and when") }}</label>
-    <input id="approval-note" name="approval_note" maxlength="500" required>
-    <button type="submit" class="secondary">{{ _("Mark as approved by a lawyer") }}</button>
-  </form>
-  {% if draft_allowed %}
-  <p data-contract-draft-allowed="1">{{ _("PRACTICE MODE: this can be published without a lawyer. The app will show it with a DRAFT mark.") }}</p>
-  {% endif %}
-  {% endif %}
-  {% if recent_auth_ok %}
-  <form method="post" action="{{ url_for('contracts.publish', version_id=version.id) }}"
-        data-confirm="{{ _('Publish this version? It replaces the live one for this audience and language.') }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="btn--primary-action">{{ _("Publish") }}</button>
-  </form>
-  {% else %}
-  <p><a href="{{ url_for('auth.reauth_form', next=url_for('contracts.detail', version_id=version.id)) }}">{{ _("Publish (requires recent authentication)") }}</a></p>
-  {% endif %}
-</div>
-{% elif not version.retired_at %}
-<div class="card--action">
+{% if status == "LIVE" %}
+<div class="card card--action" data-contract-live="1">
+  <h3>{{ _("Live since") }} {{ format_owner_datetime(version.published_at) }}</h3>
+  <p class="cs-note">{{ _("People are being asked to accept this text.") }}</p>
+  <p class="cs-note" data-contract-approval="1"><strong>{{ _("Approved for publication") }}</strong>{% if version.lawyer_approval_note %} — {{ version.lawyer_approval_note }}{% endif %}</p>
   {% if recent_auth_ok %}
   <form method="post" action="{{ url_for('contracts.retire', version_id=version.id) }}"
         data-confirm="{{ _('Retire this version? Nobody will be asked to accept it any more.') }}">
@@ -52,7 +55,50 @@
     <button type="submit" class="danger">{{ _("Retire") }}</button>
   </form>
   {% else %}
-  <p><a href="{{ url_for('auth.reauth_form', next=url_for('contracts.detail', version_id=version.id)) }}">{{ _("Retire (requires recent authentication)") }}</a></p>
+  <p><a class="btn danger" data-contract-reauth="1" href="{{ url_for('auth.reauth_form', next=url_for('contracts.detail', version_id=version.id)) }}">{{ _("Confirm with your authenticator code to retire") }}</a></p>
+  {% endif %}
+</div>
+{% elif status == "RETIRED" %}
+<div class="card" data-contract-retired="1">
+  <h3>{{ _("Retired on") }} {{ format_owner_datetime(version.retired_at) }}</h3>
+  <p class="cs-note">{{ _("Nobody is asked to accept this text any more. Those who already accepted it keep their record below.") }}</p>
+  {% if version.lawyer_approved %}<p class="cs-note" data-contract-approval="1"><strong>{{ _("Approved for publication") }}</strong>{% if version.lawyer_approval_note %} — {{ version.lawyer_approval_note }}{% endif %}</p>{% endif %}
+</div>
+{% else %}
+<div class="card {% if step == 2 %}card--action{% endif %}" data-contract-approve-card="1">
+  <h3>{{ _("2. Approve this text for publication") }}</h3>
+  {% if version.lawyer_approved %}
+  <p data-contract-approval="1"><strong>{{ _("Approved for publication") }}</strong>{% if version.lawyer_approval_note %} — {{ version.lawyer_approval_note }}{% endif %}</p>
+  {% else %}
+  <p class="cs-note">{{ _("Once you have read the text, record that it was reviewed. Nothing goes live yet.") }}</p>
+  <form method="post" action="{{ url_for('contracts.approve', version_id=version.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="approval-note">{{ _("Who reviewed this text and how (for example: in-house review, approved by the general manager, date)") }}</label>
+    <input id="approval-note" name="approval_note" maxlength="500" required>
+    <div style="margin-top:0.75rem;"><button type="submit" class="btn--primary-action">{{ _("Approve for publication") }}</button></div>
+  </form>
+  {% if draft_allowed %}
+  <p data-contract-draft-allowed="1">{{ _("PRACTICE MODE: this can be published without being approved. The app will show it with a DRAFT mark.") }}</p>
+  {% endif %}
+  {% endif %}
+</div>
+
+<div class="card {% if step == 3 %}card--action{% endif %}" data-contract-publish-card="1">
+  <h3>{{ _("3. Publish") }}</h3>
+  {% if not version.lawyer_approved and not draft_allowed %}
+  <p class="cs-note" data-contract-publish-blocked="1">{{ _("Publishing unlocks after step 2: approve the text first.") }}</p>
+  {% else %}
+  <p class="cs-note" data-contract-publish-warning="1"><strong>{{ _("After publishing, this text can never be changed; sellers/shops must accept it.") }}</strong></p>
+  {% if recent_auth_ok %}
+  <form method="post" action="{{ url_for('contracts.publish', version_id=version.id) }}"
+        data-confirm="{{ _('Publish this version? It replaces the live one for this audience and language.') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn--primary-action">{{ _("Publish now") }}</button>
+  </form>
+  {% else %}
+  <p class="cs-note">{{ _("Publishing needs a fresh check that it is really you.") }}</p>
+  <p><a class="btn btn--primary-action" data-contract-reauth="1" href="{{ url_for('auth.reauth_form', next=url_for('contracts.detail', version_id=version.id)) }}">{{ _("Confirm with your authenticator code to publish") }}</a></p>
+  {% endif %}
   {% endif %}
 </div>
 {% endif %}

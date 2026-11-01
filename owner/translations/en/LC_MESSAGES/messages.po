@@ -11671,3 +11671,191 @@ msgstr "Open the case and tell the seller"
 #: app/templates/sellers/cash_manage.html
 msgid "Open a sanction case"
 msgstr "Open a sanction case"
+
+#: app/templates/contracts/index.html
+msgid "These are the agreements people must accept: shop owners accept theirs the first time they sign in to the app, and sellers accept theirs in Aura Owner. To put a new text in front of them: save it, approve it for publication, then publish it. A saved text never changes: to fix a mistake, save a new version."
+msgstr "These are the agreements people must accept: shop owners accept theirs the first time they sign in to the app, and sellers accept theirs in Aura Owner. To put a new text in front of them: save it, approve it for publication, then publish it. A saved text never changes: to fix a mistake, save a new version."
+
+#: app/templates/contracts/index.html
+msgid "PRACTICE MODE: versions that nobody has approved for publication can be published. The app shows them with a DRAFT mark. Never use this for real customers."
+msgstr "PRACTICE MODE: versions that nobody has approved for publication can be published. The app shows them with a DRAFT mark. Never use this for real customers."
+
+#: app/templates/contracts/index.html
+msgid "Shop contracts"
+msgstr "Shop contracts"
+
+#: app/templates/contracts/index.html
+msgid "Seller agreements"
+msgstr "Seller agreements"
+
+#: app/templates/contracts/index.html
+msgid "What a shop owner accepts before using the app."
+msgstr "What a shop owner accepts before using the app."
+
+#: app/templates/contracts/index.html
+msgid "What each seller accepts before working in Aura Owner."
+msgstr "What each seller accepts before working in Aura Owner."
+
+#: app/templates/contracts/index.html
+msgid "Dates"
+msgstr "Dates"
+
+#: app/templates/contracts/index.html
+msgid "Accepted by"
+msgstr "Accepted by"
+
+#: app/templates/contracts/index.html
+msgid "Saved"
+msgstr "Saved"
+
+#: app/templates/contracts/index.html
+msgid "Live since"
+msgstr "Live since"
+
+#: app/templates/contracts/index.html
+msgid "Retired on"
+msgstr "Retired on"
+
+#: app/templates/contracts/index.html
+msgid "Review and publish"
+msgstr "Review and publish"
+
+#: app/templates/contracts/index.html
+msgid "Publish this text"
+msgstr "Publish this text"
+
+#: app/templates/contracts/index.html
+msgid "Optional: the PDF copy of the contract, stored encrypted for the record"
+msgstr "Optional: the PDF copy of the contract, stored encrypted for the record"
+
+#: app/templates/contracts/index.html
+msgid "This exact text has already been reviewed and approved for publication"
+msgstr "This exact text has already been reviewed and approved for publication"
+
+#: app/templates/contracts/index.html
+msgid "If approved: who reviewed it and how (for example: in-house review, approved by the general manager, date)"
+msgstr "If approved: who reviewed it and how (for example: in-house review, approved by the general manager, date)"
+
+#: app/templates/contracts/detail.html
+msgid "Shop contract"
+msgstr "Shop contract"
+
+#: app/templates/contracts/detail.html
+msgid "Review the text"
+msgstr "Review the text"
+
+#: app/templates/contracts/detail.html
+msgid "Approve for publication"
+msgstr "Approve for publication"
+
+#: app/templates/contracts/detail.html
+msgid "1. Review the text"
+msgstr "1. Review the text"
+
+#: app/templates/contracts/detail.html
+msgid "This is the PDF that people will be able to download. Read it, and the text underneath."
+msgstr "This is the PDF that people will be able to download. Read it, and the text underneath."
+
+#: app/templates/contracts/detail.html
+msgid "The contract as a PDF"
+msgstr "The contract as a PDF"
+
+#: app/templates/contracts/detail.html
+msgid "No PDF is attached to this version. The text below is the whole contract."
+msgstr "No PDF is attached to this version. The text below is the whole contract."
+
+#: app/templates/contracts/detail.html
+msgid "The text people will read and accept"
+msgstr "The text people will read and accept"
+
+#: app/templates/contracts/detail.html
+msgid "Technical fingerprints (for the record)"
+msgstr "Technical fingerprints (for the record)"
+
+#: app/templates/contracts/detail.html
+msgid "People are being asked to accept this text."
+msgstr "People are being asked to accept this text."
+
+#: app/templates/contracts/detail.html
+msgid "Approved for publication"
+msgstr "Approved for publication"
+
+#: app/templates/contracts/detail.html
+msgid "Confirm with your authenticator code to retire"
+msgstr "Confirm with your authenticator code to retire"
+
+#: app/templates/contracts/detail.html
+msgid "Nobody is asked to accept this text any more. Those who already accepted it keep their record below."
+msgstr "Nobody is asked to accept this text any more. Those who already accepted it keep their record below."
+
+#: app/templates/contracts/detail.html
+msgid "2. Approve this text for publication"
+msgstr "2. Approve this text for publication"
+
+#: app/templates/contracts/detail.html
+msgid "Once you have read the text, record that it was reviewed. Nothing goes live yet."
+msgstr "Once you have read the text, record that it was reviewed. Nothing goes live yet."
+
+#: app/templates/contracts/detail.html
+msgid "Who reviewed this text and how (for example: in-house review, approved by the general manager, date)"
+msgstr "Who reviewed this text and how (for example: in-house review, approved by the general manager, date)"
+
+#: app/templates/contracts/detail.html
+msgid "PRACTICE MODE: this can be published without being approved. The app will show it with a DRAFT mark."
+msgstr "PRACTICE MODE: this can be published without being approved. The app will show it with a DRAFT mark."
+
+#: app/templates/contracts/detail.html
+msgid "3. Publish"
+msgstr "3. Publish"
+
+#: app/templates/contracts/detail.html
+msgid "Publishing unlocks after step 2: approve the text first."
+msgstr "Publishing unlocks after step 2: approve the text first."
+
+#: app/templates/contracts/detail.html
+msgid "After publishing, this text can never be changed; sellers/shops must accept it."
+msgstr "After publishing, this text can never be changed; sellers/shops must accept it."
+
+#: app/templates/contracts/detail.html
+msgid "Publish now"
+msgstr "Publish now"
+
+#: app/templates/contracts/detail.html
+msgid "Publishing needs a fresh check that it is really you."
+msgstr "Publishing needs a fresh check that it is really you."
+
+#: app/templates/contracts/detail.html
+msgid "Confirm with your authenticator code to publish"
+msgstr "Confirm with your authenticator code to publish"
+
+#: app/templates/contracts/seller.html
+msgid "DRAFT — not yet approved for publication"
+msgstr "DRAFT — not yet approved for publication"
+
+#: app/templates/contracts/seller.html
+msgid "Read the agreement below. When you have read it, tick the box and press Accept at the bottom of the page."
+msgstr "Read the agreement below. When you have read it, tick the box and press Accept at the bottom of the page."
+
+#: app/templates/contracts/seller.html
+msgid "The agreement as a PDF"
+msgstr "The agreement as a PDF"
+
+#: app/templates/contracts/seller.html
+msgid "The agreement text"
+msgstr "The agreement text"
+
+#: app/templates/contracts/seller.html
+msgid "Download my copy"
+msgstr "Download my copy"
+
+#: app/contracts/routes.py
+msgid "Write who reviewed this text and how (for example: in-house review, approved by the general manager, date)."
+msgstr "Write who reviewed this text and how (for example: in-house review, approved by the general manager, date)."
+
+#: app/contracts/routes.py
+msgid "This text has not been approved for publication yet, so it cannot be published."
+msgstr "This text has not been approved for publication yet, so it cannot be published."
+
+#: app/contracts/routes.py
+msgid "Approved for publication. You can publish it now."
+msgstr "Approved for publication. You can publish it now."

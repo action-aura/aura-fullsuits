@@ -22,7 +22,10 @@ def register_security_headers(app: Flask) -> None:
         # policy of its own (`default-src 'none'; sandbox`) and must keep it.
         response.headers.setdefault("Content-Security-Policy", _CSP)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        # setdefault for the same reason as the CSP above: the contract PDF viewer
+        # (contracts/routes.py::_pdf_response) is framed by its OWN site and says
+        # SAMEORIGIN; every other response stays DENY.
+        response.headers.setdefault("X-Frame-Options", "DENY")
         # AUDIT-fix: 'no-referrer' meant the browser never sent a Referer
         # header at all -- including on this app's OWN same-origin form
         # submissions (login, every other CSRF-protected POST). Flask-WTF's

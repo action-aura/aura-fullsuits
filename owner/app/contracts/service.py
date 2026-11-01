@@ -33,7 +33,7 @@ import uuid
 from datetime import datetime, timezone
 
 from flask import current_app, has_request_context, url_for
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.audit.services import record as audit_record
@@ -214,6 +214,26 @@ def list_versions() -> list[ContractVersion]:
     return list(db_session.execute(
         select(ContractVersion).order_by(ContractVersion.audience, ContractVersion.language, ContractVersion.created_at.desc())
     ).scalars().all())
+
+
+def version_status(version: ContractVersion) -> str:
+    """The one word the screens show for a version: DRAFT (saved, nobody signed it off),
+    APPROVED (signed off, not yet published), LIVE (people are asked to accept it) or
+    RETIRED (was live, no longer shown). Derived from the stored fields only, so it can
+    never disagree with what publishing/retiring actually did."""
+    if version.retired_at is not None:
+        return "RETIRED"
+    if version.published_at is not None:
+        return "LIVE"
+    return "APPROVED" if version.lawyer_approved else "DRAFT"
+
+
+def acceptance_counts() -> dict:
+    """{version id: how many acceptances it has}, one query for the whole list screen."""
+    rows = db_session.execute(
+        select(ContractAcceptance.contract_version_id, func.count()).group_by(ContractAcceptance.contract_version_id)
+    ).all()
+    return {version_id: count for version_id, count in rows}
 
 
 def live_version(audience: str, language: str) -> ContractVersion | None:

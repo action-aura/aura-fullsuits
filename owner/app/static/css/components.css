@@ -1101,3 +1101,61 @@ table.aura-table th.num, table.aura-table td.num {
   min-inline-size: 9rem;
 }
 .aura-timeline__label { font-size: var(--aura-font-size-sm); }
+
+/* ---------- Contracts screens (Owner /contracts, seller agreement) ----------
+   A 3-step progress strip, a status badge for "approved", and the reading panels
+   (PDF viewer + text). Logical properties throughout, so RTL mirrors by itself. */
+.badge.info { background: var(--aura-color-info-soft); color: var(--aura-color-info); }
+.badge.retired { background: var(--aura-color-surface-muted); color: var(--aura-color-text-muted); }
+
+.cs-steps { display: flex; flex-wrap: wrap; gap: var(--aura-space-2); list-style: none; padding: 0; margin: 0 0 1rem; }
+.cs-step {
+  flex: 1 1 12rem;
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-2);
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: var(--aura-radius-md);
+  background: var(--aura-color-surface-muted);
+  color: var(--aura-color-text-muted);
+}
+.cs-step__num {
+  flex: none;
+  inline-size: 1.6rem;
+  block-size: 1.6rem;
+  border-radius: var(--aura-radius-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  background: var(--aura-color-border-default);
+  color: var(--aura-color-text-secondary);
+}
+.cs-step--done { color: var(--aura-color-success); background: var(--aura-color-success-soft); border-color: transparent; }
+.cs-step--done .cs-step__num { background: var(--aura-color-success); color: #fff; }
+.cs-step--current {
+  color: var(--aura-color-text-primary);
+  background: var(--aura-color-brand-primary-soft);
+  border-color: var(--aura-color-brand-primary);
+  font-weight: 700;
+}
+.cs-step--current .cs-step__num { background: var(--aura-color-brand-primary); color: #fff; }
+
+.cs-pdf { inline-size: 100%; block-size: 70vh; min-block-size: 22rem; border: 1px solid var(--aura-color-border-default); border-radius: var(--aura-radius-md); background: var(--aura-color-surface-muted); }
+.cs-text {
+  white-space: pre-wrap;
+  max-block-size: 28rem;
+  overflow: auto;
+  padding: 1rem 1.25rem;
+  margin: 0;
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: var(--aura-radius-md);
+  background: var(--aura-color-surface-raised);
+  font-family: inherit;
+  font-size: var(--aura-font-size-base);
+  line-height: 1.8;
+}
+.cs-actions { display: flex; flex-wrap: wrap; gap: var(--aura-space-3); align-items: center; }
+.cs-note { color: var(--aura-color-text-secondary); margin: 0.25rem 0 0.75rem; }
+.cs-muted { color: var(--aura-color-text-muted); font-size: var(--aura-font-size-sm); }
