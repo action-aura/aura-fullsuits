@@ -65,3 +65,8 @@ class StaffIdentityDocument(Base, UUIDPKMixin, TimestampMixin):
         DateTime(timezone=True), server_default=text("now()"), nullable=False
     )
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Retention (feat/customer-notices N4): a seller's ID photo is kept while they work
+    # for us and 365 days after they are disabled; purge_after carries that date and
+    # purged_at says the file is gone (the row stays as the record that one existed).
+    purge_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

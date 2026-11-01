@@ -70,7 +70,10 @@ class TrialDeviceMark(Base, UUIDPKMixin, TimestampMixin):
 
     device_key_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     registry_device_id: Mapped[str | None] = mapped_column(String(64))
-    customer_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False, index=True
+    # NULL once the customer behind the mark has been purged (documents.purge_due_customers):
+    # the fingerprint stays (fraud prevention, disclosed in the privacy notice), the link
+    # to the person goes. A NULL-customer mark still BLOCKS every customer (trial.py).
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=True, index=True
     )
     installation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_installations.id"))

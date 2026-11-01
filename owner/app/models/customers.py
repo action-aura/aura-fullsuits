@@ -55,6 +55,11 @@ class Customer(Base, UUIDPKMixin, TimestampMixin):
     # paid. NULL = the system default (commercial_sales/refund_policy.py).
     # Only a Super Admin sets it (customers/routes.py).
     refund_licence_stop_threshold_percent: Mapped[int | None] = mapped_column(Integer)
+    # feat/customer-notices N2: set when the customer, at the acceptance step, refused
+    # to let Action Aura keep a photo of their ID / commercial registration. The photos
+    # were deleted; staff must verify the owner by hand (visible on the customer page).
+    # NULL = nothing to do. Cleared by staff once they have done it.
+    manual_id_verification_required_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     contacts: Mapped[list["CustomerContact"]] = relationship(back_populates="customer", cascade="all, delete-orphan")
     addresses: Mapped[list["CustomerAddress"]] = relationship(back_populates="customer", cascade="all, delete-orphan")
