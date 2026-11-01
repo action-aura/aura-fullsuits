@@ -27,6 +27,7 @@ with ?inline=1 (the only response in the app that may be framed, and only by thi
 from __future__ import annotations
 
 import json
+import re
 
 from flask import Blueprint, Response, abort, flash, redirect, render_template, request, url_for
 from flask_babel import gettext as _
@@ -77,6 +78,22 @@ def _version_or_404(version_id):
     if version is None:
         abort(404)
     return version
+
+
+def _agreement_filename(version, extension: str, *, copy: bool = False, suffix: str = "") -> str:
+    """A download name that is unique per DOCUMENT, not per label.
+
+    The shop and seller agreements legitimately share a version label (e.g. "v2-2026-11"),
+    and the old name ``contract-<label>.pdf`` was therefore identical for both: the
+    browser reused / opened the already-downloaded seller file when the owner downloaded
+    the shop contract. Audience and language are part of the name so two different
+    documents can never collide. The label is reduced to [A-Za-z0-9._-] because it lands
+    inside a quoted header value."""
+    kind = "shop" if version.audience == "CUSTOMER" else "seller"
+    label = re.sub(r"[^A-Za-z0-9._-]+", "-", version.version_label or "").strip("-") or "version"
+    language = re.sub(r"[^A-Za-z0-9]+", "", version.language or "") or "xx"
+    tail = f"-{suffix}" if suffix else ""
+    return f"aura-{kind}-agreement-{'copy-' if copy else ''}{label}-{language}{tail}.{extension}"
 
 
 def _pdf_response(content: bytes, filename: str, *, inline: bool) -> Response:
@@ -205,7 +222,7 @@ def version_evidence(version_id):
     version = _version_or_404(version_id)
     payload = service._evidence(service.acceptances_of_version(version.id), {"kind": "version", "version_id": str(version.id)})
     _audit_export("version", str(version.id), load_current_staff())
-    return _json_download(payload, f"contract-{version.version_label}-acceptances.json")
+    return _json_download(payload, _agreement_filename(version, "json", suffix="acceptances"))
 
 
 @bp.route("/evidence/customer/<uuid:customer_id>.json", methods=["GET"])
@@ -237,7 +254,7 @@ def pdf(version_id):
         entity_type="contract_version", entity_public_id=str(version.id),
         after_state={"inline": request.args.get("inline") == "1"},
     )
-    return _pdf_response(content, f"contract-{version.version_label}.pdf", inline=request.args.get("inline") == "1")
+    return _pdf_response(content, _agreement_filename(version, "pdf"), inline=request.args.get("inline") == "1")
 
 
 # ---- the seller's own acceptance (any signed-in staff member) ----
@@ -302,7 +319,7 @@ def seller_pdf(version_id):
         actor_staff_user_id=actor.id, actor_role_snapshot=None, action_code="CONTRACT_PDF_VIEWED",
         entity_type="contract_version", entity_public_id=str(version.id), after_state={"by": "seller", "inline": request.args.get("inline") == "1"},
     )
-    return _pdf_response(content, f"seller-agreement-{version.version_label}.pdf", inline=request.args.get("inline") == "1")
+    return _pdf_response(content, _agreement_filename(version, "pdf"), inline=request.args.get("inline") == "1")
 
 
 @bp.route("/seller/copy/<uuid:version_id>", methods=["GET"])
@@ -316,7 +333,7 @@ def seller_copy(version_id):
     if acceptance is None or version.audience != "SELLER":
         abort(404)
     response = Response(service.seller_copy_text(acceptance, version), mimetype="text/plain; charset=utf-8")
-    response.headers["Content-Disposition"] = f'attachment; filename="seller-agreement-{version.version_label}.txt"'
+    response.headers["Content-Disposition"] = f'attachment; filename="{_agreement_filename(version, "txt", copy=True)}"'
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     return response

@@ -347,3 +347,63 @@ def test_the_staff_pages_stay_super_admin_only(app, client, seeded):
     assert denied.status_code in (400, 403)  # CSRF or permission: either way the write is refused
     assert _version(app, version_id).lawyer_approved is False  # and nothing was written
     assert client.get(f"/contracts/{uuid.uuid4()}").status_code == 403  # a stranger learns nothing, not even "no such id"
+
+
+# ===================================================================== download names are per document
+
+def test_shop_and_seller_agreements_with_the_same_label_download_under_different_names(app, client, seeded, kyc):
+    """Live bug: the shop and seller versions share the label "v2-2026-11", the name was
+    ``contract-<label>.pdf`` for both, and the browser handed the owner the seller file he
+    already had when he asked for the shop one. Asserts the NAME differs AND that each
+    response carries its own version's bytes (the hash stored on that version)."""
+    import hashlib
+    from app.contracts import service
+
+    admin = _admin(app, client, "ctp-names@example.com")
+    shop_pdf = PDF + b"-SHOP"
+    seller_pdf = PDF + b"-SELLER"
+    shop_id = _create(app, admin, audience="CUSTOMER", language="ar", version_label="v2-2026-11", pdf_bytes=shop_pdf)
+    seller_id = _create(app, admin, audience="SELLER", language="ar", version_label="v2-2026-11", pdf_bytes=seller_pdf)
+    with app.app_context():
+        service.publish(service.get_version(seller_id), actor_staff_user_id=admin)
+    stored = {v: _version(app, v).pdf_sha256 for v in (shop_id, seller_id)}
+    assert stored[shop_id] != stored[seller_id]
+
+    shop = client.get(f"/contracts/{shop_id}/pdf")
+    seller = client.get(f"/contracts/{seller_id}/pdf")
+    assert shop.headers["Content-Disposition"] == 'attachment; filename="aura-shop-agreement-v2-2026-11-ar.pdf"'
+    assert seller.headers["Content-Disposition"] == 'attachment; filename="aura-seller-agreement-v2-2026-11-ar.pdf"'
+    assert hashlib.sha256(shop.data).hexdigest() == stored[shop_id]
+    assert hashlib.sha256(seller.data).hexdigest() == stored[seller_id]
+    for response in (shop, seller):
+        assert response.headers["Cache-Control"] == "no-store"
+
+    # the seller's own route names it the same way (it is the same document)
+    seller_staff = make_staff(app, "ctp-names-seller@example.com", role_codes=["SALES"])
+    other = app.test_client()
+    force_login(other, app, seller_staff)
+    via_seller = other.get(f"/contracts/seller/pdf/{seller_id}")
+    assert via_seller.headers["Content-Disposition"] == seller.headers["Content-Disposition"]
+    assert hashlib.sha256(via_seller.data).hexdigest() == stored[seller_id]
+
+
+def test_the_seller_copy_and_the_evidence_file_carry_the_document_kind_in_their_names(app, client, seeded, kyc):
+    from app.contracts import service
+
+    admin = _admin(app, client, "ctp-names2@example.com")
+    shop_id = _create(app, admin, audience="CUSTOMER", language="en", version_label="v2-2026-11")
+    seller_id = _create(app, admin, audience="SELLER", language="en", version_label="v2-2026-11")
+    with app.app_context():
+        service.publish(service.get_version(seller_id), actor_staff_user_id=admin)
+    assert client.get(f"/contracts/{shop_id}/acceptances.json").headers["Content-Disposition"] ==         'attachment; filename="aura-shop-agreement-v2-2026-11-en-acceptances.json"'
+    assert client.get(f"/contracts/{seller_id}/acceptances.json").headers["Content-Disposition"] ==         'attachment; filename="aura-seller-agreement-v2-2026-11-en-acceptances.json"'
+    seller_staff = make_staff(app, "ctp-names2-seller@example.com", role_codes=["SALES"])
+    other = app.test_client()
+    force_login(other, app, seller_staff)
+    html = other.get("/contracts/seller").get_data(as_text=True)
+    digest = re.search(r'name="text_sha256" value="([0-9a-f]{64})"', html).group(1)
+    other.post("/contracts/seller/accept", data={"csrf_token": get_csrf(html), "version_id": seller_id, "agree": "on",
+                                                 "text_sha256": digest})
+    copy = other.get(f"/contracts/seller/copy/{seller_id}")
+    assert copy.status_code == 200
+    assert copy.headers["Content-Disposition"] == 'attachment; filename="aura-seller-agreement-copy-v2-2026-11-en.txt"'
