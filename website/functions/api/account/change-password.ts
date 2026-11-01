@@ -13,8 +13,7 @@ export const onRequest = postOnly(gated(async ({ request, env, body, ip, session
     session_token: sessionToken, current_password: currentPassword, new_password: newPassword,
     client_ip: ip, user_agent: (request.headers.get('user-agent') ?? '').slice(0, 512),
   });
-  const down = commonFailure(out);
-  if (down) return down;
+  if (out.kind === 'off' || out.kind === 'unavailable') return commonFailure(out);
   if (out.kind === 'refused') {
     if (out.status === 429) return rateLimited(out);
     // Owner uses 401 for both "current password wrong" and "session gone", told apart by `error`.

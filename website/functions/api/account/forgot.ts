@@ -12,8 +12,7 @@ export const onRequest = postOnly(gated(async ({ env, body, ip }) => {
   if (challenge === 'failed') return json({ ok: false, error: 'challenge' }, 403);
 
   const out = await callOwner(env, 'password/forgot', { email, client_ip: ip, lang: body.lang === 'ar' ? 'ar' : 'en' });
-  const down = commonFailure(out);
-  if (down) return down;
+  if (out.kind === 'off' || out.kind === 'unavailable') return commonFailure(out);
   if (out.kind === 'refused' && out.status === 429) return rateLimited(out);
   if (out.kind !== 'ok') return json({ ok: false, error: 'unavailable' }, 503);
   return json({ ok: true }, 202);

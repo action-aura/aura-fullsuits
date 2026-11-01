@@ -63,3 +63,7 @@ function init(root: HTMLElement) {
 
   syncFromScroll();
 }
+
+// Marks this file as a module: without an import/export TypeScript treats every script as one shared global scope and
+// reports the top-level `root`/`init` of each as a redeclaration of the others. The bundler already treated it as a module.
+export {};

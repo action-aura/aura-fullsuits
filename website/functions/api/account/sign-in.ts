@@ -13,8 +13,7 @@ export const onRequest = postOnly(gated(async ({ request, env, body, ip }) => {
   const out = await callOwner(env, 'sign-in', {
     email, password, client_ip: ip, user_agent: (request.headers.get('user-agent') ?? '').slice(0, 512),
   });
-  const down = commonFailure(out);
-  if (down) return down;
+  if (out.kind === 'off' || out.kind === 'unavailable') return commonFailure(out);
   if (out.kind === 'refused') {
     if (out.status === 429) return rateLimited(out);
     if (out.status === 401) return json({ ok: false, error: 'invalid_credentials' }, 401);

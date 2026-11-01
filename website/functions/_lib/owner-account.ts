@@ -26,7 +26,8 @@ function toHex(buf: ArrayBuffer): string {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-export async function sha256Hex(data: string | Uint8Array): Promise<string> {
+// Uint8Array<ArrayBuffer> (not the wider ArrayBufferLike): crypto.subtle.digest rejects a SharedArrayBuffer-backed view.
+export async function sha256Hex(data: string | Uint8Array<ArrayBuffer>): Promise<string> {
   const bytes = typeof data === 'string' ? encoder.encode(data) : data;
   return toHex(await crypto.subtle.digest('SHA-256', bytes));
 }

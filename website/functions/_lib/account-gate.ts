@@ -83,10 +83,13 @@ export function str(body: Record<string, unknown>, key: string, max: number): st
   return typeof v === 'string' ? v.slice(0, max) : '';
 }
 
-/** Owner failures that every endpoint answers the same way. Returns null when the outcome is a normal ok/refused. */
-export function commonFailure(out: OwnerOutcome): Response | null {
-  if (out.kind === 'off' || out.kind === 'unavailable') return json({ ok: false, error: 'unavailable' }, 503);
-  return null;
+/**
+ * Owner failures that every endpoint answers the same way. Callers narrow first
+ * (`if (out.kind === 'off' || out.kind === 'unavailable') return commonFailure(out);`) so that after the line
+ * TypeScript knows `out` is ok|refused and `.body` is readable; a `Response | null` return could not do that.
+ */
+export function commonFailure(_out: Extract<OwnerOutcome, { kind: 'off' | 'unavailable' }>): Response {
+  return json({ ok: false, error: 'unavailable' }, 503);
 }
 
 export function rateLimited(out: Extract<OwnerOutcome, { kind: 'refused' }>): Response {

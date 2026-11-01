@@ -8,8 +8,7 @@ export const onRequest = postOnly(gated(async ({ env, body, ip }) => {
   const password = str(body, 'password', 256);
   if (!token || !password) return json({ ok: false, error: 'invalid_request' }, 400);
   const out = await callOwner(env, 'password/set', { token, password, client_ip: ip });
-  const down = commonFailure(out);
-  if (down) return down;
+  if (out.kind === 'off' || out.kind === 'unavailable') return commonFailure(out);
   if (out.kind === 'refused') {
     if (out.status === 429) return rateLimited(out);
     if (out.status === 400) return json({ ok: false, error: 'token_invalid' }, 400);

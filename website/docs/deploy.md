@@ -119,6 +119,15 @@ If `notify_error` is set, read it with this table:
 | `owner: owner status 429` | Rate limit hit. |
 | `owner config missing` | The Pages secret `OWNER_INTAKE_SECRET` is missing. |
 
+## 6c. [owner+team] Customer accounts (GATED, stays OFF)
+
+The sign-in, account and downloads pages and their `/api/account/*` functions are in the code but off by default. Publish them only after Owner's account API answers the known-answer signature vectors (`tools/check_signature_vectors.py`).
+
+- Build flag: `PUBLIC_ACCOUNTS_ENABLED=1` at build time makes the pages exist. Leave it unset until Owner is ready; then the public HTML has no `account` strings at all.
+- Pages variables (runtime): `ACCOUNTS_ENABLED=1`, `OWNER_ACCOUNT_API_URL`, `OWNER_ACCOUNT_KEY_ID`; Pages secret `OWNER_ACCOUNT_SECRET` (type it in, never print it).
+- Lead mail to the Owner CRM (6b) needs `OWNER_INTAKE_SECRET` on Pages while `NOTIFY_PROVIDER = "smtp,owner"` is in `wrangler.toml`; without the secret every lead records `notify_error: owner config missing` (the email still goes).
+- `npm run typecheck` must exit 0 before any deploy (it covers `functions/` too).
+
 ## 7. [owner] Web Analytics
 
 Create a Web Analytics site in Cloudflare. Set `PUBLIC_CF_BEACON_TOKEN` as a build env var. Rebuild.

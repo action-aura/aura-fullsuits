@@ -9,8 +9,7 @@ export const onRequest = postOnly(gated(async ({ env, body, ip, sessionToken }) 
   if (!/^[A-Za-z0-9_.-]{1,64}$/.test(offerId)) return json({ ok: false, error: 'invalid_request' }, 400);
   const lang = body.lang === 'ar' ? 'ar' : 'en';
   const out = await callOwner(env, 'downloads/authorize', { session_token: sessionToken, offer_id: offerId, client_ip: ip });
-  const down = commonFailure(out);
-  if (down) return down;
+  if (out.kind === 'off' || out.kind === 'unavailable') return commonFailure(out);
   if (out.kind === 'refused') {
     if (out.status === 429) return rateLimited(out);
     if (out.status === 401) return sessionGone();
