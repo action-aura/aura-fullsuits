@@ -253,6 +253,10 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.sellers.cash_routes import bp as seller_cash_bp
 
     app.register_blueprint(seller_cash_bp)
+    # Clause 8: open customers (the 15-day lapse) and claiming one.
+    from app.sellers.ownership_routes import bp as seller_customers_bp
+
+    app.register_blueprint(seller_customers_bp)
     from app.sellers.cli import register_cli as register_sellers_cli
 
     register_sellers_cli(app)

@@ -3,6 +3,7 @@
 One module for the four rules, one Alembic revision per rule (chained on this branch):
 
   owner_seller_cash_handins          R1  cash a seller collected, due back to the company in 24 hours
+  owner_customer_ownership_releases  R2  a customer that stopped belonging to a seller (15-day lapse / agreement ended)
   (further rules add their tables below as they land)
 
 None of these tables is read by the licensing path or the product apps: a rule here can
@@ -13,7 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -78,3 +79,30 @@ class SellerCashHandIn(Base, UUIDPKMixin, TimestampMixin):
     last_rejection_reason: Mapped[str | None] = mapped_column(Text)
     # Set the moment the "overdue" emails were queued, so the alert goes out once per obligation.
     overdue_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CustomerOwnershipRelease(Base, UUIDPKMixin, TimestampMixin):
+    """Clause 8: a customer stopped belonging to a seller, and what became of it.
+
+    Written when the seller's 15 days run out (sellers/ownership.py) or their agreement ends (sellers/termination.py).
+    UNCLOSED (closed_at IS NULL) means the customer is OPEN for any seller to claim; at most one unclosed record per
+    customer (partial unique index). Closed when a seller claims it (CLAIMED), a manager hands it to someone
+    (REASSIGNED), or a newer release replaces a stale one (SUPERSEDED)."""
+
+    __tablename__ = "owner_customer_ownership_releases"
+    __table_args__ = (
+        CheckConstraint("reason IN ('LAPSED_15_DAYS', 'AGREEMENT_ENDED')", name="ck_owner_customer_ownership_releases_reason"),
+        CheckConstraint(
+            "closed_how IS NULL OR closed_how IN ('CLAIMED', 'REASSIGNED', 'SUPERSEDED')",
+            name="ck_owner_customer_ownership_releases_closed_how"),
+        CheckConstraint("(closed_at IS NULL) = (closed_how IS NULL)", name="ck_owner_customer_ownership_releases_closed_pair"),
+        Index("uq_owner_customer_ownership_releases_one_open", "customer_id", unique=True, postgresql_where=text("closed_at IS NULL")),
+    )
+
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False, index=True)
+    previous_owner_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_staff_users.id"))
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    released_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_how: Mapped[str | None] = mapped_column(String(16))
+    claimed_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_staff_users.id"))

@@ -1,0 +1,28 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Open customers") }}{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="open-heading">
+  <h2 id="open-heading">{{ _("Open customers") }}</h2>
+  <p class="muted">{{ _("These customers have no seller: the 15 days of the seller who registered them ran out with no subscription and no documented activity. Any seller may take one. You keep it for good once it has a subscription; until then, record your activity on it or it opens again after 15 days.") }}</p>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Customer") }}</th><th>{{ _("City") }}</th><th>{{ _("Open since") }}</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr data-open-customer-id="{{ r.customer.id }}">
+      <td>{{ r.customer.legal_name }}</td>
+      <td>{{ r.customer.city or "-" }}</td>
+      <td>{{ format_owner_datetime(r.release.released_at) }}</td>
+      <td>
+        <form method="post" action="{{ url_for('seller_customers.claim', customer_id=r.customer.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn--primary-action">{{ _("Claim this customer") }}</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="empty">{{ _("There are no open customers right now.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

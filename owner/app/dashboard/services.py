@@ -129,8 +129,17 @@ def get_dashboard_summary(actor=None, codes=None) -> dict:
         cash_handin.counts_for_managers() if actor is not None and codes and "payments.confirm" in codes else (None, None)
     )
 
+    # Clause 8: a seller's own customers whose 15 days end within 3 days (soonest first).
+    from app.sellers import ownership
+
+    expiring_soon = (
+        [{"id": c.id, "name": c.legal_name, "ends": e} for c, e in ownership.expiring_soon_for(actor.id)]
+        if actor is not None and codes and "sellers.self_service" in codes else None
+    )
+
     return {
         "scoped": scoped,
+        "expiring_soon": expiring_soon,
         "cash_mine": cash_mine,
         "cash_owed_all": cash_owed,
         "cash_overdue_all": cash_overdue,

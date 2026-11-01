@@ -22,7 +22,11 @@ def register_cli(app) -> None:
                   help="Actually announce / change things. Default is dry-run (counts only).")
     def scan_cmd(apply_: bool):
         """Runs every periodic seller rule once and prints what each did."""
-        from app.sellers import cash_handin
+        from app.sellers import cash_handin, ownership
 
-        result = {"dry_run": not apply_, "cash_overdue": cash_handin.scan_overdue(apply=apply_)}
+        result = {
+            "dry_run": not apply_,
+            "cash_overdue": cash_handin.scan_overdue(apply=apply_),
+            "customer_ownership": ownership.scan_lapsed(apply=apply_),
+        }
         click.echo(json.dumps(result, indent=2))

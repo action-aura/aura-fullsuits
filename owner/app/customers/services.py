@@ -188,6 +188,10 @@ def assign_customer(
     db_session.add(new_assignment)
     customer.assigned_sales_staff_id = assigned_to_staff_user_id
     customer.version += 1
+    # Clause 8: handing an OPEN customer to somebody closes its open-for-claiming record (same transaction).
+    from app.sellers.ownership import close_release_on_assignment
+
+    close_release_on_assignment(customer, actor_staff_user_id=actor_staff_user_id, now=now)
     db_session.commit()
     audit_record(
         actor_staff_user_id=actor_staff_user_id,

@@ -32,6 +32,8 @@ _SUBJECTS = {
     # Seller agreement clause 7: a seller's cash is more than 24 hours old and has not been handed in.
     # Goes to the seller and to everyone who may confirm payments; the facts ride in `lines`.
     "seller_cash_overdue": ("Cash not handed in within 24 hours - Aura Owner", "مبلغ نقدي لم يُسلَّم خلال 24 ساعة - Aura Owner"),
+    # Clause 8: a customer a seller registered has been released (15 days with no subscription and no activity).
+    "seller_customer_released": ("A customer is no longer yours - Aura Owner", "عميل لم يعد لك - Aura Owner"),
     # Step 2 CA1: customer website account mail. NOT in the product relay's KINDS
     # (app/mail/relay.py): only Owner's own code can queue these.
     "customer_invitation": ("Set up your Action Aura account", "إعداد حسابك في Action Aura"),
@@ -66,6 +68,8 @@ _INTROS = {
              "هذه رسالة اختبار من Aura Owner. إذا استطعت قراءتها فإرسال البريد يعمل."),
     "seller_cash_overdue": ("A cash payment collected by a seller is more than 24 hours old and has not been handed in to the company:",
                             "مبلغ نقدي قبضه مندوب مضى عليه أكثر من 24 ساعة ولم يُسلَّم إلى الشركة:"),
+    "seller_customer_released": ("A customer you registered has been released to the company:",
+                                 "عميل سجّلته أُعيد إلى الشركة:"),
     "customer_invitation": ("Action Aura has set up an account for you. Open this one-time link to choose your password:",
                             "أنشأت Action Aura حساباً لك. افتح هذا الرابط لمرة واحدة لاختيار كلمة المرور:"),
     "customer_welcome": ("Your seller has set up your Action Aura account. Sign in on our website with this email address and the temporary password your seller gave you (we never send passwords by email); you will be asked to choose your own. Please also confirm this address with the link below:",

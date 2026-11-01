@@ -22,6 +22,15 @@
   </h2>
   <dl class="kv">
     <dt>{{ _("Assigned employee") }}</dt><dd>{{ assigned_staff.display_name if assigned_staff else _("Unassigned") }}</dd>
+    {# Seller agreement clause 8: how long the owning seller's right lasts. #}
+    {% if ownership_view.state != "NONE" %}
+    <dt>{{ _("Ownership") }}</dt>
+    <dd data-ownership-state="{{ ownership_view.state }}">
+      {% if ownership_view.state == "RUNNING" %}{{ _("Yours until %(date)s unless it gets a subscription or you record activity on it.", date=format_owner_date(ownership_view.expires_at)) }}
+      {% elif ownership_view.state == "FIXED" %}{{ _("Fixed: the customer has a subscription.") }}
+      {% else %}{{ _("Open: any seller may claim this customer.") }}{% endif %}
+    </dd>
+    {% endif %}
     <dt>{{ _("Primary contact") }}</dt>
     <dd>
       {% if primary_contact %}
