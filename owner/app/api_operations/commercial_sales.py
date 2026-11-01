@@ -25,7 +25,13 @@ from app.commercial_sales.allocation import allocate_payment, reverse_allocation
 from app.commercial_sales.approvals import decide_approval
 from app.commercial_sales.errors import CommercialSalesError
 from app.commercial_sales.fulfillment import fulfill_order
-from app.commercial_sales.invoices import confirmed_allocated_amount, create_invoice_from_order, issue_invoice, void_invoice
+from app.commercial_sales.invoices import (
+    confirmed_allocated_amount,
+    create_invoice_from_order,
+    invoice_tax_breakdown,
+    issue_invoice,
+    void_invoice,
+)
 from app.commercial_sales.packages import check_payment_amount
 from app.commercial_sales.payments import confirm_payment, reject_payment, submit_payment
 from app.commercial_sales.quotes import (
@@ -417,7 +423,10 @@ def _serialize_invoice(i: CommercialInvoice) -> dict:
         "sales_order_id": str(i.sales_order_id) if i.sales_order_id else None, "customer_id": str(i.customer_id),
         "created_by_employee_profile_id": str(i.created_by_employee_profile_id),
         "currency": i.currency, "subtotal": _decimal(i.subtotal), "discount_total": _decimal(i.discount_total),
+        # tax_total is the tax CONTAINED in total (prices are tax-inclusive), not an
+        # addend; net_total = total - that tax. Computed on the fly for an old invoice.
         "tax_total": _decimal(i.tax_total), "total": _decimal(i.total),
+        "tax_included": _decimal(invoice_tax_breakdown(i)["tax"]), "net_total": _decimal(invoice_tax_breakdown(i)["net"]),
         "allocated_amount": _decimal(confirmed_allocated_amount(i)),
         "issued_at": _iso(i.issued_at), "due_date": _iso(i.due_date), "version": i.version, "created_at": _iso(i.created_at),
     }

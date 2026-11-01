@@ -17,6 +17,7 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.audit.services import record as audit_record
+from app.commercial_sales.calculator import GENERAL_SALES_TAX_RATE, split_tax_inclusive
 from app.commercial_sales.errors import INVOICE_TRANSITIONS, CommercialSalesError
 from app.commercial_sales.numbering import allocate_document_number
 from app.extensions import db_session
@@ -68,6 +69,18 @@ def create_invoice_from_order(
         select(SalesOrderLine).where(SalesOrderLine.sales_order_id == order.id).order_by(SalesOrderLine.sort_order)
     ).scalars().all()
 
+    # Tax-inclusive prices (accountant decision 2026-11-01): every Aura price
+    # already contains the 16% general sales tax, so the invoice SHOWS the tax
+    # inside the total and never adds it. WHY tax_total is a memo and not an
+    # addend: subtotal stays the gross (the sum of the tax-inclusive lines, ==
+    # total), so total == subtotal - discount_total as it always was and
+    # commissions/ledger.py::_tax_excluded_base -- which reads
+    # (subtotal - discount_total) / total and the extra-device share of
+    # subtotal -- computes exactly what it did before. Storing net as subtotal
+    # would have cut every seller's commission by 13.8% (the owner's rule:
+    # commission follows the price paid, unchanged). The net is total -
+    # tax_total, derived where it is shown (invoice_tax_breakdown).
+    _net, included_tax = split_tax_inclusive(order.total)
     invoice = CommercialInvoice(
         sales_order_id=order.id,
         customer_id=order.customer_id,
@@ -77,7 +90,7 @@ def create_invoice_from_order(
         currency=order.currency,
         subtotal=order.total,
         discount_total=Decimal("0.00"),
-        tax_total=Decimal("0.00"),
+        tax_total=included_tax,
         total=order.total,
         due_date=due_date,
         version=1,
@@ -119,6 +132,24 @@ def create_invoice_from_order(
         after_state={"invoice_number": invoice.invoice_number, "sales_order_id": str(order.id), "total": str(invoice.total)},
     )
     return invoice
+
+
+def invoice_tax_breakdown(invoice: CommercialInvoice) -> dict:
+    """What an invoice shows about its tax: {net, tax, total, rate_label}, the
+    tax INSIDE the total (see create_invoice_from_order). An invoice made
+    before tax was recorded has tax_total 0 but was priced tax-inclusive just
+    the same, so its breakdown is computed here on the fly from the total with
+    the same helper; the stored row is never touched. net + tax == total
+    always, because tax is the remainder."""
+    total = Decimal(invoice.total)
+    stored_tax = Decimal(invoice.tax_total)
+    tax = stored_tax if stored_tax > 0 else split_tax_inclusive(total)[1]
+    return {
+        "net": total - tax,
+        "tax": tax,
+        "total": total,
+        "rate_label": f"{(GENERAL_SALES_TAX_RATE * 100).normalize():f}%",
+    }
 
 
 def _check_transition(status: str, target: str) -> None:

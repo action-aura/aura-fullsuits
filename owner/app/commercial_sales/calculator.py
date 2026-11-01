@@ -27,9 +27,31 @@ from app.commercial_sales.errors import CommercialSalesError
 CENT = Decimal("0.01")
 ISO_4217_LEN = 3
 
+# Jordan general sales tax. Every Aura price already INCLUDES it (accountant
+# decision, delegated by the owner, 2026-11-01): the customer is never charged
+# 16% on top, so no price and no total may change because of it. It exists
+# only to be SHOWN on the invoice -- see split_tax_inclusive().
+GENERAL_SALES_TAX_RATE = Decimal("0.16")
+
 
 def _quantize(value: Decimal) -> Decimal:
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def split_tax_inclusive(gross: Decimal, rate: Decimal = GENERAL_SALES_TAX_RATE) -> tuple[Decimal, Decimal]:
+    """(net, tax) of a tax-INCLUSIVE amount: net = gross / (1 + rate), rounded
+    half-up, and tax = gross - net -- computed as the remainder, never rounded
+    on its own, so net + tax == gross EXACTLY whatever the rounding does.
+
+    Precision is the cent, not the dinar's third decimal: every commercial_sales
+    money column is Numeric(12, 2) (see the module docstring), and a 3 dp split
+    would not survive being stored. 250.00 -> 215.52 + 34.48; 50.00 -> 43.10 + 6.90.
+    Moving the whole commercial stack to 3 dp is a schema change of its own."""
+    gross = _quantize(_require_finite(gross))
+    if gross < 0:
+        raise CommercialSalesError("NEGATIVE_DOCUMENT_TOTAL")
+    net = _quantize(gross / (Decimal("1") + rate))
+    return net, gross - net
 
 
 def _require_finite(value: Decimal, code: str = "NON_FINITE_AMOUNT") -> Decimal:

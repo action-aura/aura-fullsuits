@@ -10,14 +10,18 @@
 
   <dl class="kv">
     <dt>{{ _("Currency") }}</dt><dd>{{ invoice.currency }}</dd>
-    <dt>{{ _("Subtotal") }}</dt><dd>{{ format_owner_number(invoice.subtotal) }}</dd>
-    <dt>{{ _("Tax") }}</dt><dd>{{ format_owner_number(invoice.tax_total) }}</dd>
-    <dt>{{ _("Total") }}</dt><dd>{{ format_owner_number(invoice.total) }}</dd>
+    {# Tax-inclusive prices: the 16% is shown INSIDE the total, never added to it
+       (invoices.invoice_tax_breakdown; an old invoice with tax_total 0 gets the
+       same breakdown computed from its total). #}
+    <dt>{{ _("Amount before tax") }}</dt><dd>{{ format_owner_number(tax.net) }}</dd>
+    <dt>{{ _("Sales tax %(rate)s (included)", rate=tax.rate_label) }}</dt><dd>{{ format_owner_number(tax.tax) }}</dd>
+    <dt>{{ _("Total") }}</dt><dd>{{ format_owner_number(tax.total) }}</dd>
     <dt>{{ _("Collected") }}</dt><dd>{{ format_owner_number(collected) }}</dd>
     <dt>{{ _("Refundable") }}</dt><dd>{{ format_owner_number(refundable) }}</dd>
     <dt>{{ _("Due") }}</dt><dd>{{ format_owner_date(invoice.due_date) if invoice.due_date else "-" }}</dd>
     <dt>{{ _("Created by") }}</dt><dd>{{ created_by_name or "-" }}</dd>
   </dl>
+  <p class="hint">{{ _("Prices include %(rate)s general sales tax", rate=tax.rate_label) }}</p>
 
   {{ record.related_records([
       (_("Customer"), url_for('customers.detail', customer_id=customer.id) if customer else None, customer.legal_name if customer else "-"),

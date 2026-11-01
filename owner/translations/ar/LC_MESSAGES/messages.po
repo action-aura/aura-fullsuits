@@ -10919,3 +10919,15 @@ msgstr "غير محفوظة"
 #: app/templates/employees/detail.html
 msgid "Choose a new photo to replace the one on file. Leave it empty to keep it."
 msgstr "اختر صورة جديدة لاستبدال المحفوظة. اتركه فارغاً للإبقاء عليها."
+
+#: app/templates/commercial_sales/invoice_detail.html
+msgid "Amount before tax"
+msgstr "المبلغ قبل الضريبة"
+
+#: app/templates/commercial_sales/invoice_detail.html
+msgid "Sales tax %(rate)s (included)"
+msgstr "ضريبة المبيعات %(rate)s (مشمولة في السعر)"
+
+#: app/templates/commercial_sales/invoice_detail.html
+msgid "Prices include %(rate)s general sales tax"
+msgstr "الأسعار شاملة ضريبة المبيعات العامة %(rate)s"

@@ -10960,3 +10960,15 @@ msgstr "Not on file"
 #: app/templates/employees/detail.html
 msgid "Choose a new photo to replace the one on file. Leave it empty to keep it."
 msgstr "Choose a new photo to replace the one on file. Leave it empty to keep it."
+
+#: app/templates/commercial_sales/invoice_detail.html
+msgid "Amount before tax"
+msgstr "Amount before tax"
+
+#: app/templates/commercial_sales/invoice_detail.html
+msgid "Sales tax %(rate)s (included)"
+msgstr "Sales tax %(rate)s (included)"
+
+#: app/templates/commercial_sales/invoice_detail.html
+msgid "Prices include %(rate)s general sales tax"
+msgstr "Prices include %(rate)s general sales tax"

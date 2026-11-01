@@ -26,7 +26,13 @@ from app.commercial_sales.dashboards import (
 )
 from app.commercial_sales.errors import CommercialSalesError
 from app.commercial_sales.fulfillment import fulfill_order
-from app.commercial_sales.invoices import confirmed_allocated_amount, create_invoice_from_order, issue_invoice, void_invoice
+from app.commercial_sales.invoices import (
+    confirmed_allocated_amount,
+    create_invoice_from_order,
+    invoice_tax_breakdown,
+    issue_invoice,
+    void_invoice,
+)
 from app.commercial_sales.payments import confirm_payment, reject_payment, submit_payment
 from app.commercial_sales.quotes import (
     add_quote_line,
@@ -498,7 +504,7 @@ def invoice_detail(invoice_id):
     return render_template(
         "commercial_sales/invoice_detail.html", invoice=invoice, lines=lines, allocations=allocations, refunds=refunds, order=order, customer=customer,
         collected=confirmed_allocated_amount(invoice), refundable=refundable_balance(invoice),
-        refund_window_closed=refund_window_closed(invoice),
+        refund_window_closed=refund_window_closed(invoice), tax=invoice_tax_breakdown(invoice),
         can_issue=("invoices.issue" in codes), error=error_text,
         created_by_name=_employee_profile_name(invoice.created_by_employee_profile_id),
     )
