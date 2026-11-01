@@ -85,6 +85,13 @@
    never by translated label text (locale-safe). #}
 {% set quick_action_priority = ['new_quote', 'new_payment', 'new_lead', 'new_expense', 'new_cash_closing'] %}
 {% set quick_actions = command_palette_data.create | selectattr('key', 'in', quick_action_priority) | list %}
+{# Clauses 16-17: a seller sees a running end-of-agreement notice and any case waiting for their reply. #}
+{% if seller.ending %}
+<p class="badge danger" role="status" data-agreement-ending="1">{{ _("Your agreement ends on %(when)s. You can keep working until then.", when=format_owner_date(seller.ending.effective_at)) }}</p>
+{% endif %}
+{% if seller.awaiting %}
+<p class="badge danger" role="alert" data-cases-awaiting="{{ seller.awaiting }}"><a href="{{ url_for('seller_discipline.my_cases') }}">{{ _("The company is waiting for your reply to a notice. Open it now.") }}</a></p>
+{% endif %}
 {% if summary.scoped %}
 <p class="hint" data-dashboard-scoped="1">{{ _("These numbers are for your own customers only.") }}</p>
 {% endif %}
@@ -194,6 +201,16 @@
   <div class="aura-stat-tile-row">
     {{ charts.stat_tile(_("Still owed"), format_owner_number(summary.cash_owed_all), href=url_for('seller_cash.manage')) }}
     {{ charts.stat_tile(_("Overdue"), format_owner_number(summary.cash_overdue_all), href=url_for('seller_cash.manage'), tone='danger' if summary.cash_overdue_all else 'default') }}
+  </div>
+</div>
+{% endif %}
+
+{% if has_permission('sellers.discipline') %}
+<div class="card" data-discipline-card="1">
+  <h3>{{ _("Seller discipline") }}</h3>
+  <div class="aura-stat-tile-row">
+    {{ charts.stat_tile(_("Open cases"), format_owner_number(discipline_open), href=url_for('seller_discipline.manager_index')) }}
+    {{ charts.stat_tile(_("Cases that can be decided now"), format_owner_number(discipline_decidable), href=url_for('seller_discipline.manager_index'), tone='warning' if discipline_decidable else 'default') }}
   </div>
 </div>
 {% endif %}

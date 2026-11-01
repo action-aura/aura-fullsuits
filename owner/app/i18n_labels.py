@@ -1144,6 +1144,9 @@ def localize_direct_sale_error(code: str, **params) -> str:
         "CONVERSION_ALREADY_PENDING": _(
             "A payment for this trial is already waiting for a manager. Wait for it, or ask a manager to reject it first."
         ),
+        "CONVERSION_CREDITS_FORMER_SELLER": _(
+            "This trial started before its seller's agreement ended, so its first payment is credited to that seller. Leave the seller as they are."
+        ),
     }
     template = messages.get(code)
     if template is None:
@@ -1253,6 +1256,7 @@ def localize_commission_error(code: str, **params) -> str:
         "STATEMENT_OBJECTION_NOT_FOUND": _("That objection does not exist."),
         "STATEMENT_OBJECTION_SELF_ANSWER_FORBIDDEN": _("You cannot answer your own objection; another manager must."),
         "STATEMENT_OBJECTION_ALREADY_ANSWERED": _("This objection has already been answered."),
+        "COMMISSION_WITHHELD": _("This commission is withheld by sanction case %(case_number)s and cannot be approved or paid."),
     }
     template = messages.get(code)
     if template is None:
@@ -1494,3 +1498,69 @@ def payment_due_warning(check) -> str:
              "(difference %(difference)s %(currency)s). It was recorded as entered and the difference is in the audit log.",
              due=check.quote.total, currency=check.quote.currency, breakdown=payment_due_breakdown(check.quote),
              entered=check.entered, difference=check.difference)
+
+
+# ---- Seller agreement clauses 16-18 (sanctions and the end of the agreement) -----------------
+
+def localize_discipline_error(code: str, **params) -> str:
+    """app.seller_discipline.errors.DisciplineError by code -- the presentation-boundary pattern."""
+    messages = {
+        "NOT_A_SELLER": _("This person is not a seller."),
+        "SELLER_NOT_CURRENT": _("This seller's account is not active."),
+        "KIND_INVALID": _("Choose a kind of sanction."),
+        "CATEGORY_INVALID": _("Choose what the violation is."),
+        "REASON_REQUIRED": _("Write the reason."),
+        "TEXT_TOO_LONG": _("The text is too long."),
+        "SELF_ACTION_FORBIDDEN": _("You cannot do this about yourself; another manager must."),
+        "IMMEDIATE_CATEGORY_IS_TERMINATION": _("This kind of violation ends the agreement at once. Choose Termination."),
+        "SUSPENSION_DATE_REQUIRED": _("Choose a suspension end date in the future."),
+        "WITHHOLD_ORDER_REQUIRED": _("Choose the deal whose commission is withheld."),
+        "WITHHOLD_ORDER_NOT_THE_SELLERS": _("That deal does not belong to this seller."),
+        "ALREADY_WITHHELD": _("That deal already has a commission-withholding case."),
+        "LINK_INVALID": _("The link to the sale, payment or customer is not valid."),
+        "CASE_NOT_FOUND": _("That case does not exist."),
+        "REPLY_REQUIRED": _("Write your reply."),
+        "CASE_NOT_AWAITING_REPLY": _("This case is not waiting for your reply."),
+        "CASE_ALREADY_DECIDED": _("This case has already been decided."),
+        "WAIT_FOR_REPLY": _("The seller has until %(due_at)s to reply. A sanction can be applied after they reply or after that time."),
+        "SUSPENSION_DATE_PASSED": _("The suspension end date has already passed. Drop this case and open a new one."),
+        "ONLY_THE_SELLER_ENDS_THEIR_OWN": _("You can only end your own agreement."),
+        "ONLY_A_MANAGER_CHOOSES_WHO_GETS_CUSTOMERS": _("Only a manager can choose who receives the customers."),
+        "REASSIGN_TARGET_INVALID": _("Choose another active seller to receive the customers."),
+        "ALREADY_ENDING": _("This agreement is already ending."),
+        "SELLER_NOT_FOUND": _("Choose a seller."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
+def sanction_kind_label(code: str) -> str:
+    labels = {
+        "WARNING": _("Written warning"),
+        "SUSPENSION": _("Suspension of the account"),
+        "COMMISSION_WITHHOLD": _("Withholding the commission of a deal"),
+        "TERMINATION": _("Termination of the agreement"),
+    }
+    return labels.get(code, code)
+
+
+def sanction_status_label(code: str) -> str:
+    labels = {
+        "NOTICE_SENT": _("Waiting for the seller's reply"),
+        "RESPONDED": _("The seller replied"),
+        "DECIDED_APPLIED": _("Applied"),
+        "DECIDED_DROPPED": _("Dropped"),
+    }
+    return labels.get(code, code)
+
+
+def sanction_category_label(code: str) -> str:
+    labels = {
+        "OTHER": _("Another violation (the seller replies first)"),
+        "MONEY_MANIPULATION": _("Tampering with, or keeping, company money (ends the agreement at once)"),
+        "CONFIDENTIAL_DISCLOSURE": _("Disclosing confidential information (ends the agreement at once)"),
+        "REVERSE_ENGINEERING": _("Reverse engineering, or selling outside the company's channels (ends the agreement at once)"),
+    }
+    return labels.get(code, code)

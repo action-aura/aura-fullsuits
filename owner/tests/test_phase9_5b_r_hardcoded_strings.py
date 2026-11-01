@@ -57,6 +57,9 @@ GATED_DIRS = (
     # Seller agreement rules (app/sellers/): cash to hand in, open customers, sanction cases. Registered so
     # every one of those templates is scanned for untranslated text like all the others.
     "sellers",
+    # Seller agreement clauses 16-18 (app/seller_discipline/): the sanction case pages and the
+    # end-of-agreement form, scanned like every other template.
+    "seller_discipline",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form

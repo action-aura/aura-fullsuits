@@ -12,6 +12,7 @@ from app.employees.presence import employee_presence_state
 from app.employees.queries import find_own_profile
 from app.employees.services import update_own_profile
 from app.security.rbac import require_login
+from app.seller_discipline.people import seller_page_context
 
 bp = Blueprint("profile", __name__, url_prefix="/profile")
 
@@ -22,7 +23,8 @@ def index():
     staff = load_current_staff()
     profile = find_own_profile(staff.id)
     presence = employee_presence_state(profile.id) if profile else None
-    return render_template("profile/index.html", staff=staff, profile=profile, presence=presence, error=None)
+    return render_template("profile/index.html", staff=staff, profile=profile, presence=presence, error=None,
+                           seller=seller_page_context(staff))
 
 
 @bp.route("", methods=["POST"])

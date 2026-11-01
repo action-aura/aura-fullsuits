@@ -11182,3 +11182,447 @@ msgstr "يجوز استضافة بيانات المتجر خارج الأردن"
 #: app/templates/customers/_consents.html
 msgid "Not recorded"
 msgstr "غير مسجَّل"
+
+#: app/i18n_labels.py
+msgid "This trial started before its seller's agreement ended, so its first payment is credited to that seller. Leave the seller as they are."
+msgstr "بدأت هذه التجربة قبل انتهاء اتفاقية بائعها، لذلك تُحتسب دفعتها الأولى لذلك البائع. اترك البائع كما هو."
+
+#: app/i18n_labels.py
+msgid "This commission is withheld by sanction case %(case_number)s and cannot be approved or paid."
+msgstr "هذه العمولة محجوبة بموجب قضية الجزاء رقم %(case_number)s ولا يمكن اعتمادها أو دفعها."
+
+#: app/i18n_labels.py
+msgid "This person is not a seller."
+msgstr "هذا الشخص ليس بائعًا."
+
+#: app/i18n_labels.py
+msgid "This seller's account is not active."
+msgstr "حساب هذا البائع غير فعّال."
+
+#: app/i18n_labels.py
+msgid "Choose a kind of sanction."
+msgstr "اختر نوع الجزاء."
+
+#: app/i18n_labels.py
+msgid "Choose what the violation is."
+msgstr "اختر نوع المخالفة."
+
+#: app/i18n_labels.py
+msgid "Write the reason."
+msgstr "اكتب السبب."
+
+#: app/i18n_labels.py
+msgid "You cannot do this about yourself; another manager must."
+msgstr "لا يمكنك فعل ذلك بشأن نفسك؛ يجب أن يفعله مدير آخر."
+
+#: app/i18n_labels.py
+msgid "This kind of violation ends the agreement at once. Choose Termination."
+msgstr "هذا النوع من المخالفات ينهي الاتفاقية فورًا. اختر إنهاء الاتفاقية."
+
+#: app/i18n_labels.py
+msgid "Choose a suspension end date in the future."
+msgstr "اختر تاريخًا مستقبليًا لانتهاء الإيقاف."
+
+#: app/i18n_labels.py
+msgid "Choose the deal whose commission is withheld."
+msgstr "اختر الصفقة التي تُحجب عمولتها."
+
+#: app/i18n_labels.py
+msgid "That deal does not belong to this seller."
+msgstr "هذه الصفقة لا تخص هذا البائع."
+
+#: app/i18n_labels.py
+msgid "That deal already has a commission-withholding case."
+msgstr "لهذه الصفقة قضية حجب عمولة قائمة بالفعل."
+
+#: app/i18n_labels.py
+msgid "The link to the sale, payment or customer is not valid."
+msgstr "الرابط بالبيع أو الدفعة أو العميل غير صالح."
+
+#: app/i18n_labels.py
+msgid "That case does not exist."
+msgstr "هذه القضية غير موجودة."
+
+#: app/i18n_labels.py
+msgid "Write your reply."
+msgstr "اكتب ردّك."
+
+#: app/i18n_labels.py
+msgid "This case is not waiting for your reply."
+msgstr "هذه القضية لا تنتظر ردّك."
+
+#: app/i18n_labels.py
+msgid "This case has already been decided."
+msgstr "تم البتّ في هذه القضية بالفعل."
+
+#: app/i18n_labels.py
+msgid "The seller has until %(due_at)s to reply. A sanction can be applied after they reply or after that time."
+msgstr "أمام البائع مهلة حتى %(due_at)s للرد. يمكن تطبيق الجزاء بعد رده أو بعد انتهاء هذه المهلة."
+
+#: app/i18n_labels.py
+msgid "The suspension end date has already passed. Drop this case and open a new one."
+msgstr "انقضى تاريخ انتهاء الإيقاف. أسقط هذه القضية وافتح قضية جديدة."
+
+#: app/i18n_labels.py
+msgid "You can only end your own agreement."
+msgstr "يمكنك إنهاء اتفاقيتك أنت فقط."
+
+#: app/i18n_labels.py
+msgid "Only a manager can choose who receives the customers."
+msgstr "المدير وحده يختار من يستلم العملاء."
+
+#: app/i18n_labels.py
+msgid "Choose another active seller to receive the customers."
+msgstr "اختر بائعًا فعّالًا آخر ليستلم العملاء."
+
+#: app/i18n_labels.py
+msgid "This agreement is already ending."
+msgstr "هذه الاتفاقية في فترة الإنهاء بالفعل."
+
+#: app/i18n_labels.py
+msgid "Choose a seller."
+msgstr "اختر بائعًا."
+
+#: app/i18n_labels.py
+msgid "Written warning"
+msgstr "إنذار كتابي"
+
+#: app/i18n_labels.py
+msgid "Suspension of the account"
+msgstr "إيقاف الحساب"
+
+#: app/i18n_labels.py
+msgid "Withholding the commission of a deal"
+msgstr "حجب عمولة صفقة"
+
+#: app/i18n_labels.py
+msgid "Termination of the agreement"
+msgstr "إنهاء الاتفاقية"
+
+#: app/i18n_labels.py
+msgid "Waiting for the seller's reply"
+msgstr "بانتظار رد البائع"
+
+#: app/i18n_labels.py
+msgid "The seller replied"
+msgstr "رد البائع"
+
+#: app/i18n_labels.py
+msgid "Dropped"
+msgstr "مُسقَطة"
+
+#: app/i18n_labels.py
+msgid "Another violation (the seller replies first)"
+msgstr "مخالفة أخرى (يرد البائع أولًا)"
+
+#: app/i18n_labels.py
+msgid "Tampering with, or keeping, company money (ends the agreement at once)"
+msgstr "التلاعب بأموال الشركة أو الاحتفاظ بها (تنتهي الاتفاقية فورًا)"
+
+#: app/i18n_labels.py
+msgid "Disclosing confidential information (ends the agreement at once)"
+msgstr "إفشاء معلومات سرية (تنتهي الاتفاقية فورًا)"
+
+#: app/i18n_labels.py
+msgid "Reverse engineering, or selling outside the company's channels (ends the agreement at once)"
+msgstr "الهندسة العكسية أو البيع خارج قنوات الشركة (تنتهي الاتفاقية فورًا)"
+
+#: app/seller_discipline/routes.py
+msgid "Your reply is recorded. The company will read it before deciding."
+msgstr "تم تسجيل ردّك. ستقرؤه الشركة قبل أن تقرر."
+
+#: app/seller_discipline/routes.py
+msgid "Tick the box to confirm that you want to end your agreement."
+msgstr "ضع علامة في المربع لتأكيد رغبتك في إنهاء اتفاقيتك."
+
+#: app/seller_discipline/routes.py
+msgid "Your agreement will end on %(when)s. You can keep working until then."
+msgstr "ستنتهي اتفاقيتك في %(when)s. يمكنك متابعة العمل حتى ذلك الحين."
+
+#: app/seller_discipline/routes.py
+msgid "The case is open and the seller has been told."
+msgstr "تم فتح القضية وإبلاغ البائع."
+
+#: app/seller_discipline/routes.py
+msgid "The sanction is applied and the seller has been told."
+msgstr "تم تطبيق الجزاء وإبلاغ البائع."
+
+#: app/seller_discipline/routes.py
+msgid "The case is dropped and the seller has been told."
+msgstr "تم إسقاط القضية وإبلاغ البائع."
+
+#: app/seller_discipline/routes.py
+msgid "Tick the box to confirm."
+msgstr "ضع علامة في المربع للتأكيد."
+
+#: app/seller_discipline/routes.py
+msgid "The agreement will end on %(when)s. The seller has been told."
+msgstr "ستنتهي الاتفاقية في %(when)s. تم إبلاغ البائع."
+
+#: app/templates/commissions/objection.html
+msgid "Withheld"
+msgstr "محجوبة"
+
+#: app/templates/commissions/statement.html
+msgid "Withheld (case %(n)s)"
+msgstr "محجوبة (القضية %(n)s)"
+
+#: app/templates/commissions/statement.html
+msgid "Withheld means the company has held back the commission of that deal after a sanction case; you can read the case under My cases."
+msgstr "محجوبة تعني أن الشركة حجبت عمولة تلك الصفقة بعد قضية جزاء؛ يمكنك قراءة القضية ضمن «قضاياي»."
+
+#: app/templates/dashboard/index.html
+msgid "Your agreement ends on %(when)s. You can keep working until then."
+msgstr "تنتهي اتفاقيتك في %(when)s. يمكنك متابعة العمل حتى ذلك الحين."
+
+#: app/templates/dashboard/index.html
+msgid "The company is waiting for your reply to a notice. Open it now."
+msgstr "الشركة بانتظار ردّك على إشعار. افتحه الآن."
+
+#: app/templates/dashboard/index.html
+msgid "Seller discipline"
+msgstr "انضباط البائعين"
+
+#: app/templates/dashboard/index.html
+msgid "Open cases"
+msgstr "القضايا المفتوحة"
+
+#: app/templates/dashboard/index.html
+msgid "Cases that can be decided now"
+msgstr "قضايا يمكن البتّ فيها الآن"
+
+#: app/templates/profile/index.html
+msgid "My seller agreement"
+msgstr "اتفاقية البائع الخاصة بي"
+
+#: app/templates/profile/index.html
+msgid "You can end your agreement at any time. It ends 7 days after you press the button, and you keep working until then. Customers you registered return to the company, except those whose free trial had already started: if they pay at its end, your commission is still due."
+msgstr "يمكنك إنهاء اتفاقيتك في أي وقت. تنتهي بعد 7 أيام من ضغطك على الزر، وتواصل العمل حتى ذلك الحين. يعود العملاء الذين سجّلتهم إلى الشركة، باستثناء من بدأت تجربتهم المجانية بالفعل: إن دفعوا عند نهايتها تبقى عمولتك مستحقة."
+
+#: app/templates/profile/index.html
+msgid "Reason (optional)"
+msgstr "السبب (اختياري)"
+
+#: app/templates/profile/index.html
+msgid "I want to end my seller agreement."
+msgstr "أريد إنهاء اتفاقية البائع الخاصة بي."
+
+#: app/templates/profile/index.html
+msgid "End my agreement"
+msgstr "إنهاء اتفاقيتي"
+
+#: app/templates/profile/index.html
+msgid "My cases"
+msgstr "قضاياي"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Case"
+msgstr "القضية"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Opened"
+msgstr "فُتحت"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Reply by"
+msgstr "الرد قبل"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Suspended until the end of"
+msgstr "موقوف حتى نهاية"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Deal"
+msgstr "الصفقة"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "The reason"
+msgstr "السبب"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "The seller's reply"
+msgstr "رد البائع"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "The seller has not replied yet."
+msgstr "لم يرد البائع بعد."
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "This case is about you. Another manager must decide it."
+msgstr "هذه القضية تخصك. يجب أن يبتّ فيها مدير آخر."
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "The seller has until %(when)s to reply. You can apply a sanction after they reply or after that time."
+msgstr "أمام البائع مهلة حتى %(when)s للرد. يمكنك تطبيق الجزاء بعد رده أو بعد انتهاء هذه المهلة."
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Note (optional, the seller will read it)"
+msgstr "ملاحظة (اختيارية، سيقرؤها البائع)"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Apply the sanction"
+msgstr "تطبيق الجزاء"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Drop the case"
+msgstr "إسقاط القضية"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "The decision"
+msgstr "القرار"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Back to all cases"
+msgstr "العودة إلى كل القضايا"
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "End a seller's agreement"
+msgstr "إنهاء اتفاقية بائع"
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "The agreement ends %(days)s days after you press the button. The seller keeps working until then. When it ends the account closes; customers whose free trial had already started stay credited to the seller for their first payment; every other customer of the seller returns to the company."
+msgstr "تنتهي الاتفاقية بعد %(days)s أيام من ضغطك على الزر. يواصل البائع العمل حتى ذلك الحين. عند انتهائها يُغلق الحساب؛ والعملاء الذين بدأت تجربتهم المجانية بالفعل تبقى دفعتهم الأولى محسوبة للبائع؛ ويعود كل عميل آخر للبائع إلى الشركة."
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "Pick the seller"
+msgstr "اختر البائع"
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "Give the returning customers to (optional)"
+msgstr "سلّم العملاء العائدين إلى (اختياري)"
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "Nobody: they return to the company"
+msgstr "لا أحد: يعودون إلى الشركة"
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "I understand that this ends the seller's agreement."
+msgstr "أفهم أن هذا ينهي اتفاقية البائع."
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "End the agreement"
+msgstr "إنهاء الاتفاقية"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Sanction cases (the seller replies within 2 working days before any sanction is applied) and sellers whose agreement is ending."
+msgstr "قضايا الجزاء (يرد البائع خلال يومي عمل قبل تطبيق أي جزاء) والبائعون الذين تنتهي اتفاقيتهم."
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Open a case"
+msgstr "فتح قضية"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Can be decided"
+msgstr "يمكن البتّ فيها"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "No cases yet."
+msgstr "لا توجد قضايا بعد."
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Agreements ending"
+msgstr "اتفاقيات في فترة الإنهاء"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Started by"
+msgstr "بدأها"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Ends on"
+msgstr "تنتهي في"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "The seller"
+msgstr "البائع"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "The company"
+msgstr "الشركة"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Ended"
+msgstr "انتهت"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Notice running"
+msgstr "فترة الإشعار جارية"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "No agreement is ending."
+msgstr "لا توجد اتفاقية في فترة الإنهاء."
+
+#: app/templates/seller_discipline/my_case.html
+msgid "Suspension until the end of"
+msgstr "الإيقاف حتى نهاية"
+
+#: app/templates/seller_discipline/my_case.html
+msgid "What the company says"
+msgstr "ما تقوله الشركة"
+
+#: app/templates/seller_discipline/my_case.html
+msgid "You have until %(when)s to reply. After that the company may decide."
+msgstr "أمامك مهلة حتى %(when)s للرد. بعدها يجوز للشركة أن تقرر."
+
+#: app/templates/seller_discipline/my_case.html
+msgid "Your reply"
+msgstr "ردّك"
+
+#: app/templates/seller_discipline/my_case.html
+msgid "Write your reply"
+msgstr "اكتب ردّك"
+
+#: app/templates/seller_discipline/my_case.html
+msgid "Send my reply"
+msgstr "إرسال ردّي"
+
+#: app/templates/seller_discipline/my_case.html
+msgid "Back to my cases"
+msgstr "العودة إلى قضاياي"
+
+#: app/templates/seller_discipline/my_cases.html
+msgid "Notices the company has sent you about your seller agreement. You always have 2 working days to reply before any sanction is applied."
+msgstr "إشعارات أرسلتها الشركة إليك بخصوص اتفاقية البائع. لديك دائمًا يومي عمل للرد قبل تطبيق أي جزاء."
+
+#: app/templates/seller_discipline/my_cases.html
+msgid "Your agreement ends on %(when)s."
+msgstr "تنتهي اتفاقيتك في %(when)s."
+
+#: app/templates/seller_discipline/my_cases.html
+msgid "You have no cases."
+msgstr "ليس لديك قضايا."
+
+#: app/templates/seller_discipline/new_case.html
+msgid "Continue"
+msgstr "متابعة"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "Kind of sanction"
+msgstr "نوع الجزاء"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "What happened"
+msgstr "ما الذي حدث"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "The first three choices end the agreement at once, with no reply period. Choose Termination of the agreement for them. Any other violation gives the seller 2 working days to reply first."
+msgstr "الخيارات الثلاثة الأولى تنهي الاتفاقية فورًا ودون مهلة للرد. اختر لها إنهاء الاتفاقية. أي مخالفة أخرى تمنح البائع يومَي عمل للرد أولًا."
+
+#: app/templates/seller_discipline/new_case.html
+msgid "Reason (the seller will read this)"
+msgstr "السبب (سيقرؤه البائع)"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "Suspension: suspended until the end of this date"
+msgstr "الإيقاف: موقوف حتى نهاية هذا التاريخ"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "The deal (required to withhold its commission)"
+msgstr "الصفقة (مطلوبة لحجب عمولتها)"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "No deal"
+msgstr "بلا صفقة"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "Open the case and tell the seller"
+msgstr "فتح القضية وإبلاغ البائع"

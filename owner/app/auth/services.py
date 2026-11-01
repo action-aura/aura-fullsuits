@@ -2,6 +2,8 @@
 future activation API or a CLI can reuse it without touching Flask routing."""
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import select
 
 from app.extensions import db_session
@@ -72,6 +74,18 @@ def authenticate(
         record_attempt(email_norm, ip_address, success=False, reason="invalid_credentials")
         return None, "invalid_credentials"
 
+    # Seller agreement clauses 16-17: the person signing in settles THEIR OWN due items first -- a
+    # suspension whose date has passed re-opens the account, a 7-day notice that has run out closes it
+    # -- so neither depends on a periodic job having run (seller_discipline/scan.py). Never breaks sign-in.
+    try:
+        from app.seller_discipline.scan import settle_due_for_staff
+
+        settle_due_for_staff(staff.id)
+        db_session.refresh(staff)
+    except Exception:  # noqa: BLE001
+        db_session.rollback()
+        logging.getLogger(__name__).exception("seller discipline settle at sign-in failed")
+        staff = find_staff_by_email(email_norm)
     if not staff.is_active or staff.disabled_at is not None:
         record_attempt(email_norm, ip_address, success=False, reason="account_disabled")
         return None, "account_disabled"

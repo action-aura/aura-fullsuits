@@ -1,0 +1,48 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Case") }} {{ case.case_number }}{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="cd-heading" data-case-status="{{ case.status }}">
+  <h2 id="cd-heading">{{ _("Case") }} {{ case.case_number }}: {{ seller.display_name if seller else "-" }}</h2>
+  <p><span class="badge {{ 'danger' if case.status == 'DECIDED_APPLIED' else 'pending' }}">{{ sanction_status_label(case.status) }}</span>
+     {{ sanction_kind_label(case.kind) }}</p>
+  <p>{{ sanction_category_label(case.reason_category) }}</p>
+  <p>{{ _("Opened") }}: {{ format_owner_datetime(case.notice_sent_at) }}</p>
+  {% if case.response_due_at %}<p>{{ _("Reply by") }}: {{ format_owner_datetime(case.response_due_at) }}</p>{% endif %}
+  {% if case.kind == "SUSPENSION" and suspended_through %}<p>{{ _("Suspended until the end of") }}: {{ format_owner_date(suspended_through) }}</p>{% endif %}
+  {% if order %}<p>{{ _("Deal") }}: <bdi dir="ltr">{{ order.order_number }}</bdi></p>{% endif %}
+  <h3>{{ _("The reason") }}</h3>
+  <blockquote dir="auto" style="white-space:pre-wrap;">{{ case.reason_text }}</blockquote>
+
+  <h3>{{ _("The seller's reply") }}</h3>
+  {% if case.response_text %}
+  <p>{{ format_owner_datetime(case.responded_at) }}</p>
+  <blockquote dir="auto" style="white-space:pre-wrap;" data-case-reply="1">{{ case.response_text }}</blockquote>
+  {% else %}<p class="muted">{{ _("The seller has not replied yet.") }}</p>{% endif %}
+
+  {% if case.status in ("NOTICE_SENT", "RESPONDED") %}
+  {% if own %}
+  <p class="muted" data-self-case="1">{{ _("This case is about you. Another manager must decide it.") }}</p>
+  {% else %}
+  <h3>{{ _("Decision") }}</h3>
+  {% if not can_decide %}
+  <p class="muted" data-wait-for-reply="1">{{ _("The seller has until %(when)s to reply. You can apply a sanction after they reply or after that time.", when=format_owner_datetime(case.response_due_at)) }}</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('seller_discipline.case_apply', case_id=case.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <p><label for="cd-note">{{ _("Note (optional, the seller will read it)") }}</label><br>
+      <textarea id="cd-note" name="note" rows="3" maxlength="4000" dir="auto" style="width:100%;"></textarea></p>
+    <button type="submit" class="btn--primary-action" data-apply-button="1" {% if not can_decide %}disabled{% endif %}>{{ _("Apply the sanction") }}</button>
+  </form>
+  <form method="post" action="{{ url_for('seller_discipline.case_drop', case_id=case.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn secondary" data-drop-button="1">{{ _("Drop the case") }}</button>
+  </form>
+  {% endif %}
+  {% else %}
+  <h3>{{ _("The decision") }}: {{ sanction_status_label(case.status) }}</h3>
+  <p>{{ format_owner_datetime(case.decided_at) }}</p>
+  {% if case.decision_note %}<blockquote dir="auto" style="white-space:pre-wrap;">{{ case.decision_note }}</blockquote>{% endif %}
+  {% endif %}
+  <p><a href="{{ url_for('seller_discipline.manager_index') }}">{{ _("Back to all cases") }}</a></p>
+</section>
+{% endblock %}

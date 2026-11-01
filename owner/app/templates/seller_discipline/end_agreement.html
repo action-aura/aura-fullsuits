@@ -1,0 +1,26 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("End a seller's agreement") }}{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="ea-heading">
+  <h2 id="ea-heading">{{ _("End a seller's agreement") }}</h2>
+  <p class="muted">{{ _("The agreement ends %(days)s days after you press the button. The seller keeps working until then. When it ends the account closes; customers whose free trial had already started stay credited to the seller for their first payment; every other customer of the seller returns to the company.", days=notice_days) }}</p>
+  {% if error %}<p class="badge danger" role="alert" data-form-error="1">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ url_for('seller_discipline.end_agreement') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <p><label for="ea-seller">{{ _("Seller") }}</label><br>
+      <select id="ea-seller" name="seller" required>
+        <option value="">{{ _("Pick the seller") }}</option>
+        {% for s, p in sellers %}<option value="{{ s.id }}" {% if form.get("seller") == s.id|string %}selected{% endif %}>{{ p.full_name }} ({{ p.employee_number }})</option>{% endfor %}
+      </select></p>
+    <p><label for="ea-reassign">{{ _("Give the returning customers to (optional)") }}</label><br>
+      <select id="ea-reassign" name="reassign_to">
+        <option value="">{{ _("Nobody: they return to the company") }}</option>
+        {% for s, p in sellers %}<option value="{{ s.id }}" {% if form.get("reassign_to") == s.id|string %}selected{% endif %}>{{ p.full_name }}</option>{% endfor %}
+      </select></p>
+    <p><label for="ea-reason">{{ _("Reason (optional)") }}</label><br>
+      <textarea id="ea-reason" name="reason" rows="3" maxlength="4000" dir="auto" style="width:100%;">{{ form.get("reason", "") }}</textarea></p>
+    <p><label><input type="checkbox" name="confirm" value="yes"> {{ _("I understand that this ends the seller's agreement.") }}</label></p>
+    <button type="submit" class="btn--primary-action">{{ _("End the agreement") }}</button>
+  </form>
+</section>
+{% endblock %}

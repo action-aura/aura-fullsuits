@@ -1,0 +1,48 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Seller discipline") }}{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="sd-heading">
+  <h2 id="sd-heading">{{ _("Seller discipline") }}</h2>
+  <p class="muted">{{ _("Sanction cases (the seller replies within 2 working days before any sanction is applied) and sellers whose agreement is ending.") }}</p>
+  <p>
+    <a class="btn" href="{{ url_for('seller_discipline.new_case') }}">{{ _("Open a case") }}</a>
+    <a class="btn secondary" href="{{ url_for('seller_discipline.end_agreement') }}">{{ _("End a seller's agreement") }}</a>
+  </p>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Case") }}</th><th>{{ _("Seller") }}</th><th>{{ _("Kind") }}</th><th>{{ _("Status") }}</th><th>{{ _("Reply by") }}</th><th></th></tr></thead>
+    <tbody>
+    {% for c in cases %}
+    <tr data-case-id="{{ c.id }}" data-case-status="{{ c.status }}">
+      <td>{{ c.case_number }}</td>
+      <td>{{ names.get(c.seller_staff_user_id, "-") }}</td>
+      <td>{{ sanction_kind_label(c.kind) }}</td>
+      <td>{{ sanction_status_label(c.status) }}{% if can_decide(c, now) %} <span class="badge success">{{ _("Can be decided") }}</span>{% endif %}</td>
+      <td>{% if c.response_due_at %}{{ format_owner_datetime(c.response_due_at) }}{% else %}-{% endif %}</td>
+      <td><a href="{{ url_for('seller_discipline.case_detail', case_id=c.id) }}">{{ _("Open") }}</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="empty">{{ _("No cases yet.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card" aria-labelledby="sd-ending-heading">
+  <h3 id="sd-ending-heading">{{ _("Agreements ending") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Seller") }}</th><th>{{ _("Started by") }}</th><th>{{ _("Ends on") }}</th><th>{{ _("Status") }}</th></tr></thead>
+    <tbody>
+    {% for n in notices %}
+    <tr data-termination-id="{{ n.id }}" data-termination-status="{{ n.status }}">
+      <td>{{ names.get(n.seller_staff_user_id, "-") }}</td>
+      <td>{{ _("The seller") if n.initiated_by_seller else _("The company") }}</td>
+      <td>{{ format_owner_datetime(n.effective_at) }}</td>
+      <td>{{ _("Ended") if n.status == "APPLIED" else _("Notice running") }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="empty">{{ _("No agreement is ending.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

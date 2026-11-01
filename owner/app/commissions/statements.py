@@ -55,6 +55,7 @@ from app.models.employees import EmployeeProfile
 from app.models.staff import StaffUser
 from app.models.subscriptions import PaymentRecord
 from app.operational_reports.periods import OWNER_TIMEZONE
+from app.seller_discipline import withhold
 
 OBJECTION_WINDOW_DAYS = 7
 REPLY_WORKING_DAYS = 2
@@ -122,12 +123,16 @@ def _money(value) -> str:
     return str(Decimal(value).quantize(Decimal("0.01")))
 
 
-def _bucket(entry: CommissionLedgerEntry, now: datetime) -> str:
+def _bucket(entry: CommissionLedgerEntry, now: datetime, held_orders: dict) -> str:
     amount = Decimal(entry.commission_amount)
     if amount < 0:
         return "clawed_back"
     if entry.status == "PAID":
         return "paid"
+    # Clause 16: the commission of a deal under an applied COMMISSION_WITHHOLD sanction is neither
+    # held (30 days) nor payable: it is withheld, whatever its status or hold date.
+    if entry.status in ("EARNED", "APPROVED") and withhold.case_number_for_entry(entry, held_orders) is not None:
+        return "withheld"
     if entry.status == "APPROVED":
         return "payable"
     if entry.status == "EARNED":
@@ -153,11 +158,21 @@ def _customer_name_for_payment(payment_id) -> str:
     return customer.legal_name if customer is not None else ""
 
 
+def _withheld_case_number(rows, held_orders: dict) -> int | None:
+    """The sanction case holding back any of these ledger rows (clause 16), or None."""
+    for row in rows:
+        number = withhold.case_number_for_entry(row, held_orders) if row.status in ("EARNED", "APPROVED") else None
+        if number is not None:
+            return number
+    return None
+
+
 def build_statement(employee_profile_id, month: date, *, now: datetime | None = None) -> dict:
     """The seller's statement for one month, as plain JSON-able data (strings for money and
     dates): the same dict is rendered, snapshotted into an objection, and hashed."""
     now = now or utcnow()
     entries = _month_entries(employee_profile_id, month)
+    held_orders = withhold.withheld_orders()
     sales = list(db_session.execute(
         select(CommissionLadderSale).where(
             CommissionLadderSale.employee_profile_id == employee_profile_id, CommissionLadderSale.ladder_month == month
@@ -168,17 +183,17 @@ def build_statement(employee_profile_id, month: date, *, now: datetime | None = 
         if entry.ladder_sale_id is not None:
             by_sale.setdefault(entry.ladder_sale_id, []).append(entry)
 
-    totals = {"held": _ZERO, "payable": _ZERO, "paid": _ZERO, "clawed_back": _ZERO, "other": _ZERO}
+    totals = {"held": _ZERO, "payable": _ZERO, "paid": _ZERO, "clawed_back": _ZERO, "withheld": _ZERO, "other": _ZERO}
     for entry in entries:
-        bucket = _bucket(entry, now)
+        bucket = _bucket(entry, now, held_orders)
         totals[bucket] += -Decimal(entry.commission_amount) if bucket == "clawed_back" else Decimal(entry.commission_amount)
 
     lines = []
     for sale in sales:
         rows = by_sale.get(sale.id, [])
-        parts = {"held": _ZERO, "payable": _ZERO, "paid": _ZERO, "clawed_back": _ZERO, "other": _ZERO}
+        parts = {"held": _ZERO, "payable": _ZERO, "paid": _ZERO, "clawed_back": _ZERO, "withheld": _ZERO, "other": _ZERO}
         for row in rows:
-            bucket = _bucket(row, now)
+            bucket = _bucket(row, now, held_orders)
             parts[bucket] += -Decimal(row.commission_amount) if bucket == "clawed_back" else Decimal(row.commission_amount)
         order = db_session.get(SalesOrder, sale.sales_order_id)
         customer = db_session.get(Customer, order.customer_id) if order is not None else None
@@ -189,12 +204,13 @@ def build_statement(employee_profile_id, month: date, *, now: datetime | None = 
             "plan": plan.name if plan is not None else "", "confirmed_at": sale.qualified_at.isoformat(), "confirmed_on": _jordan_day(sale.qualified_at),
             "position": positions[-1] if positions else None, "counted": sale.status == "COUNTED",
             "uncount_cause": sale.uncount_cause, "net": _money(sum((Decimal(r.commission_amount) for r in rows), _ZERO)),
+            "withheld_case": _withheld_case_number(rows, held_orders),
             **{key: _money(value) for key, value in parts.items()},
         })
     for entry in entries:
         if entry.ladder_sale_id is not None:
             continue  # shown inside its sale's line
-        bucket = _bucket(entry, now)
+        bucket = _bucket(entry, now, held_orders)
         parts = {key: _ZERO for key in totals}
         parts[bucket] = -Decimal(entry.commission_amount) if bucket == "clawed_back" else Decimal(entry.commission_amount)
         lines.append({
@@ -202,6 +218,7 @@ def build_statement(employee_profile_id, month: date, *, now: datetime | None = 
             "confirmed_at": (entry.earned_at or entry.created_at).isoformat(),
             "confirmed_on": _jordan_day(entry.earned_at or entry.created_at), "position": entry.ladder_position,
             "counted": True, "uncount_cause": None, "net": _money(entry.commission_amount),
+            "withheld_case": _withheld_case_number([entry], held_orders),
             **{key: _money(value) for key, value in parts.items()},
         })
 
@@ -212,7 +229,7 @@ def build_statement(employee_profile_id, month: date, *, now: datetime | None = 
             CommissionClawbackDeduction.created_at >= start, CommissionClawbackDeduction.created_at < end)
     ).scalars().all()
     # clawed_back is kept as a positive number for display; it SUBTRACTS from what the seller keeps.
-    net = totals["held"] + totals["payable"] + totals["paid"] + totals["other"] - totals["clawed_back"]
+    net = totals["held"] + totals["payable"] + totals["paid"] + totals["withheld"] + totals["other"] - totals["clawed_back"]
     return {
         "month": month.isoformat(), "currency": "JOD", "issued_at": statement_issued_at(month).isoformat(),
         "objection_window_closes_at": objection_window_closes_at(month).isoformat(),

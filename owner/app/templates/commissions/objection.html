@@ -13,15 +13,15 @@
   <h3>{{ _("The statement as the seller saw it") }}</h3>
   <table class="responsive-table">
     <thead><tr><th>{{ _("Customer") }}</th><th>{{ _("Package") }}</th><th>{{ _("Confirmed on") }}</th><th class="num">{{ _("Place on the ladder") }}</th>
-      <th class="num">{{ _("Held") }}</th><th class="num">{{ _("Payable") }}</th><th class="num">{{ _("Paid") }}</th><th class="num">{{ _("Taken back") }}</th><th class="num">{{ _("Net") }}</th></tr></thead>
+      <th class="num">{{ _("Held") }}</th><th class="num">{{ _("Payable") }}</th><th class="num">{{ _("Paid") }}</th><th class="num">{{ _("Withheld") }}</th><th class="num">{{ _("Taken back") }}</th><th class="num">{{ _("Net") }}</th></tr></thead>
     <tbody>
     {% for l in s.lines %}
     <tr><td>{{ l.customer or "-" }}</td><td>{{ l.plan or "-" }}</td><td>{{ l.confirmed_on }}</td><td class="num">{{ l.position if l.position else "-" }}</td>
-      <td class="num">{{ l.held }}</td><td class="num">{{ l.payable }}</td><td class="num">{{ l.paid }}</td><td class="num">{{ l.clawed_back }}</td><td class="num">{{ l.net }}</td></tr>
-    {% else %}<tr><td colspan="9" class="empty">{{ _("No subscriptions were confirmed in this month.") }}</td></tr>{% endfor %}
+      <td class="num">{{ l.held }}</td><td class="num">{{ l.payable }}</td><td class="num">{{ l.paid }}</td><td class="num">{{ l.get("withheld", "0.00") }}</td><td class="num">{{ l.clawed_back }}</td><td class="num">{{ l.net }}</td></tr>
+    {% else %}<tr><td colspan="10" class="empty">{{ _("No subscriptions were confirmed in this month.") }}</td></tr>{% endfor %}
     </tbody>
     <tfoot><tr><th colspan="4">{{ _("Total") }} ({{ s.currency }})</th><th class="num">{{ s.totals.held }}</th><th class="num">{{ s.totals.payable }}</th>
-      <th class="num">{{ s.totals.paid }}</th><th class="num">{{ s.totals.clawed_back }}</th><th class="num">{{ s.totals.net }}</th></tr></tfoot>
+      <th class="num">{{ s.totals.paid }}</th><th class="num">{{ s.totals.get("withheld", "0.00") }}</th><th class="num">{{ s.totals.clawed_back }}</th><th class="num">{{ s.totals.net }}</th></tr></tfoot>
   </table>
 
   {% if row.status == "OPEN" %}

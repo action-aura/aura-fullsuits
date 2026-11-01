@@ -49,6 +49,8 @@ class CommissionError(StableCodeError):
         "COMMISSION_CLAWBACK_NOTHING_REMAINING": "Nothing remains of this take-back; it is already settled.",
         "COMMISSION_CLAWBACK_AMOUNT_INVALID": "The amount to settle must be greater than 0.",
         "COMMISSION_CLAWBACK_AMOUNT_TOO_LARGE": "The amount is more than what remains of this take-back.",
+        # Seller agreement clause 16: the deal is under a COMMISSION_WITHHOLD sanction case.
+        "COMMISSION_WITHHELD": "This commission is withheld by sanction case {case_number} and cannot be approved or paid.",
         # Seller agreement clause 5 (2026-10-31): objections to a monthly statement.
         "STATEMENT_MONTH_INVALID": "This is not a valid statement month.",
         "STATEMENT_NOT_ISSUED": "This month has not closed yet, so there is no statement to object to.",
