@@ -121,7 +121,8 @@ def read_photo(document: StaffIdentityDocument) -> tuple[bytes, str]:
 def current_photo(staff_user_id) -> StaffIdentityDocument | None:
     return db_session.execute(
         select(StaffIdentityDocument).where(
-            StaffIdentityDocument.staff_user_id == staff_user_id, StaffIdentityDocument.superseded_at.is_(None)
+            StaffIdentityDocument.staff_user_id == staff_user_id, StaffIdentityDocument.superseded_at.is_(None),
+            StaffIdentityDocument.purged_at.is_(None),  # a purged photo (retention) no longer counts
         )
     ).scalars().first()
 

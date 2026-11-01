@@ -131,7 +131,11 @@ def _mark_device(*, fingerprint: str, customer_id, registry_device_id, installat
     device id the app claims for this computer (it survives a reinstall, which
     makes a new key; the app is ours, so it is a deterrent, not a proof)."""
     registry_device_id = (registry_device_id or "").strip()[:64] or None
-    clash = select(TrialDeviceMark).where(TrialDeviceMark.customer_id != customer_id)
+    # customer_id IS NULL = the customer behind this mark was purged (retention.py): the mark
+    # stays so the device is still "used", and it must block EVERY customer. `!= customer_id`
+    # alone is NULL (not true) for such a row, which would quietly re-open one-trial-per-device.
+    clash = select(TrialDeviceMark).where(
+        or_(TrialDeviceMark.customer_id.is_(None), TrialDeviceMark.customer_id != customer_id))
     if registry_device_id is not None:
         clash = clash.where(or_(TrialDeviceMark.device_key_fingerprint == fingerprint,
                                 TrialDeviceMark.registry_device_id == registry_device_id))

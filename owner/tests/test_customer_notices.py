@@ -556,3 +556,332 @@ def test_voided_and_refunded_payments_are_not_mailed(app, client, world):
     pid = _record_payment(app, world)
     _correct(app, pid, "VOIDED", world["manager"], note="duplicate entry")
     assert [m.kind for m in _mails(app)] == ["customer_payment_pending"]
+
+
+# =====================================================================  N4 retention
+
+def _paid_customer(app, w, *, status, end_offset_days, **onboard_overrides):
+    """A trial customer turned into a PAID one by hand: pilot CONVERTED, documents kept for
+    life (purge_after cleared, exactly what fulfilment does), subscription in `status` with
+    its paid-until `end_offset_days` from Amman today. Returns (customer_id, subscription_id)."""
+    from datetime import timedelta
+
+    from app.customer_onboarding import documents, trial
+    from app.extensions import db_session
+    from app.models.subscriptions import Subscription
+    from tests.test_customer_onboarding import onboard
+
+    result = onboard(app, w, **onboard_overrides)
+    with app.app_context():
+        pilot = trial.trial_pilot_for_customer(result.customer_id)
+        pilot.status = "CONVERTED"
+        sub = db_session.get(Subscription, pilot.subscription_id)
+        sub.status = status
+        sub.end_date = jordan_today() + timedelta(days=end_offset_days)
+        documents.keep_for_customer_lifetime(result.customer_id)
+        db_session.commit()
+        return result.customer_id, sub.id
+
+
+def _doc_dates(app, customer_id):
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.customer_onboarding import CustomerDocument
+
+        db_session.expire_all()
+        return {
+            d.kind: (d.purge_after, d.purged_at)
+            for d in db_session.execute(select(CustomerDocument).where(CustomerDocument.customer_id == customer_id)).scalars()
+        }
+
+
+def _set_sub(app, sub_id, **fields):
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.subscriptions import Subscription
+
+        sub = db_session.get(Subscription, sub_id)
+        for k, v in fields.items():
+            setattr(sub, k, v)
+        db_session.commit()
+
+
+def _sweep(app):
+    with app.app_context():
+        from app.customer_onboarding import retention
+
+        return retention.apply_post_customer_retention()
+
+
+def _purge_due(app):
+    with app.app_context():
+        from app.customer_onboarding import retention
+
+        return retention.purge_due()
+
+
+@pytest.fixture()
+def shop(app, seeded, kyc):
+    from tests.test_customer_onboarding import _world
+
+    return _world(app)
+
+
+def _expected_purge(end_date):
+    from datetime import datetime, time, timedelta, timezone
+
+    return datetime.combine(end_date, time.min, tzinfo=timezone.utc) + timedelta(days=365)
+
+
+def test_a_lapsed_customers_photos_get_a_date_of_last_paid_day_plus_one_year(app, shop):
+    from datetime import timedelta
+
+    cid, sub_id = _paid_customer(app, shop, status="EXPIRED", end_offset_days=-30)
+    assert all(p is None for p, _ in _doc_dates(app, cid).values()), "kept for life while a customer: no date at all"
+    assert _sweep(app) == {"set": 1, "cleared": 0}
+    expected = _expected_purge(jordan_today() - timedelta(days=30))
+    assert {k: v[0] for k, v in _doc_dates(app, cid).items()} == {"NATIONAL_ID": expected, "COMMERCIAL_REGISTRATION": expected}
+    assert _audit_count(app, "CUSTOMER_DOCUMENT_RETENTION_SET") == 1
+    assert _sweep(app) == {"set": 0, "cleared": 0}, "idempotent: nothing moves on a second run"
+    assert _audit_count(app, "CUSTOMER_DOCUMENT_RETENTION_SET") == 1
+
+
+def test_cancelled_and_refunded_customers_start_the_clock_too(app, shop):
+    from datetime import timedelta
+
+    cancelled, c_sub = _paid_customer(app, shop, status="CANCELLED", end_offset_days=-10)
+    refunded, r_sub = _paid_customer(app, shop, status="ACTIVE", end_offset_days=200)
+    # a refund that stops the licence SUSPENDS the subscription (refunds.py): history row, status SUSPENDED
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.subscriptions import Subscription
+        from app.subscriptions.services import transition_subscription
+
+        transition_subscription(db_session.get(Subscription, r_sub), "SUSPENDED", shop["admin"], reason="refund")
+    _sweep(app)
+    assert _doc_dates(app, cancelled)["NATIONAL_ID"][0] == _expected_purge(jordan_today() - timedelta(days=10))
+    from datetime import datetime, timezone
+
+    suspended_day = datetime.now(timezone.utc).date()
+    assert _doc_dates(app, refunded)["NATIONAL_ID"][0] == _expected_purge(suspended_day)
+
+
+def test_paying_or_renewing_clears_the_date_again(app, shop):
+    cid, sub_id = _paid_customer(app, shop, status="EXPIRED", end_offset_days=-30)
+    _sweep(app)
+    assert _doc_dates(app, cid)["NATIONAL_ID"][0] is not None
+    from datetime import timedelta
+
+    _set_sub(app, sub_id, status="ACTIVE", end_date=jordan_today() + timedelta(days=365))  # renewed
+    assert _sweep(app) == {"set": 0, "cleared": 1}
+    assert all(p is None for p, _ in _doc_dates(app, cid).values())
+    assert _audit_count(app, "CUSTOMER_DOCUMENT_RETENTION_CLEARED") == 1
+
+
+def test_inside_the_grace_period_nothing_is_dated_and_an_unpaid_trial_is_left_to_the_trial_rules(app, shop):
+    from datetime import timedelta
+
+    from tests.test_customer_onboarding import onboard
+
+    past_due, _ = _paid_customer(app, shop, status="PAST_DUE", end_offset_days=-3)
+    trial_only = onboard(app, shop)
+    before = _doc_dates(app, trial_only.customer_id)
+    assert _sweep(app) == {"set": 0, "cleared": 0}
+    assert all(p is None for p, _ in _doc_dates(app, past_due).values()), "PAST_DUE is still a customer"
+    assert _doc_dates(app, trial_only.customer_id) == before, "an unpaid trial keeps the trial's own 90-day date"
+    assert all(p is not None for p, _ in before.values())
+    assert jordan_today() - timedelta(days=3)  # (PAST_DUE end date was in the past on purpose)
+
+
+def test_purge_due_deletes_only_the_due_documents_and_unlinks_only_their_marks(app, shop):
+    import os
+    from datetime import timedelta
+
+    from app.customer_onboarding import documents
+    from app.models.customer_onboarding import TrialDeviceMark
+
+    gone, g_sub = _paid_customer(app, shop, status="EXPIRED", end_offset_days=-400)       # +365 passed 35 days ago
+    recent, r_sub = _paid_customer(app, shop, status="EXPIRED", end_offset_days=-30)      # due in ~335 days
+    live, l_sub = _paid_customer(app, shop, status="ACTIVE", end_offset_days=100)
+    with app.app_context():
+        from app.extensions import db_session
+
+        for n, cid in enumerate((gone, recent, live)):
+            db_session.add(TrialDeviceMark(device_key_fingerprint=f"{n}" * 64, customer_id=cid))
+        db_session.commit()
+        files = {cid: [documents._path_for(d) for d in documents.documents_of(cid)] for cid in (gone, recent, live)}
+        assert all(os.path.isfile(p) for paths in files.values() for p in paths)
+
+    summary = _purge_due(app)
+    assert summary["customer_documents_purged"] == 2 and summary["trial_marks_unlinked"] == 1
+    assert not any(os.path.exists(p) for p in files[gone]), "the due customer's encrypted files are gone"
+    assert all(os.path.isfile(p) for p in files[recent] + files[live]), "nobody else's files were touched"
+    assert all(pa is not None for pa, _ in _doc_dates(app, gone).values())
+    assert all(purged is not None for _, purged in _doc_dates(app, gone).values())
+    assert all(purged is None for c in (recent, live) for _, purged in _doc_dates(app, c).values())
+    with app.app_context():
+        from app.extensions import db_session
+
+        marks = {m.device_key_fingerprint: m.customer_id for m in db_session.execute(select(TrialDeviceMark)).scalars()}
+        assert len(marks) == 3, "the device fingerprints are KEPT (fraud prevention)"
+        assert marks["0" * 64] is None and marks["1" * 64] == recent and marks["2" * 64] == live
+    assert _audit_count(app, "TRIAL_DEVICE_MARKS_UNLINKED") == 1
+    again = _purge_due(app)
+    assert again["customer_documents_purged"] == 0 and again["trial_marks_unlinked"] == 0, "idempotent"
+    assert jordan_today() - timedelta(days=1)
+
+
+def test_a_device_whose_customer_was_purged_still_blocks_a_new_trial_on_it(app, shop):
+    """Fail-closed half of the unlink: a NULL-customer mark must refuse every customer, or
+    unlinking would quietly re-open one-trial-per-device."""
+    from app.customer_onboarding import trial
+    from app.models.customer_onboarding import TrialDeviceMark
+    from tests.test_customer_onboarding import onboard
+
+    stranger = onboard(app, shop)
+    with app.app_context():
+        from app.extensions import db_session
+
+        db_session.add(TrialDeviceMark(device_key_fingerprint="a" * 64, customer_id=None))
+        db_session.commit()
+        with pytest.raises(trial.TrialError) as refused:
+            trial._mark_device(fingerprint="a" * 64, customer_id=stranger.customer_id, registry_device_id=None, installation_id=None)
+        assert refused.value.code == "TRIAL_DEVICE_ALREADY_USED"
+        db_session.rollback()
+        # allow-half: an unrelated device is fine
+        trial._mark_device(fingerprint="b" * 64, customer_id=stranger.customer_id, registry_device_id=None, installation_id=None)
+
+
+def test_a_customer_who_only_refused_the_photos_keeps_the_device_link(app, client, world):
+    """The refusal path purges the documents of a customer who is STILL a customer: the mark
+    must stay linked (this is the guard on 'purged AND no longer a customer')."""
+    from app.models.customer_onboarding import TrialDeviceMark
+
+    _mail_on(app)
+    key = make_device_keypair()
+    ticket = _ready_for_acceptance(client, key, world)
+    accept(client, key, ticket, world["version_id"], sha(CONTRACT_BODY), consents={"id_documents": False, "data_outside_jordan": True})
+    with app.app_context():
+        from app.extensions import db_session
+
+        db_session.add(TrialDeviceMark(device_key_fingerprint="c" * 64, customer_id=world["customer_id"]))
+        db_session.commit()
+    # the world's customer is in a running trial (live), photos already refused-and-deleted
+    assert _purge_due(app)["trial_marks_unlinked"] == 0
+    with app.app_context():
+        from app.extensions import db_session
+
+        assert db_session.execute(select(TrialDeviceMark.customer_id)).scalar_one() == world["customer_id"]
+
+
+def test_the_cli_runs_the_whole_nightly_purge(app, shop):
+    import json
+
+    cid, _ = _paid_customer(app, shop, status="EXPIRED", end_offset_days=-400)
+    result = app.test_cli_runner().invoke(args=["documents", "purge-due"])
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    assert report["customer_documents_purged"] == 2
+    assert all(purged is not None for _, purged in _doc_dates(app, cid).values())
+
+
+# ---- the seller's own ID photo
+
+def _seller_with_photo(app, email, *, disabled_days_ago=None):
+    from datetime import datetime, timedelta, timezone
+
+    from app.extensions import db_session
+    from app.models.staff import StaffUser
+    from app.seller_id import documents as seller_docs
+    from tests.test_customer_onboarding import _jpeg
+
+    staff_id = make_staff(app, email, role_codes=["SALES"])
+    with app.app_context():
+        photo = seller_docs.store_identity_photo(content=_jpeg(), uploaded_by_staff_user_id=staff_id, staff_user_id=staff_id)
+        if disabled_days_ago is not None:
+            staff = db_session.get(StaffUser, staff_id)
+            staff.is_active = False
+            staff.disabled_at = datetime.now(timezone.utc) - timedelta(days=disabled_days_ago)
+        db_session.commit()
+        return staff_id, photo.id
+
+
+def test_a_sellers_id_photo_goes_a_year_after_they_leave_and_only_then(app, seeded, kyc):
+    import os
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.staff_identity import StaffIdentityDocument
+    from app.seller_id import documents as seller_docs
+
+    active, active_photo = _seller_with_photo(app, "keeps-working@example.com")
+    recent, recent_photo = _seller_with_photo(app, "left-last-month@example.com", disabled_days_ago=30)
+    old, old_photo = _seller_with_photo(app, "left-long-ago@example.com", disabled_days_ago=400)
+    with app.app_context():
+        from app.extensions import db_session
+
+        path_of = {pid: seller_docs.kyc.path_for_key(db_session.get(StaffIdentityDocument, pid).storage_key)
+                   for pid in (active_photo, recent_photo, old_photo)}
+    summary = _purge_due(app)
+    assert summary["seller_photos_purged"] == 1
+    assert not os.path.exists(path_of[old_photo]) and os.path.isfile(path_of[recent_photo]) and os.path.isfile(path_of[active_photo])
+    with app.app_context():
+        from app.extensions import db_session
+
+        db_session.expire_all()
+        rows = {r.id: r for r in db_session.execute(select(StaffIdentityDocument)).scalars()}
+        assert rows[active_photo].purge_after is None and rows[active_photo].purged_at is None
+        assert abs((rows[recent_photo].purge_after - (datetime.now(timezone.utc) - timedelta(days=30) + timedelta(days=365)))
+                   .total_seconds()) < 3600 and rows[recent_photo].purged_at is None
+        assert rows[old_photo].purged_at is not None
+        assert seller_docs.current_photo(old) is None, "a purged photo no longer satisfies the ID-photo gate"
+        assert seller_docs.current_photo(active) is not None
+    assert _audit_count(app, "STAFF_ID_PHOTO_PURGED") == 1
+    assert _purge_due(app)["seller_photos_purged"] == 0, "idempotent"
+
+
+def test_re_enabling_a_seller_takes_the_date_away_again(app, seeded, kyc):
+    from app.models.staff import StaffUser
+    from app.models.staff_identity import StaffIdentityDocument
+
+    staff_id, photo_id = _seller_with_photo(app, "came-back@example.com", disabled_days_ago=30)
+    _purge_due(app)
+    with app.app_context():
+        from app.extensions import db_session
+
+        assert db_session.get(StaffIdentityDocument, photo_id).purge_after is not None
+        staff = db_session.get(StaffUser, staff_id)
+        staff.is_active, staff.disabled_at = True, None
+        db_session.commit()
+    _purge_due(app)
+    with app.app_context():
+        from app.extensions import db_session
+
+        db_session.expire_all()
+        assert db_session.get(StaffIdentityDocument, photo_id).purge_after is None
+
+
+# =====================================================================  N6 scheduled ops
+
+def _live_script_lines():
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "deploy" / "oracle-free" / "run_scheduled_ops.sh"
+    return [l.strip() for l in script.read_text(encoding="utf-8").splitlines() if l.strip() and not l.lstrip().startswith("#")]
+
+
+def test_the_nightly_script_runs_the_trial_fallback_and_the_document_purge(app):
+    lines = _live_script_lines()
+    assert any(l.startswith("run_job") and l.endswith("commercial start-overdue-trials") for l in lines), \
+        "contract cl. 4 promises the 14-day trial fallback; it must be scheduled"
+    assert any(l.startswith("run_job") and l.endswith("documents purge-due") for l in lines), \
+        "the retention promise needs the purge to run"
+    # the SYNC pruning decision is untouched: still a dry run
+    assert not any("prune-events" in l and "--apply" in l for l in lines)
+
+
+def test_the_two_new_commands_are_registered_and_take_no_required_arguments(app):
+    for argv in (["commercial", "start-overdue-trials"], ["documents", "purge-due"]):
+        group = app.cli
+        for word in argv:
+            group = group.commands[word]
+        assert not [p for p in group.params if getattr(p, "required", False)]

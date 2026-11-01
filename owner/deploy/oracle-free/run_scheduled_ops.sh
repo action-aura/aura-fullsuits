@@ -112,6 +112,14 @@ run_job "leads purge-website --apply" leads purge-website --apply
 # within 24 hours (one alert email per obligation) and, as they land, the 15-day customer ownership lapse,
 # the end of a suspension and the effect of a termination notice. Idempotent (each row is stamped once).
 run_job "sellers scan --apply" sellers scan --apply
+# Added 2026-11-01 (feat/customer-notices). Shop agreement cl. 4 promises that an account nobody
+# activates starts its 7-day trial by itself 14 days after it was made; the command existed
+# (commercial start-overdue-trials, idempotent) but nothing ever ran it.
+run_job "commercial start-overdue-trials" commercial start-overdue-trials
+# Same date: the privacy notice promises ID / registration photos are deleted a year after
+# the customer (or the seller) is gone. This sets the dates, deletes what is due (audited)
+# and unlinks purged customers from their trial-device marks. Idempotent.
+run_job "documents purge-due" documents purge-due
 
 report_currency="$(env_value REPORT_CURRENCY)"
 if [ -z "$report_currency" ]; then
