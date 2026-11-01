@@ -1,7 +1,7 @@
 """cn1_customer_notices (contract copy mail, separate consents, retention, 2026-11-01)
 
 Revision ID: d7c3f1a9e254
-Revises: b5a9c2d7e418
+Revises: d4f8b2a6c137
 Create Date: 2026-11-01 14:00:00.000000
 
 The product changes the v2 shop agreement / privacy notice depend on (legal review
@@ -24,8 +24,8 @@ section (d)). All additive; old code running against this schema is unaffected.
                                      seller is disabled).
 
 NOTE FOR WHOEVER CHAINS THIS ON: `down_revision` below is the only line that decides
-where this migration sits. Another branch also adds a revision on b5a9c2d7e418; re-chain
-at merge.
+where this migration sits. This was re-chained at merge onto d4f8b2a6c137 (customer ownership),
+the head of release/seller-launch-owner.
 
 DOWNGRADE refuses while any consent row exists (consent evidence) and while any trial
 device mark has no customer (NOT NULL could not be restored without inventing a person).
@@ -36,8 +36,8 @@ import sqlalchemy as sa
 
 # --- the two lines to re-chain (re-chain at merge) --------------------------------
 revision = 'd7c3f1a9e254'  # pragma: allowlist secret -- an Alembic revision id, not a credential
-# re-chain at merge
-down_revision = 'b5a9c2d7e418'  # pragma: allowlist secret -- an Alembic revision id, not a credential
+# re-chained at merge onto the cash hand-in / customer ownership head
+down_revision = 'd4f8b2a6c137'  # pragma: allowlist secret -- an Alembic revision id, not a credential
 # -------------------------------------------------------------------------------
 branch_labels = None
 depends_on = None
