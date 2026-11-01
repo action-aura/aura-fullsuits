@@ -29,7 +29,7 @@ import sqlalchemy as sa
 # --- the two lines to re-chain -------------------------------------------------
 revision = 'c7d3e9a1b624'  # pragma: allowlist secret -- an Alembic revision id, not a credential
 # ---
-down_revision = 'b5a9c2d7e418'  # re-chain at merge  # pragma: allowlist secret -- an Alembic revision id, not a credential
+down_revision = 'd7c3f1a9e254'  # chained at merge (was b5a9c2d7e418)  # pragma: allowlist secret -- an Alembic revision id, not a credential
 # -------------------------------------------------------------------------------
 branch_labels = None
 depends_on = None
