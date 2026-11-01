@@ -7,6 +7,7 @@ from functools import wraps
 from flask import abort, jsonify, redirect, request, url_for
 from sqlalchemy import select
 
+from app.auth.safe_next import return_target
 from app.auth.session import COOKIE_NAME, has_recent_auth, load_current_staff
 from app.extensions import db_session
 from app.models.staff import Permission, Role, RolePermission, StaffRoleAssignment
@@ -49,8 +50,8 @@ def require_login(view):
             # longer matches a live session (idle timeout, signed out elsewhere,
             # revoked) is the case the message is for.
             if request.cookies.get(COOKIE_NAME):
-                return redirect(url_for("auth.login_form", next=request.path, reason="session_expired"))
-            return redirect(url_for("auth.login_form", next=request.path))
+                return redirect(url_for("auth.login_form", next=return_target(), reason="session_expired"))
+            return redirect(url_for("auth.login_form", next=return_target()))
         return view(*args, **kwargs)
 
     return wrapped
@@ -108,7 +109,7 @@ def require_recent_auth(view):
         if not has_recent_auth():
             if _wants_json():
                 return jsonify({"error": "recent_auth_required"}), 401
-            return redirect(url_for("auth.reauth_form", next=request.path))
+            return redirect(url_for("auth.reauth_form", next=return_target()))
         return view(*args, **kwargs)
 
     return wrapped

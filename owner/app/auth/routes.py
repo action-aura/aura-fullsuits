@@ -3,13 +3,12 @@ invitation accept (Part E/F/H)."""
 from __future__ import annotations
 
 from datetime import timedelta
-from urllib.parse import unquote, urlsplit
-
 from flask import Blueprint, current_app, make_response, redirect, render_template, request, session, url_for
 from flask_babel import gettext as _
 from sqlalchemy import select
 
 from app.audit.services import record as audit_record
+from app.auth.safe_next import safe_next
 from app.auth.services import authenticate, find_staff_by_email, mfa_is_mandatory
 from app.auth.session import (
     COOKIE_NAME,
@@ -52,33 +51,19 @@ def _qr_data_uri(uri: str) -> str:
 
 _PENDING_MFA_SESSION_KEY = "pending_mfa_staff_id"
 _PENDING_MFA_TTL_SECONDS = 300
+# The page the person asked for before being sent to sign in. Kept in the server-side
+# session across the extra authenticator-code step (the URL's ?next= is gone by then:
+# the code page is a different URL), then re-checked with safe_next at the moment of use.
+_PENDING_NEXT_SESSION_KEY = "pending_login_next"
 
 
-def _safe_next(value: str | None) -> str | None:
-    """Only ever redirect to a same-site relative path. Rejects absolute
-    URLs, protocol-relative '//host', and the backslash forms browsers
-    (WHATWG URL parsing) fold into '/' -- a leading slash plus a backslash,
-    or its percent-encoded form, both land on https://evil.com/ even though they start with a single '/'
-    (review D SEC-06). Percent-decoded and re-checked so an encoded
-    backslash or control character cannot slip through."""
-    if not value or not value.startswith("/"):
-        return None
-    candidates = (value, unquote(value), unquote(unquote(value)))
-    for cand in candidates:
-        if "\\" in cand or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in cand):
-            return None
-        if not cand.startswith("/") or cand.startswith("//"):
-            return None
-        parts = urlsplit(cand)
-        if parts.scheme or parts.netloc:
-            return None
-    return value
+_safe_next = safe_next  # historic name; tests and callers import it from here
 
 
 @bp.route("/login", methods=["GET"])
 def login_form():
     if load_current_staff() is not None:
-        return redirect(url_for("dashboard.index"))
+        return redirect(_safe_next(request.args.get("next")) or url_for("dashboard.index"))
     reason = request.args.get("reason")
     notice = _('Your session ended. Sign in again to continue.') if reason == "session_expired" else None
     response = make_response(render_template("auth/login.html", error=None, notice=notice))
@@ -112,7 +97,13 @@ def login_submit():
         return render_template("auth/login.html", error=message), 401
 
     has_mfa = staff.mfa_credential is not None and staff.mfa_credential.confirmed
+    # Overwritten on EVERY password step, so a value left by an abandoned earlier attempt
+    # can never be used by a later sign-in that asked for nothing.
+    session.pop(_PENDING_NEXT_SESSION_KEY, None)
+    wanted = _safe_next(request.args.get("next"))
     if has_mfa or mfa_is_mandatory(staff):
+        if wanted:
+            session[_PENDING_NEXT_SESSION_KEY] = wanted
         if not has_mfa:
             # MFA is mandatory for this account but not yet enrolled -- force enrollment before any session exists.
             session[_PENDING_MFA_SESSION_KEY] = str(staff.id)
@@ -130,7 +121,7 @@ def login_submit():
         entity_type="staff_user",
         entity_public_id=str(staff.id),
     )
-    response = redirect(_safe_next(request.args.get("next")) or url_for("dashboard.index"))
+    response = redirect(wanted or url_for("dashboard.index"))
     response.set_cookie(
         COOKIE_NAME, raw_token, httponly=True, samesite="Lax", secure=current_app.config["SESSION_COOKIE_SECURE"]
     )
@@ -209,7 +200,9 @@ def mfa_verify_submit():
         entity_type="staff_user",
         entity_public_id=str(staff.id),
     )
-    response = redirect(url_for("dashboard.index"))
+    # Back to the page they originally asked for (re-checked: the session value was
+    # validated when stored, but the redirect decision is made here, at the point of use).
+    response = redirect(_safe_next(session.pop(_PENDING_NEXT_SESSION_KEY, None)) or url_for("dashboard.index"))
     response.set_cookie(
         COOKIE_NAME, raw_token, httponly=True, samesite="Lax", secure=current_app.config["SESSION_COOKIE_SECURE"]
     )
