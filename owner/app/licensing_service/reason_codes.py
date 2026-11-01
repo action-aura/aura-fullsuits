@@ -56,6 +56,10 @@ PUBLIC_REASON_CODES = frozenset(
         "ACTIVATION_GRANT_INVALID",
         "PASSWORD_POLICY_FAILED",
         "CONTRACT_ACCEPTANCE_REQUIRED",
+        # The acceptance step's separate consent to host the shop's data outside Jordan was
+        # not given: the service cannot run without it, so the acceptance is refused and
+        # NOTHING is written (feat/customer-notices N2).
+        "CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED",
         "SERVICE_TEMPORARILY_UNAVAILABLE",
         "RATE_LIMITED",
         # Real-email wave: an installation is over one of its mail-relay caps.

@@ -353,6 +353,32 @@ def keep_for_customer_lifetime(customer_id) -> int:
     return len(rows)
 
 
+IDENTITY_KINDS = ("NATIONAL_ID", "COMMERCIAL_REGISTRATION")
+
+
+def remove_blob(document: CustomerDocument) -> bool:
+    """Deletes the encrypted file of a document. True when it is gone (or was already
+    missing). The file holds its own wrapped key, so removing it is what makes the
+    content unrecoverable. False = could not be removed (the caller records that)."""
+    try:
+        os.remove(_path_for(document))
+    except FileNotFoundError:
+        return True
+    except (OSError, DocumentError):
+        return False
+    return True
+
+
+def mark_identity_documents_purged(customer_id, *, now: datetime) -> list[CustomerDocument]:
+    """Stamps purged_at on every live ID / registration row of the customer. The caller
+    commits and THEN calls remove_blob() on each returned row, so a transaction that
+    rolls back never destroys a file. Payment slips are never touched (7-year duty)."""
+    rows = documents_of(customer_id, kinds=IDENTITY_KINDS)
+    for row in rows:
+        row.purged_at = now
+    return rows
+
+
 def purge_expired_documents(*, now: datetime | None = None, actor_staff_user_id=None) -> int:
     """Deletes the blob and marks the row purged for every document whose
     purge_after has passed. Idempotent (a purged row is skipped); the row itself

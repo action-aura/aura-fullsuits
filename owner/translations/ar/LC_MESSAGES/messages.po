@@ -11151,3 +11151,34 @@ msgstr "هذا العميل ملك لمندوب بالفعل، فلا يمكن �
 #: app/i18n_labels.py
 msgid "Only a seller can claim a customer."
 msgstr "المندوب وحده يستطيع تبنّي عميل."
+#: app/templates/customers/_consents.html
+msgid "Contract consents"
+msgstr "موافقات العقد"
+
+#: app/templates/customers/_consents.html
+msgid "ID verification by hand needed"
+msgstr "مطلوب التحقق من الهوية يدويًا"
+
+#: app/templates/customers/_consents.html
+msgid "The owner did not let Action Aura keep a photo of the ID and commercial registration, and the photos were deleted. Check the owner's identity by hand before relying on this account."
+msgstr "لم يسمح المالك لشركة Action Aura بالاحتفاظ بصورة الهوية والسجل التجاري، وقد حُذفت الصور. تحقق من هوية المالك يدويًا قبل الاعتماد على هذا الحساب."
+
+#: app/templates/customers/_consents.html
+msgid "Mark as verified by hand"
+msgstr "تم التحقق يدويًا"
+
+#: app/templates/customers/_consents.html
+msgid "Marked as verified by hand."
+msgstr "تم تسجيل التحقق اليدوي."
+
+#: app/templates/customers/_consents.html
+msgid "Photos of the owner's ID and commercial registration may be kept"
+msgstr "يجوز الاحتفاظ بصور هوية المالك والسجل التجاري"
+
+#: app/templates/customers/_consents.html
+msgid "The shop's data may be hosted outside Jordan"
+msgstr "يجوز استضافة بيانات المتجر خارج الأردن"
+
+#: app/templates/customers/_consents.html
+msgid "Not recorded"
+msgstr "غير مسجَّل"

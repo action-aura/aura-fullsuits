@@ -26,6 +26,7 @@ can be attached for the archive; it is encrypted like the customer documents.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import uuid
@@ -38,9 +39,17 @@ from sqlalchemy.exc import IntegrityError
 from app.audit.services import record as audit_record
 from app.customer_onboarding import documents
 from app.extensions import db_session
-from app.models.contracts import CONTRACT_AUDIENCES, CONTRACT_LANGUAGES, ContractAcceptance, ContractVersion
+from app.models.contracts import (
+    CONSENT_KINDS, CONTRACT_AUDIENCES, CONTRACT_LANGUAGES, ContractAcceptance, ContractConsent, ContractVersion,
+)
+from app.models.customers import Customer
+
+logger = logging.getLogger(__name__)
 
 MAX_BODY_CHARS = 200_000
+# The stable code the acceptance step is refused with when the customer did not agree to
+# host the shop's data outside Jordan (the service cannot run without it).
+CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED = "CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED"
 _LABEL_RE = re.compile(r"^[A-Za-z0-9._ -]{1,64}$")
 
 
@@ -247,16 +256,28 @@ def customer_gate_is_open(customer_id, account_language: str | None) -> bool:
 def record_customer_acceptance(
     *, account, version: ContractVersion, text_sha256: str, language: str, device_key_fingerprint: str,
     device_signature: str | None, ip: str | None, app_version: str | None, installation_label: str | None,
+    consents: dict | None = None,
 ) -> ContractAcceptance:
     """Appends the evidence row (idempotent: the same customer accepting the same
     version again returns the existing row). Refuses a version of the wrong
-    audience, one that is not live, or a hash that is not the stored text's."""
+    audience, one that is not live, or a hash that is not the stored text's.
+
+    `consents` ({"id_documents": bool, "data_outside_jordan": bool}, any subset) is the
+    acceptance step's two SEPARATE consents. None = an older app build: nothing is
+    recorded, nothing changes. Given: data_outside_jordan must be literally True, else the
+    acceptance is refused with CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED and nothing is written
+    (checked BEFORE the idempotent lookup, so a repeat cannot smuggle a refusal in). Both
+    answers are stored with the acceptance. id_documents False: the acceptance stands, the
+    customer's ID and commercial-registration photos are deleted and the customer is
+    flagged for verification by hand."""
     if version.audience != "CUSTOMER":
         raise ContractError("WRONG_AUDIENCE")
     if version.published_at is None or version.retired_at is not None:
         raise ContractError("VERSION_NOT_LIVE")
     if (text_sha256 or "").strip().lower() != version.body_sha256:
         raise ContractError("TEXT_MISMATCH")
+    if consents is not None and consents.get("data_outside_jordan") is not True:
+        raise ContractError(CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED)
     existing = db_session.execute(
         select(ContractAcceptance).where(
             ContractAcceptance.customer_id == account.customer_id, ContractAcceptance.contract_version_id == version.id
@@ -272,7 +293,10 @@ def record_customer_acceptance(
         accepted_at=_now(),
     )
     db_session.add(row)
+    purged_documents: list = []
     try:
+        if consents is not None:
+            purged_documents = _stage_consents(row, account, consents, installation_label)
         db_session.commit()
     except IntegrityError:
         db_session.rollback()  # two devices accepted at the same instant: the first row is the evidence
@@ -291,8 +315,49 @@ def record_customer_acceptance(
     # lost race return above -- and the notice is deduped per acceptance as well.
     from app.mail import notices
 
-    notices.queue_contract_copy(row, version, audience="CUSTOMER", to_address=account.email, lang=account.language)
+    if consents is not None:
+        _finish_consents(row, account, consents, purged_documents)
+    notices.queue_contract_copy(
+        row, version, audience="CUSTOMER", to_address=account.email, lang=account.language, consents=consents)
     return row
+
+
+def _stage_consents(row: ContractAcceptance, account, consents: dict, installation_label: str | None) -> list:
+    """Adds the consent rows (and, for a refused id_documents, the flag and the purged
+    marks) to the SAME transaction as the acceptance. Returns the documents whose files
+    must be removed AFTER the commit. flush() first: the acceptance id the rows point at."""
+    db_session.flush()
+    at = row.accepted_at
+    for kind in CONSENT_KINDS:
+        if kind in consents:
+            db_session.add(ContractConsent(
+                acceptance_id=row.id, customer_id=account.customer_id, kind=kind, given=consents[kind] is True,
+                given_at=at, installation_id=(installation_label or "")[:128] or None,
+            ))
+    if consents.get("id_documents") is not False:
+        return []
+    db_session.get(Customer, account.customer_id).manual_id_verification_required_at = at
+    return documents.mark_identity_documents_purged(account.customer_id, now=at)
+
+
+def _finish_consents(row: ContractAcceptance, account, consents: dict, purged: list) -> None:
+    """After the commit: remove the refused photos' files and leave the audit trail."""
+    not_removed = [str(d.id) for d in purged if not documents.remove_blob(d)]
+    audit_record(
+        actor_staff_user_id=None, actor_role_snapshot=None, action_code="CONTRACT_CONSENTS_RECORDED",
+        entity_type="contract_acceptance", entity_public_id=str(row.id),
+        after_state={"customer_id": str(account.customer_id),
+                     "consents": {kind: consents[kind] for kind in CONSENT_KINDS if kind in consents}},
+    )
+    if consents.get("id_documents") is False:
+        audit_record(
+            actor_staff_user_id=None, actor_role_snapshot=None, action_code="CUSTOMER_ID_DOCUMENTS_DELETED_ON_REFUSAL",
+            entity_type="customer", entity_public_id=str(account.customer_id),
+            after_state={"documents_deleted": len(purged), "files_not_removed": not_removed,
+                         "manual_verification_required": True},
+        )
+        if not_removed:
+            logger.error("customer refused to keep ID photos; %d file(s) could not be removed", len(not_removed))
 
 
 def seller_has_accepted(staff_user_id, version_id) -> bool:
@@ -415,7 +480,7 @@ def seller_copy_text(acceptance: ContractAcceptance, version: ContractVersion) -
 
 # ------------------------------------------------------------------ evidence
 
-def _acceptance_json(row: ContractAcceptance, version: ContractVersion) -> dict:
+def _acceptance_json(row: ContractAcceptance, version: ContractVersion, consents: list | None = None) -> dict:
     return {
         "acceptance_id": str(row.id), "audience": row.audience, "accepted_at": row.accepted_at.isoformat(),
         "customer_id": str(row.customer_id) if row.customer_id else None,
@@ -424,6 +489,8 @@ def _acceptance_json(row: ContractAcceptance, version: ContractVersion) -> dict:
         "email": row.email_snapshot, "language": row.language, "text_sha256": row.text_sha256,
         "device_key_fingerprint": row.device_key_fingerprint, "device_signature": row.device_signature,
         "installation_label": row.installation_id, "ip": row.ip, "app_version": row.app_version,
+        # [] = the app sent no "consents" object (an older build); recorded answers otherwise.
+        "consents": consents or [],
         "contract": {
             "version_id": str(version.id), "version_label": version.version_label, "title": version.title,
             "language": version.language, "sha256": version.body_sha256, "lawyer_approved": version.lawyer_approved,
@@ -432,13 +499,28 @@ def _acceptance_json(row: ContractAcceptance, version: ContractVersion) -> dict:
     }
 
 
+def _consents_by_acceptance(acceptance_ids: list) -> dict:
+    if not acceptance_ids:
+        return {}
+    found: dict = {}
+    for consent in db_session.execute(
+        select(ContractConsent).where(ContractConsent.acceptance_id.in_(acceptance_ids)).order_by(ContractConsent.kind)
+    ).scalars():
+        found.setdefault(consent.acceptance_id, []).append({
+            "kind": consent.kind, "given": consent.given, "given_at": consent.given_at.isoformat(),
+            "installation_id": consent.installation_id,
+        })
+    return found
+
+
 def _evidence(rows: list[ContractAcceptance], subject: dict) -> dict:
     versions = {}
     out = []
+    consents_of = _consents_by_acceptance([row.id for row in rows])
     for row in rows:
         version = versions.get(row.contract_version_id) or db_session.get(ContractVersion, row.contract_version_id)
         versions[row.contract_version_id] = version
-        out.append(_acceptance_json(row, version))
+        out.append(_acceptance_json(row, version, consents_of.get(row.id)))
     return {"format": "aura-contract-evidence-v1", "generated_at": _now().isoformat(), "subject": subject,
             "acceptances": out}
 

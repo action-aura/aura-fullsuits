@@ -80,7 +80,7 @@ def queue_notice(
 # ------------------------------------------------------------ contract copy
 
 def queue_contract_copy(acceptance, version, *, audience: str, to_address: str | None, lang: str | None,
-                        link: str | None = None) -> bool:
+                        link: str | None = None, consents: dict | None = None) -> bool:
     """The acceptance evidence (title, version, SHA-256, time in Amman, device) plus the
     exact text accepted, mailed to the person who accepted. `audience` is CUSTOMER or
     SELLER; the SELLER copy also carries a link to the signed-in copy download."""
@@ -103,6 +103,16 @@ def queue_contract_copy(acceptance, version, *, audience: str, to_address: str |
             where_ar,
         ],
     }
+    if consents:
+        yes_no = {True: ("yes", "نعم"), False: ("no", "لا")}
+        if "id_documents" in consents:
+            en, ar = yes_no[consents["id_documents"] is True]
+            lines["en"].append(f"Your choice, keep a photo of your ID and commercial registration: {en}")
+            lines["ar"].append(f"اختيارك، الاحتفاظ بصورة هويتك وسجلك التجاري: {ar}")
+        if "data_outside_jordan" in consents:
+            en, ar = yes_no[consents["data_outside_jordan"] is True]
+            lines["en"].append(f"Your choice, host your shop's data outside Jordan: {en}")
+            lines["ar"].append(f"اختيارك، استضافة بيانات متجرك خارج الأردن: {ar}")
     appendix = f"{version.title}\n{'=' * min(max(len(version.title), 8), 72)}\n\n{version.body}\n"
     return queue_notice(
         kind, to_address, lang=lang, dedupe_key=f"{kind}:{acceptance.id}", lines=lines, link=link, appendix=appendix)

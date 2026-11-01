@@ -1,0 +1,28 @@
+{# feat/customer-notices N2: what the customer answered at the acceptance step, and the
+   "ID verification by hand needed" flag. Rendered only when something was recorded
+   (customer_onboarding/consents_panel.py). #}
+{% set cp = consents_panel %}
+<div class="card" id="consents-card" data-id-verification-needed="{{ '1' if cp.flagged_at else '0' }}">
+  <h3>{{ _("Contract consents") }}</h3>
+  {% if cp.flagged_at %}
+  <p class="badge danger" data-id-verification-flag="1">{{ _("ID verification by hand needed") }}</p>
+  <p>{{ _("The owner did not let Action Aura keep a photo of the ID and commercial registration, and the photos were deleted. Check the owner's identity by hand before relying on this account.") }}</p>
+  {% if cp.can_mark_verified %}
+  <form method="post" action="{{ url_for('customers.mark_id_verified', customer_id=customer.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">{{ _("Mark as verified by hand") }}</button>
+  </form>
+  {% endif %}
+  {% endif %}
+  <dl class="kv">
+    {% for kind, label in (("id_documents", _("Photos of the owner's ID and commercial registration may be kept")), ("data_outside_jordan", _("The shop's data may be hosted outside Jordan"))) %}
+    <dt>{{ label }}</dt>
+    <dd data-consent-kind="{{ kind }}">
+      {% if cp.latest.get(kind) %}
+        {% if cp.latest[kind].given %}{{ _("Yes") }}{% else %}{{ _("No") }}{% endif %}
+        &middot; {{ format_owner_date(cp.latest[kind].given_at) }}
+      {% else %}{{ _("Not recorded") }}{% endif %}
+    </dd>
+    {% endfor %}
+  </dl>
+</div>
