@@ -10972,3 +10972,159 @@ msgstr "Sales tax %(rate)s (included)"
 #: app/templates/commercial_sales/invoice_detail.html
 msgid "Prices include %(rate)s general sales tax"
 msgstr "Prices include %(rate)s general sales tax"
+
+#: app/templates/sellers
+msgid "Cash to hand in"
+msgstr "Cash to hand in"
+
+#: app/templates/sellers
+msgid "Cash you collect from a customer belongs to the company. Hand in the whole amount within 24 hours, by bank transfer (upload the slip here) or at the office. Do not take your commission out of it."
+msgstr "Cash you collect from a customer belongs to the company. Hand in the whole amount within 24 hours, by bank transfer (upload the slip here) or at the office. Do not take your commission out of it."
+
+#: app/templates/sellers
+msgid "Hand in before"
+msgstr "Hand in before"
+
+#: app/templates/sellers
+msgid "%(hours)s hours left"
+msgstr "%(hours)s hours left"
+
+#: app/templates/sellers
+msgid "Slip waiting for a manager"
+msgstr "Slip waiting for a manager"
+
+#: app/templates/sellers
+msgid "Your last slip was rejected: %(reason)s"
+msgstr "Your last slip was rejected: %(reason)s"
+
+#: app/templates/sellers
+msgid "Bank-transfer slip"
+msgstr "Bank-transfer slip"
+
+#: app/templates/sellers
+msgid "Upload the slip"
+msgstr "Upload the slip"
+
+#: app/templates/sellers
+msgid "You have no cash to hand in."
+msgstr "You have no cash to hand in."
+
+#: app/templates/sellers
+msgid "Handed in at the office? A manager marks it received. A slip you upload is checked by a manager."
+msgstr "Handed in at the office? A manager marks it received. A slip you upload is checked by a manager."
+
+#: app/templates/sellers
+msgid "Sellers' cash hand-in"
+msgstr "Sellers' cash hand-in"
+
+#: app/templates/sellers
+msgid "Cash that sellers collected and must hand in within 24 hours. Overdue ones are at the top. Being overdue starts nothing by itself: open a sanction case if it needs one."
+msgstr "Cash that sellers collected and must hand in within 24 hours. Overdue ones are at the top. Being overdue starts nothing by itself: open a sanction case if it needs one."
+
+#: app/templates/sellers
+msgid "Show only what is still owed"
+msgstr "Show only what is still owed"
+
+#: app/templates/sellers
+msgid "Also show what was received"
+msgstr "Also show what was received"
+
+#: app/templates/sellers
+msgid "Slip to check"
+msgstr "Slip to check"
+
+#: app/templates/sellers
+msgid "Received (slip)"
+msgstr "Received (slip)"
+
+#: app/templates/sellers
+msgid "Received at the office"
+msgstr "Received at the office"
+
+#: app/templates/sellers
+msgid "Open the slip"
+msgstr "Open the slip"
+
+#: app/templates/sellers
+msgid "Confirm the slip"
+msgstr "Confirm the slip"
+
+#: app/templates/sellers
+msgid "Why is the slip rejected?"
+msgstr "Why is the slip rejected?"
+
+#: app/templates/sellers
+msgid "Reject the slip"
+msgstr "Reject the slip"
+
+#: app/templates/sellers
+msgid "Cash received at the office"
+msgstr "Cash received at the office"
+
+#: app/templates/sellers
+msgid "No cash is waiting to be handed in."
+msgstr "No cash is waiting to be handed in."
+
+#: app/sellers/cash_routes.py
+msgid "The slip is uploaded. A manager will check it."
+msgstr "The slip is uploaded. A manager will check it."
+
+#: app/sellers/cash_routes.py
+msgid "Marked as received."
+msgstr "Marked as received."
+
+#: app/sellers/cash_routes.py
+msgid "The slip is rejected. The seller must hand in the cash again."
+msgstr "The slip is rejected. The seller must hand in the cash again."
+
+#: app/templates/dashboard/index.html
+msgid "To hand in"
+msgstr "To hand in"
+
+#: app/templates/dashboard/index.html
+msgid "Next deadline: %(when)s"
+msgstr "Next deadline: %(when)s"
+
+#: app/i18n_labels.py
+msgid "That cash payment does not exist."
+msgstr "That cash payment does not exist."
+
+#: app/i18n_labels.py
+msgid "This cash payment is not waiting for a slip."
+msgstr "This cash payment is not waiting for a slip."
+
+#: app/i18n_labels.py
+msgid "This cash payment was already received."
+msgstr "This cash payment was already received."
+
+#: app/i18n_labels.py
+msgid "There is no uploaded slip to confirm or reject."
+msgstr "There is no uploaded slip to confirm or reject."
+
+#: app/i18n_labels.py
+msgid "You cannot receive your own cash; another manager must."
+msgstr "You cannot receive your own cash; another manager must."
+
+#: app/i18n_labels.py
+msgid "Choose the bank-transfer slip to upload."
+msgstr "Choose the bank-transfer slip to upload."
+
+#: app/i18n_labels.py
+msgid "The slip must be a JPEG, PNG or PDF file."
+msgstr "The slip must be a JPEG, PNG or PDF file."
+
+#: app/i18n_labels.py
+msgid "The slip file is too large (10 MB at most)."
+msgstr "The slip file is too large (10 MB at most)."
+
+#: app/i18n_labels.py
+msgid "The slip file could not be read."
+msgstr "The slip file could not be read."
+
+#: app/i18n_labels.py
+msgid "Slips cannot be stored on this server yet. Nothing was saved. Ask the administrator."
+msgstr "Slips cannot be stored on this server yet. Nothing was saved. Ask the administrator."
+
+#: app/i18n_labels.py
+msgid "Write why the slip is rejected."
+msgstr "Write why the slip is rejected."

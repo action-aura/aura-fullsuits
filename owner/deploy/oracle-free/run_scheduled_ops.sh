@@ -108,6 +108,10 @@ run_job "commercial apply-licence-stops --apply" commercial apply-licence-stops 
 # after 24 months, including the copy the website intake puts in the CRM. Only
 # unconverted WEBSITE leads; a lead that became a customer or a quote is kept.
 run_job "leads purge-website --apply" leads purge-website --apply
+# Added 2026-11-01: the seller agreement's rules that run on a clock -- cash a seller has not handed in
+# within 24 hours (one alert email per obligation) and, as they land, the 15-day customer ownership lapse,
+# the end of a suspension and the effect of a termination notice. Idempotent (each row is stamped once).
+run_job "sellers scan --apply" sellers scan --apply
 
 report_currency="$(env_value REPORT_CURRENCY)"
 if [ -z "$report_currency" ]; then

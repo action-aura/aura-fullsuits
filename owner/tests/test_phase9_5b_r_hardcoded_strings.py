@@ -54,6 +54,9 @@ GATED_DIRS = (
     # Seller ID photo (app/seller_id/): the seller's upload page. Registered so it is scanned
     # like every other template and the all-directories guard stays green.
     "seller_id",
+    # Seller agreement rules (app/sellers/): cash to hand in, open customers, sanction cases. Registered so
+    # every one of those templates is scanned for untranslated text like all the others.
+    "sellers",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form

@@ -249,6 +249,13 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.commissions.statement_routes import bp as commission_statements_bp
 
     app.register_blueprint(commission_statements_bp)
+    # Seller agreement clause 7: the seller's cash to hand in within 24 hours, and the managers' page.
+    from app.sellers.cash_routes import bp as seller_cash_bp
+
+    app.register_blueprint(seller_cash_bp)
+    from app.sellers.cli import register_cli as register_sellers_cli
+
+    register_sellers_cli(app)
     app.jinja_env.globals["customer_accounts_enabled"] = lambda: bool(app.config.get("CUSTOMER_ACCOUNTS_ENABLED"))
 
     if app.config.get("EXTERNAL_API_ENABLED"):

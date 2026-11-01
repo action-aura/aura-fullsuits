@@ -158,6 +158,12 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("commissions.pay", "COMMISSIONS", "Approve a commission payout batch"),
     ("commissions.reverse", "COMMISSIONS", "Reverse a commission ledger entry"),
     ("commission_objections.answer", "COMMISSIONS", "Answer a seller's objection to a monthly commission statement (accept or reject, with a written reply)"),
+    # Seller agreement clauses 7, 8, 16, 17: a seller's own standing. self_service = the seller's own
+    # cash to hand in, own sanction cases, claiming an open customer, ending their own agreement;
+    # discipline = a manager opening / deciding sanction cases and ending a seller's agreement
+    # (Super Admin via the wildcard). The manager cash page uses payments.confirm, as the clause says.
+    ("sellers.self_service", "SELLERS", "A seller's own standing: cash to hand in, own sanction cases, claim an open customer, end own agreement"),
+    ("sellers.discipline", "SELLERS", "Open and decide seller sanction cases and end a seller's agreement"),
     ("expenses.create", "EXPENSES", "Create/submit an expense"),
     ("expenses.view_own", "EXPENSES", "View own submitted expenses"),
     ("expenses.view_all", "EXPENSES", "View all expenses"),
@@ -256,6 +262,7 @@ ROLES: dict[str, dict] = {
             # phase requires everywhere else.
             "payments.create",
             "commissions.view_own",
+            "sellers.self_service",
             "expenses.create", "expenses.view_own",
             "device_policy.view",
             "dashboard.view_own", "reports.view_own",
@@ -333,6 +340,7 @@ ROLES: dict[str, dict] = {
             # Clause 5 of the seller agreement: the Sales Manager answers the sellers' objections
             # to their monthly statements within 2 working days (Super Admin via the wildcard).
             "commission_objections.answer",
+            "sellers.discipline",
             "expenses.create", "expenses.view_own",
             "device_policy.view",
             "dashboard.view_own", "dashboard.view_all", "reports.view_own", "reports.view_all",
