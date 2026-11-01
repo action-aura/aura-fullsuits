@@ -10960,3 +10960,447 @@ msgstr "Not on file"
 #: app/templates/employees/detail.html
 msgid "Choose a new photo to replace the one on file. Leave it empty to keep it."
 msgstr "Choose a new photo to replace the one on file. Leave it empty to keep it."
+
+#: app/i18n_labels.py
+msgid "This trial started before its seller's agreement ended, so its first payment is credited to that seller. Leave the seller as they are."
+msgstr "This trial started before its seller's agreement ended, so its first payment is credited to that seller. Leave the seller as they are."
+
+#: app/i18n_labels.py
+msgid "This commission is withheld by sanction case %(case_number)s and cannot be approved or paid."
+msgstr "This commission is withheld by sanction case %(case_number)s and cannot be approved or paid."
+
+#: app/i18n_labels.py
+msgid "This person is not a seller."
+msgstr "This person is not a seller."
+
+#: app/i18n_labels.py
+msgid "This seller's account is not active."
+msgstr "This seller's account is not active."
+
+#: app/i18n_labels.py
+msgid "Choose a kind of sanction."
+msgstr "Choose a kind of sanction."
+
+#: app/i18n_labels.py
+msgid "Choose what the violation is."
+msgstr "Choose what the violation is."
+
+#: app/i18n_labels.py
+msgid "Write the reason."
+msgstr "Write the reason."
+
+#: app/i18n_labels.py
+msgid "You cannot do this about yourself; another manager must."
+msgstr "You cannot do this about yourself; another manager must."
+
+#: app/i18n_labels.py
+msgid "This kind of violation ends the agreement at once. Choose Termination."
+msgstr "This kind of violation ends the agreement at once. Choose Termination."
+
+#: app/i18n_labels.py
+msgid "Choose a suspension end date in the future."
+msgstr "Choose a suspension end date in the future."
+
+#: app/i18n_labels.py
+msgid "Choose the deal whose commission is withheld."
+msgstr "Choose the deal whose commission is withheld."
+
+#: app/i18n_labels.py
+msgid "That deal does not belong to this seller."
+msgstr "That deal does not belong to this seller."
+
+#: app/i18n_labels.py
+msgid "That deal already has a commission-withholding case."
+msgstr "That deal already has a commission-withholding case."
+
+#: app/i18n_labels.py
+msgid "The link to the sale, payment or customer is not valid."
+msgstr "The link to the sale, payment or customer is not valid."
+
+#: app/i18n_labels.py
+msgid "That case does not exist."
+msgstr "That case does not exist."
+
+#: app/i18n_labels.py
+msgid "Write your reply."
+msgstr "Write your reply."
+
+#: app/i18n_labels.py
+msgid "This case is not waiting for your reply."
+msgstr "This case is not waiting for your reply."
+
+#: app/i18n_labels.py
+msgid "This case has already been decided."
+msgstr "This case has already been decided."
+
+#: app/i18n_labels.py
+msgid "The seller has until %(due_at)s to reply. A sanction can be applied after they reply or after that time."
+msgstr "The seller has until %(due_at)s to reply. A sanction can be applied after they reply or after that time."
+
+#: app/i18n_labels.py
+msgid "The suspension end date has already passed. Drop this case and open a new one."
+msgstr "The suspension end date has already passed. Drop this case and open a new one."
+
+#: app/i18n_labels.py
+msgid "You can only end your own agreement."
+msgstr "You can only end your own agreement."
+
+#: app/i18n_labels.py
+msgid "Only a manager can choose who receives the customers."
+msgstr "Only a manager can choose who receives the customers."
+
+#: app/i18n_labels.py
+msgid "Choose another active seller to receive the customers."
+msgstr "Choose another active seller to receive the customers."
+
+#: app/i18n_labels.py
+msgid "This agreement is already ending."
+msgstr "This agreement is already ending."
+
+#: app/i18n_labels.py
+msgid "Choose a seller."
+msgstr "Choose a seller."
+
+#: app/i18n_labels.py
+msgid "Written warning"
+msgstr "Written warning"
+
+#: app/i18n_labels.py
+msgid "Suspension of the account"
+msgstr "Suspension of the account"
+
+#: app/i18n_labels.py
+msgid "Withholding the commission of a deal"
+msgstr "Withholding the commission of a deal"
+
+#: app/i18n_labels.py
+msgid "Termination of the agreement"
+msgstr "Termination of the agreement"
+
+#: app/i18n_labels.py
+msgid "Waiting for the seller's reply"
+msgstr "Waiting for the seller's reply"
+
+#: app/i18n_labels.py
+msgid "The seller replied"
+msgstr "The seller replied"
+
+#: app/i18n_labels.py
+msgid "Dropped"
+msgstr "Dropped"
+
+#: app/i18n_labels.py
+msgid "Another violation (the seller replies first)"
+msgstr "Another violation (the seller replies first)"
+
+#: app/i18n_labels.py
+msgid "Tampering with, or keeping, company money (ends the agreement at once)"
+msgstr "Tampering with, or keeping, company money (ends the agreement at once)"
+
+#: app/i18n_labels.py
+msgid "Disclosing confidential information (ends the agreement at once)"
+msgstr "Disclosing confidential information (ends the agreement at once)"
+
+#: app/i18n_labels.py
+msgid "Reverse engineering, or selling outside the company's channels (ends the agreement at once)"
+msgstr "Reverse engineering, or selling outside the company's channels (ends the agreement at once)"
+
+#: app/seller_discipline/routes.py
+msgid "Your reply is recorded. The company will read it before deciding."
+msgstr "Your reply is recorded. The company will read it before deciding."
+
+#: app/seller_discipline/routes.py
+msgid "Tick the box to confirm that you want to end your agreement."
+msgstr "Tick the box to confirm that you want to end your agreement."
+
+#: app/seller_discipline/routes.py
+msgid "Your agreement will end on %(when)s. You can keep working until then."
+msgstr "Your agreement will end on %(when)s. You can keep working until then."
+
+#: app/seller_discipline/routes.py
+msgid "The case is open and the seller has been told."
+msgstr "The case is open and the seller has been told."
+
+#: app/seller_discipline/routes.py
+msgid "The sanction is applied and the seller has been told."
+msgstr "The sanction is applied and the seller has been told."
+
+#: app/seller_discipline/routes.py
+msgid "The case is dropped and the seller has been told."
+msgstr "The case is dropped and the seller has been told."
+
+#: app/seller_discipline/routes.py
+msgid "Tick the box to confirm."
+msgstr "Tick the box to confirm."
+
+#: app/seller_discipline/routes.py
+msgid "The agreement will end on %(when)s. The seller has been told."
+msgstr "The agreement will end on %(when)s. The seller has been told."
+
+#: app/templates/commissions/objection.html
+msgid "Withheld"
+msgstr "Withheld"
+
+#: app/templates/commissions/statement.html
+msgid "Withheld (case %(n)s)"
+msgstr "Withheld (case %(n)s)"
+
+#: app/templates/commissions/statement.html
+msgid "Withheld means the company has held back the commission of that deal after a sanction case; you can read the case under My cases."
+msgstr "Withheld means the company has held back the commission of that deal after a sanction case; you can read the case under My cases."
+
+#: app/templates/dashboard/index.html
+msgid "Your agreement ends on %(when)s. You can keep working until then."
+msgstr "Your agreement ends on %(when)s. You can keep working until then."
+
+#: app/templates/dashboard/index.html
+msgid "The company is waiting for your reply to a notice. Open it now."
+msgstr "The company is waiting for your reply to a notice. Open it now."
+
+#: app/templates/dashboard/index.html
+msgid "Seller discipline"
+msgstr "Seller discipline"
+
+#: app/templates/dashboard/index.html
+msgid "Open cases"
+msgstr "Open cases"
+
+#: app/templates/dashboard/index.html
+msgid "Cases that can be decided now"
+msgstr "Cases that can be decided now"
+
+#: app/templates/profile/index.html
+msgid "My seller agreement"
+msgstr "My seller agreement"
+
+#: app/templates/profile/index.html
+msgid "You can end your agreement at any time. It ends 7 days after you press the button, and you keep working until then. Customers you registered return to the company, except those whose free trial had already started: if they pay at its end, your commission is still due."
+msgstr "You can end your agreement at any time. It ends 7 days after you press the button, and you keep working until then. Customers you registered return to the company, except those whose free trial had already started: if they pay at its end, your commission is still due."
+
+#: app/templates/profile/index.html
+msgid "Reason (optional)"
+msgstr "Reason (optional)"
+
+#: app/templates/profile/index.html
+msgid "I want to end my seller agreement."
+msgstr "I want to end my seller agreement."
+
+#: app/templates/profile/index.html
+msgid "End my agreement"
+msgstr "End my agreement"
+
+#: app/templates/profile/index.html
+msgid "My cases"
+msgstr "My cases"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Case"
+msgstr "Case"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Opened"
+msgstr "Opened"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Reply by"
+msgstr "Reply by"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Suspended until the end of"
+msgstr "Suspended until the end of"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Deal"
+msgstr "Deal"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "The reason"
+msgstr "The reason"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "The seller's reply"
+msgstr "The seller's reply"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "The seller has not replied yet."
+msgstr "The seller has not replied yet."
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "This case is about you. Another manager must decide it."
+msgstr "This case is about you. Another manager must decide it."
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "The seller has until %(when)s to reply. You can apply a sanction after they reply or after that time."
+msgstr "The seller has until %(when)s to reply. You can apply a sanction after they reply or after that time."
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Note (optional, the seller will read it)"
+msgstr "Note (optional, the seller will read it)"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Apply the sanction"
+msgstr "Apply the sanction"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Drop the case"
+msgstr "Drop the case"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "The decision"
+msgstr "The decision"
+
+#: app/templates/seller_discipline/case_detail.html
+msgid "Back to all cases"
+msgstr "Back to all cases"
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "End a seller's agreement"
+msgstr "End a seller's agreement"
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "The agreement ends %(days)s days after you press the button. The seller keeps working until then. When it ends the account closes; customers whose free trial had already started stay credited to the seller for their first payment; every other customer of the seller returns to the company."
+msgstr "The agreement ends %(days)s days after you press the button. The seller keeps working until then. When it ends the account closes; customers whose free trial had already started stay credited to the seller for their first payment; every other customer of the seller returns to the company."
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "Pick the seller"
+msgstr "Pick the seller"
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "Give the returning customers to (optional)"
+msgstr "Give the returning customers to (optional)"
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "Nobody: they return to the company"
+msgstr "Nobody: they return to the company"
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "I understand that this ends the seller's agreement."
+msgstr "I understand that this ends the seller's agreement."
+
+#: app/templates/seller_discipline/end_agreement.html
+msgid "End the agreement"
+msgstr "End the agreement"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Sanction cases (the seller replies within 2 working days before any sanction is applied) and sellers whose agreement is ending."
+msgstr "Sanction cases (the seller replies within 2 working days before any sanction is applied) and sellers whose agreement is ending."
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Open a case"
+msgstr "Open a case"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Can be decided"
+msgstr "Can be decided"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "No cases yet."
+msgstr "No cases yet."
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Agreements ending"
+msgstr "Agreements ending"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Started by"
+msgstr "Started by"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Ends on"
+msgstr "Ends on"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "The seller"
+msgstr "The seller"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "The company"
+msgstr "The company"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Ended"
+msgstr "Ended"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "Notice running"
+msgstr "Notice running"
+
+#: app/templates/seller_discipline/manager_index.html
+msgid "No agreement is ending."
+msgstr "No agreement is ending."
+
+#: app/templates/seller_discipline/my_case.html
+msgid "Suspension until the end of"
+msgstr "Suspension until the end of"
+
+#: app/templates/seller_discipline/my_case.html
+msgid "What the company says"
+msgstr "What the company says"
+
+#: app/templates/seller_discipline/my_case.html
+msgid "You have until %(when)s to reply. After that the company may decide."
+msgstr "You have until %(when)s to reply. After that the company may decide."
+
+#: app/templates/seller_discipline/my_case.html
+msgid "Your reply"
+msgstr "Your reply"
+
+#: app/templates/seller_discipline/my_case.html
+msgid "Write your reply"
+msgstr "Write your reply"
+
+#: app/templates/seller_discipline/my_case.html
+msgid "Send my reply"
+msgstr "Send my reply"
+
+#: app/templates/seller_discipline/my_case.html
+msgid "Back to my cases"
+msgstr "Back to my cases"
+
+#: app/templates/seller_discipline/my_cases.html
+msgid "Notices the company has sent you about your seller agreement. You always have 2 working days to reply before any sanction is applied."
+msgstr "Notices the company has sent you about your seller agreement. You always have 2 working days to reply before any sanction is applied."
+
+#: app/templates/seller_discipline/my_cases.html
+msgid "Your agreement ends on %(when)s."
+msgstr "Your agreement ends on %(when)s."
+
+#: app/templates/seller_discipline/my_cases.html
+msgid "You have no cases."
+msgstr "You have no cases."
+
+#: app/templates/seller_discipline/new_case.html
+msgid "Continue"
+msgstr "Continue"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "Kind of sanction"
+msgstr "Kind of sanction"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "What happened"
+msgstr "What happened"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "The first three choices end the agreement at once, with no reply period. Choose Termination of the agreement for them. Any other violation gives the seller 2 working days to reply first."
+msgstr "The first three choices end the agreement at once, with no reply period. Choose Termination of the agreement for them. Any other violation gives the seller 2 working days to reply first."
+
+#: app/templates/seller_discipline/new_case.html
+msgid "Reason (the seller will read this)"
+msgstr "Reason (the seller will read this)"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "Suspension: suspended until the end of this date"
+msgstr "Suspension: suspended until the end of this date"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "The deal (required to withhold its commission)"
+msgstr "The deal (required to withhold its commission)"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "No deal"
+msgstr "No deal"
+
+#: app/templates/seller_discipline/new_case.html
+msgid "Open the case and tell the seller"
+msgstr "Open the case and tell the seller"

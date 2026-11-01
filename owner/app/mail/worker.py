@@ -90,6 +90,18 @@ class EmailWorker:
                 self.run_once()
             except Exception:  # noqa: BLE001 -- a dead timer chain would stop all mail for good
                 log.exception("owner mail: worker tick crashed")
+            # Seller agreement clauses 16-17: suspensions that end, notices that run out (the same tick,
+            # no second thread; also `flask seller-discipline scan`, and the sign-in itself settles).
+            try:
+                with self._app.app_context():
+                    try:
+                        from app.seller_discipline.scan import run_due
+
+                        run_due()
+                    finally:
+                        db_session.remove()
+            except Exception:  # noqa: BLE001
+                log.exception("seller discipline: periodic pass crashed")
             finally:
                 self._schedule_next(interval_seconds)
 

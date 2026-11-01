@@ -206,6 +206,15 @@ def approve_commission_entry(entry: CommissionLedgerEntry, *, actor_staff_user_i
         db_session.rollback()
         raise CommissionError("COMMISSION_ON_HOLD", payable_after=payable_after.isoformat())
 
+    # Seller agreement clause 16: the commission of a deal under an applied COMMISSION_WITHHOLD
+    # sanction is held back from payout (seller_discipline/withhold.py -- the case IS the flag).
+    from app.seller_discipline.withhold import case_withholding_entry
+
+    withheld_by = case_withholding_entry(entry)
+    if withheld_by is not None:
+        db_session.rollback()
+        raise CommissionError("COMMISSION_WITHHELD", case_number=withheld_by.case_number)
+
     beneficiary_staff_user_id = _resolve_staff_user_id(entry.employee_profile_id)
     if beneficiary_staff_user_id == actor_staff_user_id:
         db_session.rollback()
@@ -459,6 +468,13 @@ def record_payout(
         # rollback: the seller lock is held until the transaction ends.
         db_session.rollback()
         raise CommissionError("COMMISSION_INVALID_TRANSITION", from_status=entry.status, to_status="PAID")
+    # Clause 16: an entry approved BEFORE its deal was put under a withhold sanction must not pay out either.
+    from app.seller_discipline.withhold import case_withholding_entry
+
+    withheld_by = case_withholding_entry(entry)
+    if withheld_by is not None:
+        db_session.rollback()
+        raise CommissionError("COMMISSION_WITHHELD", case_number=withheld_by.case_number)
     payable = Decimal(entry.commission_amount) - _already_reversed_amount(entry)
     if payable <= 0:
         db_session.rollback()

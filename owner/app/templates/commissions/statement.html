@@ -9,27 +9,28 @@
     <thead><tr>
       <th>{{ _("Customer") }}</th><th>{{ _("Package") }}</th><th>{{ _("Confirmed on") }}</th><th class="num">{{ _("Place on the ladder") }}</th>
       <th class="num">{{ _("Held") }}</th><th class="num">{{ _("Payable") }}</th><th class="num">{{ _("Paid") }}</th>
-      <th class="num">{{ _("Taken back") }}</th><th class="num">{{ _("Net") }}</th>
+      <th class="num">{{ _("Withheld") }}</th><th class="num">{{ _("Taken back") }}</th><th class="num">{{ _("Net") }}</th>
     </tr></thead>
     <tbody>
     {% for l in statement.lines %}
     <tr data-statement-line="{{ l.kind }}" data-line-net="{{ l.net }}">
       <td>{{ l.customer or "-" }}{% if l.kind == "RENEWAL" %} <span class="badge pending">{{ _("Renewal") }}</span>{% endif %}
-        {% if not l.counted %} <span class="badge danger">{{ _("No longer counted") }}</span>{% endif %}</td>
+        {% if not l.counted %} <span class="badge danger">{{ _("No longer counted") }}</span>{% endif %}
+        {% if l.withheld_case %} <span class="badge danger" data-withheld-case="{{ l.withheld_case }}">{{ _("Withheld (case %(n)s)", n=l.withheld_case) }}</span>{% endif %}</td>
       <td>{{ l.plan or "-" }}</td>
       <td>{{ l.confirmed_on }}</td>
       <td class="num">{{ l.position if l.position else "-" }}</td>
       <td class="num">{{ l.held }}</td><td class="num">{{ l.payable }}</td><td class="num">{{ l.paid }}</td>
-      <td class="num">{{ l.clawed_back }}</td><td class="num">{{ l.net }}</td>
+      <td class="num">{{ l.withheld }}</td><td class="num">{{ l.clawed_back }}</td><td class="num">{{ l.net }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="9" class="empty">{{ _("No subscriptions were confirmed in this month.") }}</td></tr>
+    <tr><td colspan="10" class="empty">{{ _("No subscriptions were confirmed in this month.") }}</td></tr>
     {% endfor %}
     </tbody>
     <tfoot><tr data-statement-totals="1">
       <th colspan="4">{{ _("Total") }} ({{ statement.currency }}) -- {{ _("Subscriptions confirmed") }}: {{ statement.sales_confirmed }}</th>
       <th class="num" data-total-held="{{ t.held }}">{{ t.held }}</th><th class="num" data-total-payable="{{ t.payable }}">{{ t.payable }}</th>
-      <th class="num" data-total-paid="{{ t.paid }}">{{ t.paid }}</th><th class="num" data-total-clawed-back="{{ t.clawed_back }}">{{ t.clawed_back }}</th>
+      <th class="num" data-total-paid="{{ t.paid }}">{{ t.paid }}</th><th class="num" data-total-withheld="{{ t.withheld }}">{{ t.withheld }}</th><th class="num" data-total-clawed-back="{{ t.clawed_back }}">{{ t.clawed_back }}</th>
       <th class="num" data-total-net="{{ t.net }}">{{ t.net }}</th>
     </tr></tfoot>
   </table>
@@ -37,6 +38,9 @@
   <p class="muted">{{ _("Already deducted from your pay-outs this month for earlier take-backs") }}: {{ statement.deducted_from_payouts }} {{ statement.currency }}</p>
   {% endif %}
   <p class="muted">{{ _("Held means still inside the 30-day hold. Payable means the hold is over or the amount was approved. Figures are read from the commission ledger when you open this page.") }}</p>
+  {% if t.withheld != "0.00" %}
+  <p class="muted" data-withheld-note="1">{{ _("Withheld means the company has held back the commission of that deal after a sanction case; you can read the case under My cases.") }}</p>
+  {% endif %}
 </section>
 
 <section class="card" aria-labelledby="obj-heading">

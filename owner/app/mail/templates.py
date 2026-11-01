@@ -29,6 +29,12 @@ _SUBJECTS = {
     "staff_invitation": ("You have been invited to Aura Owner", "تمت دعوتك إلى Aura Owner"),
     "staff_password_reset": ("Reset your Aura Owner password", "إعادة تعيين كلمة مرور Aura Owner"),
     "test": ("Aura Owner test message", "رسالة اختبار من Aura Owner"),
+    # Seller agreement clauses 16-18 (sanctions and the end of the agreement). Owner's own code only.
+    "seller_sanction_notice": ("A notice about your seller agreement - please reply in Aura Owner",
+                               "إشعار بخصوص اتفاقية البائع - يرجى الرد في Aura Owner"),
+    "seller_sanction_decision": ("A decision about your seller agreement", "قرار بخصوص اتفاقية البائع"),
+    "seller_agreement_ending": ("Your seller agreement with Action Aura is ending",
+                                "اتفاقية البائع الخاصة بك مع Action Aura ستنتهي"),
     # Step 2 CA1: customer website account mail. NOT in the product relay's KINDS
     # (app/mail/relay.py): only Owner's own code can queue these.
     "customer_invitation": ("Set up your Action Aura account", "إعداد حسابك في Action Aura"),
@@ -61,6 +67,12 @@ _INTROS = {
                              "طُلب إعادة تعيين كلمة مرور حسابك في Aura Owner. افتح هذا الرابط لاختيار كلمة مرور جديدة:"),
     "test": ("This is a test message from Aura Owner. If you can read it, email sending works.",
              "هذه رسالة اختبار من Aura Owner. إذا استطعت قراءتها فإرسال البريد يعمل."),
+    "seller_sanction_notice": ("The company has opened a case about your seller agreement. You have 2 working days to read it and reply in Aura Owner before any decision is made:",
+                              "فتحت الشركة قضية بخصوص اتفاقية البائع الخاصة بك. لديك يومي عمل لقراءتها والرد عليها في Aura Owner قبل اتخاذ أي قرار:"),
+    "seller_sanction_decision": ("The company has decided on the case about your seller agreement. Sign in to Aura Owner to read it:",
+                                 "اتخذت الشركة قرارًا في القضية المتعلقة باتفاقية البائع الخاصة بك. سجّل الدخول إلى Aura Owner لقراءته:"),
+    "seller_agreement_ending": ("Your seller agreement is ending. Until then you can keep working as usual:",
+                                "اتفاقية البائع الخاصة بك ستنتهي. يمكنك الاستمرار في العمل كالمعتاد حتى ذلك الحين:"),
     "customer_invitation": ("Action Aura has set up an account for you. Open this one-time link to choose your password:",
                             "أنشأت Action Aura حساباً لك. افتح هذا الرابط لمرة واحدة لاختيار كلمة المرور:"),
     "customer_welcome": ("Your seller has set up your Action Aura account. Sign in on our website with this email address and the temporary password your seller gave you (we never send passwords by email); you will be asked to choose your own. Please also confirm this address with the link below:",

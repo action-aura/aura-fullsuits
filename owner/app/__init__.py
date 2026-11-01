@@ -249,6 +249,13 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.commissions.statement_routes import bp as commission_statements_bp
 
     app.register_blueprint(commission_statements_bp)
+    # Clauses 16-18: sanctions (the seller replies within 2 working days first) and the end of a
+    # seller's agreement. Its scan is also `flask seller-discipline scan`.
+    from app.seller_discipline.cli import register_cli as register_seller_discipline_cli
+    from app.seller_discipline.routes import bp as seller_discipline_bp
+
+    app.register_blueprint(seller_discipline_bp)
+    register_seller_discipline_cli(app)
     app.jinja_env.globals["customer_accounts_enabled"] = lambda: bool(app.config.get("CUSTOMER_ACCOUNTS_ENABLED"))
 
     if app.config.get("EXTERNAL_API_ENABLED"):

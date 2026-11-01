@@ -1,0 +1,27 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("My cases") }}{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="mc-heading">
+  <h2 id="mc-heading">{{ _("My cases") }}</h2>
+  <p class="muted">{{ _("Notices the company has sent you about your seller agreement. You always have 2 working days to reply before any sanction is applied.") }}</p>
+  {% if notice %}
+  <p class="badge danger" data-agreement-ending="1">{{ _("Your agreement ends on %(when)s.", when=format_owner_date(notice.effective_at)) }}</p>
+  {% endif %}
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Case") }}</th><th>{{ _("Kind") }}</th><th>{{ _("Status") }}</th><th>{{ _("Reply by") }}</th><th></th></tr></thead>
+    <tbody>
+    {% for c in cases %}
+    <tr data-case-id="{{ c.id }}" data-case-status="{{ c.status }}">
+      <td>{{ c.case_number }}</td>
+      <td>{{ sanction_kind_label(c.kind) }}</td>
+      <td>{{ sanction_status_label(c.status) }}</td>
+      <td>{% if c.response_due_at %}{{ format_owner_datetime(c.response_due_at) }}{% else %}-{% endif %}</td>
+      <td><a href="{{ url_for('seller_discipline.my_case', case_id=c.id) }}">{{ _("Open") }}</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="empty">{{ _("You have no cases.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

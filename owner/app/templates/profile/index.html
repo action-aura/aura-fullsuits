@@ -32,6 +32,25 @@
 </div>
 {% endif %}
 
+{% if seller.bound %}
+<div class="card" data-seller-agreement="1">
+  <h3>{{ _('My seller agreement') }}</h3>
+  {% if seller.ending %}
+  <p class="badge danger" role="status" data-agreement-ending="1">{{ _('Your agreement ends on %(when)s. You can keep working until then.', when=format_owner_date(seller.ending.effective_at)) }}</p>
+  {% elif seller.may_end %}
+  <p class="muted">{{ _('You can end your agreement at any time. It ends 7 days after you press the button, and you keep working until then. Customers you registered return to the company, except those whose free trial had already started: if they pay at its end, your commission is still due.') }}</p>
+  <form method="post" action="{{ url_for('seller_discipline.end_my_agreement') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <p><label for="end-reason">{{ _('Reason (optional)') }}</label><br>
+      <textarea id="end-reason" name="reason" rows="3" maxlength="4000" dir="auto" style="width:100%;"></textarea></p>
+    <p><label><input type="checkbox" name="confirm" value="yes"> {{ _('I want to end my seller agreement.') }}</label></p>
+    <button type="submit" class="btn secondary" data-end-agreement="1">{{ _('End my agreement') }}</button>
+  </form>
+  {% endif %}
+  <p><a href="{{ url_for('seller_discipline.my_cases') }}">{{ _('My cases') }}</a></p>
+</div>
+{% endif %}
+
 <div class="card">
   <h3>{{ _('Security') }}</h3>
   <dl class="kv">

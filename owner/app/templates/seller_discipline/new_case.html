@@ -1,0 +1,45 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Open a case") }}{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="nc-heading">
+  <h2 id="nc-heading">{{ _("Open a case") }}</h2>
+  {% if error %}<p class="badge danger" role="alert" data-form-error="1">{{ error }}</p>{% endif %}
+  {% if not selected %}
+  <form method="get" action="{{ url_for('seller_discipline.new_case') }}">
+    <p><label for="nc-seller">{{ _("Seller") }}</label><br>
+      <select id="nc-seller" name="seller" required>
+        <option value="">{{ _("Pick the seller") }}</option>
+        {% for s, p in sellers %}<option value="{{ s.id }}">{{ p.full_name }} ({{ p.employee_number }})</option>{% endfor %}
+      </select></p>
+    {% if link_kind %}<input type="hidden" name="link_kind" value="{{ link_kind }}"><input type="hidden" name="link_id" value="{{ link_id }}">{% endif %}
+    <button type="submit" class="btn--primary-action">{{ _("Continue") }}</button>
+  </form>
+  {% else %}
+  <p>{{ _("Seller") }}: <strong>{{ selected[1].full_name }}</strong></p>
+  <form method="post" action="{{ url_for('seller_discipline.new_case') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="seller" value="{{ selected[0].id }}">
+    {% if link_kind %}<input type="hidden" name="link_kind" value="{{ link_kind }}"><input type="hidden" name="link_id" value="{{ link_id }}">{% endif %}
+    <p><label for="nc-kind">{{ _("Kind of sanction") }}</label><br>
+      <select id="nc-kind" name="kind" required>
+        {% for k in kinds %}<option value="{{ k }}" {% if form.get("kind") == k %}selected{% endif %}>{{ sanction_kind_label(k) }}</option>{% endfor %}
+      </select></p>
+    <p><label for="nc-category">{{ _("What happened") }}</label><br>
+      <select id="nc-category" name="category">
+        {% for c in categories %}<option value="{{ c }}" {% if form.get("category") == c %}selected{% endif %}>{{ sanction_category_label(c) }}</option>{% endfor %}
+      </select></p>
+    <p class="muted">{{ _("The first three choices end the agreement at once, with no reply period. Choose Termination of the agreement for them. Any other violation gives the seller 2 working days to reply first.") }}</p>
+    <p><label for="nc-reason">{{ _("Reason (the seller will read this)") }}</label><br>
+      <textarea id="nc-reason" name="reason_text" rows="5" maxlength="4000" required dir="auto" style="width:100%;">{{ form.get("reason_text", "") }}</textarea></p>
+    <p><label for="nc-until">{{ _("Suspension: suspended until the end of this date") }}</label><br>
+      <input id="nc-until" type="date" name="suspension_date" value="{{ form.get('suspension_date', '') }}"></p>
+    <p><label for="nc-order">{{ _("The deal (required to withhold its commission)") }}</label><br>
+      <select id="nc-order" name="sales_order_id">
+        <option value="">{{ _("No deal") }}</option>
+        {% for o in orders %}<option value="{{ o.id }}" {% if form.get("sales_order_id") == o.id|string %}selected{% endif %}>{{ o.order_number }}</option>{% endfor %}
+      </select></p>
+    <button type="submit" class="btn--primary-action">{{ _("Open the case and tell the seller") }}</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

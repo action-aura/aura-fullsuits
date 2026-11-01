@@ -1,0 +1,36 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Case") }} {{ case.case_number }}{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="mcase-heading" data-case-status="{{ case.status }}">
+  <h2 id="mcase-heading">{{ _("Case") }} {{ case.case_number }}: {{ sanction_kind_label(case.kind) }}</h2>
+  <p><span class="badge {{ 'danger' if case.status == 'DECIDED_APPLIED' else 'pending' }}">{{ sanction_status_label(case.status) }}</span></p>
+  <p>{{ _("Opened") }}: {{ format_owner_datetime(case.notice_sent_at) }}</p>
+  {% if case.kind == "SUSPENSION" and suspended_through %}
+  <p>{{ _("Suspension until the end of") }}: {{ format_owner_date(suspended_through) }}</p>
+  {% endif %}
+  <h3>{{ _("What the company says") }}</h3>
+  <blockquote dir="auto" style="white-space:pre-wrap;">{{ case.reason_text }}</blockquote>
+
+  {% if case.status == "NOTICE_SENT" %}
+  <p>{{ _("You have until %(when)s to reply. After that the company may decide.", when=format_owner_datetime(case.response_due_at)) }}</p>
+  <h3>{{ _("Your reply") }}</h3>
+  <form method="post" action="{{ url_for('seller_discipline.my_case_reply', case_id=case.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <p><label for="reply_text">{{ _("Write your reply") }}</label><br>
+      <textarea id="reply_text" name="reply_text" rows="6" maxlength="4000" required dir="auto" style="width:100%;"></textarea></p>
+    <button type="submit" class="btn--primary-action">{{ _("Send my reply") }}</button>
+  </form>
+  {% elif case.response_text %}
+  <h3>{{ _("Your reply") }}</h3>
+  <p>{{ format_owner_datetime(case.responded_at) }}</p>
+  <blockquote dir="auto" style="white-space:pre-wrap;" data-case-reply="1">{{ case.response_text }}</blockquote>
+  {% endif %}
+
+  {% if case.status in ("DECIDED_APPLIED", "DECIDED_DROPPED") %}
+  <h3>{{ _("The decision") }}: {{ sanction_status_label(case.status) }}</h3>
+  <p>{{ format_owner_datetime(case.decided_at) }}</p>
+  {% if case.decision_note %}<blockquote dir="auto" style="white-space:pre-wrap;">{{ case.decision_note }}</blockquote>{% endif %}
+  {% endif %}
+  <p><a href="{{ url_for('seller_discipline.my_cases') }}">{{ _("Back to my cases") }}</a></p>
+</section>
+{% endblock %}

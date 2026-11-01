@@ -40,7 +40,18 @@ log = logging.getLogger(__name__)
 
 # What a seller without a photo can still reach, on top of everything the agreement gate
 # already exempts (sign-in/out, language, profile, the agreement pages, static, health).
-ID_STEP_EXEMPT_ENDPOINTS = frozenset({"seller_id.upload_page", "seller_id.upload"})
+#
+# Clause 16: a seller who is given 2 working days to answer a sanction case must be able to READ the
+# case and WRITE the answer even while their ID photo is missing -- otherwise the company could apply a
+# sanction to someone who was never able to reply. They still need to be signed in (require_login) and
+# they still meet the agreement gate first; only THIS step is skipped, and only for these pages (own
+# cases only -- sanctions are looked up by the signed-in seller, never by a URL parameter alone).
+# Clause 17: ending their own agreement is likewise never held behind a missing photo.
+ID_STEP_EXEMPT_ENDPOINTS = frozenset({
+    "seller_id.upload_page", "seller_id.upload",
+    "seller_discipline.my_cases", "seller_discipline.my_case", "seller_discipline.my_case_reply",
+    "seller_discipline.end_my_agreement",
+})
 _WARNED_KEY = "seller_id_kyc_missing_warned"
 
 
