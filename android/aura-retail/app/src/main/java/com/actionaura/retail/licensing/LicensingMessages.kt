@@ -137,6 +137,11 @@ object LicensingMessages {
         "PLATFORM_NOT_ALLOWED" to "This license key is not valid for an Android installation.",
         "DEVICE_LIMIT_REACHED" to
             "This license has reached its device limit. Deactivate another device or contact support to add capacity.",
+        // Owner (2026-11-01): the licence has room in total but no free slot for THIS kind of
+        // device (a bought extra phone admits only a phone). "Device limit reached" would be
+        // false here, so the phone app names its own kind. Arabic: ui/i18n/Strings.kt.
+        "DEVICE_TYPE_LIMIT_REACHED" to
+            "This licence has no free phone slot. Deactivate a device or contact support to add an extra phone.",
         "RATE_LIMITED" to "Too many attempts. Please wait a moment and try again.",
         // New customer flow (plan S6): sign in with an Aura account. Same sentences as
         // AccountFlow.kt's accountReasonKey() and the desktop's licensing-account.js.

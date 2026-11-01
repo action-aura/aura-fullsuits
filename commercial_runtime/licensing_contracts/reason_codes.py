@@ -32,6 +32,9 @@ PUBLIC_REASON_CODES = frozenset(
         "VERSION_NOT_ALLOWED",
         "VERSION_UNSUPPORTED",
         "DEVICE_LIMIT_REACHED",
+        # Owner 2026-11-01: room in total, but no free slot for this KIND of device
+        # (extra phone admits only Android, extra desktop only Windows).
+        "DEVICE_TYPE_LIMIT_REACHED",
         "INSTALLATION_NOT_FOUND",
         "INSTALLATION_SUSPENDED",
         "INSTALLATION_DEACTIVATED",

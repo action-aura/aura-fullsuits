@@ -1572,6 +1572,8 @@ private val AR_STRINGS: Map<String, String> = mapOf(
         "يجب قبول العقد قبل تفعيل هذا الجهاز.",
     "This computer could not be activated with that account. Sign in again, or contact your seller." to
         "تعذّر تفعيل هذا الجهاز بهذا الحساب. سجّل الدخول مرة أخرى أو تواصل مع البائع.",
+    "This licence has no free phone slot. Deactivate a device or contact support to add an extra phone." to
+        "لا يوجد مكان شاغر لهاتف في هذا الترخيص. عطّل جهازًا أو تواصل مع الدعم لإضافة هاتف إضافي.",
     "This account has reached its computer limit. Contact your seller to add a device." to
         "وصل هذا الحساب إلى الحد الأقصى للأجهزة. تواصل مع البائع لإضافة جهاز.",
     "That password is not allowed. Choose a longer one you have not used before." to

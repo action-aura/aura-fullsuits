@@ -61,6 +61,10 @@
     PRODUCT_MISMATCH: 'This license key is not valid for Aura Retail.',
     PLATFORM_NOT_ALLOWED: 'This license key is not valid for a Windows installation.',
     DEVICE_LIMIT_REACHED: 'This license has reached its computer limit. Deactivate another computer or contact support to add capacity.',
+    // Owner (2026-11-01): the licence has a free slot in total, but none for THIS kind of device
+    // (a bought extra desktop admits only a desktop, an extra phone only a phone). Saying
+    // "device limit reached" here would be false -- there IS room -- so name the kind that is full.
+    DEVICE_TYPE_LIMIT_REACHED: 'This licence has no free desktop slot. Deactivate a device or contact support to add an extra desktop.',
     RATE_LIMITED: 'Too many attempts. Please wait a moment and try again.',
     // New customer flow: the activation-code path answers with these on /activate.
     ACTIVATION_GRANT_INVALID: 'This computer could not be activated with that account. Sign in again, or contact your seller.',
