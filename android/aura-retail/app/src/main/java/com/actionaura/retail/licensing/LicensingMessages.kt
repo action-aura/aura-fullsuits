@@ -141,7 +141,7 @@ object LicensingMessages {
         // device (a bought extra phone admits only a phone). "Device limit reached" would be
         // false here, so the phone app names its own kind. Arabic: ui/i18n/Strings.kt.
         "DEVICE_TYPE_LIMIT_REACHED" to
-            "This licence has no free phone slot. Deactivate a device or contact support to add an extra phone.",
+            "This license has no free phone slot. Deactivate a device or contact support to add an extra phone.",
         "RATE_LIMITED" to "Too many attempts. Please wait a moment and try again.",
         // New customer flow (plan S6): sign in with an Aura account. Same sentences as
         // AccountFlow.kt's accountReasonKey() and the desktop's licensing-account.js.
