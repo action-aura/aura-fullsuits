@@ -319,8 +319,12 @@ def test_t20b_the_trial_payment_page_offers_the_typed_fields(app, client, seeded
 
 
 def test_t21_the_invoice_is_tax_inclusive_and_the_renewal_stays_100(app, client, seeded):
-    """Owner: 50 JOD per device is tax-INCLUSIVE. The invoice shows no separate tax (0.00), total =
-    subtotal = 300.00 for Package 1 + one phone, and the renewal is the package's 100 whatever was added."""
+    """Owner: 50 JOD per device is tax-INCLUSIVE. Nothing is added on top: total = subtotal = 300.00 for
+    Package 1 + one phone, and the renewal is the package's 100 whatever was added.
+
+    2026-11-01 (billing-tax): the invoice used to store tax 0.00; it now records the 16% sales tax that is
+    INSIDE the 300.00 (41.38, the cent split in calculator.split_tax_inclusive). So this test can no longer
+    catch "tax_total is still 0" -- that is the intended change -- and now also pins the included tax figure."""
     from tests.test_step0_packages import _confirm, _finished, _only_order, _post_sale
 
     w = _sales_world(app)
@@ -329,7 +333,7 @@ def test_t21_the_invoice_is_tax_inclusive_and_the_renewal_stays_100(app, client,
     _confirm(app, order_id, w["manager"])
     done = _finished(app, order_id)
     assert (done["invoice_subtotal"], done["invoice_tax"], done["invoice_total"]) == (
-        Decimal("300.00"), Decimal("0.00"), Decimal("300.00"))
+        Decimal("300.00"), Decimal("41.38"), Decimal("300.00"))
     with app.app_context():
         from sqlalchemy import select
 
