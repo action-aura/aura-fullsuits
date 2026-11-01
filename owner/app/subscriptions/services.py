@@ -223,6 +223,13 @@ def record_payment(fields: dict, actor_staff_user_id, *, in_same_transaction=Non
         except Exception:
             db_session.rollback()
             raise
+    # Seller agreement clause 7: cash a SELLER collects is owed back to the company within 24 hours.
+    # This is the one writer of payments, so every route that records one (the one-screen sale, the
+    # trial-conversion sale, the payments form, the API) is covered here; the obligation commits with
+    # the payment or not at all (sellers/cash_handin.py).
+    from app.sellers.cash_handin import open_for_seller_cash_payment
+
+    open_for_seller_cash_payment(payment, actor_staff_user_id)
     db_session.commit()
     audit_record(
         actor_staff_user_id=actor_staff_user_id,

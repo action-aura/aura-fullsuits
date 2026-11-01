@@ -166,6 +166,27 @@
 </div>
 {% endif %}
 
+{# Seller agreement clause 7: a seller's own cash to hand in (red once past 24 hours). #}
+{% if summary.cash_mine is not none %}
+<div class="card" data-cash-mine-card="1">
+  <h3>{{ _("Cash to hand in") }}</h3>
+  <div class="aura-stat-tile-row">
+    {{ charts.stat_tile(_("To hand in"), format_owner_number(summary.cash_mine.open), href=url_for('seller_cash.mine'), tone='warning' if summary.cash_mine.open else 'default') }}
+    {{ charts.stat_tile(_("Overdue"), format_owner_number(summary.cash_mine.overdue), href=url_for('seller_cash.mine'), tone='danger' if summary.cash_mine.overdue else 'default') }}
+  </div>
+  {% if summary.cash_mine.next_due_at %}<p class="hint">{{ _("Next deadline: %(when)s", when=format_owner_datetime(summary.cash_mine.next_due_at)) }}</p>{% endif %}
+</div>
+{% endif %}
+{% if summary.cash_owed_all is not none %}
+<div class="card" data-cash-manage-card="1">
+  <h3>{{ _("Sellers' cash hand-in") }}</h3>
+  <div class="aura-stat-tile-row">
+    {{ charts.stat_tile(_("Still owed"), format_owner_number(summary.cash_owed_all), href=url_for('seller_cash.manage')) }}
+    {{ charts.stat_tile(_("Overdue"), format_owner_number(summary.cash_overdue_all), href=url_for('seller_cash.manage'), tone='danger' if summary.cash_overdue_all else 'default') }}
+  </div>
+</div>
+{% endif %}
+
 {% if can_view_customers or can_view_subscriptions %}
 <div class="card">
   <h2>{{ _("Overview") }}</h2>

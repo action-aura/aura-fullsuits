@@ -10919,3 +10919,159 @@ msgstr "غير محفوظة"
 #: app/templates/employees/detail.html
 msgid "Choose a new photo to replace the one on file. Leave it empty to keep it."
 msgstr "اختر صورة جديدة لاستبدال المحفوظة. اتركه فارغاً للإبقاء عليها."
+
+#: app/templates/sellers
+msgid "Cash to hand in"
+msgstr "مبالغ نقدية يجب تسليمها"
+
+#: app/templates/sellers
+msgid "Cash you collect from a customer belongs to the company. Hand in the whole amount within 24 hours, by bank transfer (upload the slip here) or at the office. Do not take your commission out of it."
+msgstr "المبالغ النقدية التي تقبضها من العميل ملك للشركة. سلّم المبلغ كاملًا خلال 24 ساعة، بالتحويل البنكي (ارفع الإيصال هنا) أو في المكتب. لا تخصم عمولتك منه."
+
+#: app/templates/sellers
+msgid "Hand in before"
+msgstr "آخر موعد للتسليم"
+
+#: app/templates/sellers
+msgid "%(hours)s hours left"
+msgstr "متبقٍ %(hours)s ساعة"
+
+#: app/templates/sellers
+msgid "Slip waiting for a manager"
+msgstr "الإيصال بانتظار مدير"
+
+#: app/templates/sellers
+msgid "Your last slip was rejected: %(reason)s"
+msgstr "تم رفض إيصالك الأخير: %(reason)s"
+
+#: app/templates/sellers
+msgid "Bank-transfer slip"
+msgstr "إيصال التحويل البنكي"
+
+#: app/templates/sellers
+msgid "Upload the slip"
+msgstr "ارفع الإيصال"
+
+#: app/templates/sellers
+msgid "You have no cash to hand in."
+msgstr "لا توجد مبالغ نقدية عليك تسليمها."
+
+#: app/templates/sellers
+msgid "Handed in at the office? A manager marks it received. A slip you upload is checked by a manager."
+msgstr "سلّمتها في المكتب؟ يسجّل المدير استلامها. الإيصال الذي ترفعه يراجعه مدير."
+
+#: app/templates/sellers
+msgid "Sellers' cash hand-in"
+msgstr "تسليم المندوبين للمبالغ النقدية"
+
+#: app/templates/sellers
+msgid "Cash that sellers collected and must hand in within 24 hours. Overdue ones are at the top. Being overdue starts nothing by itself: open a sanction case if it needs one."
+msgstr "مبالغ نقدية قبضها المندوبون ويجب تسليمها خلال 24 ساعة. المتأخرة في الأعلى. التأخر لا يبدأ أي إجراء من تلقاء نفسه: افتح قضية جزاء إن لزم."
+
+#: app/templates/sellers
+msgid "Show only what is still owed"
+msgstr "عرض ما لم يُسلَّم بعد فقط"
+
+#: app/templates/sellers
+msgid "Also show what was received"
+msgstr "عرض ما تم استلامه أيضًا"
+
+#: app/templates/sellers
+msgid "Slip to check"
+msgstr "إيصال للمراجعة"
+
+#: app/templates/sellers
+msgid "Received (slip)"
+msgstr "تم الاستلام (إيصال)"
+
+#: app/templates/sellers
+msgid "Received at the office"
+msgstr "تم الاستلام في المكتب"
+
+#: app/templates/sellers
+msgid "Open the slip"
+msgstr "افتح الإيصال"
+
+#: app/templates/sellers
+msgid "Confirm the slip"
+msgstr "أكّد الإيصال"
+
+#: app/templates/sellers
+msgid "Why is the slip rejected?"
+msgstr "لماذا رُفض الإيصال؟"
+
+#: app/templates/sellers
+msgid "Reject the slip"
+msgstr "ارفض الإيصال"
+
+#: app/templates/sellers
+msgid "Cash received at the office"
+msgstr "استلام نقدي في المكتب"
+
+#: app/templates/sellers
+msgid "No cash is waiting to be handed in."
+msgstr "لا توجد مبالغ نقدية بانتظار التسليم."
+
+#: app/sellers/cash_routes.py
+msgid "The slip is uploaded. A manager will check it."
+msgstr "تم رفع الإيصال. سيراجعه مدير."
+
+#: app/sellers/cash_routes.py
+msgid "Marked as received."
+msgstr "تم تسجيل الاستلام."
+
+#: app/sellers/cash_routes.py
+msgid "The slip is rejected. The seller must hand in the cash again."
+msgstr "تم رفض الإيصال. على المندوب تسليم المبلغ من جديد."
+
+#: app/templates/dashboard/index.html
+msgid "To hand in"
+msgstr "للتسليم"
+
+#: app/templates/dashboard/index.html
+msgid "Next deadline: %(when)s"
+msgstr "الموعد القادم: %(when)s"
+
+#: app/i18n_labels.py
+msgid "That cash payment does not exist."
+msgstr "هذا المبلغ النقدي غير موجود."
+
+#: app/i18n_labels.py
+msgid "This cash payment is not waiting for a slip."
+msgstr "هذا المبلغ النقدي لا ينتظر إيصالًا."
+
+#: app/i18n_labels.py
+msgid "This cash payment was already received."
+msgstr "تم استلام هذا المبلغ النقدي مسبقًا."
+
+#: app/i18n_labels.py
+msgid "There is no uploaded slip to confirm or reject."
+msgstr "لا يوجد إيصال مرفوع لتأكيده أو رفضه."
+
+#: app/i18n_labels.py
+msgid "You cannot receive your own cash; another manager must."
+msgstr "لا يمكنك استلام مبلغك النقدي بنفسك؛ يجب أن يستلمه مدير آخر."
+
+#: app/i18n_labels.py
+msgid "Choose the bank-transfer slip to upload."
+msgstr "اختر إيصال التحويل البنكي لرفعه."
+
+#: app/i18n_labels.py
+msgid "The slip must be a JPEG, PNG or PDF file."
+msgstr "يجب أن يكون الإيصال ملف JPEG أو PNG أو PDF."
+
+#: app/i18n_labels.py
+msgid "The slip file is too large (10 MB at most)."
+msgstr "ملف الإيصال كبير جدًا (10 ميغابايت كحد أقصى)."
+
+#: app/i18n_labels.py
+msgid "The slip file could not be read."
+msgstr "تعذّرت قراءة ملف الإيصال."
+
+#: app/i18n_labels.py
+msgid "Slips cannot be stored on this server yet. Nothing was saved. Ask the administrator."
+msgstr "لا يمكن حفظ الإيصالات على هذا الخادم بعد. لم يُحفظ شيء. اسأل المسؤول."
+
+#: app/i18n_labels.py
+msgid "Write why the slip is rejected."
+msgstr "اكتب سبب رفض الإيصال."

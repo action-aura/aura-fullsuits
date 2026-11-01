@@ -1,0 +1,39 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Cash to hand in") }}{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="cash-heading">
+  <h2 id="cash-heading">{{ _("Cash to hand in") }}</h2>
+  <p class="muted">{{ _("Cash you collect from a customer belongs to the company. Hand in the whole amount within 24 hours, by bank transfer (upload the slip here) or at the office. Do not take your commission out of it.") }}</p>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Customer") }}</th><th class="num">{{ _("Amount") }}</th><th>{{ _("Collected") }}</th><th>{{ _("Hand in before") }}</th><th>{{ _("Status") }}</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr data-handin-id="{{ r.row.id }}" data-handin-status="{{ r.row.status }}" {% if r.overdue %}data-handin-overdue="1"{% endif %}>
+      <td>{{ r.customer or "-" }}</td>
+      <td class="num">{{ r.row.amount }} {{ r.row.currency }}</td>
+      <td>{{ format_owner_datetime(r.row.collected_at) }}</td>
+      <td>{{ format_owner_datetime(r.row.due_at) }}</td>
+      <td>
+        {% if r.overdue %}<span class="badge danger">{{ _("OVERDUE") }}</span>
+        {% elif r.row.status == "OPEN" %}<span class="badge pending">{{ _("%(hours)s hours left", hours=r.hours_left) }}</span>
+        {% elif r.row.status == "SUBMITTED" %}<span class="badge pending">{{ _("Slip waiting for a manager") }}</span>{% endif %}
+        {% if r.row.rejected_count and r.row.status == "OPEN" %}<br><span class="muted">{{ _("Your last slip was rejected: %(reason)s", reason=r.row.last_rejection_reason) }}</span>{% endif %}
+      </td>
+      <td>
+        {% if r.row.status == "OPEN" %}
+        <form method="post" action="{{ url_for('seller_cash.upload_slip', handin_id=r.row.id) }}" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="file" name="slip" accept="image/jpeg,image/png,application/pdf" required aria-label="{{ _('Bank-transfer slip') }}">
+          <button type="submit" class="btn--primary-action">{{ _("Upload the slip") }}</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="empty">{{ _("You have no cash to hand in.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">{{ _("Handed in at the office? A manager marks it received. A slip you upload is checked by a manager.") }}</p>
+</section>
+{% endblock %}

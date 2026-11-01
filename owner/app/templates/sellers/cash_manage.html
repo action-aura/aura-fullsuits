@@ -1,0 +1,55 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Sellers' cash hand-in") }}{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="cm-heading">
+  <h2 id="cm-heading">{{ _("Sellers' cash hand-in") }}</h2>
+  <p class="muted">{{ _("Cash that sellers collected and must hand in within 24 hours. Overdue ones are at the top. Being overdue starts nothing by itself: open a sanction case if it needs one.") }}</p>
+  <p>
+    {% if show_closed %}<a href="{{ url_for('seller_cash.manage') }}">{{ _("Show only what is still owed") }}</a>
+    {% else %}<a href="{{ url_for('seller_cash.manage', closed=1) }}">{{ _("Also show what was received") }}</a>{% endif %}
+  </p>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Seller") }}</th><th>{{ _("Customer") }}</th><th class="num">{{ _("Amount") }}</th><th>{{ _("Collected") }}</th><th>{{ _("Hand in before") }}</th><th>{{ _("Status") }}</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr data-handin-id="{{ r.row.id }}" data-handin-status="{{ r.row.status }}" {% if r.overdue %}data-handin-overdue="1"{% endif %}>
+      <td>{{ r.seller }}</td>
+      <td>{{ r.customer or "-" }}</td>
+      <td class="num">{{ r.row.amount }} {{ r.row.currency }}</td>
+      <td>{{ format_owner_datetime(r.row.collected_at) }}</td>
+      <td>{{ format_owner_datetime(r.row.due_at) }}</td>
+      <td>
+        {% if r.overdue %}<span class="badge danger">{{ _("OVERDUE") }}</span>
+        {% elif r.row.status == "OPEN" %}<span class="badge pending">{{ _("Open") }}</span>
+        {% elif r.row.status == "SUBMITTED" %}<span class="badge pending">{{ _("Slip to check") }}</span>
+        {% elif r.row.status == "RECEIVED" %}<span class="badge success">{{ _("Received (slip)") }}</span>
+        {% else %}<span class="badge success">{{ _("Received at the office") }}</span>{% endif %}
+      </td>
+      <td>
+        {% if r.row.status == "SUBMITTED" %}
+          {% if r.slip_url %}<a href="{{ r.slip_url }}" target="_blank" rel="noopener">{{ _("Open the slip") }}</a>{% endif %}
+          <form method="post" action="{{ url_for('seller_cash.receive', handin_id=r.row.id) }}" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="mode" value="slip">
+            <button type="submit" class="btn--primary-action">{{ _("Confirm the slip") }}</button>
+          </form>
+          <form method="post" action="{{ url_for('seller_cash.reject', handin_id=r.row.id) }}" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="text" name="reason" maxlength="2000" required placeholder="{{ _('Why is the slip rejected?') }}" aria-label="{{ _('Why is the slip rejected?') }}">
+            <button type="submit">{{ _("Reject the slip") }}</button>
+          </form>
+        {% endif %}
+        {% if r.row.status in ("OPEN", "SUBMITTED") %}
+          <form method="post" action="{{ url_for('seller_cash.receive', handin_id=r.row.id) }}" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="mode" value="office">
+            <button type="submit">{{ _("Cash received at the office") }}</button>
+          </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="empty">{{ _("No cash is waiting to be handed in.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

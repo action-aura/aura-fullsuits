@@ -33,6 +33,7 @@ from app.models import push  # noqa: F401
 from app.models import customer_accounts  # noqa: F401
 from app.models import customer_onboarding  # noqa: F401
 from app.models import staff_identity  # noqa: F401
+from app.models import sellers  # noqa: F401
 
 from app.models.staff import (  # noqa: F401
     Role,

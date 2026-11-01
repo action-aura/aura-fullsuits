@@ -120,8 +120,20 @@ def get_dashboard_summary(actor=None, codes=None) -> dict:
     # (review r33, 2026-11-01 -- a seller's dashboard still carried every seller's count).
     open_objections, overdue_objections = (0, 0) if scoped else open_and_overdue_counts()
 
+    # Seller agreement clause 7: a seller sees THEIR OWN cash to hand in; a payments.confirm holder sees
+    # the company-wide numbers (still owed, overdue). Nobody sees a number they have no use for.
+    from app.sellers import cash_handin
+
+    cash_mine = cash_handin.tile_for_seller(actor.id) if actor is not None and codes and "sellers.self_service" in codes else None
+    cash_owed, cash_overdue = (
+        cash_handin.counts_for_managers() if actor is not None and codes and "payments.confirm" in codes else (None, None)
+    )
+
     return {
         "scoped": scoped,
+        "cash_mine": cash_mine,
+        "cash_owed_all": cash_owed,
+        "cash_overdue_all": cash_overdue,
         "total_customers": total_customers,
         "pilot_customers": pilot_customers,
         "active_customers": active_customers,

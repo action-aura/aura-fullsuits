@@ -1260,6 +1260,30 @@ def localize_commission_error(code: str, **params) -> str:
     return template % params if params else template
 
 
+def localize_seller_error(code: str, **params) -> str:
+    """Seller agreement clauses 7, 8, 16, 17, 18 -- presentation-boundary localization for
+    app.sellers.errors.SellerRulesError, the same pattern as localize_commission_error()."""
+    messages = {
+        # clause 7: cash hand-in
+        "HANDIN_NOT_FOUND": _("That cash payment does not exist."),
+        "HANDIN_NOT_OPEN": _("This cash payment is not waiting for a slip."),
+        "HANDIN_ALREADY_CLOSED": _("This cash payment was already received."),
+        "HANDIN_NO_SLIP_TO_CONFIRM": _("There is no uploaded slip to confirm or reject."),
+        "HANDIN_SELF_RECEIVE_FORBIDDEN": _("You cannot receive your own cash; another manager must."),
+        "HANDIN_SLIP_REQUIRED": _("Choose the bank-transfer slip to upload."),
+        "HANDIN_SLIP_TYPE_NOT_ALLOWED": _("The slip must be a JPEG, PNG or PDF file."),
+        "HANDIN_SLIP_TOO_LARGE": _("The slip file is too large (10 MB at most)."),
+        "HANDIN_SLIP_INVALID": _("The slip file could not be read."),
+        "HANDIN_SLIP_STORAGE_NOT_READY": _("Slips cannot be stored on this server yet. Nothing was saved. Ask the administrator."),
+        "HANDIN_REJECT_REASON_REQUIRED": _("Write why the slip is rejected."),
+        "HANDIN_REASON_TOO_LONG": _("The text is too long."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
 def expense_status_label(code: str) -> str:
     """Phase 9.5E -- real values from app.models.expenses.EXPENSE_STATUSES."""
     labels = {
