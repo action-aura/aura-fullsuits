@@ -74,9 +74,10 @@
     <h3>{{ _("3. Seller") }}</h3>
     {% if may_choose_seller %}
     <label for="sale-seller">{{ _("Seller (sales owner) -- the employee whose commission this sale counts for") }}</label>
+    {% if convert and convert.credited_seller %}<p class="muted" data-credited-seller="1">{{ _("This trial started before its seller's agreement ended, so its first payment is credited to that seller. Leave the seller as they are.") }}</p>{% endif %}
     <select id="sale-seller" name="sales_owner_employee_profile_id" required>
       <option value="">{{ _("-- Pick the seller --") }}</option>
-      {% for s in sellers %}<option value="{{ s.id }}" {% if fv.get("sales_owner_employee_profile_id") == s.id|string %}selected{% endif %}>{{ s.full_name }} ({{ s.employee_number }})</option>{% endfor %}
+      {% for s in sellers %}<option value="{{ s.id }}" {% if fv.get("sales_owner_employee_profile_id") == s.id|string or (convert and convert.credited_seller and convert.credited_seller.id == s.id) %}selected{% endif %}>{{ s.full_name }} ({{ s.employee_number }})</option>{% endfor %}
     </select>
     {% elif own_profile %}
     <p>{{ _("You are the seller of this sale:") }} <strong>{{ own_profile.full_name }}</strong></p>

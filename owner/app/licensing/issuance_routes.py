@@ -120,6 +120,13 @@ def _active_sellers() -> list[EmployeeProfile]:
     ).scalars().all()
 
 
+def _sellers_for_form(convert) -> list[EmployeeProfile]:
+    """The seller dropdown: every active seller, and -- for a trial that still credits a former seller
+    (clause 18) -- that seller as the only choice, since the sale must be theirs."""
+    credited = convert["credited_seller"] if convert else None
+    return [credited] if credited is not None else _active_sellers()
+
+
 def _wants_json_error() -> bool:
     """True only for a genuine API caller -- a JSON request body, or an
     Accept header that asks for JSON and explicitly not HTML. False for
@@ -144,10 +151,16 @@ def _conversion_context(raw_subscription_id, actor, codes):
         subscription = _resolve_conversion(raw_subscription_id, "-", actor.id, codes)
     except DirectSaleError:
         return None
+    # Seller agreement clause 18: a trial that started before its seller's agreement ended still
+    # credits that (former) seller for its first payment, so the form offers them -- and only them.
+    from app.seller_discipline.terminations import credited_staff_for_subscription
+
+    credited_staff_id = credited_staff_for_subscription(subscription.id)
     return {
         "subscription_id": subscription.id,
         "customer": db_session.get(Customer, subscription.customer_id),
         "plan": db_session.get(Plan, subscription.plan_id),
+        "credited_seller": find_own_profile(credited_staff_id) if credited_staff_id is not None else None,
     }
 
 
@@ -171,7 +184,7 @@ def _render_sale_form(*, error: str | None, idempotency_key: str, form_values=No
         "licensing/sale.html",
         customers=_customers_visible_to(actor, codes),
         packages=packages,
-        sellers=_active_sellers() if may_choose_seller else [],
+        sellers=_sellers_for_form(convert) if may_choose_seller else [],
         may_choose_seller=may_choose_seller,
         own_profile=find_own_profile(actor.id),
         payment_methods=DIRECT_SALE_PAYMENT_METHODS,

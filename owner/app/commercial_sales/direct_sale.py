@@ -249,6 +249,7 @@ DIRECT_SALE_MESSAGES = {
     "CONVERSION_NOT_A_TRIAL": "That subscription is not a running trial, so there is nothing to convert.",
     "CONVERSION_WRONG_PRODUCT": "A trial can only be paid with a package of its own product.",
     "CONVERSION_ALREADY_PENDING": "A payment for this trial is already waiting for a manager. Wait for it, or ask a manager to reject it first.",
+    "CONVERSION_CREDITS_FORMER_SELLER": "This trial started before its seller's agreement ended, so its first payment is credited to that seller. Leave the seller as they are.",
 }
 
 
@@ -328,11 +329,28 @@ def parse_amount(raw) -> Decimal:
     return amount
 
 
-def _resolve_seller(sales_owner_employee_profile_id, *, actor_staff_user_id, actor_permission_codes: set[str]) -> EmployeeProfile:
+def _resolve_seller(sales_owner_employee_profile_id, *, actor_staff_user_id, actor_permission_codes: set[str],
+                    credited_staff_user_id=None) -> EmployeeProfile:
+    """credited_staff_user_id (seller agreement clause 18): the FORMER seller a running trial still
+    credits for its first payment (seller_discipline.terminations.SellerTrialCredit). Their account
+    is closed, so the usual "the seller must be an active employee" cannot hold -- for exactly this
+    trial and exactly this person it is waived, and the sale is credited to them, whoever records it.
+    Anyone else named as the seller of such a trial is refused: the credit is the clause, not a choice."""
     own = db_session.execute(
         select(EmployeeProfile).where(EmployeeProfile.staff_user_id == actor_staff_user_id)
     ).scalars().first()
     may_choose = CHOOSE_SELLER_PERMISSION in actor_permission_codes
+    if credited_staff_user_id is not None and may_choose:
+        credited = db_session.execute(
+            select(EmployeeProfile).where(EmployeeProfile.staff_user_id == credited_staff_user_id)
+        ).scalars().first()
+        if credited is None:
+            raise DirectSaleError("SELLER_NOT_FOUND")
+        if sales_owner_employee_profile_id and str(sales_owner_employee_profile_id) != str(credited.id):
+            raise DirectSaleError("CONVERSION_CREDITS_FORMER_SELLER")
+        if credited.employment_status not in ("ACTIVE", "TERMINATED", "ARCHIVED"):
+            raise DirectSaleError("SELLER_NOT_ACTIVE")
+        return credited
     if not may_choose:
         # A seller can only sell as themselves: crediting another employee,
         # or being credited for someone else's sale, is a manager's call.
@@ -609,6 +627,7 @@ def record_direct_sale(
         seller = _resolve_seller(
             sales_owner_employee_profile_id,
             actor_staff_user_id=actor_staff_user_id, actor_permission_codes=actor_permission_codes,
+            credited_staff_user_id=_credited_former_seller(trial_subscription),
         )
         customer, legal_name = _resolve_customer(
             customer_id, new_customer_legal_name,
@@ -753,6 +772,16 @@ def record_direct_sale(
                              payment_date=payment_date, seller=seller, actor_staff_user_id=actor_staff_user_id,
                              slip_photo=slip_photo)
         return _result(order, payment_id, replayed=False, method=method)
+
+
+def _credited_former_seller(trial_subscription):
+    """Clause 18: the seller whose agreement ended after their customer's trial started, while that
+    trial is still waiting to be paid; else None."""
+    if trial_subscription is None:
+        return None
+    from app.seller_discipline.terminations import credited_staff_for_subscription
+
+    return credited_staff_for_subscription(trial_subscription.id)
 
 
 def _resolve_conversion(raw_subscription_id, idempotency_key, actor_staff_user_id, actor_permission_codes) -> Subscription:
