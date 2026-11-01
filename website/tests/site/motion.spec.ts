@@ -200,12 +200,18 @@ test('world blends are short: no stretch of scroll longer than a quarter viewpor
 // Arabic form on a legal or FAQ page (Cloudflare, Turnstile, Meta, CSV, hash, IP), the 07X phone placeholder.
 // Also allowed: X and Z (the names of the two standard till reports) and the 07X XXX XXXX phone placeholder pieces.
 const ALLOWED = /^(english|cloudflare|turnstile|meta|csv|hash|ip|x+|z|07x|info@actionaura\.me)$/i;
+// Privacy and Terms (v2, with customer accounts) name the legal entity, the product and the hosting vendors, and the
+// cookie/cipher identifiers have no Arabic form. They are removed as WHOLE PHRASES, and only on those two pages, so a
+// stray "Email" or "Retail" or any other Latin word there (or any Latin word anywhere else) still fails the test.
+// What this can no longer catch: these exact phrases appearing by mistake on Privacy or Terms.
+const LEGAL_NAMES = /\b(Action Aura|Aura Retail|Aura|Oracle Cloud|Cloudflare R2|Namecheap Private Email|AES-256-GCM|HttpOnly)\b/g;
 for (const slug of ['', 'aura-retail/', 'aura-clinic/', 'about/', 'contact/', 'faq/', 'privacy/', 'terms/']) {
   test(`/ar/${slug} shows no Latin words beyond the allowed list`, async ({ page }) => {
     await page.goto(`/ar/${slug}`);
     await page.waitForLoadState('load');
     // The honeypot field (.hp) is aria-hidden and off-screen: not visible text.
-    const text = await page.evaluate(() => { const c = document.body.cloneNode(true) as HTMLElement; c.querySelectorAll('.hp, script, style, noscript').forEach((e) => e.remove()); return c.textContent ?? ''; }) + '\n' + await page.evaluate(() => '' + Array.from(document.querySelectorAll('input[placeholder], textarea[placeholder]')).map((e) => e.getAttribute('placeholder')).join('\n'));
+    const raw = await page.evaluate(() => { const c = document.body.cloneNode(true) as HTMLElement; c.querySelectorAll('.hp, script, style, noscript').forEach((e) => e.remove()); return c.textContent ?? ''; }) + '\n' + await page.evaluate(() => '' + Array.from(document.querySelectorAll('input[placeholder], textarea[placeholder]')).map((e) => e.getAttribute('placeholder')).join('\n'));
+    const text = slug === 'privacy/' || slug === 'terms/' ? raw.replace(LEGAL_NAMES, ' ') : raw;
     const words = (text.match(/[A-Za-z0-9][A-Za-z0-9@._'-]*[A-Za-z0-9]|[A-Za-z]/g) ?? []).filter((w) => /[A-Za-z]/.test(w) && !ALLOWED.test(w));
     expect([...new Set(words)], 'Latin words on the Arabic page').toEqual([]);
   });
