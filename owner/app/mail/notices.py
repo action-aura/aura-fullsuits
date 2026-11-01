@@ -124,3 +124,59 @@ def _where(acceptance, audience: str) -> tuple[str, str]:
         return f"Device / installation: {device}", f"الجهاز / التثبيت: {device}"
     address = acceptance.ip or "-"
     return f"From address: {address}", f"من العنوان: {address}"
+
+
+# ----------------------------------------------------------- payment receipts
+
+# Only these three are the shop's receipts (recorded by our seller / confirmed by the
+# company / rejected). VOIDED and REFUNDED are corrections and refunds with their own
+# paperwork; they are not mailed here.
+_PAYMENT_KIND = {
+    "PENDING": "customer_payment_pending",
+    "CONFIRMED": "customer_payment_confirmed",
+    "FAILED": "customer_payment_rejected",
+}
+_PAYMENT_STATUS_TEXT = {
+    "customer_payment_pending": ("Status: received by our seller, waiting for confirmation",
+                                 "الحالة: استلمها بائعنا وهي بانتظار التأكيد"),
+    "customer_payment_confirmed": ("Status: Confirmed", "الحالة: مؤكدة"),
+    "customer_payment_rejected": ("Status: Rejected - please contact us", "الحالة: مرفوضة، يرجى التواصل معنا"),
+}
+# The tax sentence the shop agreement promises on every receipt. No tax is computed
+# here (invoices are another module); this is only the statement.
+TAX_INCLUSIVE_LINE = ("Prices include 16% general sales tax", "الأسعار شاملة ضريبة المبيعات العامة 16%")
+
+
+def queue_payment_notice(payment, status: str) -> bool:
+    """Mails the customer ACCOUNT's email a receipt line for `payment` reaching `status`
+    (PENDING / CONFIRMED / FAILED; anything else is ignored). One mail per payment per
+    status. A customer with no account has nobody to write to: nothing is sent. Never
+    raises (see the module docstring)."""
+    kind = _PAYMENT_KIND.get(status)
+    if kind is None:
+        return False
+    try:
+        from app.models.customer_accounts import CustomerAccount
+
+        account = db_session.execute(
+            select(CustomerAccount).where(CustomerAccount.customer_id == payment.customer_id)
+        ).scalars().first()
+        if account is None:
+            return False
+        number = f"PAY-{str(payment.id)[:8].upper()}"
+        status_en, status_ar = _PAYMENT_STATUS_TEXT[kind]
+        en = [f"Amount: {payment.amount:.2f} {payment.currency}", f"Method: {payment.method or '-'}",
+              f"Payment record number: {number}"]
+        ar = [f"المبلغ: {payment.amount:.2f} {payment.currency}", f"طريقة الدفع: {payment.method or '-'}",
+              f"رقم سجل الدفعة: {number}"]
+        if payment.reference:
+            en.append(f"Reference: {payment.reference}")
+            ar.append(f"المرجع: {payment.reference}")
+        en += [f"Date: {payment.payment_date.isoformat()}", status_en, TAX_INCLUSIVE_LINE[0]]
+        ar += [f"التاريخ: {payment.payment_date.isoformat()}", status_ar, TAX_INCLUSIVE_LINE[1]]
+        return queue_notice(
+            kind, account.email, lang=account.language, dedupe_key=f"{kind}:{payment.id}", lines={"en": en, "ar": ar})
+    except Exception:  # noqa: BLE001 -- the payment is committed; its receipt must never undo or fail it
+        db_session.rollback()
+        logger.warning("payment notice (%s) could not be prepared", kind, exc_info=True)
+        return False
