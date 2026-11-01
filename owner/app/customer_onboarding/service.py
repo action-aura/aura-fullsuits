@@ -104,7 +104,7 @@ ONBOARDING_MESSAGES = {
     "LOCATION_INVALID": "The captured location is not valid. Capture it again or leave it empty.",
     "ID_PHOTO_REQUIRED": "Add a photo of the owner's ID.",
     "CR_PHOTO_REQUIRED": "Add a photo of the commercial registration.",
-    "DOCUMENT_TYPE_NOT_ALLOWED": "Photos must be JPEG or PNG pictures (or a PDF).",
+    "DOCUMENT_TYPE_NOT_ALLOWED": "Photos must be JPEG or PNG pictures.",
     "DOCUMENT_TOO_LARGE": "A photo is too large (at most %(max_mb)s MB).",
     "DOCUMENT_EMPTY": "A photo file is empty.",
     "DOCUMENT_CORRUPT": "A photo file is damaged. Take it again.",
@@ -439,8 +439,8 @@ def create_trial_customer(
         if not cr_photo:
             raise OnboardingError("CR_PHOTO_REQUIRED")
         try:
-            documents.clean_file(id_photo)
-            documents.clean_file(cr_photo)
+            documents.clean_identity_file(id_photo)
+            documents.clean_identity_file(cr_photo)
         except documents.DocumentError as exc:
             raise OnboardingError(exc.code, **exc.params)
         if not documents.storage_is_ready():

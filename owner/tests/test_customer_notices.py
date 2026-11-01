@@ -885,3 +885,88 @@ def test_the_two_new_commands_are_registered_and_take_no_required_arguments(app)
         for word in argv:
             group = group.commands[word]
         assert not [p for p in group.params if getattr(p, "required", False)]
+
+# =====================================================================  N5 images only
+
+PDF_BYTES = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
+
+
+@pytest.mark.parametrize("which", ["id_photo", "cr_photo"])
+def test_a_pdf_is_refused_for_the_id_and_the_registration_and_nothing_is_created(app, shop, which):
+    from app.customer_onboarding.service import OnboardingError
+    from tests.test_customer_onboarding import counts, onboard
+
+    before = counts(app)
+    with pytest.raises(OnboardingError) as refused:
+        onboard(app, shop, **{which: PDF_BYTES})
+    assert refused.value.code == "DOCUMENT_TYPE_NOT_ALLOWED"
+    assert counts(app) == before, "a refused form writes nothing at all"
+    ok = onboard(app, shop)  # allow-half: the same form with two pictures works
+    assert ok.customer_id is not None
+
+
+def test_the_store_itself_refuses_a_pdf_for_an_id_but_the_payment_slip_may_still_be_a_pdf(app, seeded, kyc):
+    from app.customer_onboarding import documents
+
+    with app.app_context():
+        with pytest.raises(documents.DocumentError) as refused:
+            documents.clean_identity_file(PDF_BYTES)
+        assert refused.value.code == "DOCUMENT_TYPE_NOT_ALLOWED"
+        # the slip path uses the general cleaner: a PDF is still a valid slip
+        assert documents.clean_file(PDF_BYTES)[1] == "application/pdf"
+        with pytest.raises(documents.DocumentError):
+            documents.store_document(customer_id=uuid_for_tests(), kind="NATIONAL_ID", content=PDF_BYTES, uploaded_by_staff_user_id=None)
+
+
+def test_a_payment_slip_may_still_be_stored_as_a_pdf(app, shop):
+    """Allow-half of N5: only the ID and the registration are picture-only."""
+    from decimal import Decimal
+
+    from app.customer_onboarding import documents
+    from app.extensions import db_session
+    from app.subscriptions.services import record_payment
+    from tests.test_customer_onboarding import onboard
+
+    customer = onboard(app, shop)
+    with app.app_context():
+        payment = record_payment(
+            {"customer_id": customer.customer_id, "amount": Decimal("10.00"), "currency": "JOD", "method": "CLIQ",
+             "payment_date": jordan_today(), "status": "PENDING"}, shop["seller"])
+        slip = documents.store_document(
+            customer_id=customer.customer_id, kind="PAYMENT_SLIP", content=PDF_BYTES, uploaded_by_staff_user_id=shop["seller"],
+            payment_record_id=payment.id)
+        db_session.commit()
+        assert slip.content_type == "application/pdf"
+
+
+def uuid_for_tests():
+    import uuid
+
+    return uuid.uuid4()
+
+
+def test_the_seller_form_opens_the_camera_and_offers_only_pictures_for_the_id_and_registration(app, shop):
+    app.config.update(CUSTOMER_ONBOARDING_ENABLED=True)
+    client = app.test_client()
+    force_login(client, app, shop["seller"])
+    html = client.get("/customers/new-trial").get_data(as_text=True)
+    inputs = {m.group(1): m.group(0) for m in re.finditer(r'<input[^>]*name="(id_photo|cr_photo)"[^>]*>', html)}
+    assert set(inputs) == {"id_photo", "cr_photo"}
+    for tag in inputs.values():
+        assert 'accept="image/*"' in tag and 'capture="environment"' in tag and "pdf" not in tag, tag
+
+
+def test_the_refusal_is_worded_in_english_and_arabic_without_a_pdf_promise(app):
+    from app.i18n_labels import localize_onboarding_error
+
+    from flask_babel import force_locale
+
+    with app.test_request_context("/"):
+        with force_locale("en"):
+            english = localize_onboarding_error("DOCUMENT_TYPE_NOT_ALLOWED")
+        with force_locale("ar"):
+            arabic = localize_onboarding_error("DOCUMENT_TYPE_NOT_ALLOWED")
+    assert "PDF" not in english and "JPEG" in english
+    assert arabic != english and "--" not in arabic and "JPEG" in arabic and "PDF" not in arabic
+
+
