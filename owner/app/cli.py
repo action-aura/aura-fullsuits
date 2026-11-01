@@ -616,6 +616,23 @@ def register_cli(app: Flask) -> None:
 
         click.echo(json.dumps({"trials_started": start_overdue_trials()}, indent=2))
 
+    @app.cli.group("documents")
+    def documents_group():
+        """Customer / seller identity-document upkeep."""
+
+    @documents_group.command("purge-due")
+    def purge_due_documents_cmd():
+        """The nightly retention job (legal review v2 (d)-4/10), in the one correct order:
+        (1) set/clear the purge date of every ID / registration photo of a customer who has
+        paid -- last paid-until day + 365 days once nothing of theirs is live, no date while
+        they are a customer again; (2) the same for a seller's own ID photo (365 days after
+        they are disabled or terminated); (3) securely delete every document whose date has
+        passed (audited, the row stays as the record); (4) drop the customer link from the
+        trial-device marks of purged customers (the fingerprint stays). Idempotent."""
+        from app.customer_onboarding import retention
+
+        click.echo(json.dumps(retention.purge_due(), indent=2, default=str))
+
     @app.cli.group("leads")
     def leads_group():
         """Lead data upkeep."""
