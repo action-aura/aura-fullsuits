@@ -147,8 +147,32 @@ def process_password_change(body: dict, *, source_ip: str | None, config: dict) 
     return {"ticket": fresh, "expires_at": expires.isoformat()}
 
 
+CONSENT_KEYS = ("id_documents", "data_outside_jordan")
+
+
+def _consents(body: dict) -> dict | None:
+    """The optional "consents" object of an acceptance. ABSENT (or null) -> None: an older
+    app build, nothing is recorded and nothing changes. Present -> {key: bool} for the
+    keys it carries; a value that is not a JSON boolean is a malformed request (a string
+    "false" must never read as a refusal OR as consent). Part of the signed envelope
+    like every other field, so it cannot be altered in transit."""
+    raw = body.get("consents")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise AccountRejected("INVALID_REQUEST")
+    out = {}
+    for key in CONSENT_KEYS:
+        if key in raw:
+            if not isinstance(raw[key], bool):
+                raise AccountRejected("INVALID_REQUEST")
+            out[key] = raw[key]
+    return out
+
+
 def process_contract_acceptance(body: dict, *, source_ip: str | None, config: dict) -> dict:
     fingerprint = _verify_envelope(body, nonce_scope="contract_acceptance", config=config)
+    consents = _consents(body)
     ticket = _text(body, "ticket", max_len=256)
     version_id = _text(body, "contract_version_id", max_len=64)
     text_sha256 = _text(body, "text_sha256", max_len=64)
@@ -158,13 +182,15 @@ def process_contract_acceptance(body: dict, *, source_ip: str | None, config: di
             ticket=ticket, contract_version_id=version_id, text_sha256=text_sha256, fingerprint=fingerprint,
             device_signature=body["signature"], ip=service.clean_ip(source_ip),
             app_version=body.get("app_version") if isinstance(body.get("app_version"), str) else None,
-            installation_label=installation_label,
+            installation_label=installation_label, consents=consents,
         )
     except service.SignInLocked as exc:
         raise _locked(exc)
     except device_flow.GrantInvalid:
         raise AccountRejected("ACCOUNT_SIGN_IN_FAILED", 401)
-    except contracts.ContractError:
+    except contracts.ContractError as exc:
+        if exc.code == contracts.CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED:
+            raise AccountRejected("CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED", 409)
         # Wrong id, retired version, text that is not the stored text, wrong audience:
         # all the same answer -- show the current contract again.
         raise AccountRejected("CONTRACT_ACCEPTANCE_REQUIRED", 409)

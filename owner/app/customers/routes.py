@@ -187,8 +187,13 @@ def detail(customer_id):
 
     trial_panel = trial_panel_context(customer, codes)
 
+    # Contract-consents card (None = nothing recorded and no flag).
+    from app.customer_onboarding.consents_panel import panel_context as consents_panel_context
+
+    consents_panel = consents_panel_context(customer, codes)
+
     return render_template(
-        "customers/detail.html", customer=customer, website_account_panel=website_account_panel, trial_panel=trial_panel, notes=notes, interactions=interactions, followups=followups,
+        "customers/detail.html", customer=customer, website_account_panel=website_account_panel, trial_panel=trial_panel, consents_panel=consents_panel, notes=notes, interactions=interactions, followups=followups,
         locations=locations, assignment_history=assignment_history, followup_status=followup_status,
         is_overdue=is_overdue, error=error_text,
         quotes=quotes, orders=orders, invoices=invoices, payments=payments, subscriptions=subscriptions,
@@ -244,6 +249,26 @@ def update(customer_id):
     # effect as customers.archive.
     fields = {k: v for k, v in request.form.items() if k in ("legal_name", "trade_name", "city", "country")}
     update_customer(customer, fields, actor.id)
+    return redirect(url_for("customers.detail", customer_id=customer_id))
+
+
+@bp.route("/<uuid:customer_id>/id-verified", methods=["POST"])
+@require_permission("customer_documents.view")
+def mark_id_verified(customer_id):
+    """Staff checked the owner's identity by hand after the customer refused to let us
+    keep their ID photos (contracts.service consents): clears the flag. Audited."""
+    actor = load_current_staff()
+    customer = db_session.get(Customer, customer_id)
+    if customer is None or not _customer_visible_to(customer, actor):
+        return jsonify({"error": "not_found"}), 404
+    if customer.manual_id_verification_required_at is not None:
+        customer.manual_id_verification_required_at = None
+        db_session.commit()
+        audit_record(
+            actor_staff_user_id=actor.id, actor_role_snapshot=None, action_code="CUSTOMER_ID_VERIFIED_BY_HAND",
+            entity_type="customer", entity_public_id=str(customer_id), after_state={"flag_cleared": True},
+        )
+        flash(_("Marked as verified by hand."), "success")
     return redirect(url_for("customers.detail", customer_id=customer_id))
 
 

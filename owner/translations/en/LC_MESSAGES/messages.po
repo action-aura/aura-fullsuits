@@ -10960,3 +10960,35 @@ msgstr "Not on file"
 #: app/templates/employees/detail.html
 msgid "Choose a new photo to replace the one on file. Leave it empty to keep it."
 msgstr "Choose a new photo to replace the one on file. Leave it empty to keep it."
+
+#: app/templates/customers/_consents.html
+msgid "Contract consents"
+msgstr "Contract consents"
+
+#: app/templates/customers/_consents.html
+msgid "ID verification by hand needed"
+msgstr "ID verification by hand needed"
+
+#: app/templates/customers/_consents.html
+msgid "The owner did not let Action Aura keep a photo of the ID and commercial registration, and the photos were deleted. Check the owner's identity by hand before relying on this account."
+msgstr "The owner did not let Action Aura keep a photo of the ID and commercial registration, and the photos were deleted. Check the owner's identity by hand before relying on this account."
+
+#: app/templates/customers/_consents.html
+msgid "Mark as verified by hand"
+msgstr "Mark as verified by hand"
+
+#: app/templates/customers/_consents.html
+msgid "Marked as verified by hand."
+msgstr "Marked as verified by hand."
+
+#: app/templates/customers/_consents.html
+msgid "Photos of the owner's ID and commercial registration may be kept"
+msgstr "Photos of the owner's ID and commercial registration may be kept"
+
+#: app/templates/customers/_consents.html
+msgid "The shop's data may be hosted outside Jordan"
+msgstr "The shop's data may be hosted outside Jordan"
+
+#: app/templates/customers/_consents.html
+msgid "Not recorded"
+msgstr "Not recorded"

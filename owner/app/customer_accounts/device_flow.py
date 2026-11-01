@@ -227,10 +227,11 @@ def change_password(*, ticket: str, new_password: str, ip: str, fingerprint: str
 
 def accept_contract(
     *, ticket: str, contract_version_id: str, text_sha256: str, fingerprint: str, device_signature: str | None,
-    ip: str, app_version: str | None, installation_label: str | None,
+    ip: str, app_version: str | None, installation_label: str | None, consents: dict | None = None,
 ):
     """Records the acceptance (idempotent). Raises GrantInvalid, or
-    contracts.ContractError('TEXT_MISMATCH' | 'VERSION_NOT_LIVE' | 'NOT_FOUND')."""
+    contracts.ContractError('TEXT_MISMATCH' | 'VERSION_NOT_LIVE' | 'NOT_FOUND' |
+    'CONSENT_DATA_OUTSIDE_JORDAN_REQUIRED')."""
     _take_device_slot("account_ticket_ops", fingerprint)
     _grant, account = load_ticket(ticket, fingerprint)
     version = contracts.get_version(contract_version_id)
@@ -239,7 +240,7 @@ def accept_contract(
     return contracts.record_customer_acceptance(
         account=account, version=version, text_sha256=text_sha256, language=version.language,
         device_key_fingerprint=fingerprint, device_signature=device_signature, ip=ip, app_version=app_version,
-        installation_label=installation_label,
+        installation_label=installation_label, consents=consents,
     )
 
 
