@@ -1,4 +1,5 @@
 import { worldMix, dominant, WORLDS, type World } from './mix';
+import { bus, type Frame } from '../scroll-bus';
 
 // Each world layer takes ITS OWN share as opacity. (The prototype's first
 // version applied a stacked-crossfade formula to semi-transparent scrims,
@@ -13,10 +14,8 @@ export function startWorlds(root: HTMLElement): () => void {
   }));
   const layers = Object.fromEntries(WORLDS.map((w) => [w, Array.from(document.querySelectorAll<HTMLElement>(`.bg-${w}, .sc-${w}`))])) as Record<World, HTMLElement[]>;
   let cache = sections();
-  let frame = 0;
-  const update = () => {
-    frame = 0;
-    let mix = worldMix(cache, window.scrollY, window.innerHeight);
+  const update = (f: Frame) => {
+    let mix = worldMix(cache, f.y, f.h);
     const dom = dominant(mix);
     if (reduced) {
       // Reduced motion: step to the dominant world, no blending.
@@ -34,18 +33,11 @@ export function startWorlds(root: HTMLElement): () => void {
     (root as any).__auraMix = mix;
     root.dispatchEvent(new CustomEvent('worldmix', { detail: mix }));
   };
-  const onScroll = () => { if (!frame) frame = requestAnimationFrame(update); };
-  const remeasure = () => { cache = sections(); onScroll(); };
-  addEventListener('scroll', onScroll, { passive: true });
-  addEventListener('resize', remeasure);
-  addEventListener('load', remeasure);
-  document.fonts?.ready.then(remeasure);
-  const main = document.querySelector('main');
-  const ro = main && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(remeasure) : null;
-  if (main) ro?.observe(main);
-  update();
-  return () => {
-    removeEventListener('scroll', onScroll); removeEventListener('resize', remeasure);
-    removeEventListener('load', remeasure); ro?.disconnect(); cancelAnimationFrame(frame);
-  };
+  // One shared scheduler (scroll-bus.ts): this runs once per frame with scrollY read for it, and the section geometry
+  // is re-measured only when the layout can have changed.
+  const b = bus();
+  b.onMeasure(() => { cache = sections(); });
+  b.onScroll(update);
+  update({ y: window.scrollY, h: window.innerHeight });
+  return () => {};
 }

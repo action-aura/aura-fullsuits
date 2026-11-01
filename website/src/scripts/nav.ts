@@ -1,16 +1,22 @@
+import { bus } from './scroll-bus';
+
 const root = document.documentElement;
 
 // Nav bar: --nav-top keeps the fixed nav under the phone strip (38px) at the top of the page and lets it settle at 0 as the
 // strip scrolls away; data-scrolled switches on the soft field bar behind the nav (components.css .nav::before).
 const nav = document.querySelector<HTMLElement>('.nav');
-const stripH = parseFloat(getComputedStyle(root).getPropertyValue('--strip-h')) || 0;
-const placeNav = () => {
-  root.style.setProperty('--nav-top', Math.max(0, stripH - scrollY) + 'px');
-  nav?.toggleAttribute('data-scrolled', scrollY > 8);
+const readStripH = () => parseFloat(getComputedStyle(root).getPropertyValue('--strip-h')) || 0;
+let stripH = readStripH();
+const placeNav = (y: number) => {
+  root.style.setProperty('--nav-top', Math.max(0, stripH - y) + 'px');
+  nav?.toggleAttribute('data-scrolled', y > 8);
 };
-addEventListener('scroll', placeNav, { passive: true });
-addEventListener('resize', placeNav);
-placeNav();
+// The strip height is a CSS value that changes with the breakpoint, so it is re-read when the layout is re-measured,
+// not in the scroll frame (getComputedStyle after a style write forces a style recalculation).
+const b = bus();
+b.onMeasure(() => { stripH = readStripH(); });
+b.onScroll((f) => placeNav(f.y));
+placeNav(scrollY);
 
 const sections = document.querySelectorAll<HTMLElement>('[data-w]');
 if (sections.length && 'IntersectionObserver' in window) {
