@@ -94,6 +94,13 @@ MUTANTS = {
     "admin_resume_lost": ("**/app-shell.js", "if (roleStep.state === 'ADMIN') {", "if (false) {"),
     # rc.19: with no other device known the wait screen must not promise an account "on its way" (B5e).
     "wait_always_on_its_way": ("**/app-shell.js", "const knowsOtherDevice = !!(opts && opts.otherDevice);", "const knowsOtherDevice = true;"),
+    # 2026-11-02 boss device: the chooser leans by platform and by whether a boss is already known (A6g..A6k).
+    "lean_ignored": ("**/app-shell.js", "const lean = suggestion ? suggestion.default : 'ADMIN';", "const lean = 'ADMIN';"),
+    "boss_note_hidden": ("**/app-shell.js", "known.hidden = false;", ""),
+    "boss_exists_not_cashier": ("**/app-shell.js", "(lean === 'ADMIN' ? adminBtn : cashierBtn).setAttribute('data-suggested', 'true');",
+                                "adminBtn.setAttribute('data-suggested', 'true');"),
+    "other_button_removed": ("**/app-shell.js", "cashierBtn.addEventListener('click', () => this._chooseRole('CASHIER', rec));",
+                             "cashierBtn.disabled = suggestion && suggestion.default === 'ADMIN';"),
     "no_email_prefill": ("**/app-shell.js", "if (emailEl && !emailEl.value) emailEl.value = this._setupPrefillEmail;", ""),
     "cashier_gets_setup": ("**/app-shell.js", "    return this._waitForShopAccount(undefined, undefined, { otherDevice: true });\n  },\n\n  // ── First-run brand intro",
                            "    return this.showSetupModal();\n  },\n\n  // ── First-run brand intro"),
@@ -331,6 +338,50 @@ def scenario_admin(pw, fake, backend):
     check("A6 after activation the app asks which computer this is", visible(page, "#role-admin-btn"))
     check("A6b the licensing page no longer shows", "licensing.html" not in page.url, page.url)
     page.screenshot(path=str(OUT / "A6_role.png"))
+
+    # A6g..A6k (2026-11-02, boss device): this host is a Windows computer with no boss yet, so the step leans
+    # to CASHIER (filled button) -- and a phone leans to the boss, and a device that learns the shop already
+    # has a boss defaults to cashier and names it. The lean is never a lock: both buttons stay usable.
+    def lean_of():
+        return page.evaluate("""() => ({
+            admin: document.getElementById('role-admin-btn').getAttribute('data-suggested'),
+            cashier: document.getElementById('role-cashier-btn').getAttribute('data-suggested'),
+            adminCls: document.getElementById('role-admin-btn').className,
+            cashierCls: document.getElementById('role-cashier-btn').className,
+            note: (document.getElementById('role-boss-known') || {}).hidden === false
+                  ? document.getElementById('role-boss-known').innerText : '',
+            adminOff: document.getElementById('role-admin-btn').disabled,
+            cashierOff: document.getElementById('role-cashier-btn').disabled })""")
+
+    real = lean_of()
+    check("A6g a Windows computer with no boss yet leans to CASHIER (filled button)",
+          real["cashier"] == "true" and real["admin"] is None and "auth-submit" in real["cashierCls"]
+          and "auth-submit" not in real["adminCls"], real)
+    check("A6h ... and says nothing about another boss", real["note"] == "", real)
+
+    def fake_suggestion(payload):
+        def handler(route):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"suggestion": payload}))
+        page.route("**/api/onboarding/role-suggestion", handler)
+        page.evaluate("() => SubsystemApp._showRoleStep({state:'pending', email:''})")
+        page.wait_for_timeout(600)
+        got = lean_of()
+        page.unroute("**/api/onboarding/role-suggestion")
+        return got
+
+    phone = fake_suggestion({"default": "ADMIN", "boss_exists": False, "platform": "ANDROID",
+                             "boss_device_name": "", "boss_device_platform": ""})
+    check("A6i a phone with no boss yet leans to BOSS (filled button), the cashier button still works",
+          phone["admin"] == "true" and phone["cashier"] is None and "auth-submit" in phone["adminCls"]
+          and not phone["cashierOff"] and phone["note"] == "", phone)
+    second = fake_suggestion({"default": "CASHIER", "boss_exists": True, "platform": "ANDROID",
+                              "boss_device_name": "Front desk PC", "boss_device_platform": "WINDOWS"})
+    check("A6j a second device defaults to CASHIER even on a phone", second["cashier"] == "true"
+          and second["admin"] is None and "auth-submit" in second["cashierCls"], second)
+    check("A6k ... says 'This shop's boss computer is Front desk PC' and still lets the person pick boss",
+          "boss computer is Front desk PC" in second["note"] and not second["adminOff"], second)
+    page.evaluate("() => SubsystemApp._showRoleStep({state:'pending', email:''})")
+    page.wait_for_timeout(600)
     st = fake.state()
     check("A6c Owner recorded exactly one acceptance of the exact text",
           len(st["acceptances"]) == 1 and len(st["acceptances"][0]["sha256"]) == 64, st["acceptances"])

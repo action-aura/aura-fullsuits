@@ -258,6 +258,28 @@ class RolePendingStore(context: Context, private val clock: () -> Long = System:
     }
 }
 
+/**
+ * What "Which computer is this?" shows from the backend's suggestion (owner 2026-11-02: a phone leans to
+ * the boss computer, a Windows computer to cashier, only while the shop has no boss yet). A LEAN, never a
+ * lock: both buttons always work. Pure so it is unit-testable; the Compose screen only draws it.
+ */
+object RoleLean {
+    /** True when the boss button is the filled/primary one. No suggestion = the old look (boss first). */
+    fun leansBoss(s: com.actionaura.retail.net.RoleSuggestion?): Boolean = s == null || s.default != "CASHIER"
+
+    /** The boss device's own name, or null when it has none. */
+    fun bossName(s: com.actionaura.retail.net.RoleSuggestion): String? = s.boss_device_name.trim().ifEmpty { null }
+
+    /** What kind of device an unnamed boss is -- a translation KEY, the screen runs it through tr(). */
+    fun bossKind(s: com.actionaura.retail.net.RoleSuggestion): String =
+        if (s.boss_device_platform.equals("ANDROID", ignoreCase = true)) "a phone" else "a Windows computer"
+
+    /** Fixed English literals (looked up whole in the Arabic table); the name is filled in AFTER lookup. */
+    const val BOSS_KNOWN = "This shop's boss computer is {name}. This computer is set to be a cashier computer."
+    const val BOSS_NOTE_WHEN_KNOWN =
+        "Only one computer can be the boss. Choose this only if the boss computer named above is gone. You can move the boss role later in Plan & devices."
+}
+
 /** The e-mail the boss-computer setup form should start with (memory only). */
 object SetupPrefill {
     @Volatile var email: String = ""

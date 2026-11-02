@@ -298,6 +298,88 @@ def role_step_get():
     return jsonify({'role_step': get_role_step()})
 
 
+# ── Role suggestion: which button the chooser leans toward ─────────────────────
+#
+# Owner instruction 2026-11-02: "by default the mobile version is the Admin (boss
+# device); if he wants to change he must have options". So the chooser PRE-SELECTS
+#   - a phone (ANDROID)  -> the boss computer,
+#   - a Windows computer -> a cashier computer,
+# but ONLY while no boss exists yet. The person can still press the other button;
+# this is a lean, never a lock.
+#
+# When this device's registry ALREADY names another device as the boss
+# (admin_device_assignment -> a device that is not this one) the shop has its boss:
+# the second device defaults to cashier whatever its platform, and the chooser
+# says which device the boss is. Why it matters: two devices that both pick "boss"
+# each create their own admin user (data that is NOT merged afterwards) -- see
+# device_registry.is_joined_device / admin_assignment_wins for what DOES converge.
+#
+# Read-only and best effort: a fresh second device has usually not synced the
+# registry yet, so "no boss known here" falls back to the platform lean and the
+# real guard stays claim-admin's 409 plus the epoch rule. Nothing here is a
+# permission check; it never writes.
+ROLE_LEAN_BOSS_PLATFORMS = ('ANDROID',)
+
+
+def _boss_elsewhere(company_id):
+    """(device_row | None) -- the device the local registry names as the boss
+    when that device is not this one and is still an active member of the shop."""
+    try:
+        conn = get_conn()
+    except Exception:
+        return None
+    try:
+        from commercial_runtime.identity import device_registry as _dr
+        if not company_id:
+            rows = conn.execute("SELECT company_id FROM admin_device_assignment").fetchall()
+            company_id = rows[0][0] if len(rows) == 1 else None
+        if not company_id:
+            return None
+        assignment = _dr.get_assignment(conn, company_id)
+        if not assignment:
+            return None
+        try:
+            this_id = peek_local_device_uuid()
+        except Exception:
+            this_id = None
+        if this_id and assignment['device_id'] == this_id:
+            return None
+        row = _dr.get_device(conn, assignment['device_id'])
+        if row and (row.get('status') or '').lower() == 'revoked':
+            return None
+        # A named boss we hold no row for is still a boss: report it nameless.
+        return dict(row) if row else {'id': assignment['device_id'], 'device_label': None, 'platform': None}
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def role_suggestion(platform=None, company_id=None) -> dict:
+    """{default: 'ADMIN'|'CASHIER', boss_exists: bool, boss_device_name: str,
+    boss_device_platform: str, platform: str}. Names are raw: the screens put
+    them into their own translated sentences."""
+    platform = (platform or _device_context.detect_platform() or '').upper()
+    boss = _boss_elsewhere(company_id if company_id is not None else _read_config().get('company_id'))
+    if boss is not None:
+        label = boss.get('device_label')
+        return {
+            'default': 'CASHIER', 'boss_exists': True, 'platform': platform,
+            'boss_device_name': (label.strip() if isinstance(label, str) else ''),
+            'boss_device_platform': str(boss.get('platform') or '').upper(),
+        }
+    return {
+        'default': 'ADMIN' if platform in ROLE_LEAN_BOSS_PLATFORMS else 'CASHIER',
+        'boss_exists': False, 'platform': platform,
+        'boss_device_name': '', 'boss_device_platform': '',
+    }
+
+
+@onboarding_bp.route('/api/onboarding/role-suggestion', methods=['GET'])
+def role_suggestion_get():
+    return jsonify({'suggestion': role_suggestion()})
+
+
 @onboarding_bp.route('/api/onboarding/role-step', methods=['POST'])
 def role_step_set():
     """Allowed only while first-run is still open (no admin yet) -- once a shop

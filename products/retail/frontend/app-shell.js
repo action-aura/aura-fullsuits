@@ -2772,7 +2772,22 @@ const SubsystemApp = {
     } catch (e) { return false; }
   },
 
-  _showRoleStep(rec) {
+  // Which button the step leans toward (owner 2026-11-02): a phone leans to the boss computer, a
+  // Windows computer to a cashier computer -- but only while the shop has no boss yet; when this
+  // device's registry already names another device as the boss, this one defaults to cashier and
+  // says who the boss is. A lean, never a lock: both buttons always work. Server decides
+  // (onboarding_routes.role_suggestion); null on any failure = the two equal buttons as before.
+  async _loadRoleSuggestion() {
+    try {
+      const body = await fetch('/api/onboarding/role-suggestion', { cache: 'no-store' }).then(r => r.json());
+      const s = body && body.suggestion;
+      if (s && (s.default === 'ADMIN' || s.default === 'CASHIER')) return s;
+    } catch (e) { /* no suggestion: neutral buttons */ }
+    return null;
+  },
+
+  async _showRoleStep(rec) {
+    const suggestion = await this._loadRoleSuggestion();
     this._authModalOpen = true;
     this._applyAccent(this.systems.retail);
     let overlay = document.getElementById('aura-relogin-modal');
@@ -2784,15 +2799,25 @@ const SubsystemApp = {
       document.body.appendChild(overlay);
     }
     const card = overlay.querySelector('.auth-card');
+    // The suggested button is the filled one (auth-submit); the other is the outlined one. With no
+    // suggestion the boss button stays the filled one, exactly the previous look.
+    const lean = suggestion ? suggestion.default : 'ADMIN';
+    const adminCls = lean === 'ADMIN' ? 'auth-submit' : 'btn-secondary';
+    const cashierCls = lean === 'CASHIER' ? 'auth-submit' : 'btn-secondary';
+    const adminStyle = lean === 'ADMIN' ? 'width:100%;margin-top:8px'
+      : 'width:100%;justify-content:center;min-block-size:var(--touch-target-min);margin-top:8px';
+    const cashierStyle = lean === 'CASHIER' ? 'width:100%;margin-top:8px'
+      : 'width:100%;justify-content:center;min-block-size:var(--touch-target-min);margin-top:12px';
     card.innerHTML = `
       <div class="auth-head">
         <div class="auth-icon">${window.AuraIcons && AuraIcons.mark ? AuraIcons.mark(40) : ''}</div>
         <h2 class="auth-title" id="role-title"></h2>
         <p class="auth-sub" id="role-sub"></p>
       </div>
-      <button id="role-admin-btn" class="auth-submit" style="width:100%;margin-top:8px"></button>
+      <p class="auth-note" id="role-boss-known" role="status" hidden></p>
+      <button id="role-admin-btn" class="${adminCls}" style="${adminStyle}"></button>
       <p class="auth-note" id="role-admin-note"></p>
-      <button id="role-cashier-btn" class="btn-secondary" style="width:100%;justify-content:center;min-block-size:var(--touch-target-min);margin-top:12px"></button>
+      <button id="role-cashier-btn" class="${cashierCls}" style="${cashierStyle}"></button>
       <p class="auth-note" id="role-cashier-note"></p>`;
     // textContent for every string, one place: nothing here is markup.
     const set = (id, text) => { const n = card.querySelector('#' + id); if (n) n.textContent = text; };
@@ -2802,8 +2827,22 @@ const SubsystemApp = {
     set('role-admin-note', t('The boss computer sets up the shop, the staff and the settings. Every shop needs one.'));
     set('role-cashier-btn', t('This is a cashier computer'));
     set('role-cashier-note', t('A cashier computer sells at the counter. It gets its staff from the boss computer.'));
-    card.querySelector('#role-admin-btn').addEventListener('click', () => this._chooseRole('ADMIN', rec));
-    card.querySelector('#role-cashier-btn').addEventListener('click', () => this._chooseRole('CASHIER', rec));
+    const adminBtn = card.querySelector('#role-admin-btn');
+    const cashierBtn = card.querySelector('#role-cashier-btn');
+    // The marker tests (and the next person) read: which button is the lean.
+    (lean === 'ADMIN' ? adminBtn : cashierBtn).setAttribute('data-suggested', 'true');
+    if (suggestion && suggestion.boss_exists) {
+      const platformName = String(suggestion.boss_device_platform || '').toUpperCase() === 'ANDROID'
+        ? t('a phone') : t('a Windows computer');
+      const name = suggestion.boss_device_name || platformName;
+      const known = card.querySelector('#role-boss-known');
+      known.textContent = t("This shop's boss computer is {name}. This computer is set to be a cashier computer.")
+        .replace('{name}', name);
+      known.hidden = false;
+      set('role-admin-note', t('Only one computer can be the boss. Choose this only if the boss computer named above is gone. You can move the boss role later in Plan & devices.'));
+    }
+    adminBtn.addEventListener('click', () => this._chooseRole('ADMIN', rec));
+    cashierBtn.addEventListener('click', () => this._chooseRole('CASHIER', rec));
   },
 
   async _chooseRole(role, rec) {

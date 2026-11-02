@@ -1563,6 +1563,14 @@ private val AR_STRINGS: Map<String, String> = mapOf(
         "سجّل الدخول بحساب Aura لتفعيل هذا الجهاز. استخدم البريد الإلكتروني وكلمة المرور اللذين أعطاك إياهما البائع.",
     "Sign in" to
         "تسجيل الدخول",
+    "a phone" to
+        "هاتف",
+    "a Windows computer" to
+        "جهاز ويندوز",
+    "This shop's boss computer is {name}. This computer is set to be a cashier computer." to
+        "جهاز المدير في هذا المحل هو {name}. هذا الجهاز مضبوط ليكون جهاز كاشير.",
+    "Only one computer can be the boss. Choose this only if the boss computer named above is gone. You can move the boss role later in Plan & devices." to
+        "يمكن لجهاز واحد فقط أن يكون جهاز المدير. اختر هذا فقط إذا كان جهاز المدير المذكور أعلاه غير موجود. يمكنك نقل دور المدير لاحقًا من «الخطة والأجهزة».",
     "The email or password is not right. Check them and try again." to
         "البريد الإلكتروني أو كلمة المرور غير صحيحة. تحقق منهما وحاول مرة أخرى.",
     "Too many attempts. Please wait a few minutes and try again." to

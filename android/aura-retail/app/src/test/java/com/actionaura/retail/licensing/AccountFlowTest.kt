@@ -385,6 +385,56 @@ class AccountFlowTest {
         assertThat(source("src/main/java/com/actionaura/retail/ui/screens/SetupScreen.kt")).contains("SetupPrefill.email")
     }
 
+    // ── Boss-device lean (owner 2026-11-02) ─────────────────────────────────────
+
+    private fun suggestion(json: String) =
+        Gson().fromJson(json, com.actionaura.retail.net.RoleSuggestionResponse::class.java).suggestion
+
+    @Test
+    fun `a phone with no boss yet leans to the boss computer`() {
+        val s = suggestion("""{"suggestion":{"default":"ADMIN","boss_exists":false,"platform":"ANDROID"}}""")
+        assertThat(RoleLean.leansBoss(s)).isTrue()
+    }
+
+    @Test
+    fun `a Windows computer with no boss yet leans to cashier`() {
+        val s = suggestion("""{"suggestion":{"default":"CASHIER","boss_exists":false,"platform":"WINDOWS"}}""")
+        assertThat(RoleLean.leansBoss(s)).isFalse()
+    }
+
+    @Test
+    fun `a second device leans to cashier and names the boss, even a phone`() {
+        val s = suggestion(
+            """{"suggestion":{"default":"CASHIER","boss_exists":true,"platform":"ANDROID",
+               "boss_device_name":"Front desk PC","boss_device_platform":"WINDOWS"}}""")!!
+        assertThat(RoleLean.leansBoss(s)).isFalse()
+        assertThat(RoleLean.bossName(s)).isEqualTo("Front desk PC")
+    }
+
+    @Test
+    fun `an unnamed boss is described by its kind and no suggestion keeps the old look`() {
+        val phone = suggestion("""{"suggestion":{"default":"CASHIER","boss_exists":true,"boss_device_platform":"ANDROID"}}""")!!
+        assertThat(RoleLean.bossName(phone)).isNull()
+        assertThat(RoleLean.bossKind(phone)).isEqualTo("a phone")
+        val pc = suggestion("""{"suggestion":{"default":"CASHIER","boss_exists":true,"boss_device_platform":"WINDOWS"}}""")!!
+        assertThat(RoleLean.bossKind(pc)).isEqualTo("a Windows computer")
+        assertThat(RoleLean.leansBoss(null)).isTrue()
+    }
+
+    @Test
+    fun `the role step asks the backend for its lean and draws from RoleLean`() {
+        val screen = source("src/main/java/com/actionaura/retail/ui/screens/RoleStepScreen.kt")
+        assertThat(screen).contains("RoleLean.leansBoss(suggestion)")
+        assertThat(screen).contains("RoleLean.BOSS_KNOWN")
+        // both buttons are always there: the lean is never a lock
+        assertThat(screen).contains("onAdmin, tr(\"This is the boss computer (Admin)\")")
+        assertThat(screen).contains("onCashier, tr(\"This is a cashier computer\")")
+        val root = source("src/main/java/com/actionaura/retail/ui/AppRoot.kt")
+        assertThat(root).contains("roleSuggestion().suggestion")
+        assertThat(source("src/main/java/com/actionaura/retail/net/AuraApi.kt"))
+            .contains("@GET(\"api/onboarding/role-suggestion\")")
+    }
+
     @Test
     fun `the coordinator never persists the password or the ticket`() {
         val coordinator = source("src/main/java/com/actionaura/retail/licensing/LicensingCoordinator.kt")

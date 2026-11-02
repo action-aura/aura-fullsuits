@@ -330,6 +330,7 @@ fun AppRoot() {
                     // Boss computer -> the create-account screen (e-mail prefilled); cashier computer -> the
                     // existing join wait. The marker is cleared the moment a choice is made: asked once.
                     Phase.ROLE -> RoleStepScreen(
+                        loadSuggestion = { ApiClient.get().roleSuggestion().suggestion },
                         onAdmin = {
                             val store = com.actionaura.retail.licensing.RolePendingStore(ctx)
                             com.actionaura.retail.licensing.SetupPrefill.email = store.pendingEmail().orEmpty()

@@ -15,6 +15,9 @@ interface AuraApi {
     @GET("api/onboarding/status")
     suspend fun onboardingStatus(): OnboardingStatus
 
+    @GET("api/onboarding/role-suggestion")
+    suspend fun roleSuggestion(): RoleSuggestionResponse
+
     @POST("api/onboarding/create-admin")
     suspend fun createAdmin(@Body body: CreateAdminRequest): CreateAdminResponse
 

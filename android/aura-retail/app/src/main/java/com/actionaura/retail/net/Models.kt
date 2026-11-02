@@ -9,6 +9,22 @@ data class LoginRequest(val email: String, val password: String)
 
 data class OnboardingStatus(val needs_setup: Boolean = false)
 
+/**
+ * GET /api/onboarding/role-suggestion -- which button "Which computer is this?" leans toward
+ * (onboarding_routes.role_suggestion). `default` is "ADMIN" | "CASHIER"; when `boss_exists` the
+ * local registry already names another device as the boss and `boss_device_name` says which
+ * ("" when the boss has no name -- fall back to `boss_device_platform`).
+ */
+data class RoleSuggestion(
+    val default: String = "",
+    val boss_exists: Boolean = false,
+    val boss_device_name: String = "",
+    val boss_device_platform: String = "",
+    val platform: String = "",
+)
+
+data class RoleSuggestionResponse(val suggestion: RoleSuggestion? = null)
+
 data class CreateAdminRequest(
     val name: String,
     val email: String,
