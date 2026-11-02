@@ -60,6 +60,9 @@ GATED_DIRS = (
     # Seller agreement clauses 16-18 (app/seller_discipline/): the sanction case pages and the
     # end-of-agreement form, scanned like every other template.
     "seller_discipline",
+    # Personal-data requests (app/privacy_requests/): the manager's list of requests. Registered so it is
+    # scanned for untranslated text like every other template.
+    "data_requests",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form

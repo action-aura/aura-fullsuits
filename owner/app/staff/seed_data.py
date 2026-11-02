@@ -164,6 +164,9 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     # (Super Admin via the wildcard). The manager cash page uses payments.confirm, as the clause says.
     ("sellers.self_service", "SELLERS", "A seller's own standing: cash to hand in, own sanction cases, claim an open customer, end own agreement"),
     ("sellers.discipline", "SELLERS", "Open and decide seller sanction cases and end a seller's agreement"),
+    # A customer's request for a copy of their personal data, or for it to be erased: log it, download
+    # the copy (the ID photos only if customer_documents.view is also held), carry out the erasure.
+    ("privacy.requests", "CUSTOMERS", "Log and answer customers' personal-data requests (copy of their data, erasure)"),
     ("expenses.create", "EXPENSES", "Create/submit an expense"),
     ("expenses.view_own", "EXPENSES", "View own submitted expenses"),
     ("expenses.view_all", "EXPENSES", "View all expenses"),
@@ -341,6 +344,7 @@ ROLES: dict[str, dict] = {
             # to their monthly statements within 2 working days (Super Admin via the wildcard).
             "commission_objections.answer",
             "sellers.discipline",
+            "privacy.requests",
             "expenses.create", "expenses.view_own",
             "device_policy.view",
             "dashboard.view_own", "dashboard.view_all", "reports.view_own", "reports.view_all",

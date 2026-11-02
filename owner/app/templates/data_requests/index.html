@@ -1,0 +1,25 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Personal data requests") }}{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="dr-heading">
+  <h2 id="dr-heading">{{ _("Personal data requests") }}</h2>
+  <p class="muted">{{ _("Customers who asked for a copy of their data or for it to be deleted. Each must be answered within 30 days. Log a new request from the customer's page.") }}</p>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Request") }}</th><th>{{ _("Customer") }}</th><th>{{ _("Kind") }}</th><th>{{ _("Received") }}</th><th>{{ _("Answer by") }}</th><th>{{ _("Status") }}</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr data-request-id="{{ r.id }}" data-request-status="{{ r.status }}">
+      <td>{{ r.request_number }}</td>
+      <td><a href="{{ url_for('customers.detail', customer_id=r.customer_id) }}#data-requests-card">{{ names.get(r.customer_id, "-") }}</a></td>
+      <td>{{ data_request_kind_label(r.kind) }}</td>
+      <td>{{ format_owner_date(jday(r.received_at)) }}</td>
+      <td>{{ format_owner_date(jday(r.due_at)) }}{% if is_overdue(r) %} <span class="badge danger">{{ _("Overdue") }}</span>{% endif %}</td>
+      <td>{{ data_request_status_label(r.status) }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="empty">{{ _("No requests yet.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

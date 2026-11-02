@@ -11630,3 +11630,167 @@ msgstr "فتح القضية وإبلاغ البائع"
 #: app/templates/sellers/cash_manage.html
 msgid "Open a sanction case"
 msgstr "فتح قضية عقوبة"
+
+#: app/i18n_labels.py
+msgid "Choose what the customer asked for."
+msgstr "اختر ما طلبه العميل."
+
+#: app/i18n_labels.py
+msgid "Choose how the request reached us."
+msgstr "اختر الطريقة التي وصل بها الطلب إلينا."
+
+#: app/i18n_labels.py
+msgid "The date the customer asked cannot be in the future."
+msgstr "لا يمكن أن يكون تاريخ طلب العميل في المستقبل."
+
+#: app/i18n_labels.py
+msgid "Enter the date the customer asked as a valid date."
+msgstr "أدخل تاريخ طلب العميل كتاريخ صحيح."
+
+#: app/i18n_labels.py
+msgid "That request does not exist."
+msgstr "هذا الطلب غير موجود."
+
+#: app/i18n_labels.py
+msgid "This request is already closed."
+msgstr "هذا الطلب مغلق بالفعل."
+
+#: app/i18n_labels.py
+msgid "Write the answer given to the customer."
+msgstr "اكتب الجواب الذي أُعطي للعميل."
+
+#: app/i18n_labels.py
+msgid "Choose how to close the request."
+msgstr "اختر طريقة إغلاق الطلب."
+
+#: app/i18n_labels.py
+msgid "An erasure request can only be closed as done by pressing Erase the person."
+msgstr "لا يمكن إغلاق طلب المحو كمنجز إلا بالضغط على «محو الشخص»."
+
+#: app/i18n_labels.py
+msgid "This request is not an erasure request."
+msgstr "هذا الطلب ليس طلب محو."
+
+#: app/i18n_labels.py
+msgid "Only an open request for a copy can be downloaded."
+msgstr "لا يمكن تنزيل إلا طلب نسخة مفتوح."
+
+#: app/i18n_labels.py
+msgid "The customer still has a current subscription (%(statuses)s). It must end before the person can be erased."
+msgstr "لدى العميل اشتراك حالي (%(statuses)s). يجب أن ينتهي قبل أن يمكن محو الشخص."
+
+#: app/i18n_labels.py
+msgid "The details were erased but %(count)s encrypted file(s) could not be deleted. The request stays open: press Erase the person again."
+msgstr "تم محو البيانات لكن تعذّر حذف %(count)s من الملفات المشفّرة. يبقى الطلب مفتوحًا: اضغط على «محو الشخص» مرة أخرى."
+
+#: app/i18n_labels.py
+msgid "A copy of their data"
+msgstr "نسخة من بياناتهم"
+
+#: app/i18n_labels.py
+msgid "Erase their data"
+msgstr "محو بياناتهم"
+
+#: app/i18n_labels.py
+msgid "Phone call"
+msgstr "مكالمة هاتفية"
+
+#: app/i18n_labels.py
+msgid "In person"
+msgstr "حضوريًا"
+
+#: app/i18n_labels.py
+msgid "Refused"
+msgstr "مرفوض"
+
+#: app/privacy_requests/routes.py
+msgid "The request is logged. It must be answered by %(due)s."
+msgstr "تم تسجيل الطلب. يجب الرد عليه قبل %(due)s."
+
+#: app/privacy_requests/routes.py
+msgid "The person was erased and the request is closed."
+msgstr "تم محو الشخص وأُغلق الطلب."
+
+#: app/privacy_requests/routes.py
+msgid "The request is closed."
+msgstr "تم إغلاق الطلب."
+
+#: app/templates/customers/_data_requests.html
+msgid "Personal data requests"
+msgstr "طلبات البيانات الشخصية"
+
+#: app/templates/customers/_data_requests.html
+msgid "The customer may ask for a copy of what we hold about them, or for it to be deleted. We must answer within 30 days. Do not write personal details in the answer."
+msgstr "يحق للعميل أن يطلب نسخة مما نحتفظ به عنه أو أن يُحذف. يجب أن نجيب خلال 30 يومًا. لا تكتب بيانات شخصية في الجواب."
+
+#: app/templates/customers/_data_requests.html
+msgid "What did the customer ask for?"
+msgstr "ماذا طلب العميل؟"
+
+#: app/templates/customers/_data_requests.html
+msgid "How did the request reach us?"
+msgstr "كيف وصلنا الطلب؟"
+
+#: app/templates/customers/_data_requests.html
+msgid "Date the customer asked"
+msgstr "تاريخ طلب العميل"
+
+#: app/templates/customers/_data_requests.html
+msgid "Log the request"
+msgstr "سجّل الطلب"
+
+#: app/templates/customers/_data_requests.html
+msgid "Request"
+msgstr "الطلب"
+
+#: app/templates/customers/_data_requests.html
+msgid "Received"
+msgstr "تاريخ الاستلام"
+
+#: app/templates/customers/_data_requests.html
+msgid "Answer by"
+msgstr "آخر موعد للرد"
+
+#: app/templates/customers/_data_requests.html
+msgid "Download the copy (ZIP)"
+msgstr "تنزيل النسخة (ZIP)"
+
+#: app/templates/customers/_data_requests.html
+msgid "You may not open ID photos, so the copy will not contain them."
+msgstr "لا يحق لك فتح صور الهوية، لذلك لن تحتويها النسخة."
+
+#: app/templates/customers/_data_requests.html
+msgid "Erase this person for good? Invoices and payment records are kept. This cannot be undone."
+msgstr "هل تريد محو هذا الشخص نهائيًا؟ تبقى الفواتير وسجلات الدفع. لا يمكن التراجع عن هذا."
+
+#: app/templates/customers/_data_requests.html
+msgid "Erase the person"
+msgstr "محو الشخص"
+
+#: app/templates/customers/_data_requests.html
+msgid "Answer to the customer"
+msgstr "الجواب المعطى للعميل"
+
+#: app/templates/customers/_data_requests.html
+msgid "Close as"
+msgstr "إغلاق كـ"
+
+#: app/templates/customers/_data_requests.html
+msgid "Close the request"
+msgstr "إغلاق الطلب"
+
+#: app/templates/data_requests/index.html
+msgid "Customers who asked for a copy of their data or for it to be deleted. Each must be answered within 30 days. Log a new request from the customer's page."
+msgstr "عملاء طلبوا نسخة من بياناتهم أو حذفها. يجب الرد على كل طلب خلال 30 يومًا. سجّل طلبًا جديدًا من صفحة العميل."
+
+#: app/templates/data_requests/index.html
+msgid "No requests yet."
+msgstr "لا توجد طلبات بعد."
+
+#: app/templates/dashboard/index.html
+msgid "Open requests"
+msgstr "الطلبات المفتوحة"
+
+#: app/templates/dashboard/index.html
+msgid "Overdue (more than 30 days)"
+msgstr "متأخرة (أكثر من 30 يومًا)"

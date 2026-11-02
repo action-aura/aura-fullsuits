@@ -131,6 +131,9 @@
 {% if has_permission('sellers.discipline') %}
   {% set _unused = sales_links.append({'endpoint': 'seller_discipline.manager_index', 'label': _('Seller discipline')}) %}
 {% endif %}
+{% if has_permission('privacy.requests') %}
+  {% set _unused = sales_links.append({'endpoint': 'data_requests.index', 'label': _('Personal data requests')}) %}
+{% endif %}
 {% if has_any_permission('quotes.create', 'orders.create', 'invoices.create') %}
   {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.employee_dashboard_view', 'label': _('Commercial Dashboard')}) %}
 {% endif %}

@@ -11671,3 +11671,167 @@ msgstr "Open the case and tell the seller"
 #: app/templates/sellers/cash_manage.html
 msgid "Open a sanction case"
 msgstr "Open a sanction case"
+
+#: app/i18n_labels.py
+msgid "Choose what the customer asked for."
+msgstr "Choose what the customer asked for."
+
+#: app/i18n_labels.py
+msgid "Choose how the request reached us."
+msgstr "Choose how the request reached us."
+
+#: app/i18n_labels.py
+msgid "The date the customer asked cannot be in the future."
+msgstr "The date the customer asked cannot be in the future."
+
+#: app/i18n_labels.py
+msgid "Enter the date the customer asked as a valid date."
+msgstr "Enter the date the customer asked as a valid date."
+
+#: app/i18n_labels.py
+msgid "That request does not exist."
+msgstr "That request does not exist."
+
+#: app/i18n_labels.py
+msgid "This request is already closed."
+msgstr "This request is already closed."
+
+#: app/i18n_labels.py
+msgid "Write the answer given to the customer."
+msgstr "Write the answer given to the customer."
+
+#: app/i18n_labels.py
+msgid "Choose how to close the request."
+msgstr "Choose how to close the request."
+
+#: app/i18n_labels.py
+msgid "An erasure request can only be closed as done by pressing Erase the person."
+msgstr "An erasure request can only be closed as done by pressing Erase the person."
+
+#: app/i18n_labels.py
+msgid "This request is not an erasure request."
+msgstr "This request is not an erasure request."
+
+#: app/i18n_labels.py
+msgid "Only an open request for a copy can be downloaded."
+msgstr "Only an open request for a copy can be downloaded."
+
+#: app/i18n_labels.py
+msgid "The customer still has a current subscription (%(statuses)s). It must end before the person can be erased."
+msgstr "The customer still has a current subscription (%(statuses)s). It must end before the person can be erased."
+
+#: app/i18n_labels.py
+msgid "The details were erased but %(count)s encrypted file(s) could not be deleted. The request stays open: press Erase the person again."
+msgstr "The details were erased but %(count)s encrypted file(s) could not be deleted. The request stays open: press Erase the person again."
+
+#: app/i18n_labels.py
+msgid "A copy of their data"
+msgstr "A copy of their data"
+
+#: app/i18n_labels.py
+msgid "Erase their data"
+msgstr "Erase their data"
+
+#: app/i18n_labels.py
+msgid "Phone call"
+msgstr "Phone call"
+
+#: app/i18n_labels.py
+msgid "In person"
+msgstr "In person"
+
+#: app/i18n_labels.py
+msgid "Refused"
+msgstr "Refused"
+
+#: app/privacy_requests/routes.py
+msgid "The request is logged. It must be answered by %(due)s."
+msgstr "The request is logged. It must be answered by %(due)s."
+
+#: app/privacy_requests/routes.py
+msgid "The person was erased and the request is closed."
+msgstr "The person was erased and the request is closed."
+
+#: app/privacy_requests/routes.py
+msgid "The request is closed."
+msgstr "The request is closed."
+
+#: app/templates/customers/_data_requests.html
+msgid "Personal data requests"
+msgstr "Personal data requests"
+
+#: app/templates/customers/_data_requests.html
+msgid "The customer may ask for a copy of what we hold about them, or for it to be deleted. We must answer within 30 days. Do not write personal details in the answer."
+msgstr "The customer may ask for a copy of what we hold about them, or for it to be deleted. We must answer within 30 days. Do not write personal details in the answer."
+
+#: app/templates/customers/_data_requests.html
+msgid "What did the customer ask for?"
+msgstr "What did the customer ask for?"
+
+#: app/templates/customers/_data_requests.html
+msgid "How did the request reach us?"
+msgstr "How did the request reach us?"
+
+#: app/templates/customers/_data_requests.html
+msgid "Date the customer asked"
+msgstr "Date the customer asked"
+
+#: app/templates/customers/_data_requests.html
+msgid "Log the request"
+msgstr "Log the request"
+
+#: app/templates/customers/_data_requests.html
+msgid "Request"
+msgstr "Request"
+
+#: app/templates/customers/_data_requests.html
+msgid "Received"
+msgstr "Received"
+
+#: app/templates/customers/_data_requests.html
+msgid "Answer by"
+msgstr "Answer by"
+
+#: app/templates/customers/_data_requests.html
+msgid "Download the copy (ZIP)"
+msgstr "Download the copy (ZIP)"
+
+#: app/templates/customers/_data_requests.html
+msgid "You may not open ID photos, so the copy will not contain them."
+msgstr "You may not open ID photos, so the copy will not contain them."
+
+#: app/templates/customers/_data_requests.html
+msgid "Erase this person for good? Invoices and payment records are kept. This cannot be undone."
+msgstr "Erase this person for good? Invoices and payment records are kept. This cannot be undone."
+
+#: app/templates/customers/_data_requests.html
+msgid "Erase the person"
+msgstr "Erase the person"
+
+#: app/templates/customers/_data_requests.html
+msgid "Answer to the customer"
+msgstr "Answer to the customer"
+
+#: app/templates/customers/_data_requests.html
+msgid "Close as"
+msgstr "Close as"
+
+#: app/templates/customers/_data_requests.html
+msgid "Close the request"
+msgstr "Close the request"
+
+#: app/templates/data_requests/index.html
+msgid "Customers who asked for a copy of their data or for it to be deleted. Each must be answered within 30 days. Log a new request from the customer's page."
+msgstr "Customers who asked for a copy of their data or for it to be deleted. Each must be answered within 30 days. Log a new request from the customer's page."
+
+#: app/templates/data_requests/index.html
+msgid "No requests yet."
+msgstr "No requests yet."
+
+#: app/templates/dashboard/index.html
+msgid "Open requests"
+msgstr "Open requests"
+
+#: app/templates/dashboard/index.html
+msgid "Overdue (more than 30 days)"
+msgstr "Overdue (more than 30 days)"

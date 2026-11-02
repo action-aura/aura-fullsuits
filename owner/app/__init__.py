@@ -267,6 +267,10 @@ def create_app(config_name: str | None = None) -> Flask:
 
     app.register_blueprint(seller_discipline_bp)
     register_seller_discipline_cli(app)
+    # Personal-data requests (a customer asks for a copy of their data, or for it to be erased).
+    from app.privacy_requests.routes import bp as data_requests_bp
+
+    app.register_blueprint(data_requests_bp)
     app.jinja_env.globals["customer_accounts_enabled"] = lambda: bool(app.config.get("CUSTOMER_ACCOUNTS_ENABLED"))
 
     if app.config.get("EXTERNAL_API_ENABLED"):

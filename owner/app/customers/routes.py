@@ -195,8 +195,13 @@ def detail(customer_id):
 
     consents_panel = consents_panel_context(customer, codes)
 
+    # Personal-data requests card (None = the actor does not hold privacy.requests).
+    from app.privacy_requests.panel import panel_context as data_requests_panel_context
+
+    data_requests_panel = data_requests_panel_context(customer, codes)
+
     return render_template(
-        "customers/detail.html", customer=customer, ownership_view=ownership_view, website_account_panel=website_account_panel, trial_panel=trial_panel, consents_panel=consents_panel, notes=notes, interactions=interactions, followups=followups,
+        "customers/detail.html", customer=customer, ownership_view=ownership_view, website_account_panel=website_account_panel, trial_panel=trial_panel, consents_panel=consents_panel, data_requests_panel=data_requests_panel, notes=notes, interactions=interactions, followups=followups,
         locations=locations, assignment_history=assignment_history, followup_status=followup_status,
         is_overdue=is_overdue, error=error_text,
         quotes=quotes, orders=orders, invoices=invoices, payments=payments, subscriptions=subscriptions,

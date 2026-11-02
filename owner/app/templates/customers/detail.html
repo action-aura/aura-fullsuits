@@ -190,6 +190,7 @@
     {% if website_account_panel %}{% include "customers/_website_account.html" %}{% endif %}
     {% if trial_panel %}{% include "customers/_trial.html" %}{% endif %}
     {% if consents_panel %}{% include "customers/_consents.html" %}{% endif %}
+    {% if data_requests_panel %}{% include "customers/_data_requests.html" %}{% endif %}
     {% if next_followup or open_quote %}
     <div class="card">
       <h3>{{ _("Open items") }}</h3>

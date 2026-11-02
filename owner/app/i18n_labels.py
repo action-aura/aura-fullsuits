@@ -1564,3 +1564,45 @@ def sanction_category_label(code: str) -> str:
         "REVERSE_ENGINEERING": _("Reverse engineering, or selling outside the company's channels (ends the agreement at once)"),
     }
     return labels.get(code, code)
+
+
+# ---- Personal-data requests (Alembic DR1) ----------------------------------------------------
+
+def localize_data_request_error(code: str, **params) -> str:
+    """app.privacy_requests.errors.DataRequestError by code -- the presentation-boundary pattern."""
+    messages = {
+        "KIND_INVALID": _("Choose what the customer asked for."),
+        "CHANNEL_INVALID": _("Choose how the request reached us."),
+        "CUSTOMER_NOT_FOUND": _("That customer does not exist."),
+        "RECEIVED_IN_FUTURE": _("The date the customer asked cannot be in the future."),
+        "RECEIVED_DATE_INVALID": _("Enter the date the customer asked as a valid date."),
+        "REQUEST_NOT_FOUND": _("That request does not exist."),
+        "REQUEST_NOT_OPEN": _("This request is already closed."),
+        "ANSWER_REQUIRED": _("Write the answer given to the customer."),
+        "TEXT_TOO_LONG": _("The text is too long."),
+        "STATUS_INVALID": _("Choose how to close the request."),
+        "ERASE_NOT_CARRIED_OUT": _("An erasure request can only be closed as done by pressing Erase the person."),
+        "NOT_AN_ERASE_REQUEST": _("This request is not an erasure request."),
+        "NOT_AN_OPEN_EXPORT": _("Only an open request for a copy can be downloaded."),
+        "ERASE_BLOCKED_BY_SUBSCRIPTION": _("The customer still has a current subscription (%(statuses)s). It must end before the person can be erased."),
+        "ERASE_FILES_NOT_DELETED": _("The details were erased but %(count)s encrypted file(s) could not be deleted. The request stays open: press Erase the person again."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
+def data_request_kind_label(code: str) -> str:
+    labels = {"EXPORT": _("A copy of their data"), "ERASE": _("Erase their data")}
+    return labels.get(code, code)
+
+
+def data_request_channel_label(code: str) -> str:
+    labels = {"EMAIL": _("Email"), "PHONE": _("Phone call"), "IN_PERSON": _("In person")}
+    return labels.get(code, code)
+
+
+def data_request_status_label(code: str) -> str:
+    labels = {"OPEN": _("Open"), "DONE": _("Done"), "REFUSED": _("Refused")}
+    return labels.get(code, code)

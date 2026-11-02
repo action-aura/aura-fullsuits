@@ -1,0 +1,61 @@
+{# Personal-data requests card (privacy_requests/panel.py::panel_context). Drawn only for a holder of
+   privacy.requests. The customer asked for a copy of what we hold (EXPORT) or for it to be erased (ERASE). #}
+{% set dp = data_requests_panel %}
+<div class="card" id="data-requests-card">
+  <h3>{{ _("Personal data requests") }}</h3>
+  <p class="muted">{{ _("The customer may ask for a copy of what we hold about them, or for it to be deleted. We must answer within 30 days. Do not write personal details in the answer.") }}</p>
+  <form method="post" action="{{ url_for('data_requests.log_request', customer_id=customer.id) }}" data-log-request-form="1">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="dr-kind">{{ _("What did the customer ask for?") }}</label>
+    <select id="dr-kind" name="kind" required>
+      {% for k in dp.kinds %}<option value="{{ k }}">{{ data_request_kind_label(k) }}</option>{% endfor %}
+    </select>
+    <label for="dr-channel">{{ _("How did the request reach us?") }}</label>
+    <select id="dr-channel" name="channel" required>
+      {% for c in dp.channels %}<option value="{{ c }}">{{ data_request_channel_label(c) }}</option>{% endfor %}
+    </select>
+    <label for="dr-received">{{ _("Date the customer asked") }}</label>
+    <input id="dr-received" type="date" name="received_on" value="{{ dp.today.isoformat() }}" max="{{ dp.today.isoformat() }}">
+    <button type="submit">{{ _("Log the request") }}</button>
+  </form>
+  {% if dp.requests %}
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Request") }}</th><th>{{ _("Kind") }}</th><th>{{ _("Received") }}</th><th>{{ _("Answer by") }}</th><th>{{ _("Status") }}</th><th></th></tr></thead>
+    <tbody>
+    {% for r in dp.requests %}
+    <tr data-request-id="{{ r.id }}" data-request-kind="{{ r.kind }}" data-request-status="{{ r.status }}">
+      <td>{{ r.request_number }}</td>
+      <td>{{ data_request_kind_label(r.kind) }}</td>
+      <td>{{ format_owner_date(jday(r.received_at)) }}</td>
+      <td>{{ format_owner_date(jday(r.due_at)) }}{% if r.id in dp.overdue %} <span class="badge danger">{{ _("Overdue") }}</span>{% endif %}</td>
+      <td>{{ data_request_status_label(r.status) }}{% if r.answer_note %}<br><small>{{ r.answer_note }}</small>{% endif %}</td>
+      <td>
+        {% if r.status == 'OPEN' %}
+          {% if r.kind == 'EXPORT' %}
+          <a class="btn" data-export-link="1" href="{{ url_for('data_requests.download_export', request_id=r.id) }}">{{ _("Download the copy (ZIP)") }}</a>
+          {% if not dp.can_open_documents %}<br><small>{{ _("You may not open ID photos, so the copy will not contain them.") }}</small>{% endif %}
+          {% else %}
+          {% if dp.blocking %}<small data-erase-blocked="1">{{ _("The customer still has a current subscription (%(statuses)s). It must end before the person can be erased.", statuses=dp.blocking|join(", ")) }}</small><br>{% endif %}
+          <form method="post" action="{{ url_for('data_requests.run_erase', request_id=r.id) }}" onsubmit="return confirm('{{ _("Erase this person for good? Invoices and payment records are kept. This cannot be undone.") }}');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="danger">{{ _("Erase the person") }}</button>
+          </form>
+          {% endif %}
+          <form method="post" action="{{ url_for('data_requests.close_request', request_id=r.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label for="dr-note-{{ r.id }}">{{ _("Answer to the customer") }}</label>
+            <input id="dr-note-{{ r.id }}" type="text" name="answer_note" maxlength="4000" required>
+            <select name="status" aria-label="{{ _('Close as') }}">
+              {% if r.kind == 'EXPORT' %}<option value="DONE">{{ data_request_status_label('DONE') }}</option>{% endif %}
+              <option value="REFUSED">{{ data_request_status_label('REFUSED') }}</option>
+            </select>
+            <button type="submit">{{ _("Close the request") }}</button>
+          </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>

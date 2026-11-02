@@ -41,6 +41,8 @@ REAL_TEMPLATE_DIRS = (
     # one page by design -- its rendering in both languages (Arabic section
     # lang="ar" dir="rtl") is covered by tests/test_pwa.py.
     "pwa",
+    # Personal-data requests (app/privacy_requests/): the manager's list of requests.
+    "data_requests",
 )
 
 # No-fixture-required GET routes: real, reachable, list/index/status pages.

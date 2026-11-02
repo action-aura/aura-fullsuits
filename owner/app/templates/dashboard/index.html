@@ -215,6 +215,16 @@
 </div>
 {% endif %}
 
+{% if has_permission('privacy.requests') %}
+<div class="card" data-data-requests-card="1">
+  <h3>{{ _("Personal data requests") }}</h3>
+  <div class="aura-stat-tile-row">
+    {{ charts.stat_tile(_("Open requests"), format_owner_number(data_requests_open), href=url_for('data_requests.index')) }}
+    {{ charts.stat_tile(_("Overdue (more than 30 days)"), format_owner_number(data_requests_late), href=url_for('data_requests.index'), tone='danger' if data_requests_late else 'default') }}
+  </div>
+</div>
+{% endif %}
+
 {% if can_view_customers or can_view_subscriptions %}
 <div class="card">
   <h2>{{ _("Overview") }}</h2>
